@@ -471,7 +471,7 @@ For highly non-linear differential equations where classical perturbation method
 ### 7.11. Plotting and Visualization
 - **Adaptive Grid Generation**: Implements adaptive mesh refinement (AMR) algorithms to automatically detect high-curvature regions and increase sample density (preventing jagged edges in steep slope functions).
 - **DirectX/Vulkan Native Renderer**: High-performance native Windows rendering using vertex buffers generated directly on the GPU (e.g. from Triton SDE paths or matrix coordinate arrays), bypassing CPU read-back.
-- **Interactive JSON Data Serialization**: For web environments (Jupyter/Python bindings), the plotting module formats data into highly optimized JSON structures parsed by frontend visualization libraries (e.g. Plotly, Three.js).
+- **Interactive JSON Data Serialization**: For web environments (Jupyter/Python bindings), the plotting module formats data into highly optimized JSON structures parsed by frontend visualization libraries (e.g., WebGPU/WebGL-based Three.js or custom shaders).
 - **Parameter Sweep Bindings**: Interacts with the `nimblecas.parallel` PPL task scheduler to recalculate surface mesh points on-the-fly as user-adjusted slider parameters vary.
 
 ### 7.12. LaTeX Math Exporter
@@ -485,7 +485,7 @@ For highly non-linear differential equations where classical perturbation method
 ### 7.13. Executable Document Engine
 - **Markdown Parsing & AST Construction**: A custom parser extracts text and code block elements into a unified Document AST. Code fence languages trigger dedicated execution dispatchers.
 - **Incremental Cell Execution**: Each code cell is hashed based on its text and any previous variables/expressions it references. The executor manages an in-memory session state, skipping execution of unchanged cells by pulling cached values/renders.
-- **HTML & WebGL Generation**: Compiles executable markdown into interactive HTML pages. Math blocks are rendered using MathJax/KaTeX, and 3D surface plots use embedded Three.js components pointing to inline JSON buffers.
+- **HTML, WebGL & WebGPU Generation**: Compiles executable markdown into interactive HTML pages. Math blocks are rendered using MathJax/KaTeX. If a GPU is available on the client device, 3D surface plots use embedded WebGPU or WebGL components (e.g., via Orillusion or Three.js WebGL/WebGPURenderer) for hardware-accelerated 60 FPS graphics, automatically falling back to 2D SVG/PNG layouts if no GPU is detected.
 
 ### 7.14. Numerical Solvers and Optimization Engine
 - **Newton-Raphson & Multi-dimensional Systems**: Resolves $F(x) = 0$ for vector fields using symbolic Jacobian matrices generated at runtime:
