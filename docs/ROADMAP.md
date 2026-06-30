@@ -104,7 +104,8 @@ export namespace nimblecas {
         std::unique_ptr<AddNode>,
         std::unique_ptr<MulNode>,
         std::unique_ptr<PowerNode>,
-        std::unique_ptr<FunctionNode>
+        std::unique_ptr<FunctionNode>,
+        std::unique_ptr<FusedOperatorNode>
     >;
 
     class Expr {
@@ -140,6 +141,12 @@ export namespace nimblecas {
     struct FunctionNode {
         std::string name;
         std::vector<Expr> args;
+    };
+
+    struct FusedOperatorNode {
+        enum class OpType { FMA }; // Fused Multiply-Add
+        OpType type;
+        std::vector<Expr> operands;
     };
 }
 ```

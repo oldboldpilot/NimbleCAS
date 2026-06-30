@@ -35,6 +35,7 @@ A core requirement of the symbolic engine is **Automatic Simplification**, which
 - **Product Simplification**: Grouping factors, combining exponents, handling multiplicative identities ($u \cdot 1 \to u$) and absorbing elements ($u \cdot 0 \to 0$).
 - **Power Simplification**: Handling base-exponent rules ($u^0 \to 1$, $u^1 \to u$, $(u^a)^b \to u^{a \cdot b}$).
 - **Transcendental Simplification**: Basic trigonometric and logarithmic reductions ($\ln(e^x) \to x$, $\sin(0) \to 0$).
+- **Fused Operators (Allocation Optimization)**: Fuses related operations (e.g., Fused Multiply-Add $a \cdot b + c \to \text{fma}(a, b, c)$) into a single AST node during automatic simplification. This minimizes recursive heap allocations and deallocations under RAII, improving AST traversal performance and keeping memory contiguous.
 
 ### 2.3. Polynomial and Rational Arithmetic
 NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multivariate polynomial rings:
