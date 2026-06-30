@@ -475,6 +475,18 @@ For highly non-linear differential equations where classical perturbation method
 - **Incremental Cell Execution**: Each code cell is hashed based on its text and any previous variables/expressions it references. The executor manages an in-memory session state, skipping execution of unchanged cells by pulling cached values/renders.
 - **HTML & WebGL Generation**: Compiles executable markdown into interactive HTML pages. Math blocks are rendered using MathJax/KaTeX, and 3D surface plots use embedded Three.js components pointing to inline JSON buffers.
 
+### 7.14. Numerical Solvers and Optimization Engine
+- **Newton-Raphson & Multi-dimensional Systems**: Resolves $F(x) = 0$ for vector fields using symbolic Jacobian matrices generated at runtime:
+  $$x_{n+1} = x_n - J(x_n)^{-1} F(x_n)$$
+  using multi-threaded LU decompositions from Section 2.7.
+- **Broyden's Quasi-Newton Method**: Updates the Jacobian approximation $B_n$ using the rank-one update formula:
+  $$B_{n+1} = B_n + \frac{\Delta F_n - B_n \Delta x_n}{\|\Delta x_n\|^2} \Delta x_n^T$$
+  to avoid costly symbolic evaluations of $J(x_n)$ at every iteration.
+- **L-BFGS Optimization**: Implements the limited-memory Broyden-Fletcher-Goldfarb-Shanno algorithm for high-dimensional non-linear minimizations, utilizing past iteration history vectors ($s_k, y_k$) to approximate the inverse Hessian.
+- **Levenberg-Marquardt Solver**: Solves non-linear least squares curve fitting $\min \sum [r_i(\beta)]^2$ by interpolating between Gauss-Newton and gradient descent:
+  $$(J^T J + \lambda \operatorname{diag}(J^T J)) \delta = J^T r$$
+  implemented as parallelized loops on the GPU using Triton.
+
 ---
 
 ## 8. Railway-Oriented Error Handling

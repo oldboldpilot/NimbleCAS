@@ -116,6 +116,16 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **State Caching & Execution Modes**: Incremental execution support via cell-level hashing. If a code block's source and dependency cells are unchanged, the engine uses cached execution states to bypass recalculation.
 - **Export Formats**: Ability to compile the executed live notebook into polished static HTML (containing embedded WebGL elements for interactive 3D plots), standard Markdown, and production-ready PDF documents.
 
+### 2.18. Numerical Solvers and Optimization Engine
+- **Non-Linear Equations & Systems**: Solvers for root-finding of single univariate non-linear equations and multi-dimensional systems of non-linear equations ($F(x) = 0$).
+- **Iterative Root Solvers**: Implementation of:
+  - **Fixed-Point Iteration**: Solving $x = g(x)$ with user-defined convergence criteria.
+  - **Newton-like Methods**: High-speed Newton-Raphson, Secant, and Halley's methods for univariate functions; multi-dimensional Newton's method and Broyden's quasi-Newton updates for systems of equations.
+- **Linear & Non-Linear Optimization**:
+  - **Linear Programming (LP)**: Solvers for bounded linear optimization systems using the Simplex and Interior-Point algorithms.
+  - **Non-Linear Optimization**: Local and global minimizers including Gradient Descent, Conjugate Gradient, Nelder-Mead simplex, and L-BFGS algorithms.
+  - **Non-Linear Least Squares**: Curve fitting and parameter estimation via the Levenberg-Marquardt and Gauss-Newton algorithms.
+
 ---
 
 ## 3. High-Performance Architecture & Hardware Acceleration
