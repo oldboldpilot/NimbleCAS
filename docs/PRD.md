@@ -62,11 +62,15 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 
 ### 2.7. Linear Algebra and Matrices
 - **Symbolic Matrices**: Support for matrix symbols with non-numeric elements, symbolic determinants, matrix inverses, and matrix multiplications.
-- **Linear Algebra Routines**: Symbolic and high-performance numeric eigenvalues, eigenvectors, and matrix decompositions (LU, QR, SVD, Cholesky) accelerated via CPU SIMD and GPU co-processing.
+- **Matrix Decompositions**: Standard numeric and symbolic decompositions (LU, QR, SVD) and native high-speed **Cholesky decomposition** ($A = L L^T$) for symmetric positive-definite matrices.
+- **Eigenvalue Solvers**: Standard and generalized eigenvalue problems ($A x = \lambda x$, $A x = \lambda B x$). Solvers include:
+  - **Dense Matrices**: Power iteration and the QR algorithm.
+  - **Sparse/Large Matrices**: Lanczos iteration (for symmetric matrices) and Arnoldi iteration (for general matrices) yielding Ritz eigenvalues.
+- **Iterative Linear Solvers**: High-performance solvers for large systems ($A x = b$), including stationary methods (Jacobi, Gauss-Seidel, Successive Over-Relaxation (SOR)) and Krylov subspace methods (Conjugate Gradient (CG), generalized minimal residual (GMRES), and Bi-Conjugate Gradient Stabilized (BiCGSTAB)).
 
 ### 2.8. Differential Equations (ODEs and PDEs)
-- **Analytical ODE Solvers**: Automatic classification and exact solving of 1st and 2nd order linear ODEs (separation of variables, integrating factors, variation of parameters, Laplace transforms).
-- **Analytical PDE Solvers**: Exact solutions for classical PDEs (heat, wave, Laplace equations) using separation of variables, Fourier transforms, and the method of characteristics.
+- **Analytical Solvers**: Automatic classification and exact solving of 1st and 2nd order linear ODEs and classical PDEs (heat, wave, Laplace equations).
+- **Spectral Methods**: Numerical solving of boundary value problems (BVPs) and PDEs in the frequency domain using Fourier collocation (for periodic boundaries) and Chebyshev collocation (for non-periodic boundaries) methods.
 
 ### 2.9. Integral Transforms, Series, and Wavelets
 - **Fourier Analysis**: Symbolic computation of Fourier series expansion, continuous Fourier transforms, and discrete/fast Fourier transforms.

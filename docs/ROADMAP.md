@@ -381,13 +381,25 @@ NimbleCAS extends Joel Cohen's core symbolic algebra engine to support advanced 
   - **Representation**: A `ComplexNode` containing real and imaginary parts ($x + i y$) represented as recursive expression sub-trees.
   - **Identities**: Automatic simplification handles branch cuts, complex conjugation ($\bar{z}$), residues, and Euler's formula conversion ($e^{i \theta} \to \cos \theta + i \sin \theta$).
 
-### 7.2. Linear Algebra and Matrices
+### 7.2. Linear Algebra, Decompositions, and Iterative Solvers
 - **Symbolic Matrices**: A `MatrixNode` containing a 2D vector of sub-expressions.
-- **Dynamic SIMD / GPU Execution**: For numeric evaluations, matrices are converted to contiguous aligned memory layouts and computed via the dynamic SIMD dispatcher (AVX-512/AVX2/SSE2) or offloaded to the GPU for parallel decomposition (LU, QR, SVD, Cholesky).
+- **Cholesky Decomposition**: Computes the Cholesky factor $L$ of a symmetric positive-definite matrix $A$ ($A = L L^T$) using:
+  $$L_{j,j} = \sqrt{A_{j,j} - \sum_{k=1}^{j-1} L_{j,k}^2}, \quad L_{i,j} = \frac{1}{L_{j,j}} \left( A_{i,j} - \sum_{k=1}^{j-1} L_{i,k} L_{j,k} \right) \text{ for } i > j$$
+  parallelized over CPU registers (AVX-512) and GPU warps.
+- **Eigenvalue Solvers**:
+  - **Dense QR Algorithm**: Computes all eigenvalues via iterative QR decompositions ($A_k = Q_k R_k$, $A_{k+1} = R_k Q_k$) using Householder reflections.
+  - **Lanczos Iteration**: Tridiagonalizes large symmetric matrices $A$ to extract extreme eigenvalues (Ritz values) with low memory footprint.
+  - **Arnoldi Iteration**: Builds an orthonormal basis of the Krylov subspace for general non-symmetric matrices, computing upper Hessenberg matrices to solve generalized eigenvalue problems.
+- **Iterative Linear Solvers**: Solves large sparse systems $A x = b$:
+  - **Stationary Methods**: Jacobi, Gauss-Seidel, and Successive Over-Relaxation (SOR) with dynamic relaxation parameters $\omega$.
+  - **Krylov Subspace Solvers**: Conjugate Gradient (CG) for positive-definite systems, GMRES with Gram-Schmidt orthogonalization, and BiCGSTAB for general sparse systems, utilizing block Jacobi preconditioners.
 
-### 7.3. Series, Transforms, and Wavelets
+### 7.3. Series, Transforms, Wavelets, and Spectral Methods
 - **Taylor, Laurent, and Puiseux Series**: Computes asymptotic expansions around $x = a$ up to order $n$ using symbolic differentiation and recursive coefficients.
 - **Wavelets**: Modules for Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT), containing precompiled filters (Haar, Daubechies 4/8, Morlet) optimized via SIMD vector registers.
+- **Spectral Methods**: Solves differential equations numerically by representing the solution $u(x)$ as a sum of global basis functions:
+  - **Fourier Collocation**: Used for periodic boundary conditions, evaluating spatial derivatives via the Discrete Fourier Transform (FFT) on the GPU.
+  - **Chebyshev Collocation**: Used for non-periodic boundaries, mapping grid points to Chebyshev-Gauss-Lobatto nodes $x_j = \cos(\pi j / N)$ and computing spatial derivatives via Chebyshev differentiation matrices.
 
 ### 7.4. Singular Perturbation of ODEs
 - **Matched Asymptotic Expansions**: Solves boundary layer problems of the form $\epsilon y'' + p(x)y' + q(x)y = 0$.
