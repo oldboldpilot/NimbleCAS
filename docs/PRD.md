@@ -136,6 +136,7 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
   - **Linear Programming (LP)**: Solvers for bounded linear optimization systems using the Simplex and Interior-Point algorithms.
   - **Non-Linear Optimization**: Local and global minimizers including Gradient Descent, Conjugate Gradient, Nelder-Mead simplex, and L-BFGS algorithms.
   - **Non-Linear Least Squares**: Curve fitting and parameter estimation via the Levenberg-Marquardt and Gauss-Newton algorithms.
+  - **Spline Interpolation**: Fitting and evaluation of 1D and 2D data points using linear, quadratic, and cubic splines, Hermite splines, B-splines (basis splines), and Non-Uniform Rational B-Splines (NURBS) with symbolic piecewise-expression exports.
 
 ### 2.19. Quantum Mechanics and Functional Analysis Engine
 - **Abstract Algebras & Lie Algebras**: Symbolic representation of algebraic objects, non-commutative algebras, and Lie algebras. Native support for:
@@ -148,6 +149,16 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **Abstract Spaces**:
   - **Hilbert Spaces**: Symbolic definitions of infinite-dimensional inner-product spaces (such as $L^2$) including completeness axioms, orthonormal basis expansions, and projections.
   - **Banach Spaces**: Symbolic definitions of complete normed vector spaces (such as $L^p$ spaces) including norm axioms ($\|x\|$).
+
+### 2.20. Classical Orthogonal Polynomials
+- **Symbolic Representation & Evaluation**: Dedicated AST nodes for families of univariate orthogonal polynomials, including symbolic expansions, evaluations, and derivations.
+- **Orthogonal Families**: Native support for:
+  - **Chebyshev Polynomials**: First kind $T_n(x)$ and second kind $U_n(x)$ with trigonometric conversions (e.g. $T_n(\cos\theta) = \cos(n\theta)$).
+  - **Legendre Polynomials**: Standard Legendre polynomials $P_n(x)$ and associated Legendre polynomials $P_n^m(x)$.
+  - **Laguerre Polynomials**: Laguerre polynomials $L_n(x)$ and generalized/associated Laguerre polynomials $L_n^\alpha(x)$.
+  - **Hermite Polynomials**: Physicist's Hermite polynomials $H_n(x)$ and probabilist's Hermite polynomials $He_n(x)$.
+  - **Jacobi & Gegenbauer Polynomials**: Jacobi polynomials $P_n^{(\alpha, \beta)}(x)$ and Gegenbauer (ultraspherical) polynomials $C_n^\alpha(x)$.
+- **Recurrence Relations & Weight Functions**: Symbolic resolution of three-term recurrence relations (e.g., $T_{n+1}(x) = 2x T_n(x) - T_{n-1}(x)$), Rodrigues' formulas, and verification of orthogonality relations over respective domains against weight functions $w(x)$ (e.g. $w(x) = \frac{1}{\sqrt{1-x^2}}$ for $T_n(x)$).
 
 ---
 

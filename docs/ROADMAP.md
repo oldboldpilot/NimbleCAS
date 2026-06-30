@@ -498,6 +498,12 @@ For highly non-linear differential equations where classical perturbation method
 - **Levenberg-Marquardt Solver**: Solves non-linear least squares curve fitting $\min \sum [r_i(\beta)]^2$ by interpolating between Gauss-Newton and gradient descent:
   $$(J^T J + \lambda \operatorname{diag}(J^T J)) \delta = J^T r$$
   implemented as parallelized loops on the GPU using Triton.
+- **Cubic Splines and B-Splines Solver**: Constructs piecewise-polynomial curves passing through a set of knots $x_0, x_1, \dots, x_k$.
+  - For cubic splines: Solves a tridiagonal system of continuity equations for second-derivatives $S''_i(x)$ at each knot using the iterative thomas-algorithm, enforcing boundary conditions (natural, clamped, or periodic).
+  - For B-splines and NURBS: Evaluates basis functions $N_{i,p}(u)$ recursively via the **Cox-de Boor recursion formula**:
+    $$N_{i,0}(u) = \begin{cases} 1 & \text{if } u_i \le u < u_{i+1} \\ 0 & \text{otherwise} \end{cases}$$
+    $$N_{i,p}(u) = \frac{u - u_i}{u_{i+p} - u_i} N_{i,p-1}(u) + \frac{u_{i+p+1} - u}{u_{i+p+1} - u_{i+1}} N_{i+1,p-1}(u)$$
+    mapping rational curves with weight variables $w_i$.
 
 ### 7.15. Quantum Mechanics and Functional Analysis Engine
 - **Non-Commutative Algebraic Simplifiers**: The simplification engine parses operator variables as non-commutative symbols. Lie brackets $[A, B]$ are represented using a `LieBracketNode` with algebraic reduction rules:
@@ -510,6 +516,18 @@ For highly non-linear differential equations where classical perturbation method
 - **Abstract Function Spaces**:
   - `HilbertSpace` structures specifying domain boundaries, inner-product rules (e.g., $L^2$ integration formulas $\langle f, g \rangle = \int_a^b f(x) \overline{g(x)} dx$), and projections.
   - `NormNode` tracking abstract normed operations $\|x\|_p$ for Banach spaces, mapping algebraic reductions (e.g. triangle inequalities $\|x + y\| \le \|x\| + \|y\|$).
+
+### 7.16. Classical Orthogonal Polynomials
+- **Orthogonal Polynomial Nodes**: Dedicated classes `ChebyshevTNode`, `ChebyshevUNode`, `LegendrePNode`, `LaguerreLNode`, `HermiteHNode`, and `JacobiPNode` that store degree $n$ and symbol $x$.
+- **Symbolic Expansion Engines**: Evaluates polynomials symbolically to ordinary polynomial forms using three-term recurrences, preventing factorial calculation overflow:
+  - Chebyshev: $T_{n+1}(x) = 2x T_n(x) - T_{n-1}(x)$ with $T_0(x) = 1, T_1(x) = x$.
+  - Legendre: $(n+1) P_{n+1}(x) = (2n+1) x P_n(x) - n P_{n-1}(x)$ with $P_0(x) = 1, P_1(x) = x$.
+  - Laguerre: $(n+1) L_{n+1}(x) = (2n+1-x) L_n(x) - n L_{n-1}(x)$ with $L_0(x) = 1, L_1(x) = 1-x$.
+  - Hermite (Physicist): $H_{n+1}(x) = 2x H_n(x) - 2n H_{n-1}(x)$ with $H_0(x) = 1, H_1(x) = 2x$.
+  - Jacobi: Recurrence coefficients derived dynamically using $\alpha, \beta$ parameter expressions.
+- **Rodrigues' Formula Integrator**: Computes analytical derivatives to verify polynomials:
+  $$P_n(x) = \frac{1}{2^n n!} \frac{d^n}{dx^n} (x^2 - 1)^n$$
+  leveraging the recursive differentiation engine from Cohen's guide.
 
 ---
 
