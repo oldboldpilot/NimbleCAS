@@ -120,6 +120,7 @@ To meet the speed demands of modern simulations and real-time physical modeling,
   - **Windows**: Uses the Microsoft Concurrency Runtime's **Parallel Patterns Library (PPL)**.
   - **Linux & macOS**: Uses **Intel oneTBB (Threading Building Blocks)**.
   - Core math routines (parallel grids, polynomial arithmetic, numerical solvers) must use unified parallel wrappers that map to PPL or TBB at compile-time.
+  - **Zero-Copy Ranges and Views**: To achieve maximum throughput, data pipeline transformations (such as array maps, matrix slicing, and polynomial reductions) must utilize C++20/C++23 ranges and views (`std::ranges` and `std::views`) composed lazily. These views must be processed directly within parallel loop constructs to avoid intermediate memory copies.
 - **Concurrency Safeguards**: All parallel algorithms must be data-race free. Symbolic expression trees are immutable (COW), eliminating lock contention during concurrent reads.
 
 ### 3.2. Vectorization (Multiregister SIMD with Dynamic Dispatch)

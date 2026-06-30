@@ -229,16 +229,18 @@ export namespace nimblecas {
         #endif
     }
 
-    // Parallel grid mapping
-    template <typename T, typename MapFunc>
-    auto parallel_map(std::span<T> data, MapFunc&& mapper) -> void {
+    // Parallel transformation mapping with support for C++20/C++23 lazy views
+    template <typename R, typename MapFunc>
+    requires std::ranges::random_access_range<R> && std::ranges::sized_range<R>
+    auto parallel_transform(R&& range, MapFunc&& mapper) -> void {
+        const size_t size = std::ranges::size(range);
         #ifdef _WIN32
-        concurrency::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
-            data[i] = mapper(data[i]);
+        concurrency::parallel_for(size_t{0}, size, [&range, &mapper](size_t i) {
+            range[i] = mapper(range[i]);
         });
         #else
-        tbb::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
-            data[i] = mapper(data[i]);
+        tbb::parallel_for(size_t{0}, size, [&range, &mapper](size_t i) {
+            range[i] = mapper(range[i]);
         });
         #endif
     }
