@@ -540,6 +540,17 @@ For highly non-linear differential equations where classical perturbation method
   $$P_n(x) = \frac{1}{2^n n!} \frac{d^n}{dx^n} (x^2 - 1)^n$$
   leveraging the recursive differentiation engine from Cohen's guide.
 
+### 7.17. Polynomial and Rational Arithmetic (including Partial Fraction Decomposition)
+- **Multivariate Polynomial GCD**: Computes greatest common divisors in $\mathbb{Z}[x_1, \dots, x_k]$ using subresultant Polynomial Remainder Sequences (PRS) to control coefficient growth.
+- **Yun's Square-Free Factorization**: Decomposes polynomials into square-free components:
+  $$u(x) = \prod_{i=1}^m a_i(x)^i$$
+  where each $a_i(x)$ is square-free and $\gcd(a_i, a_j) = 1$ for $i \ne j$.
+- **Partial Fraction Decomposition (PFD)**: Evaluates the PFD of a rational function $A(x)/B(x)$.
+  1. Computes the square-free factorization of the denominator $B(x) = \prod_{i=1}^m b_i(x)^i$.
+  2. Applies **Hermite reduction** or undetermined coefficients to decompose $A(x)/B(x)$ into simpler rational terms:
+     $$\frac{A(x)}{B(x)} = P(x) + \sum_{i} \sum_{j=1}^{d_i} \frac{C_{i,j}(x)}{b_i(x)^j}$$
+     with $\deg(C_{i,j}) < \deg(b_i)$.
+
 ---
 
 ## 8. Railway-Oriented Error Handling

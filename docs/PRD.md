@@ -42,6 +42,7 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 - **Polynomial Division**: Division of polynomials with remainder ($A(x) = B(x)Q(x) + R(x)$).
 - **Greatest Common Divisor (GCD)**: Implementation of the Euclidean algorithm and the Subresultant Polynomial Remainder Sequence (PRS) for multivariate polynomial GCD.
 - **Square-Free Factorization**: Decomposing polynomials into square-free parts using Yun's algorithm.
+- **Partial Fraction Decomposition**: Decomposing rational functions $\frac{P(x)}{Q(x)}$ (with $\deg(P) < \deg(Q)$) into a sum of simpler rational terms with denominators based on the irreducible factors (linear and quadratic) of $Q(x)$, supporting the Heaviside cover-up method and system solving of undetermined coefficients.
 
 ### 2.4. Symbolic Calculus
 - **Symbolic Differentiation**: Implementation of the differentiation operator $\frac{d}{dx}$ using standard rules (sum, product, quotient, power, chain rule) for basic and transcendental functions.
