@@ -197,31 +197,50 @@ Automatic simplification applies mathematical invariants recursively:
 
 ---
 
-## 3. Parallel Patterns Library (PPL) on Windows
+## 3. Cross-Platform CPU Concurrency (PPL / TBB)
 
-Windows concurrency utilizes the Microsoft Concurrency Runtime's PPL to leverage multi-threaded CPU cores without OpenMP.
+NimbleCAS implements a unified parallel abstraction layer. It maps to **Microsoft PPL** on Windows and **Intel oneTBB** on Linux and macOS at compile-time.
 
 ```cpp
 export module nimblecas.parallel;
 import std;
+
+#ifdef _WIN32
 import <ppl.h>; // PPL headers
+#else
+import <tbb/parallel_invoke.h>; // TBB headers
+import <tbb/parallel_for.h>;
+#endif
 
 export namespace nimblecas {
-    // Parallel evaluation helper using PPL task group
+    // Parallel evaluation helper mapping to PPL or TBB
     template <typename Func>
     auto run_in_parallel(Func&& func1, Func&& func2) -> void {
+        #ifdef _WIN32
         concurrency::parallel_invoke(
             std::forward<Func>(func1),
             std::forward<Func>(func2)
         );
+        #else
+        tbb::parallel_invoke(
+            std::forward<Func>(func1),
+            std::forward<Func>(func2)
+        );
+        #endif
     }
 
-    // Parallel grid mapping
+    // Parallel grid mapping mapping to PPL or TBB
     template <typename T, typename MapFunc>
     auto parallel_map(std::span<T> data, MapFunc&& mapper) -> void {
+        #ifdef _WIN32
         concurrency::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
             data[i] = mapper(data[i]);
         });
+        #else
+        tbb::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
+            data[i] = mapper(data[i]);
+        });
+        #endif
     }
 }
 ```

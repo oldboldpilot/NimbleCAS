@@ -115,12 +115,12 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 
 To meet the speed demands of modern simulations and real-time physical modeling, NimbleCAS must fully exploit local hardware capabilities on Windows.
 
-### 3.1. CPU Parallelism (Microsoft PPL)
-- **Parallel Patterns Library (PPL)**: Must be used for CPU-bound symbolic computations, such as:
-  - Parallel evaluation of expressions over dense grids.
-  - Parallel polynomial expansion and factorization using `ppl::parallel_invoke` and `ppl::task_group`.
-  - Parallel numerical solvers and multi-start optimization searches.
-- **Concurrency Safeguards**: All algorithms must be data-race free. Symbolic expression trees are immutable (COW), eliminating the need for expensive locking during parallel read sweeps.
+### 3.1. CPU Parallelism (Microsoft PPL / Intel oneTBB)
+- **Cross-Platform Parallel Execution**: Concurrency must scale dynamically depending on the compile target:
+  - **Windows**: Uses the Microsoft Concurrency Runtime's **Parallel Patterns Library (PPL)**.
+  - **Linux & macOS**: Uses **Intel oneTBB (Threading Building Blocks)**.
+  - Core math routines (parallel grids, polynomial arithmetic, numerical solvers) must use unified parallel wrappers that map to PPL or TBB at compile-time.
+- **Concurrency Safeguards**: All parallel algorithms must be data-race free. Symbolic expression trees are immutable (COW), eliminating lock contention during concurrent reads.
 
 ### 3.2. Vectorization (Multiregister SIMD with Dynamic Dispatch)
 - **Dynamic Dispatching**: Vectorized operations (such as matrix algebra, array-based numerical evaluations, and polynomial evaluation) must query the CPU capability at runtime and execute the most advanced instruction set available:
