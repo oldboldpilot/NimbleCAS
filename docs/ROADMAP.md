@@ -321,6 +321,12 @@ Multivariate polynomial GCD and resultant calculations are parallelized via modu
 2. **GPU Arithmetic**: GPU threads compute the GCD of the modular images in parallel. To avoid the high cost of integer division on the GPU, modular reductions utilize **Montgomery multiplication** or **Barrett reduction**.
 3. **Reconstruction**: The GPU performs a parallelized **Chinese Remainder Theorem (CRT)** or **Mixed-Radix Conversion (MRC)** to reconstruct the final integer coefficients of the polynomial GCD.
 
+### 5.4. Triton-Based Math Kernels & Multi-GPU Scale
+For heavy parallelized numeric evaluations (such as simulating $10^6$ Euler-Maruyama SDE paths, calculating dense Lyapunov exponents, or executing Daubechies DWT filters):
+- **Triton Python API**: Custom math kernels are written in **OpenAI's Triton** syntax. The Triton compiler automatically generates optimized LLVM IR and PTX code.
+- **Triton Advantages**: Automatically handles memory coalescing, block-level execution scheduling, and shared memory management, producing kernels that rival hand-tuned CUDA.
+- **Multi-GPU Parallelism**: The `nimblecas.gpu` layer launches independent Triton execution streams across multiple local GPUs concurrently, using PyTorch/CUDA multi-stream orchestration.
+
 ---
 
 ## 6. Distributed Symbolic Scaling via StochasticGraphExecutionEngine
