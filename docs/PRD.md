@@ -122,10 +122,17 @@ To meet the speed demands of modern simulations and real-time physical modeling,
   - **Scalar Fallback** (standard C++ loop structures).
 - **Memory Alignment**: Vector arrays and matrices must use aligned memory allocations to avoid page-boundary faults.
 
-### 3.3. GPU Acceleration (Co-processing Model)
-- **GPU-CPU Co-processing**: The engine must support offloading heavy compute tasks to the GPU while the CPU manages expression tree transformations.
-  - **Numerical Grids**: Evaluating a symbolic expression over millions of grid points must compile the expression into a vectorized kernel (CUDA/DirectX HLSL/SYCL) and run it on the GPU.
-  - **Matrix and Linear Algebra**: Matrix exponentiation, symbolic/numerical determinants, and large linear solvers must utilize GPU-accelerated algorithms.
+### 3.3. GPU-Accelerated Symbolic Manipulation (JIT & Polish Notation)
+- **Symbolic JIT Compilation (NVRTC)**: For array-based numerical evaluations, the symbolic engine must compile expression ASTs at runtime into high-performance CUDA/HLSL kernels using NVIDIA Runtime Compilation (NVRTC) to avoid recursive tree traversals on GPU registers.
+- **Flattened Polish Stacks**: Pure symbolic processing on the GPU (e.g. parallel pattern matching or subterm searches) must flatten pointer-based trees into contiguous array buffers of prefix/postfix tokens, enabling GPU memory-coalesced parallel scans.
+- **GPU Modular Arithmetic**: To parallelize multivariate polynomial expansions and high-degree GCD operations, computations are partitioned into modulo-prime images.
+  - GPU threads execute modular multiplications and reductions in parallel using **Montgomery multiplication** or **Barrett reduction** to bypass division latency.
+  - Final results are reconstructed on-device using a parallelized **Chinese Remainder Theorem (CRT)** or **Mixed-Radix Conversion (MRC)**.
+
+### 3.4. Distributed Symbolic Derivations (StochasticGraphExecutionEngine)
+- **Stochastic Graph Scheduling**: Highly complex analytical expansions (e.g. high-order HAM deformation equations) are compiled into symbolic Directed Acyclic Graphs (DAGs) and executed on the distributed cluster.
+- **Distributed Modular Division & Resultants**: High-degree polynomial GCDs are distributed to remote worker nodes, where each worker computes the GCD modulo a different prime $p_i$ concurrently, returning the modular image.
+- **Distributed Sub-expression Memoization**: Distributed key-value tables cache simplified sub-expressions (hash-consing) across worker nodes to prevent redundant symbolic calculations across the network.
 
 ---
 

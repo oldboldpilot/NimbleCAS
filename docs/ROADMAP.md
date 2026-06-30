@@ -301,45 +301,43 @@ export namespace nimblecas {
 
 ---
 
-## 5. Local GPU Offloading (Single / Multi-GPU)
+## 5. Parallel & GPU-Accelerated Symbolic Engine (JIT & Flat Polish Notation)
 
-For intensive numerical calculations, NimbleCAS implements a co-processing pipeline using local GPUs.
+NimbleCAS implements advanced hardware acceleration to shift bottlenecks in symbolic algebra from the CPU to local GPU resources.
 
-- **Dynamic Kernel Code-Generation**: When evaluating symbolic expressions over millions of points, the symbolic AST compiles itself into a GLSL/HLSL/CUDA source code fragment.
-- **Asynchronous Execution Streams**: We use non-default streams (`cudaStream_t`) to execute numerical evaluations concurrently on a single GPU.
-- **Multi-GPU Scaling**: We partition large matrices or numerical grid arrays across available GPUs. Memory transfers between GPUs are managed using peer-to-peer copies (`cudaMemcpyPeerAsync`) to avoid rounding back through CPU host RAM.
+### 5.1. Runtime Code Generation (JIT Compilation via NVRTC)
+Dynamic pointer-heavy expression trees are inefficient for the GPU due to memory access divergence. To solve this:
+- **Kernel Compilation**: The CPU simplifies the symbolic tree and compiles the expression at runtime into CUDA source code using **NVIDIA Runtime Compilation (NVRTC)**.
+- **Grid Evaluation**: The compiled kernel is loaded dynamically and executed on the GPU, evaluating the expression concurrently over millions of elements.
+
+### 5.2. Flattened Polish Stacks for Symbolic Parallelism
+For pure symbolic evaluations (e.g. pattern matching or subterm search) on the GPU:
+- **Linearization**: Pointer-based trees are flattened into contiguous arrays using Polish prefix/postfix notation (e.g., $x^2 + 5$ becomes `[Add, Pow, Sym(x), Const(2), Const(5)]`).
+- **Parallel Scanning**: Multiple GPU threads scan these contiguous stack buffers concurrently using GPU-coalesced memory accesses, eliminating tree traversal branch divergence.
+
+### 5.3. Modular Polynomial Arithmetic on the GPU
+Multivariate polynomial GCD and resultant calculations are parallelized via modular reduction:
+1. **Modular Splitting**: The polynomial is split into independent images modulo several primes $p_i$.
+2. **GPU Arithmetic**: GPU threads compute the GCD of the modular images in parallel. To avoid the high cost of integer division on the GPU, modular reductions utilize **Montgomery multiplication** or **Barrett reduction**.
+3. **Reconstruction**: The GPU performs a parallelized **Chinese Remainder Theorem (CRT)** or **Mixed-Radix Conversion (MRC)** to reconstruct the final integer coefficients of the polynomial GCD.
 
 ---
 
-## 6. Distributed Scaling (CPU + Multi-GPU) via StochasticGraphExecutionEngine
+## 6. Distributed Symbolic Scaling via StochasticGraphExecutionEngine
 
-To scale beyond a single node, NimbleCAS integrates with **`StochasticGraphExecutionEngine`** (`https://github.com/oldboldpilot/StochasticGraphExecutionEngine`) to execute distributed evaluation graphs.
+To scale computations beyond a single node, NimbleCAS distributes computation tasks using the **`StochasticGraphExecutionEngine`** (`https://github.com/oldboldpilot/StochasticGraphExecutionEngine`).
 
 ### 6.1. Computation Graph Modeling
-We represent large symbolic-numeric computations (e.g. Monte Carlo simulations of systems of differential equations, or wide parameter sweeps of algebraic formulas) as a Directed Acyclic Graph (DAG) using the stochastic task graph structures:
-- **Tasks**: Nodes in the graph represent tasks (e.g. symbolic simplifications, polynomial factorization, numerical evaluation of matrices).
-- **Stochastic Duration Model**: Task nodes carry execution time estimates and variance models. The scheduler uses these metrics to optimize workload distribution dynamically.
-- **Hardware Affinities**: Each node declares its computational affinity:
-  - **`CPU_ONLY`**: Runs via local/remote PPL + SIMD threads.
-  - **`GPU_ONLY`**: Runs via local/remote CUDA execution paths.
-  - **`HYBRID`**: Runs on whichever resource is free.
+We represent complex symbolic-numeric systems (such as high-order Homotopy Analysis Method expansions or massive ODE/SDE parameter sweeps) as a Directed Acyclic Graph (DAG) using the stochastic task graph structures:
+- **Tasks**: Nodes represent tasks (e.g. computing Adomian Polynomials, solving modular polynomial images, or running SDE paths).
+- **Stochastic Scheduling**: Task nodes carry execution time estimates and variance models. The scheduler dynamically balances loads across local PPL CPU threads, local GPUs, and remote cluster workers.
+- **Hardware Affinities**: Nodes declare affinities: `CPU_ONLY`, `GPU_ONLY`, or `HYBRID`.
 
-### 6.2. Multi-GPU and CPU Scheduling Matrix
-The execution of the computation graph is scheduled stochastically across heterogeneous hardware resources:
-
-```
-[StochasticGraphExecutionEngine Scheduler]
-           |
-           +---> [PPL Thread Pool] --------> CPU Core 0 .. N
-           |
-           +---> [Local GPU Dispatcher] ----> GPU 0, GPU 1 .. M (via Peer-to-Peer CUDA)
-           |
-           +---> [Distributed Network] -----> Remote Node Workers (via Gitea/GitHub Deployments)
-```
-
-1. **Local Scaling**: The scheduler distributes task graph nodes to local PPL CPU threads and local GPU devices concurrently.
-2. **Distributed Scaling**: Tasks are serialized to JSON using `fastestjsoninthewest`, transmitted over TCP/IP endpoints to remote machine pools, executed, and the results are asynchronously gathered back.
-3. **Data Locality Optimization**: The engine minimizes data copying by prioritizing scheduling of downstream tasks on the exact same GPU or node holding the parent data.
+### 6.2. Distributed Modular Computations and Memoization
+The distributed scheduler optimizes symbolic execution using algebraic properties:
+1. **Distributed Modular GCD**: The coordinator broadcasts modular polynomial GCD images (modulo different primes $p_i$) across the cluster. Remote nodes compute modular images independently, and the coordinator merges results.
+2. **Distributed Hash-Consing**: The cluster implements a distributed memoization key-value table. Simplified sub-expressions are hashed and cached across the network, preventing redundant symbolic simplifications.
+3. **Data Locality Optimization**: Tasks are scheduled on nodes that already hold parent datasets (e.g. a downstream matrix calculation is scheduled on the specific GPU holding the parent matrix) to minimize inter-node TCP/IP or PCIe transfers.
 
 ---
 
