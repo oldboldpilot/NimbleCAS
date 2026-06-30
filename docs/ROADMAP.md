@@ -395,7 +395,13 @@ NimbleCAS extends Joel Cohen's core symbolic algebra engine to support advanced 
   - **Krylov Subspace Solvers**: Conjugate Gradient (CG) for positive-definite systems, GMRES with Gram-Schmidt orthogonalization, and BiCGSTAB for general sparse systems, utilizing block Jacobi preconditioners.
 
 ### 7.3. Series, Transforms, Wavelets, and Spectral Methods
-- **Taylor, Laurent, and Puiseux Series**: Computes asymptotic expansions around $x = a$ up to order $n$ using symbolic differentiation and recursive coefficients.
+- **Taylor, Laurent, and Puiseux Series**:
+  - **Taylor's Series**: Computes univariate expansions around point $z = a$ up to order $n$:
+    $$f(z) \approx \sum_{k=0}^n \frac{f^{(k)}(a)}{k!} (z-a)^k$$
+    acting on both the **real** ($\mathbb{R}$) and **complex** ($\mathbb{C}$) domains. Leverages high-order symbolic differentiation or composite lookup compositions.
+  - **Laurent & Puiseux Series**: Supports negative power terms (for pole singularities) and fractional power terms (for branch points). Evaluates residues at poles using $\operatorname{Res}(f, a) = a_{-1}$.
+  - **Convergence Radius**: Calculates the radius of convergence $R$ using the Cauchy-Hadamard formula:
+    $$R = \frac{1}{\limsup_{k\to\infty} \sqrt[k]{|a_k|}}$$
 - **Wavelets**: Modules for Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT), containing precompiled filters (Haar, Daubechies 4/8, Morlet) optimized via SIMD vector registers.
 - **Spectral Methods**: Solves differential equations numerically by representing the solution $u(x)$ as a sum of global basis functions:
   - **Fourier Collocation**: Used for periodic boundary conditions, evaluating spatial derivatives via the Discrete Fourier Transform (FFT) on the GPU.

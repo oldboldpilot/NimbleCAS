@@ -83,7 +83,7 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 ### 2.9. Integral Transforms, Series, and Wavelets
 - **Fourier Analysis**: Symbolic computation of Fourier series expansion, continuous Fourier transforms, and discrete/fast Fourier transforms.
 - **Wavelets**: Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT) with support for Haar, Daubechies, and Morlet wavelet filters.
-- **Series & Asymptotics**: Infinite sum evaluations, convergence tests, and Taylor, Laurent, and Puiseux series expansions of expressions around any point $x = a$ up to arbitrary order $n$.
+- **Series & Asymptotics**: Infinite sum evaluations, convergence tests, and **Taylor's series expansions** ($f(z) \approx \sum_{k=0}^n \frac{f^{(k)}(a)}{k!}(z-a)^k$) in both the **real** ($\mathbb{R}$) and **complex** ($\mathbb{C}$) domains. Supports Laurent and Puiseux series expansions of expressions around any point $z = a$ up to arbitrary order $n$, automatic differentiation, residue evaluation at singular poles, and computation of the radius of convergence.
 
 ### 2.10. Asymptotic Perturbation and Homotopy Methods (Esoterica)
 NimbleCAS supports advanced symbolic solvers for highly non-linear or singular mathematical systems:
