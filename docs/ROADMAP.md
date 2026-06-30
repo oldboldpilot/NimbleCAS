@@ -470,6 +470,11 @@ For highly non-linear differential equations where classical perturbation method
   - Matrix containers map to `\begin{pmatrix} ... \end{pmatrix}` with rows separated by `\\`.
 - **Monadic and Fluent Integration**: Exposes `.to_latex()` on the Expression class to enable fluent format conversions.
 
+### 7.13. Executable Document Engine
+- **Markdown Parsing & AST Construction**: A custom parser extracts text and code block elements into a unified Document AST. Code fence languages trigger dedicated execution dispatchers.
+- **Incremental Cell Execution**: Each code cell is hashed based on its text and any previous variables/expressions it references. The executor manages an in-memory session state, skipping execution of unchanged cells by pulling cached values/renders.
+- **HTML & WebGL Generation**: Compiles executable markdown into interactive HTML pages. Math blocks are rendered using MathJax/KaTeX, and 3D surface plots use embedded Three.js components pointing to inline JSON buffers.
+
 ---
 
 ## 8. Railway-Oriented Error Handling

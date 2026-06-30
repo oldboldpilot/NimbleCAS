@@ -110,6 +110,12 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **GPU-Accelerated Graphics**: Integration with WebGL (for Jupyter Notebook environments) and DirectX/Vulkan/OpenGL (for native GUI applications) to render millions of data points smoothly. Supporting export to vector formats (SVG, PDF) and raster formats (PNG, JPEG).
 - **LaTeX Math Exporter**: Built-in support to compile any symbolic expression tree into standard, syntax-conforming LaTeX strings (e.g. converting division to `\frac`, integrals to `\int`, special functions like `lambertW` to custom formats, and matrices to `\begin{pmatrix}`). Exposed directly in Python bindings (`expr.to_latex()`).
 
+### 2.17. Executable Document Engine (Live Notebooks)
+- **Live Markdown Integration**: Support for executing dynamic documents (`.ncmd` / `.casmd`) containing interspersed Markdown text and executable code blocks (fenced with ````{nimblecas}` or ````{python}`).
+- **Inline Result Rendering**: The engine must execute code blocks in a sandboxed interpreter and render resulting mathematical evaluations (formatted as LaTeX equations), tables, stdout logs, and generated 2D/3D plots directly inline.
+- **State Caching & Execution Modes**: Incremental execution support via cell-level hashing. If a code block's source and dependency cells are unchanged, the engine uses cached execution states to bypass recalculation.
+- **Export Formats**: Ability to compile the executed live notebook into polished static HTML (containing embedded WebGL elements for interactive 3D plots), standard Markdown, and production-ready PDF documents.
+
 ---
 
 ## 3. High-Performance Architecture & Hardware Acceleration
