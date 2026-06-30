@@ -1,0 +1,35 @@
+# Build and Temp Directories
+build/
+bin/
+lib/
+out/
+*.pcm
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Environment and Secrets
+.env
+.env.*
+config/.env
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.suo
+*.user
+*.sln
+*.vcxproj
+*.filters
+
+# Log files
+*.log
+logs/
+
+# Backup and Cache
+.av_cache/
+.claude/
+.gemini/

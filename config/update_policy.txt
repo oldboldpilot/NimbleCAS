@@ -1,0 +1,113 @@
+# BigBrotherAnalytics Update & Commit Policy
+# Last Updated: December 22, 2025
+
+## OFFICIAL CODE POLICY (authoritative)
+The canonical, official code policy for ALL code (C++ engines + nanobind bindings,
+Python bot/eval/training, and tests) is `config/cpp_details.txt`. Every change
+MUST adhere to it and every code review MUST check against it. It governs C++23
+style/safety, threading (TBB, thread-safe, no data races), FP32 train==infer
+arithmetic, perf evidence (perf/VTune/Nsight before any speedup claim), and the dual
+deep-thinking code-review requirement (Serena/claude + agy) before merge.
+
+remote repository is both in github and gitea(self-hosted, credentials stored in config/.env file) ,
+create the gitea repo if it does not exist already before pushing to it. Since you have the credentials and the 
+ssh login has been setup already.
+
+## Pre-Commit Checklist
+All this applies only to code that is used by the python bot in python_big_brother_analytics_bot folder and any C++ python bindings and supporting code for the python bot. 
+1. **Build Verification**
+   - Compile with clang-tidy and clang-format
+   - Zero warnings, zero errors required
+   - Command: `SKIP_CLANG_TIDY=1 ninja -C build nimblecas`
+
+2. **Test Suite**
+   - All tests must pass before pushing
+   - Command: `ctest --test-dir build`
+   - Review code for adherence to coding standards
+
+3. **Documentation Updates** (Required for every push)
+   - Move all json files in the root for backtests to a backtests/ folder for better organization
+   - Move all log files in the root to logs/ folder for better organization
+   - Move all .md files in the root to docs/ folder for better organization (later instructions will specify more after the files have been moved how they should be organized inside the docs/ folder)
+   - Update docs/QUICKSTART.md (if changes affect setup/use)
+   - Update ai/CLAUDE.md (technical changes)
+   - Update CLAUDE.md (root quick reference)
+   - Sync .github/copilot-instructions.md with CLAUDE.md
+   - Sync ai/gemini.md with CLAUDE.md
+   - Update docs/INDEX.md (if new/removed docs)
+   - Update docs/PRD.md (status, test counts)
+   - Update docs/ROADMAP.md (progress)
+   - Update README.md (user-facing changes)
+   - move all markdown's in root folder except README.md and QUICKSTART.md to docs/ folder for general documentation
+   - reorganise the root folder moving stray documents,.json,.txt,.log files and reorganize. Check dependencies and adjust to make sure nothign is broken
+   so that when you move the files everything still works as expected
+   - Move all markdown except README and QUICKSTART docs to docs/ folder for python bot documentation
+   - Organise the docs/ folder into subfolders by topic:
+     - docs/api/ for API documentation
+     - docs/guides/ for user guides and tutorials
+     - docs/architecture/ for system architecture and design docs
+     - docs/release_notes/ for changelogs and release notes
+     - docs/technical/ for deep technical dives
+     - docs/meeting_notes/ for meeting minutes and notes
+     - docs/other/ for miscellaneous documentation
+     - Organise and update docs/INDEX.md to reflect this new structure
+     - Ensure all links in docs/INDEX.md are valid and up to date
+     - Ensure all links and reference in the documentation point to the correct locations after reorganization
+     - Other general documentation improvements as needed, and following best practices for technical writing
+     - Follow the same process for the root README.md,QUICKSTART and INDEX if it contains sections that fit into these categories
+     - Arrange the root docs into a docs/ folder if applicable in the same way as above for the python bot documentation
+
+4. **Session State**
+   - Save session state to docs/session_logs/
+
+## Authorship Policy (MANDATORY)
+
+**ALL code and commits MUST be attributed ONLY to: Olumuyiwa Oluwasanmi**
+
+### Prohibited Actions
+- NEVER add "Co-Authored-By:" lines with AI agent names (Claude, Copilot, Anthropic, etc.)
+- NEVER use "@author Claude", "@author AI Assistant", or any AI agent attribution
+- NEVER include AI agent names in git history, branch names, file headers, or comments
+- NEVER mention AI assistants as co-authors in commit messages
+
+### Required Actions
+- ALWAYS use "@author Olumuyiwa Oluwasanmi" in file headers
+- VERIFY existing files follow this policy before modifying
+- All commits attributed solely to: Olumuyiwa Oluwasanmi
+
+### Violation Response
+Any violation of this policy must be fixed immediately by amending the commit
+or rebasing the history to remove AI attributions.
+
+## Commit Message Format
+
+Commit messages must be:
+- Detailed and descriptive of the changes made
+- Follow conventional commits format (feat:, fix:, docs:, refactor:, etc.)
+- Include a summary of what changed and why
+- NO AI co-author attributions
+
+Example:
+```
+feat(module): Brief description of feature
+
+Detailed explanation of what changed:
+- Change 1
+- Change 2
+- Change 3
+
+Files modified:
+- file1.cpp
+- file2.cppm
+```
+
+## Post-Commit Actions
+
+1. **Push to GitHub**
+   - Push to appropriate branch
+   - Verify CI/CD passes
+
+2. **Backup to NAS**
+   - Run: `bash scripts/backup_to_nas.sh`
+   - Verify backup completed successfully
+

@@ -1,0 +1,123 @@
+═══════════════════════════════════════════════════════════════════════════════
+  OFFICIAL CODE POLICY — NimbleCAS
+  This document is the AUTHORITATIVE, canonical code policy for the project.
+  ALL code (C++ engines, nanobind bindings, Python bot/eval/training, and tests)
+  MUST adhere to it. It governs: C++23 style + safety, threading (TBB, thread-safe,
+  no data races)use PPL and STL on windows, arithmetic (BF16 end-to-end, train==infer, you can use fp32 for adamw,but prefer bf16 with momentum), performance
+  (perf/VTune/Nsight evidence before any speedup claim), and the dual code-review
+  requirement (deep-thinking Serena/claude + agy) before merge. New code AND new
+  tests are written to this policy; reviews check against it. Referenced by
+  configs/update_policy.txt as the official policy. Made-official: 2026-06-13.
+═══════════════════════════════════════════════════════════════════════════════
+
+C++23 code purely that adheres to the following rules:
+1. Follows C++23 standard.
+2. Follows C++ Core Guidelines.
+3. No RAW pointers.
+4. Uses smart pointers (e.g., std::unique_ptr, std::shared_ptr) if pointers are necessary.
+5. All memory is aligned.
+6. Make sure to use RAII (Resource Acquisition Is Initialization) for resource management.
+8. Use constexpr and inlinine functions where appropriate for performance and clarity.
+9. Use std::optional for functions that may not return a value.
+10. Use C++ attributes (e.g., [[nodiscard]], [[maybe_unused]]) to improve code safety and readability., also use them for peformance hints 
+ where applicable(like branch prediction).
+11. Use import statements to include necessary standard library headers and avoid unnecessary includes.
+12 Use import std instead of including individual headers where possible to reduce compilation time and improve code organization.
+13. Use namespaces to avoid name collisions and improve code organization.
+14. Make sure all code is thread-safe and avoids data races, using synchronization primitives (e.g., std::mutex, std::lock_guard) where necessary.
+15. Use a fluent api design where appropriate to improve code readability and usability.
+16. Use for range loops and range-based algorithms (e.g., std::ranges) for better readability and performance.
+17. Use STL algorithms and data structures and parallel algorithms(parallel STL and std::execution) where appropriate to improve performance and reduce code complexity.
+18. When using TBB for performance-critical code, make sure to use it in a way that is compatible with C++23 and follows the above guidelines. Also make sure to use
+    TBB's parallel algorithms and lock-free data structures where appropriate to maximize performance and minimize contention.
+19. Use concepts and constraints to improve code readability and maintainability, and to catch errors at compile time.
+20. Use structured bindings and auto type deduction to improve code readability and reduce verbosity.
+21. Make sure to use move semantics and perfect forwarding where appropriate to improve performance and reduce unnecessary copying.
+22. Use copy on write semantics where appropriate to improve performance and reduce memory usage.
+23. Use string_view instead of std::string when possible to avoid unnecessary copying of strings, and range_views for better performance and readability when working with ranges of data.
+24. Use std::span for non-owning views of contiguous sequences of data, and std::array for fixed-size arrays, to improve performance and reduce memory usage.
+25. Use std::variant for type-safe unions and std::any for type-erased values, to improve code safety and flexibility.
+26. Use std::filesystem for file system operations, to improve code readability and portability.
+27. Use std::chrono for time-related operations, to improve code readability and accuracy.
+28. In using import std, make sure the header is already precompiled with all the necessary precompiled flags for performance and prevent BMI issues, pass all the necessary flags,
+    through the cmake build system using variables.
+29. Use multiregister simd types and operations where appropriate to improve performance, while ensuring that the code remains portable and maintainable. Use dynamic dispathing,
+    to make sure we are using the best available SIMD instructions on the target platform, while still maintaining compatibility with older hardware. 
+    . SIMD should waterfall dynamically from the most advanced instruction set available (e.g., AVX-512) down to the least advanced (e.g., SSE2) to ensure maximum performance on a wide range of hardware.
+    and then finally fall back to scalar code if no SIMD instructions are available. 
+    The multi-register simd should be determined by dynamic dispatch.
+     Make sure to use appropriate alignment and memory management techniques when working with SIMD data to ensure optimal performance and avoid issues with memory access.
+30. Use C++23's new features such as modules, concepts, and ranges to improve code organization, readability, and performance. Make sure to use these features in a way that is compatible
+31. Use Trail calling function syntax at all times throughout the codebase to improve readability and consistency. This syntax allows for a more natural and intuitive way of calling functions, especially when chaining multiple function calls together. It also helps to reduce the amount of parentheses needed, making the code cleaner and easier to read. Make sure to use this syntax consistently across all functions in the codebase to maintain a cohesive and readable style.
+32. Use C++23, std::expected, std::unexpected for error handling to improve code safety and readability, use railway oriented programming style to handle errors in a more functional way,
+     and to avoid the pitfalls of exceptions and error codes. This approach allows for better composition of functions and improved error handling, while still maintaining the benefits of C++'s performance and flexibility. Make sure to use std::expected and std::unexpected in a way that is consistent with the overall design of the codebase, and to provide clear and informative error messages when errors occur.
+33. Test thoroughly using a combination of unit tests, integration tests, and performance tests to ensure that the code is correct, efficient, and maintainable. Use a testing framework such as Google Test or Catch2 to write and run tests, and make sure to cover all edge cases and potential failure scenarios. Additionally, use code coverage tools to identify areas of the code that may not be adequately tested, and to ensure that all code paths are exercised during testing. Finally, use continuous integration tools to automate the testing process and ensure that tests are run regularly as part of the development workflow.
+34. Use clang-tidy and clang-format to maintain code quality and consistency, and to catch potential issues early in the development process. Configure these tools with appropriate rules and settings to enforce the coding standards and guidelines outlined above, and to provide clear and actionable feedback when issues are detected. Make sure to run these tools regularly as part of the development workflow, and to address any issues that are identified in a timely manner to maintain code quality and prevent technical debt from accumulating over time.
+make sure the code passes with no errors or warnings on all supported platforms and compilers, and that it is well-documented and easy to understand for other developers who may work on the codebase in the future. Additionally, make sure to keep the codebase up-to-date with the latest C++ standards and best practices, and to continuously refactor and improve the code as needed to maintain its quality and performance over time.
+35. Guard against null dereferencing and ensure that all pointers are properly initialized before use. Use smart pointers to manage dynamic memory and avoid memory leaks, and use std::optional to represent values that may be absent. Additionally, use assertions and error handling to catch potential null pointer dereferences at runtime, and to provide clear and informative error messages when such issues occur. Make sure to follow best practices for pointer safety and to avoid common pitfalls such as dangling pointers and double deletions, to ensure that the code is robust and reliable.
+use nullptr and nullptr_t instead of NULL or 0 for pointer literals, to improve code clarity and safety. This helps to prevent accidental misuse of integer literals as pointers, and to make it clear when a pointer is being initialized or compared to a null value. Additionally, use smart pointers and std::optional to manage dynamic memory and represent optional values, to further improve code safety and reduce the risk of null pointer dereferences. Make sure to follow best practices for pointer safety and to use appropriate error handling techniques to catch potential issues at runtime.
+36. Use valgrind and sanitizers(LeakSantitizer, AddressSanitizer,MemorySanitizer,ThreadSanitizer,UndefinedBehaviorSanitizer) etc to located memory leaks,undefined behaviour, uninitialized memory, and other issues that can arise in C++ code. These tools can help to identify potential problems early in the development process, and to ensure that the code is robust and reliable. Make sure to use these tools regularly as part of the development workflow, and to address any issues that are identified in a timely manner to maintain code quality and prevent technical debt from accumulating over time. Additionally, use static analysis tools such as clang-tidy to catch potential issues at compile time, and to provide clear and actionable feedback when issues are detected.
+37. Use fastestjsoninthewest for JSON parsing and serialization, to improve performance and reduce memory usage when working with JSON data. This library is designed to be fast and efficient, while still providing a simple and intuitive API for working with JSON in C++. Make sure to use this library in a way that is consistent with the overall design of the codebase, and to provide clear and informative error messages when issues occur during JSON parsing or serialization. Additionally, use appropriate error handling techniques to catch potential issues at runtime, and to ensure that the code is robust and reliable when working with JSON data.
+38. Use CMake(latest version) for build configuration and management, to improve the portability and maintainability of the codebase. CMake provides a powerful and flexible build system that can be used to manage complex projects with multiple dependencies and platforms. Make sure to use CMake in a way that is consistent with the overall design of the codebase, and to provide clear and informative error messages when issues occur during the build process. Additionally, use appropriate CMake features such as target-based builds, modern CMake practices, and support for multiple build systems to ensure that the code can be built and maintained effectively across different environments. 
+    Use the latest version of Ninja as the underlying build system to take advantage of its performance benefits, and to ensure that the build process is fast and efficient. Make sure to configure CMake to use Ninja as the default generator, and to provide clear instructions for building the codebase using CMake and Ninja in the documentation. Additionally, use CMake's support for out-of-source builds to keep the source directory clean and organized, and to make it easier to manage multiple build configurations (e.g., Debug, Release) without cluttering the source tree.
+
+39. No use of any external libraries for testing, use only the testing framework provided by the cpp-23 C++ logger or the one provided by sensen library or build one internally.
+40. Use C++23 modules, particularly precompiled modules, to organize the codebase and improve compilation times, while ensuring that the code remains portable and maintainable. Use modules to encapsulate related functionality and to provide clear interfaces for other parts of the codebase to interact with. Additionally, use precompiled headers where appropriate to further improve compilation times, while ensuring that the code remains modular and maintainable. Make sure to follow best practices for module design and organization, and to provide clear documentation for each module to help other developers understand its purpose and usage.
+41. Prefer the use of import std and precompiled modules over traditional header files to reduce compilation times and improve code organization. This approach allows for better encapsulation of implementation details and can lead to faster build times, especially in large codebases. Make sure to use import statements to include necessary standard library headers and to avoid unnecessary includes, which can further improve compilation times and reduce dependencies between modules. Additionally, use precompiled headers where appropriate to further optimize build times, while ensuring that the code remains modular and maintainable.
+42. Make sure all datastructure are aligned, and use of constexpr and inline functions where appropriate 
+    for performance and clarity. This helps to ensure that the code is efficient and easy to understand, 
+    while also taking advantage of C++23's features to improve performance. 
+    Additionally, use appropriate alignment and memory management techniques when working with 
+    data structures to ensure optimal performance and avoid issues with memory access. Make sure to follow best practices.
+     for data structure design and organization, and to provide clear documentation for each data structure to help other developers understand its purpose and usage.
+43. Use perf and other performance profiling tools to identify bottlenecks and optimize critical sections of the code. This helps to ensure that the code is efficient
+     and performs well under real-world conditions. 
+     Make sure to use these tools regularly as part of the development workflow, 
+     and to address any performance issues that are identified in a timely manner 
+     to maintain code quality and prevent technical debt from accumulating over time. 
+     Additionally, use appropriate optimization techniques such as algorithmic improvements, 
+     data structure optimizations, and SIMD vectorization with dynamic dispatch where applicable to further 
+     improve performance while maintaining code readability and maintainability.
+44. Use xor/binary fuses filters to improve performance and reduce memory usage when working with large datasets. 
+These filters are designed to be fast and efficient, 
+while still providing a simple and intuitive API for working with large datasets in C++. Use where appropriate where we need to do membership very fast.
+ Make sure to use these filters in a way that is consistent with the overall design of the codebase, 
+ and to provide clear and informative error messages when issues occur during their use.
+  Additionally, use appropriate error handling techniques to catch potential issues at runtime, 
+  and to ensure that the code is robust and reliable when working with large datasets.
+  45. Use C++23's new features such as modules, concepts, and ranges to improve code organization, readability, and performance. Make sure to use these features in a way that is compatible with the overall design of the codebase, and to provide clear documentation for each feature to help other developers understand its purpose and usage. Additionally, use appropriate error handling techniques to catch potential issues at runtime, and to ensure that the code is robust and reliable when using these new features.
+  46. Use Trail calling function syntax at all times throughout the codebase to improve readability and consistency. This syntax allows for a more natural and intuitive way of calling functions, especially when chaining multiple function calls together. It also helps to reduce the amount of parentheses needed, making the code cleaner and easier to read. Make sure to use this syntax consistently across all functions in the codebase to maintain a cohesive and readable style.
+  47. Use method chaining and fluent API design where appropriate to improve code readability and usability. This approach allows for a more natural and intuitive way of calling functions, especially when chaining multiple function calls together. It also helps to reduce the amount of boilerplate code needed, making the code cleaner and easier to read. Make sure to use method chaining and fluent API design consistently across all relevant parts of the codebase to maintain a cohesive and readable style.
+
+48. Use coroutines for async programming,use std::array or std::vector for arrays instead of c-style arrays, use std::size_t, std::uintX_t, std::intX_t for sizes and indexes
+49. Prefer for range loops and range-based algorithms (e.g., std::ranges) for better readability and performance when working with collections of data. This approach allows for a more concise and expressive way of iterating over collections, while also taking advantage of C++23's features to improve performance. Additionally, use appropriate error handling techniques to catch
+potential issues at runtime, and to ensure that the code is robust and reliable when working with collections of data. Make sure to follow best practices for range-based programming and to provide clear documentation for each use case to help other developers understand its purpose and usage. Unless performance is critical and we need to use iterators or indices,
+in which case we should use the appropriate STL algorithms and data structures to achieve the best performance while maintaining code readability and maintainability. Multi register SIMD with dynamic dispatch should be used where appropriate to further improve performance when working with collections of data, while ensuring that the code remains portable and maintainable across different hardware platforms.
+
+50. CANONICAL BUILD FLAGS — MANDATORY (Last Updated: April 2026). All C++23 modules and .so objects in this repo MUST compile with the exact same CANONICAL_FLAGS array defined in scripts/build_common.sh. Any divergence causes BMI (Binary Module Interface) validation to reject the PCM with a module-file-config-mismatch error. The canonical flags are:
+    -std=c++23 -stdlib=libc++ -fPIC -O3
+    -march=x86-64-v3 -mtune=generic   (NOT -march=native — host-specific ISA breaks cross-host reproducibility)
+    -mavx -mavx2 -mfma
+    NO -ffast-math   (it enables non-associative FP reordering which produces different results on different machines — we accept the ~2-5% single-threaded perf cost for bit-identical results)
+    -pthread -fstack-protector-strong -DNDEBUG
+    (NO -fopenmp: the codebase is TBB-only as of 2026-06-06 — OpenMP was dropped from CANONICAL_FLAGS; parallelism is exclusively oneTBB.)
+    -D_LIBCPP_ENABLE_EXPERIMENTAL -fexperimental-library
+    -nostdinc++ -isystem external/libcxx-v1/include
+    Toolchain: clang++-22 only. AVX-512 is engaged via [[gnu::target("avx512f,avx512dq,fma")]] per-function attributes, NOT global -mavx512f flags, so the binary stays portable across machines that lack AVX-512.
+
+51. VENDORED STD MODULE AND LIBCXX — MANDATORY (April 2026). Never use system-provided std.cppm or libc++ headers. The repo vendors both:
+    - modules/std.cppm — libc++ C++23 std module export
+    - external/libcxx-v1/include/ — full libc++ header tree
+    All build scripts must source scripts/build_common.sh which resolves REPO_ROOT via git rev-parse and uses repo-relative paths exclusively. Absolute system paths (e.g. /usr/lib/llvm-22/share/libc++/v1/) are NEVER used because cloud boxes (Vast.ai, Packet) may have different LLVM versions installed, causing silent partial builds that fail deep in compilation — wasting GPU $/hr before the error surfaces.
+
+52. EXPLICIT MODULE FILE PATHS — NO -fprebuilt-module-path (April 2026). Every .pcm consumer must explicitly specify each dependency via -fmodule-file=<name>=<path>. NEVER use -fprebuilt-module-path as it silently picks up the wrong PCM from an unrelated build tree and yields opaque BMI errors. This explicit discipline enables parallel variant builds (e.g., modules/ canonical + modules_experimental/ AVX-512 variant) to coexist without conflict. Each build tree owns its own PCM stack identified by explicit relative paths.
+
+53. TBB PARALLEL SWEEP — TASKSET CPU PINNING (April 2026). When launching TBB-parallel sweep processes on 32-core machines (oluwasanmi-fedora-server, oluwasanmi-tradingbot-server), always pin to exactly half the cores using taskset: taskset -c 0-15. The --n-threads argument to Python scripts alone is insufficient — TBB can still spawn threads beyond the requested count. taskset is the ONLY reliable way to guarantee 50% CPU usage and leave the other half for the live trading bot. Example: nohup taskset -c 0-15 .venv/bin/python3 scripts/sweep_scalp_joint_optuna.py --n-threads 16
+
+54. $ORIGIN-RELATIVE RPATHS FOR PORTABILITY (April 2026). All .so files built in this repo must use $ORIGIN-relative rpaths computed by the so_to_root_rpath() helper in scripts/build_common.sh (e.g., build_indicators/python → $ORIGIN/../..). Never hardcode absolute library paths. This ensures the repo can be moved, rsync'd to cloud boxes, or copied into git worktrees without relinking. The vendored libc++ runtime at external/libcxx-v1/lib is found via rpath at load time, preventing symbol mismatches when the host has a different libc++ version installed.
+
+55. CROSS-HOST FP PARITY VERIFICATION (April 2026). After any C++ performance change (new intrinsics, flag changes, module updates), verify bit-identical results across all production hosts before merging. Run the full sweep on both oluwasanmi-fedora-server and oluwasanmi-tradingbot-server and diff trade-level metrics at zero tolerance. The fix: remove -ffast-math and switch from -march=native to -march=x86-64-v3 -mtune=generic. Any future perf change that introduces -ffast-math or host-specific ISA flags is a regression.
+56. Use AddressSanitizer and UndefinedBehaviorSanitizer  and  LeakSanitizer to make sure there are no memory leaks, undefined behavior, or other issues in the code. These tools can help to identify potential problems early in the development process, and to ensure that the code is robust and reliable. Make sure to use these tools regularly as part of the development workflow, and to address any issues that are identified in a timely manner to maintain code quality and prevent technical debt from accumulating over time. Additionally, use static analysis tools such as clang-tidy to catch potential issues at compile time, and to provide clear and actionable feedback when issues are detected.
+57. All file paths of libraries and *.pcm files must be relative to the repo root. So all the code is easily portable across different operating systems or machines.
+58. Use perf to discover and improve and eliminate performance bottlenecks in the codebase. This includes identifying hot paths, optimizing critical sections of code, and ensuring that the code is efficient and performs well under real-world conditions. Make sure to use perf regularly as part of the development workflow, and to address any performance issues that are identified in a timely manner to maintain code quality and prevent technical debt from accumulating over time. Additionally, use appropriate optimization techniques such as algorithmic improvements, data structure optimizations, and SIMD vectorization with dynamic dispatch where applicable to further improve performance while maintaining code readability and maintainability.
+59. Use Nvidia nsight to discover and improve GPU performance bottlenecks in the codebase. This includes identifying hot paths, optimizing critical sections of GPU code, and ensuring that the code is efficient and performs well under real-world conditions when running on Nvidia GPUs. Make sure to use Nvidia nsight regularly as part of the development workflow, and to address any performance issues that are identified in a timely manner to maintain code quality and prevent technical debt from accumulating over time. Additionally, use appropriate optimization techniques such as algorithmic improvements, data structure optimizations, and GPU-specific optimizations to further improve performance while maintaining code readability and maintainability when running on Nvidia GPUs.
