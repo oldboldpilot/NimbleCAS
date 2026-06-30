@@ -491,6 +491,17 @@ For highly non-linear differential equations where classical perturbation method
 - **Newton-Raphson & Multi-dimensional Systems**: Resolves $F(x) = 0$ for vector fields using symbolic Jacobian matrices generated at runtime:
   $$x_{n+1} = x_n - J(x_n)^{-1} F(x_n)$$
   using multi-threaded LU decompositions from Section 2.7.
+- **Inexact Newton & JFNK (C.T. Kelley)**: Solves the linear Newton step $J(x_k) s_k = -F(x_k)$ inexactly using iterative Krylov solvers (GMRES / BiCGSTAB) to satisfy:
+  $$\| F(x_k) + J(x_k) s_k \| \le \eta_k \| F(x_k) \|$$
+  where $\eta_k$ is the forcing term computed using Kelley's choice: $\eta_k = \gamma (\|F(x_k)\|/\|F(x_{k-1})\|)^\alpha$ to prevent oversolving.
+  - **Jacobian-Free Newton-Krylov (JFNK)**: Evaluates Jacobian-vector products $J(x)v$ without forming or storing the Jacobian matrix, using finite difference approximations:
+    $$J(x) v \approx \frac{F(x + \epsilon v) - F(x)}{\epsilon}$$
+    leveraging the parallelized GMRES solver.
+- **Armijo Line Search**: Ensures global convergence of Newton steps by performing backtracking line search to find step size $\lambda$ satisfying the Armijo condition:
+  $$\| F(x_k + \lambda s_k) \| < (1 - \alpha \lambda) \| F(x_k) \|$$
+- **Anderson Acceleration**: Accelerates fixed-point iterations $x_{k+1} = g(x_k)$ by forming the new estimate as a linear combination of the past $m$ iterations:
+  $$x_{k+1} = \sum_{i=0}^m \alpha_i g(x_{k-m+i})$$
+  solving a small optimization problem for $\alpha_i$ to minimize the residual norm.
 - **Broyden's Quasi-Newton Method**: Updates the Jacobian approximation $B_n$ using the rank-one update formula:
   $$B_{n+1} = B_n + \frac{\Delta F_n - B_n \Delta x_n}{\|\Delta x_n\|^2} \Delta x_n^T$$
   to avoid costly symbolic evaluations of $J(x_n)$ at every iteration.

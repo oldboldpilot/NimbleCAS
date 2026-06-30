@@ -131,7 +131,7 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **Non-Linear Equations & Systems**: Solvers for root-finding of single univariate non-linear equations and multi-dimensional systems of non-linear equations ($F(x) = 0$).
 - **Iterative Root Solvers**: Implementation of:
   - **Fixed-Point Iteration**: Solving $x = g(x)$ with user-defined convergence criteria.
-  - **Newton-like Methods**: High-speed Newton-Raphson, Secant, and Halley's methods for univariate functions; multi-dimensional Newton's method and Broyden's quasi-Newton updates for systems of equations.
+  - **Newton-like & C.T. Kelley Iterative Methods**: High-speed Newton-Raphson, Secant, and Halley's methods for univariate equations. For multi-dimensional systems: multi-dimensional Newton's method, Broyden's updates, **Inexact Newton methods** (with linear solvers like GMRES/BiCGSTAB utilizing Kelley's $\eta$-forcing terms to prevent oversolving), **Jacobian-Free Newton-Krylov (JFNK)**, **backtracking line search** (Armijo rule for global convergence), and **Anderson Acceleration** for fixed-point iterations.
 - **Linear & Non-Linear Optimization**:
   - **Linear Programming (LP)**: Solvers for bounded linear optimization systems using the Simplex and Interior-Point algorithms.
   - **Non-Linear Optimization**: Local and global minimizers including Gradient Descent, Conjugate Gradient, Nelder-Mead simplex, and L-BFGS algorithms.
