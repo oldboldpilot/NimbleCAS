@@ -1,5 +1,5 @@
-# BigBrotherAnalytics Update & Commit Policy
-# Last Updated: December 22, 2025
+# NimbleCAS Update & Commit Policy
+
 
 ## OFFICIAL CODE POLICY (authoritative)
 The canonical, official code policy for ALL code (C++ engines + nanobind bindings,
