@@ -58,7 +58,14 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 ### 2.6. Advanced Special Functions, Complex Numbers, and Combinatorics
 - **Advanced Functions**: Implementation of special transcendental functions, specifically the **Lambert W function** ($\text{lambertW}(z)$), error functions ($\text{erf}$), and gamma/beta functions.
 - **Complex Number Engine**: Native support for complex variables ($z = x + i y$) and Euler polar representations ($r e^{i\theta}$). Symbolic evaluation of complex functions, branch cut tracking, and complex residues.
-- **Combinatorics**: Recursive and closed-form symbolic calculation of factorials, binomial coefficients, combinations, permutations, Stirling numbers, and generating functions.
+- **Combinatorics**: Recursive and closed-form symbolic calculation of combinatorial functions. Native support for:
+  - **Stirling Numbers**: Stirling numbers of the first kind $\left[ \begin{matrix} n \\ k \end{matrix} \right]$ (cycle-counting) and second kind $\left\{ \begin{matrix} n \\ k \end{matrix} \right\}$ (subset-partitioning).
+  - **Catalan Numbers**: Catalan numbers $C_n = \frac{1}{n+1} \binom{2n}{n}$ with symbolic recurrence relations.
+  - **Falling and Rising Powers**: Falling factorial powers $x^{\underline{n}} = \prod_{k=0}^{n-1} (x-k)$ and rising factorial powers $x^{\overline{n}} = \prod_{k=0}^{n-1} (x+k)$ from *Concrete Mathematics*, including algebraic transformations and conversions to/from ordinary powers using Stirling numbers.
+  - **Partitions & Bell Numbers**: Integer partitions $P(n)$ and Bell numbers $B_n$ representing the total number of partitions of a set.
+  - **Eulerian & Fibonacci Sequences**: Eulerian numbers $\left\langle \begin{matrix} n \\ k \end{matrix} \right\rangle$, Fibonacci numbers $F_n$, Lucas numbers $L_n$, and derangements (subfactorials $!n$).
+  - **Bernoulli, Euler, and Multinomials**: Bernoulli numbers $B_n$, Euler numbers $E_n$, multinomial coefficients $\binom{n}{k_1, k_2, \dots, k_m}$, and Pochhammer symbol $(x)_n$.
+  - **Harmonic Numbers**: Harmonic numbers $H_n = \sum_{i=1}^n \frac{1}{i}$ and generalized harmonic numbers $H_{n,r} = \sum_{i=1}^n \frac{1}{i^r}$.
 
 ### 2.7. Linear Algebra and Matrices
 - **Symbolic Matrices**: Support for matrix symbols with non-numeric elements, symbolic determinants, matrix inverses, and matrix multiplications.
@@ -129,6 +136,18 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
   - **Linear Programming (LP)**: Solvers for bounded linear optimization systems using the Simplex and Interior-Point algorithms.
   - **Non-Linear Optimization**: Local and global minimizers including Gradient Descent, Conjugate Gradient, Nelder-Mead simplex, and L-BFGS algorithms.
   - **Non-Linear Least Squares**: Curve fitting and parameter estimation via the Levenberg-Marquardt and Gauss-Newton algorithms.
+
+### 2.19. Quantum Mechanics and Functional Analysis Engine
+- **Abstract Algebras & Lie Algebras**: Symbolic representation of algebraic objects, non-commutative algebras, and Lie algebras. Native support for:
+  - **Lie Brackets**: Symbolic brackets $[x, y]$ adhering to bilinear, skew-symmetric, and Jacobi identity ($[x, [y, z]] + [y, [z, x]] + [z, [x, y]] = 0$) rules.
+  - **Structure Constants**: Resolving algebra expansions using structure constants: $[e_i, e_j] = \sum_k c_{i,j}^k e_k$.
+- **Quantum State Representations (Dirac Notation)**:
+  - **Bra and Ket Vector Spaces**: Symbolic representation of Kets $| \psi \rangle$ and Bras $\langle \phi |$, including scalar multiplications, linear combinations, and conjugate transpositions ($(| \psi \rangle)^\dagger = \langle \psi |$).
+  - **Outer and Inner Products**: Support for inner products $\langle \phi | \psi \rangle$ (yielding scalars or expressions) and outer products $| \psi \rangle \langle \phi |$ (yielding projection operators).
+  - **Hamiltonians & Operators**: Symbolic manipulation of self-adjoint operators (such as Hamiltonians $\hat{H}$, momentum $\hat{p}$, and position $\hat{x}$) acting on state vectors (eigenvalue equations: $\hat{H} | \psi \rangle = E | \psi \rangle$).
+- **Abstract Spaces**:
+  - **Hilbert Spaces**: Symbolic definitions of infinite-dimensional inner-product spaces (such as $L^2$) including completeness axioms, orthonormal basis expansions, and projections.
+  - **Banach Spaces**: Symbolic definitions of complete normed vector spaces (such as $L^p$ spaces) including norm axioms ($\|x\|$).
 
 ---
 

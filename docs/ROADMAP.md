@@ -499,6 +499,18 @@ For highly non-linear differential equations where classical perturbation method
   $$(J^T J + \lambda \operatorname{diag}(J^T J)) \delta = J^T r$$
   implemented as parallelized loops on the GPU using Triton.
 
+### 7.15. Quantum Mechanics and Functional Analysis Engine
+- **Non-Commutative Algebraic Simplifiers**: The simplification engine parses operator variables as non-commutative symbols. Lie brackets $[A, B]$ are represented using a `LieBracketNode` with algebraic reduction rules:
+  - Linearity: $[\alpha A + \beta B, C] = \alpha [A, C] + \beta [B, C]$
+  - Jacobi Identity expansions.
+- **Dirac Notation Objects**:
+  - `KetNode` and `BraNode` containing state identification tags (e.g. $|\psi\rangle$, $\langle\phi|$).
+  - Conjugation and Dagger operations maps $A^\dagger$ and conjugates state vectors.
+  - Operator application evaluates $\hat{O} |\psi\rangle$ by checking defined projection mappings, matrix representations, or eigenvalue coefficients.
+- **Abstract Function Spaces**:
+  - `HilbertSpace` structures specifying domain boundaries, inner-product rules (e.g., $L^2$ integration formulas $\langle f, g \rangle = \int_a^b f(x) \overline{g(x)} dx$), and projections.
+  - `NormNode` tracking abstract normed operations $\|x\|_p$ for Banach spaces, mapping algebraic reductions (e.g. triangle inequalities $\|x + y\| \le \|x\| + \|y\|$).
+
 ---
 
 ## 8. Railway-Oriented Error Handling
