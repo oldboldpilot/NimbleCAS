@@ -145,12 +145,14 @@ To meet the speed demands of modern simulations and real-time physical modeling,
 
 ---
 
-## 4. Software Engineering & C++23 Constraints
+## 4. Software Engineering, C++23 Constraints & C++26 Readiness
 
 NimbleCAS must adhere strictly to the rules of the official project code policy (`cpp_details.txt`).
 
 ### 4.1. Language Style & Safety
 - **Toolchain**: Built using `clang++-22` on Windows.
+- **C++26 Reflection Readiness**: The codebase must be structured to immediately transition to C++26 once a compiler toolchain supporting standard reflection (`std::meta` and the `^` operator) is stable. Symbolic visitor patterns, AST serialization, and JSON schema generations must be prepared to swap manual templates for compiler-driven reflection.
+- **Windows Parallel STL Maturity**: Since the Windows Parallel STL implementation (`<execution>` with `std::execution::par`) is mature and stable, the codebase must target standard STL parallel algorithms on Windows, while Linux and macOS fall back to oneTBB-wrapped parallel patterns.
 - **Modules**: Built using C++23 modules (`import std`). Header files are replaced with precompiled modules (`.pcm`) explicitly mapped in the build system.
 - **Memory Management**: Zero raw pointers. Explicit usage of `std::unique_ptr` and `std::shared_ptr`.
 - **Copy-on-Write (COW)**: Symbolic sub-expressions are wrapped in a COW smart pointer class (`CowPtr<T>`) to make copying expressions extremely cheap and threads safe.

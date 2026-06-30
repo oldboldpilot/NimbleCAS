@@ -197,30 +197,29 @@ Automatic simplification applies mathematical invariants recursively:
 
 ---
 
-## 3. Cross-Platform CPU Concurrency (PPL / TBB)
+## 3. Cross-Platform CPU Concurrency (Parallel STL / TBB)
 
-NimbleCAS implements a unified parallel abstraction layer. It maps to **Microsoft PPL** on Windows and **Intel oneTBB** on Linux and macOS at compile-time.
+NimbleCAS implements a unified parallel abstraction layer. Because the Windows Parallel STL is mature and stable, Windows targets directly leverage standard Parallel STL algorithms (`<execution>`), while Linux and macOS targets utilize **Intel oneTBB**.
 
 ```cpp
 export module nimblecas.parallel;
 import std;
 
 #ifdef _WIN32
-import <ppl.h>; // PPL headers
+import <execution>; // Windows mature Parallel STL
 #else
 import <tbb/parallel_invoke.h>; // TBB headers
 import <tbb/parallel_for.h>;
 #endif
 
 export namespace nimblecas {
-    // Parallel evaluation helper mapping to PPL or TBB
+    // Parallel evaluation helper
     template <typename Func>
     auto run_in_parallel(Func&& func1, Func&& func2) -> void {
         #ifdef _WIN32
-        concurrency::parallel_invoke(
-            std::forward<Func>(func1),
-            std::forward<Func>(func2)
-        );
+        // Run tasks in parallel using STL execution policy
+        std::array<std::function<void()>, 2> tasks{func1, func2};
+        std::for_each(std::execution::par, tasks.begin(), tasks.end(), [](auto& f) { f(); });
         #else
         tbb::parallel_invoke(
             std::forward<Func>(func1),
@@ -229,13 +228,12 @@ export namespace nimblecas {
         #endif
     }
 
-    // Parallel grid mapping mapping to PPL or TBB
+    // Parallel grid mapping
     template <typename T, typename MapFunc>
     auto parallel_map(std::span<T> data, MapFunc&& mapper) -> void {
         #ifdef _WIN32
-        concurrency::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
-            data[i] = mapper(data[i]);
-        });
+        // Utilize mature Windows Parallel STL
+        std::transform(std::execution::par, data.begin(), data.end(), data.begin(), std::forward<MapFunc>(mapper));
         #else
         tbb::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
             data[i] = mapper(data[i]);
@@ -550,9 +548,24 @@ set(CANONICAL_FLAGS
 add_compile_options(${CANONICAL_FLAGS})
 ```
 
+## 11. C++26 Transition Plan & Reflection Preparation
+
+As soon as a stable compiler toolchain with C++26 reflection is available, NimbleCAS will upgrade its target standard to C++26 (`-std=c++26`). To prepare for this transition:
+
+- **Reflecting AST Structs**: Abstract Syntax Tree nodes (such as operator classes, symbol representations, and function signatures) will transition from manual template visitor registration to standard compile-time reflection (`std::meta` library and the `^` operator).
+- **Automated Serialization**: Hand-written serialization code for `fastestjsoninthewest` will be replaced by a compile-time reflection traversal:
+  ```cpp
+  template <typename T>
+  auto serialize_struct(const T& obj) -> std::string {
+      // Loop over struct members using C++26 reflection
+      // and output JSON tokens automatically.
+  }
+  ```
+- **Pattern Matching Generators**: The CAS simplification engine will use reflection to automatically compile symbolic expression matching patterns into nested switch statements, avoiding redundant run-time type lookups.
+
 ---
 
-## 11. Implementation Phases & Roadmap Timeline
+## 12. Implementation Phases & Roadmap Timeline
 
 | Phase | Title | Description | Est. Time |
 | :--- | :--- | :--- | :--- |
