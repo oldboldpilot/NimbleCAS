@@ -197,18 +197,18 @@ Automatic simplification applies mathematical invariants recursively:
 
 ---
 
-## 3. Cross-Platform CPU Concurrency (Parallel STL / TBB)
+## 3. Cross-Platform CPU Concurrency (PPL / TBB)
 
-NimbleCAS implements a unified parallel abstraction layer. Because the Windows Parallel STL is mature and stable, Windows targets directly leverage standard Parallel STL algorithms (`<execution>`), while Linux and macOS targets utilize **Intel oneTBB**.
+NimbleCAS implements a unified parallel abstraction layer. Concurrency maps to **Intel oneTBB** as the default parallel library on all non-Windows systems, while Windows targets leverage the Microsoft Concurrency Runtime's **Parallel Patterns Library (PPL)**.
 
 ```cpp
 export module nimblecas.parallel;
 import std;
 
 #ifdef _WIN32
-import <execution>; // Windows mature Parallel STL
+import <ppl.h>; // PPL for Windows
 #else
-import <tbb/parallel_invoke.h>; // TBB headers
+import <tbb/parallel_invoke.h>; // Intel oneTBB as default
 import <tbb/parallel_for.h>;
 #endif
 
@@ -217,9 +217,10 @@ export namespace nimblecas {
     template <typename Func>
     auto run_in_parallel(Func&& func1, Func&& func2) -> void {
         #ifdef _WIN32
-        // Run tasks in parallel using STL execution policy
-        std::array<std::function<void()>, 2> tasks{func1, func2};
-        std::for_each(std::execution::par, tasks.begin(), tasks.end(), [](auto& f) { f(); });
+        concurrency::parallel_invoke(
+            std::forward<Func>(func1),
+            std::forward<Func>(func2)
+        );
         #else
         tbb::parallel_invoke(
             std::forward<Func>(func1),
@@ -232,8 +233,9 @@ export namespace nimblecas {
     template <typename T, typename MapFunc>
     auto parallel_map(std::span<T> data, MapFunc&& mapper) -> void {
         #ifdef _WIN32
-        // Utilize mature Windows Parallel STL
-        std::transform(std::execution::par, data.begin(), data.end(), data.begin(), std::forward<MapFunc>(mapper));
+        concurrency::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
+            data[i] = mapper(data[i]);
+        });
         #else
         tbb::parallel_for(size_t{0}, data.size(), [&data, &mapper](size_t i) {
             data[i] = mapper(data[i]);
