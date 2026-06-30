@@ -343,7 +343,61 @@ The execution of the computation graph is scheduled stochastically across hetero
 
 ---
 
-## 7. Railway-Oriented Error Handling
+## 7. Advanced Math & Analytical Solvers (including Esoterica)
+
+NimbleCAS extends Joel Cohen's core symbolic algebra engine to support advanced mathematical branches and analytical approximation methods for non-linear systems.
+
+### 7.1. Special Functions and Complex Numbers
+- **Lambert W Function (`lambertW(z)`)**:
+  - **Representation**: A `LambertWNode` holding a sub-expression $z$ and a branch integer $k \in \{0, -1\}$.
+  - **Evaluation**: Evaluated analytically using Taylor series around $z=0$ for $|z| < \frac{1}{e}$. For complex or large values, Halley's numerical iteration method is executed in the complex plane:
+    $$w_{n+1} = w_n - \frac{w_n e^{w_n} - z}{e^{w_n}(w_n + 1) - \frac{(w_n + 2)(w_n e^{w_n} - z)}{2w_n + 2}}$$
+- **Complex Numbers**:
+  - **Representation**: A `ComplexNode` containing real and imaginary parts ($x + i y$) represented as recursive expression sub-trees.
+  - **Identities**: Automatic simplification handles branch cuts, complex conjugation ($\bar{z}$), residues, and Euler's formula conversion ($e^{i \theta} \to \cos \theta + i \sin \theta$).
+
+### 7.2. Linear Algebra and Matrices
+- **Symbolic Matrices**: A `MatrixNode` containing a 2D vector of sub-expressions.
+- **Dynamic SIMD / GPU Execution**: For numeric evaluations, matrices are converted to contiguous aligned memory layouts and computed via the dynamic SIMD dispatcher (AVX-512/AVX2/SSE2) or offloaded to the GPU for parallel decomposition (LU, QR, SVD, Cholesky).
+
+### 7.3. Series, Transforms, and Wavelets
+- **Taylor, Laurent, and Puiseux Series**: Computes asymptotic expansions around $x = a$ up to order $n$ using symbolic differentiation and recursive coefficients.
+- **Wavelets**: Modules for Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT), containing precompiled filters (Haar, Daubechies 4/8, Morlet) optimized via SIMD vector registers.
+
+### 7.4. Singular Perturbation of ODEs
+- **Matched Asymptotic Expansions**: Solves boundary layer problems of the form $\epsilon y'' + p(x)y' + q(x)y = 0$.
+- **Implementation**:
+  1. Identifies singular perturbation terms by searching for parameter symbol $\epsilon$ multiplying high-order derivatives.
+  2. Solves the **Outer Expansion** by setting $\epsilon = 0$.
+  3. Solves the **Inner Expansion** in the boundary layer by introducing the stretched coordinate $\tilde{x} = \frac{x-a}{\epsilon^\alpha}$.
+  4. Automatically matches coefficients using Prandtl's matching condition.
+
+### 7.5. Homotopy Methods (HAM, ADM, HPM, HAP)
+For highly non-linear differential equations where classical perturbation methods fail, NimbleCAS implements symbolic solvers using homotopy expansions.
+
+#### 1. Homotopy Analysis Method (HAM)
+- Constructs a continuous mapping from an initial guess $u_0(t)$ to the exact solution $u(t)$.
+- **Deformation Equation**:
+  $$(1-p)\mathcal{L}[\phi(t;p) - u_0(t)] = p h \mathcal{H}(t) \mathcal{N}[\phi(t;p)]$$
+  where $p \in [0, 1]$ is the embedding parameter, $h$ is the auxiliary parameter (used to plot the $h$-curves to determine convergence), $\mathcal{L}$ is the auxiliary linear operator, and $\mathcal{N}$ is the non-linear operator.
+- **Solver**: Symbolically differentiates the deformation equation $m$ times with respect to $p$, divides by $m!$, sets $p=0$, and solves the resulting linear equations recursively.
+
+#### 2. Adomian Decomposition Method (ADM)
+- Decomposes the solution as $u = \sum_{n=0}^{\infty} u_n$ and the non-linear term $N(u) = \sum_{n=0}^{\infty} A_n$ where $A_n$ are the **Adomian Polynomials**.
+- **Polynomial Generation**:
+  $$A_n = \frac{1}{n!} \left[ \frac{d^n}{dp^n} N\left( \sum_{i=0}^{\infty} p^i u_i \right) \right]_{p=0}$$
+- **Solver**: NimbleCAS recursively computes $A_n$ symbolically using higher-order symbolic differentiation and solves:
+  $$u_{n+1} = L^{-1}(A_n)$$
+  where $L^{-1}$ is the integral operator.
+
+#### 3. Homotopy Perturbation Method (HPM) and Homotopy Analysis Protocol (HAP)
+- Combines perturbation theory with homotopy, constructing:
+  $$H(u, p) = (1-p)[L(u) - L(u_0)] + p[A(u) - f(r)] = 0$$
+- Solves the sequence of linear problems for each coefficient of $p^k$, executing the **Homotopy Analysis Protocol (HAP)** to verify the boundaries of convergence.
+
+---
+
+## 8. Railway-Oriented Error Handling
 
 To satisfy Code Policy Rule 32, we reject C++ exceptions and use `std::expected` for monad-style error handling.
 
@@ -388,7 +442,7 @@ export namespace nimblecas {
 
 ---
 
-## 8. XOR & Binary Fuse Filters
+## 9. XOR & Binary Fuse Filters
 
 In order to check membership of functions or variables quickly without accessing hash maps (Code Policy Rule 44):
 - **Implementation**: We construct a compact Binary Fuse Filter containing the hash signatures of predefined functions (`sin`, `cos`, `tan`, `log`, etc.).
@@ -396,7 +450,7 @@ In order to check membership of functions or variables quickly without accessing
 
 ---
 
-## 9. Build System and Canonical Flags
+## 10. Build System and Canonical Flags
 
 As required by Rule 50, all C++ files are built using CMake and Ninja using the canonical build parameters.
 
@@ -433,15 +487,17 @@ add_compile_options(${CANONICAL_FLAGS})
 
 ---
 
-## 10. Implementation Phases & Roadmap Timeline
+## 11. Implementation Phases & Roadmap Timeline
 
 | Phase | Title | Description | Est. Time |
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | **Core Framework** | Setup CMake, vendored libc++, custom internal test framework. | 1 Week |
 | **Phase 2** | **Symbolic Basics** | Implement `CowPtr`, `ExprNode` variant, `FreeOf`, `Substitute` (Cohen guide). | 2 Weeks |
-| **Phase 3** | **Simplifier & Poly** | Automatic simplification rules, polynomial expansion, GCD subresultants. | 3 Weeks |
-| **Phase 4** | **PPL & SIMD Core** | Microsoft PPL task system, dynamic SIMD dispatcher class, matrix algorithms. | 2 Weeks |
-| **Phase 5** | **Multi-GPU Engine** | Asynchronous execution streams, Peer-to-Peer multi-GPU copy pipelines. | 2 Weeks |
-| **Phase 6** | **Distributed Engine** | Integrate `StochasticGraphExecutionEngine` for distributed DAG scheduling. | 2 Weeks |
-| **Phase 7** | **JSON & Bindings** | `fastestjsoninthewest` serialization and nanobind interface. | 1 Week |
-| **Phase 8** | **Hardening** | Valgrind, Sanitizers (ASan/UBSan), performance profiling using Nsight/perf. | 1 Week |
+| **Phase 3** | **Special Functions & Simplification** | Automatic simplification, Lambert W, complex numbers, combinatorics, polynomials. | 3 Weeks |
+| **Phase 4** | **PPL, SIMD & Linear Algebra** | Microsoft PPL, dynamic SIMD dispatcher, symbolic/numeric matrices. | 2 Weeks |
+| **Phase 5** | **Differential & Series Solvers** | ODE/PDE solvers, wavelets, Fourier/Taylor series, asymptotic expansions. | 3 Weeks |
+| **Phase 6** | **Homotopy & Perturbation** | Implement singular perturbation, HAM, ADM, HPM, and HAP symbolic engines. | 3 Weeks |
+| **Phase 7** | **Multi-GPU Engine** | Asynchronous execution streams, Peer-to-Peer multi-GPU copy pipelines. | 2 Weeks |
+| **Phase 8** | **Distributed Engine** | Integrate `StochasticGraphExecutionEngine` for distributed DAG scheduling. | 2 Weeks |
+| **Phase 9** | **JSON & Bindings** | `fastestjsoninthewest` serialization and nanobind interface. | 1 Week |
+| **Phase 10** | **Hardening** | Valgrind, Sanitizers (ASan/UBSan), performance profiling using Nsight/perf. | 1 Week |

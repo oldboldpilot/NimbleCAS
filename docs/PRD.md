@@ -55,6 +55,31 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 - **Root Finding**: Analytical decomposition of higher-degree solvable polynomials.
 - **Numerical Solvers**: High-performance, vectorized Newton-Raphson method for systems of non-linear equations.
 
+### 2.6. Advanced Special Functions, Complex Numbers, and Combinatorics
+- **Advanced Functions**: Implementation of special transcendental functions, specifically the **Lambert W function** ($\text{lambertW}(z)$), error functions ($\text{erf}$), and gamma/beta functions.
+- **Complex Number Engine**: Native support for complex variables ($z = x + i y$) and Euler polar representations ($r e^{i\theta}$). Symbolic evaluation of complex functions, branch cut tracking, and complex residues.
+- **Combinatorics**: Recursive and closed-form symbolic calculation of factorials, binomial coefficients, combinations, permutations, Stirling numbers, and generating functions.
+
+### 2.7. Linear Algebra and Matrices
+- **Symbolic Matrices**: Support for matrix symbols with non-numeric elements, symbolic determinants, matrix inverses, and matrix multiplications.
+- **Linear Algebra Routines**: Symbolic and high-performance numeric eigenvalues, eigenvectors, and matrix decompositions (LU, QR, SVD, Cholesky) accelerated via CPU SIMD and GPU co-processing.
+
+### 2.8. Differential Equations (ODEs and PDEs)
+- **Analytical ODE Solvers**: Automatic classification and exact solving of 1st and 2nd order linear ODEs (separation of variables, integrating factors, variation of parameters, Laplace transforms).
+- **Analytical PDE Solvers**: Exact solutions for classical PDEs (heat, wave, Laplace equations) using separation of variables, Fourier transforms, and the method of characteristics.
+
+### 2.9. Integral Transforms, Series, and Wavelets
+- **Fourier Analysis**: Symbolic computation of Fourier series expansion, continuous Fourier transforms, and discrete/fast Fourier transforms.
+- **Wavelets**: Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT) with support for Haar, Daubechies, and Morlet wavelet filters.
+- **Series & Asymptotics**: Infinite sum evaluations, convergence tests, and Taylor, Laurent, and Puiseux series expansions of expressions around any point $x = a$ up to arbitrary order $n$.
+
+### 2.10. Asymptotic Perturbation and Homotopy Methods (Esoterica)
+NimbleCAS supports advanced symbolic solvers for highly non-linear or singular mathematical systems:
+- **Singular Perturbation of ODEs**: Matched asymptotic expansions, boundary layer analysis, inner/outer expansions, and WKB approximation.
+- **Homotopy Analysis Method (HAM)**: Constructing zero-order and high-order deformation equations, introducing auxiliary parameters $h$ and auxiliary functions $H(t)$ to control the convergence region and rate of series solutions.
+- **Adomian Decomposition Method (ADM)**: Analytical approximation of non-linear differential equations by decomposing non-linear operators into Adomian Polynomials ($A_n$) for rapid series convergence.
+- **Homotopy Perturbation Method (HPM) and Homotopy Analysis Protocol (HAP)**: Combines classical perturbation theory with homotopy to embed perturbation parameters $p \in [0, 1]$ into non-linear equations, solving the resulting sequence of linear equations.
+
 ---
 
 ## 3. High-Performance Architecture & Hardware Acceleration
