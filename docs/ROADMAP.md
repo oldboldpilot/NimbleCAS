@@ -462,6 +462,14 @@ For highly non-linear differential equations where classical perturbation method
 - **Interactive JSON Data Serialization**: For web environments (Jupyter/Python bindings), the plotting module formats data into highly optimized JSON structures parsed by frontend visualization libraries (e.g. Plotly, Three.js).
 - **Parameter Sweep Bindings**: Interacts with the `nimblecas.parallel` PPL task scheduler to recalculate surface mesh points on-the-fly as user-adjusted slider parameters vary.
 
+### 7.12. LaTeX Math Exporter
+- **AST to LaTeX Formatting**: Walks the symbolic AST recursively and translates math operations into valid LaTeX tags.
+  - Division node `Div(A, B)` formats to `\frac{A}{B}`.
+  - Integration node `Integral(f, x, a, b)` formats to `\int_{a}^{b} f(x) \, dx`.
+  - Special functions like `lambertW(z)` translate to `\text{W}(z)`.
+  - Matrix containers map to `\begin{pmatrix} ... \end{pmatrix}` with rows separated by `\\`.
+- **Monadic and Fluent Integration**: Exposes `.to_latex()` on the Expression class to enable fluent format conversions.
+
 ---
 
 ## 8. Railway-Oriented Error Handling
@@ -568,6 +576,7 @@ NB_MODULE(nimblecas, m) {
         .def(nb::init<std::string>())
         .def("simplify", &nimblecas::Expression::simplify)
         .def("substitute", &nimblecas::Expression::substitute, "symbol"_a, "value"_a)
+        .def("to_latex", &nimblecas::Expression::to_latex)
         .def("__add__", [](const nimblecas::Expression& a, const nimblecas::Expression& b) { return a + b; })
         .def("__mul__", [](const nimblecas::Expression& a, const nimblecas::Expression& b) { return a * b; })
         .def("__repr__", &nimblecas::Expression::to_string);

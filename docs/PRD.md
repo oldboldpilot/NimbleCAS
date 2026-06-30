@@ -108,6 +108,7 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **3D Plotting Engine**: Interactive rendering of surfaces $z = f(x, y)$, 3D parametric curves $(x(t), y(t), z(t))$, 3D implicit surfaces $f(x, y, z) = 0$, and 3D vector fields.
 - **Interactive Visualizations**: Real-time rendering of parameter sweeps using sliders (e.g. observing the deformation of a bifurcation attractor or wave propagation over time), 3D camera rotation/zoom, and color mapping based on function value gradients or curvature.
 - **GPU-Accelerated Graphics**: Integration with WebGL (for Jupyter Notebook environments) and DirectX/Vulkan/OpenGL (for native GUI applications) to render millions of data points smoothly. Supporting export to vector formats (SVG, PDF) and raster formats (PNG, JPEG).
+- **LaTeX Math Exporter**: Built-in support to compile any symbolic expression tree into standard, syntax-conforming LaTeX strings (e.g. converting division to `\frac`, integrals to `\int`, special functions like `lambertW` to custom formats, and matrices to `\begin{pmatrix}`). Exposed directly in Python bindings (`expr.to_latex()`).
 
 ---
 
