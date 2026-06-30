@@ -103,6 +103,12 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **Stability and Bifurcation**: Determining stability via Lyapunov stability criteria, computing eigenvalues of the Jacobian at fixed points, and identifying bifurcation points (saddle-node, pitchfork, Hopf bifurcations) symbolically.
 - **Chaos and Attractors**: High-speed numerical evaluation of chaotic trajectories (e.g., Lorenz attractor, Rössler attractor) and computation of Lyapunov exponents, Poincaré maps, and fractal dimensions using GPU vectorization.
 
+### 2.16. Plotting and Visualization
+- **2D Plotting Engine**: High-fidelity plotting of functions $y = f(x)$, parametric curves $(x(t), y(t))$, polar curves $r(\theta)$, implicit curves $f(x, y) = 0$, scatter plots, and 2D vector fields (e.g. phase portraits for 2D systems).
+- **3D Plotting Engine**: Interactive rendering of surfaces $z = f(x, y)$, 3D parametric curves $(x(t), y(t), z(t))$, 3D implicit surfaces $f(x, y, z) = 0$, and 3D vector fields.
+- **Interactive Visualizations**: Real-time rendering of parameter sweeps using sliders (e.g. observing the deformation of a bifurcation attractor or wave propagation over time), 3D camera rotation/zoom, and color mapping based on function value gradients or curvature.
+- **GPU-Accelerated Graphics**: Integration with WebGL (for Jupyter Notebook environments) and DirectX/Vulkan/OpenGL (for native GUI applications) to render millions of data points smoothly. Supporting export to vector formats (SVG, PDF) and raster formats (PNG, JPEG).
+
 ---
 
 ## 3. High-Performance Architecture & Hardware Acceleration

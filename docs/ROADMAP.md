@@ -435,6 +435,12 @@ For highly non-linear differential equations where classical perturbation method
 - **Fixed Points and Stability**: Evaluates steady states of non-linear vector fields $\dot{x} = f(x)$, constructs the symbolic Jacobian matrix $J$, computes eigenvalues at fixed points to determine local stability (sink, source, saddle, spiral), and solves bifurcation equations.
 - **Chaos Numerics**: Optimized double-precision ODE integration solvers running parallelized on CPU and GPU to compute Lyapunov exponents and Poincaré sections.
 
+### 7.11. Plotting and Visualization
+- **Adaptive Grid Generation**: Implements adaptive mesh refinement (AMR) algorithms to automatically detect high-curvature regions and increase sample density (preventing jagged edges in steep slope functions).
+- **DirectX/Vulkan Native Renderer**: High-performance native Windows rendering using vertex buffers generated directly on the GPU (e.g. from Triton SDE paths or matrix coordinate arrays), bypassing CPU read-back.
+- **Interactive JSON Data Serialization**: For web environments (Jupyter/Python bindings), the plotting module formats data into highly optimized JSON structures parsed by frontend visualization libraries (e.g. Plotly, Three.js).
+- **Parameter Sweep Bindings**: Interacts with the `nimblecas.parallel` PPL task scheduler to recalculate surface mesh points on-the-fly as user-adjusted slider parameters vary.
+
 ---
 
 ## 8. Railway-Oriented Error Handling
