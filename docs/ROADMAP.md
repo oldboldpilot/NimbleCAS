@@ -402,9 +402,14 @@ NimbleCAS extends Joel Cohen's core symbolic algebra engine to support advanced 
   - **Laurent & Puiseux Series**: Supports negative power terms (for pole singularities) and fractional power terms (for branch points). Evaluates residues at poles using $\operatorname{Res}(f, a) = a_{-1}$.
   - **Convergence Radius**: Calculates the radius of convergence $R$ using the Cauchy-Hadamard formula:
     $$R = \frac{1}{\limsup_{k\to\infty} \sqrt[k]{|a_k|}}$$
+- **Series & Sequence Manipulation**:
+  - **Gosper's Hypergeometric Summation**: Determines if a sum $S_n = \sum_{k=0}^{n-1} t_k$ of a hypergeometric term $t_k$ (where $t_{k+1}/t_k$ is a rational function of $k$) can be written in closed-form $S_n = z_n - z_0$ by solving the key equation for a polynomial $y(k)$:
+    $$\frac{t_{k+1}}{t_k} = \frac{p(k+1)}{p(k)} \frac{q(k)}{r(k+1)}$$
+  - **Series Reversion & Cauchy Products**: Composes series coefficients via Lagrange Inversion (reversing $w = f(z)$ to find $z = f^{-1}(w)$) and evaluates products $A(z)B(z) = \sum_n (\sum_{k=0}^n a_k b_{n-k}) z^n$ optimized using parallel zero-copy views.
 - **Wavelets**: Modules for Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT), containing precompiled filters (Haar, Daubechies 4/8, Morlet) optimized via SIMD vector registers.
-- **Spectral Methods**: Solves differential equations numerically by representing the solution $u(x)$ as a sum of global basis functions:
-  - **Fourier Collocation**: Used for periodic boundary conditions, evaluating spatial derivatives via the Discrete Fourier Transform (FFT) on the GPU.
+- **Spectral and Pseudo-Spectral Methods**: Solves differential equations numerically by representing the solution $u(x)$ as a sum of global basis functions:
+  - **Fourier Collocation & Pseudo-Spectral Derivatives**: Evaluates derivatives in frequency space using the FFT ($\widehat{u'} = i k \widehat{u}$), while evaluating non-linear products directly on the physical grid to bypass convolution calculations.
+  - **Orszag 2/3-rule Dealiasing**: To eliminate quadratic aliasing errors from grid-domain products, the engine zeros out the upper third of the computed Fourier spectrum ($|k| \ge \frac{2}{3} \frac{N}{2}$) at each time step.
   - **Chebyshev Collocation**: Used for non-periodic boundaries, mapping grid points to Chebyshev-Gauss-Lobatto nodes $x_j = \cos(\pi j / N)$ and computing spatial derivatives via Chebyshev differentiation matrices.
 
 ### 7.4. Singular Perturbation of ODEs

@@ -78,12 +78,16 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 
 ### 2.8. Differential Equations (ODEs and PDEs)
 - **Analytical Solvers**: Automatic classification and exact solving of 1st and 2nd order linear ODEs and classical PDEs (heat, wave, Laplace equations).
-- **Spectral Methods**: Numerical solving of boundary value problems (BVPs) and PDEs in the frequency domain using Fourier collocation (for periodic boundaries) and Chebyshev collocation (for non-periodic boundaries) methods.
+- **Spectral and Pseudo-Spectral Methods**: Numerical solving of boundary value problems (BVPs) and non-linear PDEs. Evaluation of spatial derivatives in the spectral domain (using FFT or Chebyshev matrices) while non-linear multiplications are evaluated in the physical grid domain. Includes **dealiasing techniques** (Orszag 2/3-rule) to eliminate high-frequency aliasing errors.
 
 ### 2.9. Integral Transforms, Series, and Wavelets
 - **Fourier Analysis**: Symbolic computation of Fourier series expansion, continuous Fourier transforms, and discrete/fast Fourier transforms.
 - **Wavelets**: Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT) with support for Haar, Daubechies, and Morlet wavelet filters.
 - **Series & Asymptotics**: Infinite sum evaluations, convergence tests, and **Taylor's series expansions** ($f(z) \approx \sum_{k=0}^n \frac{f^{(k)}(a)}{k!}(z-a)^k$) in both the **real** ($\mathbb{R}$) and **complex** ($\mathbb{C}$) domains. Supports Laurent and Puiseux series expansions of expressions around any point $z = a$ up to arbitrary order $n$, automatic differentiation, residue evaluation at singular poles, and computation of the radius of convergence.
+- **Series & Sequence Manipulation**:
+  - **Symbolic Summation**: Analytical evaluation of finite and infinite sums $\sum_{k=a}^b f(k)$ using **Gosper's algorithm** for hypergeometric terms and telescoping summation.
+  - **Series Algebra**: Addition, subtraction, multiplication (Cauchy product), composition, reversion (Lagrange inversion formula), and differentiation/integration of series terms.
+  - **Sequence Operators**: Shift operators ($E$), difference operators ($\Delta$), and recurrence relation conversions.
 
 ### 2.10. Asymptotic Perturbation and Homotopy Methods (Esoterica)
 NimbleCAS supports advanced symbolic solvers for highly non-linear or singular mathematical systems:
