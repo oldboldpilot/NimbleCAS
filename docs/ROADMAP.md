@@ -393,6 +393,19 @@ For highly non-linear differential equations where classical perturbation method
   $$H(u, p) = (1-p)[L(u) - L(u_0)] + p[A(u) - f(r)] = 0$$
 - Solves the sequence of linear problems for each coefficient of $p^k$, executing the **Homotopy Analysis Protocol (HAP)** to verify the boundaries of convergence.
 
+#### 4. Padé Approximations
+- Computes rational approximations $[M/N](x)$ of a symbolic function around $x=0$ by extracting its Taylor expansion $f(x) = \sum_{k=0}^{M+N} c_k x^k$.
+- Solves the Hankel matrix system of linear equations for denominator coefficients $q_i$ and computes numerator coefficients $p_j$ using:
+  $$\sum_{j=0}^{k} c_{k-j} q_j = p_k \quad (\text{with } q_0=1, q_i=0 \text{ for } i > N, p_j=0 \text{ for } j > M)$$
+  utilizing dynamic SIMD execution for numeric coefficients.
+
+#### 5. Continued Fractions
+- Implementation of **Viskovatov's algorithm** to convert power series directly into continued fraction representations:
+  $$f(x) \approx b_0 + \frac{a_1 x}{b_1 + \frac{a_2 x}{b_2 + \frac{a_3 x}{\dots}}}$$
+- Evaluates the $n$-th convergent $A_n/B_n$ using the forward recurrence relation:
+  $$A_n = b_n A_{n-1} + a_n x A_{n-2}, \quad B_n = b_n B_{n-1} + a_n x B_{n-2}$$
+  to enable highly stable and fast numerical evaluation of special transcendental functions on the CPU and GPU.
+
 ### 7.6. Laplace Methods and Integral Transforms
 - **Laplace Transforms**: Table-driven and rule-based forward and inverse Laplace transform algorithms, handling convolution theorem, delta functions, and step functions.
 - **Laplace's Approximation Method**: Integrals of the form $I(M) = \int_a^b e^{M f(x)} g(x) dx$ are approximated asymptotically for large $M$ using:
