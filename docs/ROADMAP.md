@@ -513,9 +513,9 @@ In order to check membership of functions or variables quickly without accessing
 
 ---
 
-## 10. Build System and Canonical Flags
+## 10. Build System and Canonical Multiplatform Flags
 
-As required by Rule 50, all C++ files are built using CMake and Ninja using the canonical build parameters.
+To ensure day-one multiplatform support for Windows, Linux, and macOS, NimbleCAS uses CMake and Ninja to manage build targets, standardizing compiler flags and abstractions.
 
 ```cmake
 # CMakeLists.txt snippet
@@ -525,25 +525,38 @@ project(NimbleCAS LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Canonical flags compiled for Windows Target Clang-22
-set(CANONICAL_FLAGS
-    "-std=c++23"
-    "-stdlib=libc++"
-    "-fPIC"
-    "-O3"
-    "-march=x86-64-v3"
-    "-mtune=generic"
-    "-mavx"
-    "-mavx2"
-    "-mfma"
-    "-pthread"
-    "-fstack-protector-strong"
-    "-DNDEBUG"
-    "-D_LIBCPP_ENABLE_EXPERIMENTAL"
-    "-fexperimental-library"
-    "-nostdinc++"
-    "-isystem ${CMAKE_SOURCE_DIR}/external/libcxx-v1/include"
-)
+# Cross-platform compiler flags setup
+if(MSVC)
+    # Windows native MSVC/Clang-cl options
+    set(CANONICAL_FLAGS
+        "/std:c++latest"
+        "/O2"
+        "/Oi"
+        "/Ot"
+        "/arch:AVX2"
+        "/permissive-"
+        "/EHsc"
+    )
+else()
+    # Clang and GCC flags for Linux, macOS, and Clang on Windows
+    set(CANONICAL_FLAGS
+        "-std=c++23"
+        "-fPIC"
+        "-O3"
+        "-march=x86-64-v3"
+        "-mtune=generic"
+        "-pthread"
+        "-fstack-protector-strong"
+        "-DNDEBUG"
+    )
+    if(APPLE)
+        # macOS specific adjustments
+        list(APPEND CANONICAL_FLAGS "-stdlib=libc++")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Linux specific adjustments
+        list(APPEND CANONICAL_FLAGS "-stdlib=libstdc++")
+    endif()
+endif()
 
 add_compile_options(${CANONICAL_FLAGS})
 ```

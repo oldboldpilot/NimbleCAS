@@ -178,6 +178,6 @@ NimbleCAS must adhere strictly to the rules of the official project code policy 
 | ID | Category | Requirement Description |
 | :--- | :--- | :--- |
 | **NFR-1** | **Precision** | All numerical calculations default to BF16 (Brain Floating Point 16) end-to-end to match target inference/training pipelines, with FP32 permitted only for specific solvers. |
-| **NFR-2** | **Portability** | Build paths and module interfaces must be fully relative to the repository root. No absolute host-specific paths allowed. |
+| **NFR-2** | **Portability** | Must work on Windows, Linux, and macOS on day one. All build paths, module configurations, file I/O operations (using C++23 `<filesystem>`), and graphics pipelines must use platform-agnostic abstractions. No absolute paths or OS-specific code paths without preprocessor switches are allowed. |
 | **NFR-3** | **Reproducibility** | FP arithmetic must be bit-identical across hardware. No `-ffast-math` is allowed. Build flags must enforce `-march=x86-64-v3 -mtune=generic`. |
 | **NFR-4** | **Sanitization** | The codebase must pass clean sweeps under AddressSanitizer (ASan), UndefinedBehaviorSanitizer (UBSan), and LeakSanitizer (LSan). |
