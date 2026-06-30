@@ -151,9 +151,10 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
   - **Bra and Ket Vector Spaces**: Symbolic representation of Kets $| \psi \rangle$ and Bras $\langle \phi |$, including scalar multiplications, linear combinations, and conjugate transpositions ($(| \psi \rangle)^\dagger = \langle \psi |$).
   - **Outer and Inner Products**: Support for inner products $\langle \phi | \psi \rangle$ (yielding scalars or expressions) and outer products $| \psi \rangle \langle \phi |$ (yielding projection operators).
   - **Hamiltonians & Operators**: Symbolic manipulation of self-adjoint operators (such as Hamiltonians $\hat{H}$, momentum $\hat{p}$, and position $\hat{x}$) acting on state vectors (eigenvalue equations: $\hat{H} | \psi \rangle = E | \psi \rangle$).
-- **Abstract Spaces**:
-  - **Hilbert Spaces**: Symbolic definitions of infinite-dimensional inner-product spaces (such as $L^2$) including completeness axioms, orthonormal basis expansions, and projections.
-  - **Banach Spaces**: Symbolic definitions of complete normed vector spaces (such as $L^p$ spaces) including norm axioms ($\|x\|$).
+- **Abstract Spaces, Norms & Metrics**:
+  - **Hilbert Spaces**: Symbolic definitions of infinite-dimensional inner-product spaces (such as $L^2$). Evaluates inner products $\langle x, y \rangle$, inducing the norm $\|x\|_H = \sqrt{\langle x, x \rangle}$, and inducing the metric $d(x, y) = \|x - y\|_H$. Includes completeness axioms, orthonormal basis expansions, and projections.
+  - **Banach Spaces**: Symbolic definitions of complete normed vector spaces (such as $L^p$ spaces). Evaluates norms $\|x\|_B$ satisfying positive definiteness, absolute homogeneity, and the triangle inequality, inducing the metric $d(x, y) = \|x - y\|_B$.
+  - **Metric Spaces**: Support for abstract distance metrics $d(x, y)$ satisfying positivity, symmetry ($d(x, y) = d(y, x)$), identity of indiscernibles ($d(x, y) = 0 \iff x = y$), and the triangle inequality ($d(x, z) \le d(x, y) + d(y, z)$).
 
 ### 2.20. Classical Orthogonal Polynomials
 - **Symbolic Representation & Evaluation**: Dedicated AST nodes for families of univariate orthogonal polynomials, including symbolic expansions, evaluations, and derivations.

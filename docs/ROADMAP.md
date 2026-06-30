@@ -535,9 +535,9 @@ For highly non-linear differential equations where classical perturbation method
   - `KetNode` and `BraNode` containing state identification tags (e.g. $|\psi\rangle$, $\langle\phi|$).
   - Conjugation and Dagger operations maps $A^\dagger$ and conjugates state vectors.
   - Operator application evaluates $\hat{O} |\psi\rangle$ by checking defined projection mappings, matrix representations, or eigenvalue coefficients.
-- **Abstract Function Spaces**:
-  - `HilbertSpace` structures specifying domain boundaries, inner-product rules (e.g., $L^2$ integration formulas $\langle f, g \rangle = \int_a^b f(x) \overline{g(x)} dx$), and projections.
-  - `NormNode` tracking abstract normed operations $\|x\|_p$ for Banach spaces, mapping algebraic reductions (e.g. triangle inequalities $\|x + y\| \le \|x\| + \|y\|$).
+- **Abstract Function Spaces, Norms & Metrics**:
+  - `HilbertSpace` structures specifying domain boundaries, inner-product rules (e.g., $L^2$ integration formulas $\langle f, g \rangle = \int_a^b f(x) \overline{g(x)} dx$), inducing the norm $\|f\| = \sqrt{\langle f, f \rangle}$ and inducing the metric $d(f, g) = \|f - g\|$, along with projection mappings.
+  - `NormNode` and `MetricNode` tracking abstract normed operations $\|x\|_p$ for Banach spaces and distance metrics $d(x, y)$ for metric spaces, applying algebraic reductions and inequalities (e.g., positive definiteness, triangle inequalities $\|x + y\| \le \|x\| + \|y\|$ and $d(x, z) \le d(x, y) + d(y, z)$).
 
 ### 7.16. Classical Orthogonal Polynomials
 - **Orthogonal Polynomial Nodes**: Dedicated classes `ChebyshevTNode`, `ChebyshevUNode`, `LegendrePNode`, `LaguerreLNode`, `HermiteHNode`, and `JacobiPNode` that store degree $n$ and symbol $x$.
