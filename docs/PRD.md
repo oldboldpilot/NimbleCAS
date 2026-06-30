@@ -162,9 +162,12 @@ NimbleCAS must adhere strictly to the rules of the official project code policy 
   ```cpp
   auto evaluate(const Context& ctx) const -> std::expected<double, EvaluationError>;
   ```
-- **Fluent APIs**: Expression manipulation must support method chaining:
+- **Fluent & Composable APIs**: All key modules (symbolic engine, linear algebra matrices, homotopy/differential solvers, and plotting outputs) must expose a unified, fluent, and composable API utilizing method chaining. Configuration parameters and mathematical operations must link together seamlessly without manual temporary object declarations:
   ```cpp
-  auto expr = x.add(y).mul(z).simplify();
+  auto expr = x.add(y).mul(z).simplify().differentiate("x");
+  auto mat = matrix.transpose().mul(other_matrix).inverse();
+  auto solution = solver.with_equation(eq).with_order(6).solve();
+  auto scene = plot.add_surface(f).with_resolution(256).with_colormap("viridis").render();
   ```
 
 ### 4.2. Third-Party Libraries & Dependencies

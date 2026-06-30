@@ -504,6 +504,31 @@ export namespace nimblecas {
             .and_then(compute_sqrt)
             .transform([](double val) { return val * 2.0; });
     }
+
+    // Example of Fluent, Composable API chaining across NimbleCAS objects
+    auto run_fluent_demo() -> void {
+        Expression x{"x"};
+        Expression y{"y"};
+
+        // Chain symbolic alterations
+        auto expr = x.add(y)
+                     .mul(Expression{5.0})
+                     .simplify()
+                     .differentiate("x");
+
+        // Chain Matrix creations and linear algebra
+        Matrix A = Matrix::identity(3, 3)
+                        .scale(2.0)
+                        .transpose()
+                        .inverse();
+
+        // Chain solvers
+        HomotopySolver solver;
+        auto result = solver.with_equation(expr)
+                            .with_initial_guess(0.1)
+                            .with_order(4)
+                            .solve();
+    }
 }
 ```
 
@@ -517,7 +542,68 @@ In order to check membership of functions or variables quickly without accessing
 
 ---
 
-## 10. Build System and Canonical Multiplatform Flags
+## 10. Python Bindings via nanobind
+
+To enable high-performance, seamless integration with Python-based science and machine learning ecosystems (NumPy, PyTorch, SymPy), NimbleCAS exposes all of its features using **nanobind**.
+
+### 10.1. nanobind Module Definition
+We define the Python binding module `nimblecas_python` in C++:
+
+```cpp
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/unique_ptr.h>
+#include <nanobind/ndarray.h>
+
+namespace nb = nanobind;
+using namespace nb::literals;
+
+NB_MODULE(nimblecas, m) {
+    m.doc() = "NimbleCAS C++23 High-Performance Computer Algebra System Python Bindings";
+
+    // Bind core Expression Node and Symbols
+    nb::class_<nimblecas::Expression>(m, "Expression")
+        .def(nb::init<std::string>())
+        .def("simplify", &nimblecas::Expression::simplify)
+        .def("substitute", &nimblecas::Expression::substitute, "symbol"_a, "value"_a)
+        .def("__add__", [](const nimblecas::Expression& a, const nimblecas::Expression& b) { return a + b; })
+        .def("__mul__", [](const nimblecas::Expression& a, const nimblecas::Expression& b) { return a * b; })
+        .def("__repr__", &nimblecas::Expression::to_string);
+
+    // Bind matrix and support zero-copy NumPy/PyTorch conversions via nb::ndarray
+    nb::class_<nimblecas::Matrix>(m, "Matrix")
+        .def(nb::init<size_t, size_t>())
+        .def("to_numpy", [](nimblecas::Matrix& mat) {
+            float* data = mat.data();
+            size_t shape[2] = { mat.rows(), mat.cols() };
+            return nb::ndarray<float, nb::numpy, nb::c_contig>(
+                data, 2, shape, nb::handle() // zero-copy tensor wrapper
+            );
+        });
+
+    // Bind special methods: Lambert W, Perturbations, SDE solvers, Plotting AMR grids
+    m.def("lambertW", &nimblecas::lambertW, "z"_a);
+    m.def("solve_ham", &nimblecas::solve_ham, "eqn"_a, "order"_a);
+    m.def("simulate_sde", &nimblecas::simulate_sde, "mu"_a, "sigma"_a, "x0"_a, "t"_a, "paths"_a);
+}
+```
+
+### 10.2. CMake Integration
+The build system dynamically links nanobind via CMake:
+```cmake
+find_package(nanobind CONFIG REQUIRED)
+
+nanobind_add_module(nimblecas_python
+    src/bindings.cpp
+)
+target_link_libraries(nimblecas_python PRIVATE nimblecas_core)
+```
+
+---
+
+## 11. Build System and Canonical Multiplatform Flags
 
 To ensure day-one multiplatform support for Windows, Linux, and macOS, NimbleCAS uses CMake and Ninja to manage build targets, standardizing compiler flags and abstractions.
 
