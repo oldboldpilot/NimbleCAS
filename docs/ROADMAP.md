@@ -517,49 +517,78 @@ In order to check membership of functions or variables quickly without accessing
 
 To ensure day-one multiplatform support for Windows, Linux, and macOS, NimbleCAS uses CMake and Ninja to manage build targets, standardizing compiler flags and abstractions.
 
-```cmake
-# CMakeLists.txt snippet
-cmake_minimum_required(VERSION 3.28)
-project(NimbleCAS LANGUAGES CXX)
+### 10.1. Relocatable Local Toolchain & Zero External Dependencies
+To allow building the project immediately after moving the repository folder to any location, all build tools (Clang 22, CMake, Ninja, clang-tidy, and clang-format) are referenced relatively using paths within the project directory (under a vendored `tools/` path).
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+- **Local Toolchain Mapping (`config/toolchain.cmake`)**:
+  A relative toolchain file is defined to override compiler and analyzer paths at configuration time:
+  ```cmake
+  # config/toolchain.cmake
+  set(CMAKE_SYSTEM_NAME ${CMAKE_HOST_SYSTEM_NAME})
 
-# Cross-platform compiler flags setup
-if(MSVC)
-    # Windows native MSVC/Clang-cl options
-    set(CANONICAL_FLAGS
-        "/std:c++latest"
-        "/O2"
-        "/Oi"
-        "/Ot"
-        "/arch:AVX2"
-        "/permissive-"
-        "/EHsc"
-    )
-else()
-    # Clang and GCC flags for Linux, macOS, and Clang on Windows
-    set(CANONICAL_FLAGS
-        "-std=c++23"
-        "-fPIC"
-        "-O3"
-        "-march=x86-64-v3"
-        "-mtune=generic"
-        "-pthread"
-        "-fstack-protector-strong"
-        "-DNDEBUG"
-    )
-    if(APPLE)
-        # macOS specific adjustments
-        list(APPEND CANONICAL_FLAGS "-stdlib=libc++")
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        # Linux specific adjustments
-        list(APPEND CANONICAL_FLAGS "-stdlib=libstdc++")
-    endif()
-endif()
+  # Compute relative path to the tools folder
+  set(TOOLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools")
 
-add_compile_options(${CANONICAL_FLAGS})
-```
+  # Detect platform executable extension
+  if(WIN32)
+      set(EXE_EXT ".exe")
+  else()
+      set(EXE_EXT "")
+  endif()
+
+  # Set compiler paths relatively
+  set(CMAKE_CXX_COMPILER "${TOOLS_DIR}/llvm/bin/clang++${EXE_EXT}")
+  set(CMAKE_C_COMPILER "${TOOLS_DIR}/llvm/bin/clang${EXE_EXT}")
+
+  # Set static analysis tools relatively
+  set(CMAKE_CXX_CLANG_TIDY "${TOOLS_DIR}/llvm/bin/clang-tidy${EXE_EXT};-checks=*")
+  set(CLANG_FORMAT_BIN "${TOOLS_DIR}/llvm/bin/clang-format${EXE_EXT}")
+  ```
+
+- **CMake Configuration**:
+  ```cmake
+  # CMakeLists.txt snippet
+  cmake_minimum_required(VERSION 3.28)
+  project(NimbleCAS LANGUAGES CXX)
+
+  set(CMAKE_CXX_STANDARD 23)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+  # Cross-platform compiler flags setup
+  if(MSVC)
+      # Windows native MSVC/Clang-cl options
+      set(CANONICAL_FLAGS
+          "/std:c++latest"
+          "/O2"
+          "/Oi"
+          "/Ot"
+          "/arch:AVX2"
+          "/permissive-"
+          "/EHsc"
+      )
+  else()
+      # Clang and GCC flags for Linux, macOS, and Clang on Windows
+      set(CANONICAL_FLAGS
+          "-std=c++23"
+          "-fPIC"
+          "-O3"
+          "-march=x86-64-v3"
+          "-mtune=generic"
+          "-pthread"
+          "-fstack-protector-strong"
+          "-DNDEBUG"
+      )
+      if(APPLE)
+          # macOS specific adjustments
+          list(APPEND CANONICAL_FLAGS "-stdlib=libc++")
+      elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+          # Linux specific adjustments
+          list(APPEND CANONICAL_FLAGS "-stdlib=libstdc++")
+      endif()
+  endif()
+
+  add_compile_options(${CANONICAL_FLAGS})
+  ```
 
 ## 11. C++26 Transition Plan & Reflection Preparation
 
