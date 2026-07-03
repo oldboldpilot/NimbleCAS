@@ -48,6 +48,18 @@ if [[ -z "${SANITIZER}" && -x "${PYTHON_BIN}" ]] \
   )
 fi
 
+# Enable the CUDA GPU kernels when nvcc is available (non-sanitizer builds only; the
+# .cu is compiled by nvcc independently of the sanitized clang/libc++ objects).
+if [[ -z "${SANITIZER}" ]]; then
+  NVCC_BIN="$(command -v nvcc 2>/dev/null || true)"
+  for d in /usr/local/cuda/bin /usr/local/cuda-13.2/bin; do
+    if [[ -z "${NVCC_BIN}" && -x "${d}/nvcc" ]]; then NVCC_BIN="${d}/nvcc"; fi
+  done
+  if [[ -n "${NVCC_BIN}" ]]; then
+    CMAKE_ARGS+=(-DNIMBLECAS_CUDA=ON -DNIMBLECAS_NVCC="${NVCC_BIN}")
+  fi
+fi
+
 cmake "${CMAKE_ARGS[@]}"
 
 cmake --build "${BUILD_DIR}"

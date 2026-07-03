@@ -28,6 +28,7 @@ enum class MathError : std::uint8_t {
     domain_error,
     syntax_error,
     not_implemented,
+    gpu_error,
 };
 
 [[nodiscard]] constexpr auto to_string_view(MathError err) noexcept -> std::string_view {
@@ -38,6 +39,7 @@ enum class MathError : std::uint8_t {
         case MathError::domain_error:     return "domain error";
         case MathError::syntax_error:     return "syntax error";
         case MathError::not_implemented:  return "not implemented";
+        case MathError::gpu_error:        return "gpu error";
     }
     return "unknown error";
 }

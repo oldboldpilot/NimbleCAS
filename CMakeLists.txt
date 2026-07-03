@@ -231,6 +231,49 @@ target_link_libraries(parallel_tests
   PRIVATE nimblecas_parallel nimblecas_testing std_module)
 add_test(NAME parallel_tests COMMAND parallel_tests)
 
+# ---- nimblecas.gpu : CUDA GPU acceleration (ROADMAP 5) — opt-in via -DNIMBLECAS_CUDA=ON --
+# The .cu is compiled by nvcc INDEPENDENTLY (a custom command -> static archive), never
+# through CMake's CUDA language, so the global clang/libc++ canonical flags (which nvcc
+# cannot parse) never reach it. The kernels are reached over the plain C ABI of
+# src/gpu/gpu_bridge.h; only POD crosses the nvcc <-> clang boundary.
+option(NIMBLECAS_CUDA "Build the CUDA GPU kernels (requires nvcc)" OFF)
+if(NIMBLECAS_CUDA AND NOT WIN32)
+  set(NIMBLECAS_NVCC "" CACHE FILEPATH "Path to nvcc (auto-detected if empty)")
+  if(NOT NIMBLECAS_NVCC)
+    find_program(NIMBLECAS_NVCC nvcc
+      HINTS /usr/local/cuda/bin /usr/local/cuda-13.2/bin ENV CUDA_HOME ENV PATH REQUIRED)
+  endif()
+  get_filename_component(_cuda_bin "${NIMBLECAS_NVCC}" DIRECTORY)
+  find_library(NIMBLECAS_CUDART cudart
+    HINTS "${_cuda_bin}/../lib64" /usr/local/cuda/lib64 /usr/local/cuda-13.2/lib64 REQUIRED)
+  get_filename_component(_cuda_libdir "${NIMBLECAS_CUDART}" DIRECTORY)
+
+  set(_gpu_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_kernels.cu")
+  set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
+  add_custom_command(
+    OUTPUT "${_gpu_lib}"
+    COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
+            -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib "${_gpu_src}" -o "${_gpu_lib}"
+    DEPENDS "${_gpu_src}" "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
+    VERBATIM
+    COMMENT "nvcc: building CUDA GPU kernels (-arch=native)")
+  add_custom_target(nimblecas_gpu_kernels DEPENDS "${_gpu_lib}")
+
+  add_library(nimblecas_gpu STATIC)
+  target_sources(nimblecas_gpu PUBLIC FILE_SET CXX_MODULES FILES src/gpu/gpu.cppm)
+  target_include_directories(nimblecas_gpu PRIVATE "${CMAKE_SOURCE_DIR}/src/gpu")
+  add_dependencies(nimblecas_gpu nimblecas_gpu_kernels)
+  target_link_libraries(nimblecas_gpu
+    PUBLIC nimblecas_core std_module "${_gpu_lib}" "${NIMBLECAS_CUDART}")
+
+  add_executable(gpu_tests tests/gpu_tests.cpp)
+  add_dependencies(gpu_tests nimblecas_gpu_kernels)
+  target_link_libraries(gpu_tests
+    PRIVATE nimblecas_gpu nimblecas_core nimblecas_testing std_module)
+  set_target_properties(gpu_tests PROPERTIES BUILD_RPATH "${_cuda_libdir}")
+  add_test(NAME gpu_tests COMMAND gpu_tests)
+endif()
+
 # ---- Python bindings (nanobind, ROADMAP 10) — opt-in via -DNIMBLECAS_PYTHON=ON ----
 option(NIMBLECAS_PYTHON "Build the nanobind Python bindings" OFF)
 if(NIMBLECAS_PYTHON)
