@@ -150,6 +150,24 @@ auto main() -> int {
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "saddle", "diag(-1, 2) => saddle");
               })
+        .test("classify_zero_with_positive_is_unstable",
+              [](TestContext& t) {
+                  // diag(0, 1) grows like e^t: a positive eigenvalue makes it unstable, and
+                  // must NOT be reported as merely marginal just because a zero is present.
+                  auto c = classify_equilibrium(mat({{0, 0}, {0, 1}}));
+                  t.expect(c.has_value(), "classify succeeds");
+                  t.expect(c.value_or("") == "unstable (with marginal direction)",
+                           "diag(0, 1) => unstable (with marginal direction)");
+              })
+        .test("classify_zero_with_negative_is_marginally_stable",
+              [](TestContext& t) {
+                  // diag(0, -1): bounded but not asymptotically stable (the zero direction
+                  // neither grows nor decays) => marginally stable, not a stable node.
+                  auto c = classify_equilibrium(mat({{0, 0}, {0, -1}}));
+                  t.expect(c.has_value(), "classify succeeds");
+                  t.expect(c.value_or("") == "marginally stable",
+                           "diag(0, -1) => marginally stable");
+              })
         .test("classify_non_rational_fallback",
               [](TestContext& t) {
                   // Rotation: spectrum +/- i is not rational, so the Routh-Hurwitz fallback

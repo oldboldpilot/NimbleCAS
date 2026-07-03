@@ -126,7 +126,10 @@ auto rejection_sample(std::function<double(double)> pdf, double a, double b, dou
     const double width = b - a;
 
     std::vector<double> accepted;
-    accepted.reserve(static_cast<std::size_t>(want));
+    // At most min(want, max_trials) samples can ever be accepted, so reserve that — never
+    // the raw `want`, which an un-clamped caller could set huge enough to make reserve()
+    // throw std::bad_alloc/length_error and escape the no-throw railway contract.
+    accepted.reserve(static_cast<std::size_t>(std::min(want, max_trials)));
 
     // Hard cap on proposals: the loop makes at most `max_trials` iterations and also exits
     // early once `want` samples are collected — so it always terminates.

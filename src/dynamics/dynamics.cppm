@@ -50,12 +50,14 @@ export namespace nimblecas {
 // A human-readable classification of the equilibrium at the origin of dx/dt = A x.
 //
 // When ALL eigenvalues are rational (their multiplicities from rational_eigenvalues sum to
-// n) the sign pattern gives an exact verdict:
-//   - every eigenvalue negative        -> "stable node"
-//   - every eigenvalue positive        -> "unstable node"
-//   - both signs present (no zero)     -> "saddle"
-//   - any zero eigenvalue present      -> "degenerate/marginal"
-// (A zero eigenvalue is checked first: its marginal direction dominates the verdict.)
+// n) the sign pattern gives an exact verdict. A positive eigenvalue means instability
+// regardless of the rest, so positive dominates a zero (marginal) eigenvalue:
+//   - both a positive and a negative eigenvalue -> "saddle"
+//   - all non-negative, some positive, no zero  -> "unstable node"
+//   - all non-negative, some positive, a zero   -> "unstable (with marginal direction)"
+//   - all non-positive, some negative, no zero  -> "stable node"
+//   - all non-positive, some negative, a zero   -> "marginally stable"
+//   - all eigenvalues zero (or n == 0)          -> "degenerate/marginal"
 //
 // Otherwise part of the spectrum is irrational/complex and cannot be seen over Q, so the
 // verdict falls back to the Routh-Hurwitz result:
@@ -215,20 +217,27 @@ auto classify_equilibrium(const Matrix& a) -> Result<std::string> {
     }
 
     if (total_multiplicity == static_cast<std::int64_t>(n)) {
-        // Fully rational spectrum: classify by sign pattern.
-        if (has_zero) {
-            return std::string("degenerate/marginal");
-        }
-        if (has_negative && has_positive) {
-            return std::string("saddle");
-        }
-        if (has_negative) {
-            return std::string("stable node");
+        // Fully rational spectrum: classify by sign pattern. Any eigenvalue with positive
+        // real part makes the origin UNSTABLE regardless of the others, so the positive
+        // cases are decided before the zero (marginal) case — otherwise diag(0, +1), which
+        // grows like e^t, would be mislabelled "marginal".
+        if (has_positive && has_negative) {
+            return std::string("saddle");  // stable and unstable directions coexist
         }
         if (has_positive) {
-            return std::string("unstable node");
+            // All non-negative with at least one positive: unstable, possibly with a
+            // marginal (zero-eigenvalue) direction alongside the growing one.
+            return has_zero ? std::string("unstable (with marginal direction)")
+                            : std::string("unstable node");
         }
-        // Empty spectrum (n == 0): no motion, treat as marginal.
+        if (has_negative) {
+            // All non-positive with at least one negative: a zero eigenvalue makes it only
+            // marginally (not asymptotically) stable; otherwise a genuine stable node.
+            return has_zero ? std::string("marginally stable")
+                            : std::string("stable node");
+        }
+        // No positive and no negative eigenvalue: the spectrum is all zeros (or empty for
+        // n == 0) — no exponential motion, a fully degenerate/marginal equilibrium.
         return std::string("degenerate/marginal");
     }
 
