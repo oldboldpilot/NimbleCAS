@@ -43,7 +43,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff`):
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
 
-The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant}}`; `parallel`):
+The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein}}`; `parallel`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
@@ -55,6 +55,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.pfd` | [pfd.md](reference/pfd.md) | Square-free partial-fraction decomposition over `Q[x]`: Yun factorization, Bezout split, base-`b` power expansion. |
 | `nimblecas.ratint` | [ratint.md](reference/ratint.md) | Hermite reduction of `int A/B dx` over `Q`: exact rational part plus a square-free-denominator logarithmic integrand. |
 | `nimblecas.resultant` | [resultant.md](reference/resultant.md) | Resultant and discriminant over `Q[x]` via the Euclidean remainder sequence: common-factor / repeated-root detection. |
+| `nimblecas.rothstein` | [rothstein.md](reference/rothstein.md) | Rothstein–Trager logarithmic integration over `Q(x)`: the residue resultant `R(t) = res_x(D, A − t·D')`, rational-residue logarithms of a square-free-denominator integrand. |
 
 Tooling and integration:
 
@@ -89,9 +90,9 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
               ┌──────────┴──────────┐
               ▼                     ▼
         nimblecas.pfd       nimblecas.resultant
-              │
-              ▼
-        nimblecas.ratint
+              │                     │
+              ▼                     ▼
+        nimblecas.ratint    nimblecas.rothstein
 
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)

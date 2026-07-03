@@ -49,6 +49,10 @@ reviewed):
 - `nimblecas.resultant` — resultant and discriminant over `Q[x]` via the Euclidean
   remainder sequence: common-factor / repeated-root detection — the substrate for the
   subresultant PRS, multivariate GCD, and the Rothstein–Trager resultant.
+- `nimblecas.rothstein` — Rothstein–Trager logarithmic integration over `Q(x)`: the
+  residue resultant `R(t) = res_x(D, A − t·D')` sampled and interpolated, emitting the
+  rational-residue logarithms of a square-free-denominator integrand — the logarithmic-part
+  half of rational-function integration (completing it with Hermite reduction).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -78,9 +82,9 @@ polyexpr ratpoly               │
       ┌─────┴─────┐            │
       ▼           ▼            ▼
      pfd      resultant  bindings (nanobind: symbolic, simplify, diff, polyexpr)
-      │
-      ▼
-    ratint
+      │           │
+      ▼           ▼
+    ratint    rothstein
 
 testing  (stands alone)
 ```

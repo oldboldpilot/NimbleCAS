@@ -164,10 +164,10 @@ Hermite reduction is the **rational-part half** of rational-function integration
 (ROADMAP §7.19). It reuses the square-free factorization and Bézout split of
 [`pfd`](pfd.md) to peel off the elementary rational term `g` without a full
 irreducible factorization of `B`, and hands the leftover square-free integrand
-`h = integrand_num/integrand_den` to the planned next step: **Rothstein–Trager**,
-which computes the logarithmic part via resultants / a subresultant PRS. That step
-is not yet implemented; `ratint` produces exactly the square-free-denominator input
-it requires.
+`h = integrand_num/integrand_den` to [**Rothstein–Trager**](rothstein.md), which
+computes the logarithmic part via the resultant `res_x(D, A - t*D')`. `ratint`
+produces exactly the square-free-denominator input it requires; the two passes are
+run in sequence by a combined `integrate_rational` capstone.
 
 ## See also
 

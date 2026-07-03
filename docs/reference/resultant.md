@@ -144,10 +144,10 @@ R(t) = res_x(D, A - t*D'),
 ```
 
 whose roots supply the constant multipliers of the logarithms in the logarithmic
-part of `int A(x)/D(x) dx` with `D` square-free (ROADMAP §7.19). That step
-consumes exactly the square-free-denominator integrand that
-[`ratint`](ratint.md) leaves behind, making `resultant` the planned next piece
-after Hermite reduction.
+part of `int A(x)/D(x) dx` with `D` square-free (ROADMAP §7.19). That step —
+[`nimblecas.rothstein`](rothstein.md) — consumes exactly the
+square-free-denominator integrand that [`ratint`](ratint.md) leaves behind,
+sampling and interpolating this resultant to recover its residues.
 
 ## See also
 
