@@ -78,6 +78,13 @@ target_sources(nimblecas_polyexpr PUBLIC
 target_link_libraries(nimblecas_polyexpr
   PUBLIC nimblecas_polynomial nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.ratpoly : polynomials over the rationals Q[x] (division, gcd) ----
+add_library(nimblecas_ratpoly STATIC)
+target_sources(nimblecas_ratpoly PUBLIC
+  FILE_SET CXX_MODULES FILES src/ratpoly/ratpoly.cppm)
+target_link_libraries(nimblecas_ratpoly
+  PUBLIC nimblecas_polynomial nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -134,6 +141,11 @@ target_link_libraries(polyexpr_tests
   PRIVATE nimblecas_polyexpr nimblecas_polynomial nimblecas_symbolic nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME polyexpr_tests COMMAND polyexpr_tests)
+
+add_executable(ratpoly_tests tests/ratpoly_tests.cpp)
+target_link_libraries(ratpoly_tests
+  PRIVATE nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME ratpoly_tests COMMAND ratpoly_tests)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
