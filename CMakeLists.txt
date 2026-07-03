@@ -113,6 +113,13 @@ target_sources(nimblecas_roots PUBLIC
 target_link_libraries(nimblecas_roots
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.complex : exact Gaussian-rational complex numbers (§7.1) ----
+add_library(nimblecas_complex STATIC)
+target_sources(nimblecas_complex PUBLIC
+  FILE_SET CXX_MODULES FILES src/complex/complex.cppm)
+target_link_libraries(nimblecas_complex
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -206,6 +213,12 @@ target_link_libraries(roots_tests
   PRIVATE nimblecas_roots nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME roots_tests COMMAND roots_tests)
+
+add_executable(complex_tests tests/complex_tests.cpp)
+target_link_libraries(complex_tests
+  PRIVATE nimblecas_complex nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME complex_tests COMMAND complex_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
