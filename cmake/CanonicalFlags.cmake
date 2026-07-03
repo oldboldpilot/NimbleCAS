@@ -51,11 +51,33 @@ else()
   add_link_options(-stdlib=libc++ -fexperimental-library -pthread)
 endif()
 
-# AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer build
-# (Code Policy Rules 36 / 56). Applied last so -O1/-UNDEBUG win over the release
-# defaults above. (Linux toolchain; the Windows path uses the release flags only.)
-option(NIMBLECAS_SANITIZE "Build with ASan+UBSan+LSan" OFF)
-if(NIMBLECAS_SANITIZE AND NOT WIN32)
-  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all -O1 -UNDEBUG)
-  add_link_options(-fsanitize=address,undefined)
+# Sanitizer builds (Code Policy Rules 36 / 56). Select one via
+#   -DNIMBLECAS_SANITIZER=address|thread|memory|undefined
+# (empty = none). NIMBLECAS_SANITIZE=ON is a back-compat alias for "address".
+# Applied last so -O1/-g/-UNDEBUG win over the release defaults above. Linux only
+# (the Windows path uses the release flags). ASan implies LeakSanitizer.
+option(NIMBLECAS_SANITIZE "Alias for -DNIMBLECAS_SANITIZER=address" OFF)
+set(NIMBLECAS_SANITIZER "" CACHE STRING
+    "Sanitizer: address | thread | memory | undefined (empty = none)")
+if(NIMBLECAS_SANITIZE AND NIMBLECAS_SANITIZER STREQUAL "")
+  set(NIMBLECAS_SANITIZER "address")
+endif()
+
+if(NIMBLECAS_SANITIZER AND NOT WIN32)
+  add_compile_options(-fno-omit-frame-pointer -fno-sanitize-recover=all -O1 -g -UNDEBUG)
+  if(NIMBLECAS_SANITIZER STREQUAL "address")
+    add_compile_options(-fsanitize=address,undefined)
+    add_link_options(-fsanitize=address,undefined)
+  elseif(NIMBLECAS_SANITIZER STREQUAL "thread")
+    add_compile_options(-fsanitize=thread)
+    add_link_options(-fsanitize=thread)
+  elseif(NIMBLECAS_SANITIZER STREQUAL "memory")
+    add_compile_options(-fsanitize=memory -fsanitize-memory-track-origins=2)
+    add_link_options(-fsanitize=memory)
+  elseif(NIMBLECAS_SANITIZER STREQUAL "undefined")
+    add_compile_options(-fsanitize=undefined)
+    add_link_options(-fsanitize=undefined)
+  else()
+    message(FATAL_ERROR "Unknown NIMBLECAS_SANITIZER='${NIMBLECAS_SANITIZER}'")
+  endif()
 endif()
