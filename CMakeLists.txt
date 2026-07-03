@@ -127,6 +127,13 @@ target_sources(nimblecas_complex PUBLIC
 target_link_libraries(nimblecas_complex
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.recurrence : linear constant-coefficient recurrences (§7.9) ----
+add_library(nimblecas_recurrence STATIC)
+target_sources(nimblecas_recurrence PUBLIC
+  FILE_SET CXX_MODULES FILES src/recurrence/recurrence.cppm)
+target_link_libraries(nimblecas_recurrence
+  PUBLIC nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -184,6 +191,13 @@ target_sources(nimblecas_latex PUBLIC
 target_link_libraries(nimblecas_latex
   PUBLIC nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.series : Taylor series via the diff engine (§7.3) ----
+add_library(nimblecas_series STATIC)
+target_sources(nimblecas_series PUBLIC
+  FILE_SET CXX_MODULES FILES src/series/series.cppm)
+target_link_libraries(nimblecas_series
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
 target_sources(nimblecas_testing PUBLIC
@@ -233,10 +247,22 @@ target_link_libraries(complex_tests
           nimblecas_testing std_module)
 add_test(NAME complex_tests COMMAND complex_tests)
 
+add_executable(recurrence_tests tests/recurrence_tests.cpp)
+target_link_libraries(recurrence_tests
+  PRIVATE nimblecas_recurrence nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME recurrence_tests COMMAND recurrence_tests)
+
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
   PRIVATE nimblecas_latex nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
 add_test(NAME latex_tests COMMAND latex_tests)
+
+add_executable(series_tests tests/series_tests.cpp)
+target_link_libraries(series_tests
+  PRIVATE nimblecas_series nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME series_tests COMMAND series_tests)
 
 add_executable(symbolic_tests tests/symbolic_tests.cpp)
 target_link_libraries(symbolic_tests
