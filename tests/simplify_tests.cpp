@@ -93,6 +93,14 @@ auto main() -> int {
                   auto lhs = x.pow(Expr::integer(2)).mul(x.pow(Expr::integer(3)));
                   simplifies_to(t, lhs, x.pow(Expr::integer(5)), "x^2 * x^3 -> x^5");
               })
+        .test("reconstructed_terms_stay_flat",
+              [&](TestContext& t) {
+                  // 2*x*y + 3*x*y -> 5*x*y  (must be a flat product, not Mul{Mul{x,y},5})
+                  auto lhs = Expr::product({Expr::integer(2), x, y})
+                                 .add(Expr::product({Expr::integer(3), x, y}));
+                  simplifies_to(t, lhs, Expr::product({Expr::integer(5), x, y}),
+                                "2xy + 3xy -> 5xy (flat)");
+              })
         .test("overflow_is_reported",
               [&](TestContext& t) {
                   // 2^63 overflows int64 exact folding

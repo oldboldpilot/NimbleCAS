@@ -195,6 +195,45 @@ struct ConstVal {
     return {factor, Expr::integer(1)};
 }
 
+// Flatten nested Add terms / Mul factors into a single level. Uses a separate
+// worklist stack: splicing children back into the source vector while iterating it
+// would alias the container across a reallocation (UB). Order is preserved.
+[[nodiscard]] auto flatten_terms(std::vector<Expr> items) -> std::vector<Expr> {
+    std::vector<Expr> out;
+    std::vector<Expr> stack(std::make_move_iterator(items.rbegin()),
+                            std::make_move_iterator(items.rend()));
+    while (!stack.empty()) {
+        Expr e = std::move(stack.back());
+        stack.pop_back();
+        if (const auto* a = std::get_if<AddNode>(&e.node().value)) {
+            for (auto it = a->terms.rbegin(); it != a->terms.rend(); ++it) {
+                stack.push_back(*it);
+            }
+        } else {
+            out.push_back(std::move(e));
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] auto flatten_factors(std::vector<Expr> items) -> std::vector<Expr> {
+    std::vector<Expr> out;
+    std::vector<Expr> stack(std::make_move_iterator(items.rbegin()),
+                            std::make_move_iterator(items.rend()));
+    while (!stack.empty()) {
+        Expr e = std::move(stack.back());
+        stack.pop_back();
+        if (const auto* m = std::get_if<MulNode>(&e.node().value)) {
+            for (auto it = m->factors.rbegin(); it != m->factors.rend(); ++it) {
+                stack.push_back(*it);
+            }
+        } else {
+            out.push_back(std::move(e));
+        }
+    }
+    return out;
+}
+
 auto simplify_power(const Expr& base, const Expr& exponent) -> Result<Expr> {
     const auto exp_c = as_constant(exponent);
     const auto base_c = as_constant(base);
@@ -243,6 +282,7 @@ auto simplify_power(const Expr& base, const Expr& exponent) -> Result<Expr> {
 }
 
 auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
+    terms = flatten_terms(std::move(terms));  // self-contained: never rely on caller flattening
     Expr constant_sum = Expr::integer(0);
     std::vector<std::string> order;  // insertion order of group keys
     std::unordered_map<std::string, std::pair<Expr, Expr>> groups;  // key -> (coeff, rest)
@@ -302,6 +342,7 @@ auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
 }
 
 auto simplify_product(std::vector<Expr> factors) -> Result<Expr> {
+    factors = flatten_factors(std::move(factors));  // self-contained: flatten nested products
     Expr constant_product = Expr::integer(1);
     std::vector<std::string> order;
     std::unordered_map<std::string, std::pair<Expr, Expr>> groups;  // key -> (base, exponent)
