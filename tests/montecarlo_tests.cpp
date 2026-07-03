@@ -180,7 +180,9 @@ auto main() -> int {
               })
         .test("sample_mean_and_variance",
               [](TestContext& t) {
-                  // Textbook data: mean 5, sample variance 4 (n-1), population variance 3.5.
+                  // Textbook data with mean 5 and sum of squared deviations 32 (the classic
+                  // "standard deviation 2" set): population variance 32/8 = 4, and the
+                  // Bessel-corrected sample variance 32/7 = 4.5714285...
                   const std::array<double, 8> data{2, 4, 4, 4, 5, 5, 7, 9};
                   std::span<const double> s{data};
 
@@ -194,15 +196,15 @@ auto main() -> int {
                   auto var = sample_variance(s, true);
                   t.expect(var.has_value(), "sample_variance (Bessel) succeeds");
                   if (var) {
-                      t.expect(std::abs(*var - 4.0) < 1e-12,
-                               std::format("sample variance == 4 (got {})", *var));
+                      t.expect(std::abs(*var - 32.0 / 7.0) < 1e-12,
+                               std::format("sample variance == 32/7 (got {})", *var));
                   }
 
                   auto pop = sample_variance(s, false);
                   t.expect(pop.has_value(), "population variance succeeds");
                   if (pop) {
-                      t.expect(std::abs(*pop - 3.5) < 1e-12,
-                               std::format("population variance == 3.5 (got {})", *pop));
+                      t.expect(std::abs(*pop - 4.0) < 1e-12,
+                               std::format("population variance == 4 (got {})", *pop));
                   }
               })
         .test("statistics_domain_errors",
