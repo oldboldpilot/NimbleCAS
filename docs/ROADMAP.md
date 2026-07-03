@@ -1129,7 +1129,7 @@ target_link_libraries(nimblecas_python PRIVATE nimblecas_core)
 
 To ensure day-one multiplatform support for Windows, Linux, and macOS, NimbleCAS uses CMake and Ninja to manage build targets, standardizing compiler flags and abstractions.
 
-### 10.1. Relocatable Local Toolchain & Zero External Dependencies
+### 11.1. Relocatable Local Toolchain & Zero External Dependencies
 To allow building the project immediately after moving the repository folder to any location, all build tools (Clang 22, CMake, Ninja, clang-tidy, and clang-format) are referenced relatively using paths within the project directory (under a vendored `tools/` path).
 
 - **Local Toolchain Mapping (`config/toolchain.cmake`)**:
@@ -1202,7 +1202,7 @@ To allow building the project immediately after moving the repository folder to 
   add_compile_options(${CANONICAL_FLAGS})
   ```
 
-## 11. C++26 Transition Plan & Reflection Preparation
+## 12. C++26 Transition Plan & Reflection Preparation
 
 As soon as a stable compiler toolchain with C++26 reflection is available, NimbleCAS will upgrade its target standard to C++26 (`-std=c++26`). To prepare for this transition:
 
@@ -1219,7 +1219,7 @@ As soon as a stable compiler toolchain with C++26 reflection is available, Nimbl
 
 ---
 
-## 12. Implementation Phases & Roadmap Timeline
+## 13. Implementation Phases & Roadmap Timeline
 
 | Phase | Title | Description | Est. Time |
 | :--- | :--- | :--- | :--- |
