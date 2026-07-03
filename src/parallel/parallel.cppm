@@ -46,6 +46,9 @@ auto invoke2(const std::function<void()>& f, const std::function<void()>& g) -> 
 
 // Order-preserving parallel map by index: result[i] = fn(i) for i in [0, n).
 // Deterministic (result depends only on fn, not on scheduling). Serial below grain.
+// PRECONDITION: fn must be safe to invoke concurrently for distinct indices — i.e.
+// stateless or synchronising internally. In NimbleCAS this holds because the tree is
+// immutable (CowPtr), so fn only reads shared subexpressions and produces new ones.
 template <typename Fn>
 [[nodiscard]] auto transform_index(std::size_t n, Fn fn, std::size_t grain = default_grain)
     -> std::vector<std::invoke_result_t<Fn&, std::size_t>> {
