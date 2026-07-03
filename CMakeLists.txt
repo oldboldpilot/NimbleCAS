@@ -162,6 +162,13 @@ target_sources(nimblecas_eigen PUBLIC
 target_link_libraries(nimblecas_eigen
   PUBLIC nimblecas_matrix nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.powerseries : truncated formal power series over Q (§7.4/7.5 dependency) ----
+add_library(nimblecas_powerseries STATIC)
+target_sources(nimblecas_powerseries PUBLIC
+  FILE_SET CXX_MODULES FILES src/powerseries/powerseries.cppm)
+target_link_libraries(nimblecas_powerseries
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -309,6 +316,12 @@ target_link_libraries(eigen_tests
   PRIVATE nimblecas_eigen nimblecas_matrix nimblecas_roots nimblecas_ratpoly
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME eigen_tests COMMAND eigen_tests)
+
+add_executable(powerseries_tests tests/powerseries_tests.cpp)
+target_link_libraries(powerseries_tests
+  PRIVATE nimblecas_powerseries nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME powerseries_tests COMMAND powerseries_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
