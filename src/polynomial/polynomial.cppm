@@ -105,6 +105,9 @@ auto Polynomial::monomial(std::int64_t coeff, std::size_t degree) -> Polynomial 
     if (coeff == 0) {
         return Polynomial{};
     }
+    // Guard the degree+1 wrap (degree == SIZE_MAX would index an empty vector). Any
+    // such degree is unrepresentable anyway (the allocation would dwarf memory).
+    assert(degree < std::numeric_limits<std::size_t>::max() && "monomial degree too large");
     std::vector<std::int64_t> c(degree + 1, 0);
     c[degree] = coeff;
     return Polynomial{std::move(c)};
