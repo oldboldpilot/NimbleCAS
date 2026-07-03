@@ -62,6 +62,39 @@ auto main() -> int {
                   t.expect(!r.has_value() && r.error() == MathError::overflow,
                            "int64 overflow in multiply is reported");
               })
+        .test("content_and_primitive_part",
+              [](TestContext& t) {
+                  t.expect(poly({2, 4, 6}).content().value() == 2, "content(2,4,6) = 2");
+                  t.expect(poly({3, 0, 9}).content().value() == 3, "content(3,0,9) = 3");
+                  t.expect(poly({}).content().value() == 0, "content(0) = 0");
+                  // 2x + 4 -> x + 2 (primitive)
+                  t.expect(poly({4, 2}).primitive_part().value().is_equal(poly({2, 1})),
+                           "primitive_part(4 + 2x) = 2 + x");
+                  // -2x - 2 -> x + 1 (sign-normalised to positive leading)
+                  t.expect(poly({-2, -2}).primitive_part().value().is_equal(poly({1, 1})),
+                           "primitive_part(-2 - 2x) = 1 + x");
+              })
+        .test("pseudo_remainder",
+              [](TestContext& t) {
+                  // x^2 - 1 = (x - 1)(x + 1): x - 1 divides it, prem = 0
+                  auto r = poly({-1, 0, 1}).pseudo_remainder(poly({-1, 1}));
+                  t.expect(r.has_value() && r->is_zero(), "prem(x^2-1, x-1) = 0");
+                  auto bad = poly({1, 1}).pseudo_remainder(poly({}));
+                  t.expect(!bad.has_value() && bad.error() == MathError::division_by_zero,
+                           "zero divisor rejected");
+              })
+        .test("gcd_over_Z",
+              [](TestContext& t) {
+                  auto g1 = poly({-1, 0, 1}).gcd(poly({-1, 1}));  // gcd(x^2-1, x-1)
+                  t.expect(g1.has_value() && g1->is_equal(poly({-1, 1})), "gcd(x^2-1, x-1) = x-1");
+                  auto g2 = poly({1, 2, 1}).gcd(poly({1, 1}));  // gcd((x+1)^2, x+1)
+                  t.expect(g2.has_value() && g2->is_equal(poly({1, 1})), "gcd((x+1)^2, x+1) = x+1");
+                  auto g3 = poly({-1, 0, 1}).gcd(poly({1, -2, 1}));  // gcd(x^2-1, (x-1)^2)
+                  t.expect(g3.has_value() && g3->is_equal(poly({-1, 1})), "gcd(x^2-1, (x-1)^2) = x-1");
+                  auto g4 = poly({-2, 0, 2}).gcd(poly({-2, 2}));  // gcd(2x^2-2, 2x-2)
+                  t.expect(g4.has_value() && g4->is_equal(poly({-2, 2})),
+                           "gcd(2x^2-2, 2x-2) = 2x-2 (content 2)");
+              })
         .test("evaluate_batch_matches_scalar_reference",
               [](TestContext& t) {
                   auto p = poly({2, -3, 1});  // 2 - 3x + x^2

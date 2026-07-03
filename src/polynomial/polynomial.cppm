@@ -51,6 +51,16 @@ public:
     [[nodiscard]] auto scale(std::int64_t s) const -> Result<Polynomial>;
     [[nodiscard]] auto multiply(const Polynomial& other) const -> Result<Polynomial>;
 
+    // Content = gcd of the coefficients (>= 0; 0 for the zero polynomial).
+    [[nodiscard]] auto content() const -> Result<std::int64_t>;
+    // Primitive part = this / content, sign-normalised to a positive leading coeff.
+    [[nodiscard]] auto primitive_part() const -> Result<Polynomial>;
+    // Pseudo-remainder R: lc(divisor)^(deg-diff+1) * this = divisor*Q + R, staying in
+    // Z[x] (no fractions). Fails on a zero divisor or int64 overflow.
+    [[nodiscard]] auto pseudo_remainder(const Polynomial& divisor) const -> Result<Polynomial>;
+    // Greatest common divisor in Z[x] via the primitive Euclidean PRS.
+    [[nodiscard]] auto gcd(const Polynomial& other) const -> Result<Polynomial>;
+
     // Exact evaluation at an integer point (Horner, overflow-checked).
     [[nodiscard]] auto evaluate(std::int64_t x) const -> Result<std::int64_t>;
 
@@ -90,6 +100,15 @@ namespace {
 }
 [[nodiscard]] auto mul_ov(std::int64_t a, std::int64_t b, std::int64_t& out) -> bool {
     return __builtin_mul_overflow(a, b, &out);
+}
+
+// std::gcd is UB if |m| or |n| is unrepresentable (i.e. INT64_MIN); guard it.
+[[nodiscard]] auto checked_gcd(std::int64_t a, std::int64_t b) -> std::optional<std::int64_t> {
+    constexpr std::int64_t int64_min = std::numeric_limits<std::int64_t>::min();
+    if (a == int64_min || b == int64_min) {
+        return std::nullopt;
+    }
+    return std::gcd(a, b);
 }
 
 }  // namespace
@@ -167,6 +186,120 @@ auto Polynomial::multiply(const Polynomial& other) const -> Result<Polynomial> {
         }
     }
     return Polynomial{std::move(r)};
+}
+
+auto Polynomial::content() const -> Result<std::int64_t> {
+    std::int64_t g = 0;
+    for (const std::int64_t c : coeffs_) {
+        auto next = checked_gcd(g, c);
+        if (!next) {
+            return make_error<std::int64_t>(MathError::overflow);
+        }
+        g = *next;  // gcd(0, c) = |c|, so g stays >= 0
+    }
+    return g;
+}
+
+auto Polynomial::primitive_part() const -> Result<Polynomial> {
+    if (is_zero()) {
+        return Polynomial{};
+    }
+    auto c = content();
+    if (!c) {
+        return make_error<Polynomial>(c.error());
+    }
+    const std::int64_t g = *c;  // > 0 for a non-zero polynomial
+    std::vector<std::int64_t> r(coeffs_.size(), 0);
+    for (std::size_t i = 0; i < coeffs_.size(); ++i) {
+        r[i] = coeffs_[i] / g;  // exact: content divides every coefficient
+    }
+    Polynomial p{std::move(r)};
+    if (p.leading_coefficient() < 0) {
+        return p.scale(-1);  // sign-normalise to a positive leading coefficient
+    }
+    return p;
+}
+
+auto Polynomial::pseudo_remainder(const Polynomial& divisor) const -> Result<Polynomial> {
+    if (divisor.is_zero()) {
+        return make_error<Polynomial>(MathError::division_by_zero);
+    }
+    if (degree() < divisor.degree()) {
+        return *this;  // already the remainder (scaling power is d^0 = 1)
+    }
+    const std::int64_t d = divisor.leading_coefficient();
+    const std::int64_t n = divisor.degree();
+    std::int64_t e = degree() - n + 1;  // total scaling exponent lc(divisor)^e
+    Polynomial r = *this;
+    while (!r.is_zero() && r.degree() >= n) {
+        // r <- d*r - lc(r) * x^(deg r - n) * divisor
+        auto s = Polynomial::monomial(r.leading_coefficient(),
+                                      static_cast<std::size_t>(r.degree() - n));
+        auto dr = r.scale(d);
+        if (!dr) {
+            return dr;
+        }
+        auto sb = s.multiply(divisor);
+        if (!sb) {
+            return sb;
+        }
+        auto next = dr->subtract(*sb);
+        if (!next) {
+            return next;
+        }
+        r = *next;
+        --e;
+    }
+    for (; e > 0; --e) {  // apply the remaining lc(divisor)^e factor
+        auto scaled = r.scale(d);
+        if (!scaled) {
+            return scaled;
+        }
+        r = *scaled;
+    }
+    return r;
+}
+
+auto Polynomial::gcd(const Polynomial& other) const -> Result<Polynomial> {
+    auto normalized = [](const Polynomial& p) -> Result<Polynomial> {
+        return p.leading_coefficient() < 0 ? p.scale(-1) : Result<Polynomial>{p};
+    };
+    if (is_zero()) {
+        return normalized(other);
+    }
+    if (other.is_zero()) {
+        return normalized(*this);
+    }
+    // gcd of contents times the primitive gcd (primitive Euclidean PRS).
+    auto ca = content();
+    auto cb = other.content();
+    if (!ca || !cb) {
+        return make_error<Polynomial>(MathError::overflow);
+    }
+    auto d = checked_gcd(*ca, *cb);
+    if (!d) {
+        return make_error<Polynomial>(MathError::overflow);
+    }
+    auto a = primitive_part();
+    auto b = other.primitive_part();
+    if (!a || !b) {
+        return make_error<Polynomial>(a ? b.error() : a.error());
+    }
+    Polynomial pa = *a;
+    Polynomial pb = *b;
+    while (!pb.is_zero()) {
+        auto r = pa.pseudo_remainder(pb);
+        if (!r) {
+            return r;
+        }
+        pa = pb;
+        auto prim = r->primitive_part();
+        if (!prim) {
+            return prim;
+        }
+        pb = *prim;
+    }
+    return pa.scale(*d);  // primitive gcd scaled by the content gcd
 }
 
 auto Polynomial::evaluate(std::int64_t x) const -> Result<std::int64_t> {
