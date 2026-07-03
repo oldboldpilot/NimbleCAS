@@ -64,6 +64,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.combinatorics` | [combinatorics.md](reference/combinatorics.md) | Overflow-checked `int64` counting — factorial, binomial, permutations, Catalan, Fibonacci, Stirling numbers — plus exact-`Rational` Bernoulli numbers (Akiyama–Tanigawa, `B_1 = -1/2`). |
 | `nimblecas.orthopoly` | [orthopoly.md](reference/orthopoly.md) | Classical orthogonal polynomials over `Q[x]` (Chebyshev T/U, Legendre, Laguerre, physicists'/probabilists' Hermite) via their three-term recurrences. |
 | `nimblecas.roots` | [roots.md](reference/roots.md) | Rational roots of a polynomial over `Q[x]` with multiplicity, via the rational root theorem plus deflation (analytical equation solving; radical/Cardano/RootOf are a planned extension). |
+| `nimblecas.complex` | [complex.md](reference/complex.md) | Exact complex numbers over `Q` — the Gaussian rationals `Q + Qi`: overflow-checked add/subtract/multiply/divide/conjugate/reciprocal and the exact squared modulus (modulus and argument omitted as irrational). |
 
 Tooling and integration:
 
@@ -108,7 +109,7 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
                nimblecas.integrate
 
 nimblecas.matrix  nimblecas.combinatorics  nimblecas.orthopoly  nimblecas.roots
-                    (ratpoly consumers; each depends on core + ratpoly)
+nimblecas.complex   (ratpoly consumers; each depends on core + ratpoly)
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)
 nimblecas.gpu       (optional CUDA; depends on core — opt-in via -DNIMBLECAS_CUDA=ON)

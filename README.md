@@ -78,6 +78,9 @@ reviewed):
 - `nimblecas.roots` — analytical equation solving over `Q[x]`: every rational root of a polynomial
   with its multiplicity, via the rational root theorem plus exact deflation (radical / Cardano /
   symbolic `RootOf` for irrational and complex roots are a planned extension).
+- `nimblecas.complex` — exact complex numbers over the rationals, the Gaussian rationals `Q + Qi`:
+  overflow-checked add / subtract / multiply / divide / negate / conjugate / reciprocal and the exact
+  squared modulus (modulus and argument omitted as irrational — deferred to a later numeric layer).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
