@@ -63,6 +63,15 @@ reviewed):
 - `nimblecas.integrate` — rational-function integration capstone over `Q(x)`: runs Hermite
   reduction then Rothstein–Trager to assemble the complete `int A/B dx` as a rational part
   plus a sum of residue-weighted logarithms (`not_implemented` for the algebraic-residue case).
+- `nimblecas.matrix` — dense matrices over exact `Rational`: overflow-checked add / subtract /
+  scale / multiply / transpose / trace, plus exact determinant, `A x = b` solve, inverse, and
+  rank via Gaussian / Gauss-Jordan elimination over the field `Q`.
+- `nimblecas.combinatorics` — overflow-checked `int64` counting functions (factorial, binomial,
+  permutations, Catalan, Fibonacci, both Stirling kinds) plus exact-`Rational` Bernoulli numbers
+  via Akiyama–Tanigawa (the `B_1 = -1/2` convention).
+- `nimblecas.orthopoly` — the classical orthogonal polynomials over `Q[x]` (Chebyshev first/second
+  kind, Legendre, Laguerre, physicists'/probabilists' Hermite), each generated exactly from its
+  three-term recurrence.
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -100,6 +109,7 @@ polyexpr ratpoly               │
             ▼
         integrate
 
+matrix  combinatorics  orthopoly   (ratpoly consumers)
 testing  (stands alone)
 ```
 

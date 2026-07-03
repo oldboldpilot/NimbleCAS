@@ -65,6 +65,9 @@ Edges as declared in the sources (`import` statements):
 | [`resultant`](../reference/resultant.md) | `core`, `ratpoly` |
 | [`rothstein`](../reference/rothstein.md) | `core`, `ratpoly`, `resultant` |
 | [`integrate`](../reference/integrate.md) | `core`, `ratpoly`, `ratint`, `rothstein` |
+| [`matrix`](../reference/matrix.md) | `core`, `ratpoly` |
+| [`combinatorics`](../reference/combinatorics.md) | `core`, `ratpoly` |
+| [`orthopoly`](../reference/orthopoly.md) | `core`, `ratpoly` |
 | [`gpu`](../reference/gpu.md) (optional) | `core` (plus external `nvcc` + `cudart` at build time) |
 | bindings (`nimblecas_ext`) | `core`, `symbolic`, `simplify`, `diff`, `polyexpr` |
 
@@ -87,7 +90,12 @@ Two chains sit on the common `core` foundation:
   rational residues) on top of that resultant, and `integrate` is the capstone
   that joins the two halves — running Hermite reduction then Rothstein–Trager — to
   assemble the complete `int A/B dx` as a rational part plus residue-weighted
-  logarithms.
+  logarithms. Three further modules consume the exact `Q`/`Q[x]` substrate
+  directly, alongside `pfd` and `resultant`: `matrix` does exact dense linear
+  algebra over `Rational` (determinant, solve, inverse, rank), `combinatorics`
+  supplies overflow-checked integer sequences plus exact-`Rational` Bernoulli
+  numbers, and `orthopoly` generates the classical orthogonal polynomials over
+  `Q[x]` by their three-term recurrences.
 
 ## 2. The immutable, copy-on-write data model
 
@@ -202,5 +210,5 @@ across GPU architectures without a rebuild.
 ## See also
 
 - [Parallel tree computation](parallel-tree-computation.md) — the parallel design in depth.
-- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [vectorcalc](../reference/vectorcalc.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md) · [gpu](../reference/gpu.md)
+- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [vectorcalc](../reference/vectorcalc.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md) · [matrix](../reference/matrix.md) · [combinatorics](../reference/combinatorics.md) · [orthopoly](../reference/orthopoly.md) · [gpu](../reference/gpu.md)
 - [Documentation hub](../Index.md)
