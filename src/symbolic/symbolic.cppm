@@ -58,10 +58,16 @@ public:
     // the cost gate for parallel tree recursion (large subtree -> fork children).
     [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
 
+    // Structural hash, memoised at construction (O(1) query): a.is_equivalent_to(b)
+    // implies a.structural_hash() == b.structural_hash(). Used to fast-path equality
+    // and as the key for hash-consing / memoisation.
+    [[nodiscard]] auto structural_hash() const noexcept -> std::size_t { return hash_; }
+
 private:
     explicit Expr(ExprNode value);
     CowPtr<ExprNode> node_;
     std::size_t size_{1};
+    std::size_t hash_{0};
 };
 
 [[nodiscard]] auto operator==(const Expr& lhs, const Expr& rhs) -> bool {
@@ -215,10 +221,40 @@ namespace {
         node.value);
 }
 
+// Structural hash from the node kind + children's already-memoised hashes (O(1) per
+// child). Consistent with is_equivalent_to (doubles hashed bitwise via hash_constant).
+[[nodiscard]] auto compute_hash(const ExprNode& node) -> std::size_t {
+    std::size_t seed = std::hash<std::size_t>{}(node.value.index());
+    std::visit(
+        [&seed]<typename T>(const T& n) {
+            if constexpr (std::is_same_v<T, SymbolNode>) {
+                seed = hash_combine(seed, std::hash<std::string>{}(n.name));
+            } else if constexpr (std::is_same_v<T, ConstantNode>) {
+                seed = hash_combine(seed, hash_constant(n));
+            } else if constexpr (std::is_same_v<T, AddNode>) {
+                for (const Expr& e : n.terms) seed = hash_combine(seed, e.structural_hash());
+            } else if constexpr (std::is_same_v<T, MulNode>) {
+                for (const Expr& e : n.factors) seed = hash_combine(seed, e.structural_hash());
+            } else if constexpr (std::is_same_v<T, PowerNode>) {
+                seed = hash_combine(seed, n.base.structural_hash());
+                seed = hash_combine(seed, n.exponent.structural_hash());
+            } else if constexpr (std::is_same_v<T, FunctionNode>) {
+                seed = hash_combine(seed, std::hash<std::string>{}(n.name));
+                for (const Expr& e : n.args) seed = hash_combine(seed, e.structural_hash());
+            } else {
+                static_assert(always_false<T>, "compute_hash: unhandled ExprNode kind");
+            }
+        },
+        node.value);
+    return seed;
+}
+
 }  // namespace
 
 Expr::Expr(ExprNode value) : node_(CowPtr<ExprNode>::make(std::move(value))) {
-    size_ = compute_size(node_.read());
+    const ExprNode& n = node_.read();
+    size_ = compute_size(n);
+    hash_ = compute_hash(n);
 }
 
 auto Expr::symbol(std::string name) -> Expr {
@@ -281,6 +317,12 @@ auto Expr::pow(const Expr& exponent) const -> Expr { return Expr::power(*this, e
 auto Expr::is_equivalent_to(const Expr& other) const -> bool {
     const ExprNode& a = node_.read();
     const ExprNode& b = other.node_.read();
+    if (&a == &b) {
+        return true;  // same shared node (COW) — structurally identical, O(1)
+    }
+    if (hash_ != other.hash_) {
+        return false;  // different structural hash cannot be equivalent, O(1)
+    }
     if (a.value.index() != b.value.index()) {
         return false;
     }
@@ -416,37 +458,7 @@ auto substitute(const Expr& u, const Expr& t, const Expr& r) -> Expr {
         u.node().value);
 }
 
-auto hash_value(const Expr& u) -> std::size_t {
-    const ExprNode& n = u.node();
-    std::size_t seed = std::hash<std::size_t>{}(n.value.index());  // node kind
-    std::visit(
-        [&seed]<typename T>(const T& node) {
-            if constexpr (std::is_same_v<T, SymbolNode>) {
-                seed = hash_combine(seed, std::hash<std::string>{}(node.name));
-            } else if constexpr (std::is_same_v<T, ConstantNode>) {
-                seed = hash_combine(seed, hash_constant(node));
-            } else if constexpr (std::is_same_v<T, AddNode>) {
-                for (const Expr& e : node.terms) {
-                    seed = hash_combine(seed, hash_value(e));
-                }
-            } else if constexpr (std::is_same_v<T, MulNode>) {
-                for (const Expr& e : node.factors) {
-                    seed = hash_combine(seed, hash_value(e));
-                }
-            } else if constexpr (std::is_same_v<T, PowerNode>) {
-                seed = hash_combine(seed, hash_value(node.base));
-                seed = hash_combine(seed, hash_value(node.exponent));
-            } else if constexpr (std::is_same_v<T, FunctionNode>) {
-                seed = hash_combine(seed, std::hash<std::string>{}(node.name));
-                for (const Expr& e : node.args) {
-                    seed = hash_combine(seed, hash_value(e));
-                }
-            } else {
-                static_assert(always_false<T>, "hash_value: unhandled ExprNode kind");
-            }
-        },
-        n.value);
-    return seed;
-}
+// O(1): the structural hash is memoised on each Expr at construction (compute_hash).
+auto hash_value(const Expr& u) -> std::size_t { return u.structural_hash(); }
 
 }  // namespace nimblecas
