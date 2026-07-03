@@ -92,6 +92,13 @@ target_sources(nimblecas_matrix PUBLIC
 target_link_libraries(nimblecas_matrix
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.stats : descriptive statistics & covariance matrix (§7.7) ----
+add_library(nimblecas_stats STATIC)
+target_sources(nimblecas_stats PUBLIC
+  FILE_SET CXX_MODULES FILES src/stats/stats.cppm)
+target_link_libraries(nimblecas_stats
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.combinatorics : factorial/binomial/Bernoulli/Stirling (§7.18) ----
 add_library(nimblecas_combinatorics STATIC)
 target_sources(nimblecas_combinatorics PUBLIC
@@ -195,6 +202,12 @@ target_link_libraries(matrix_tests
   PRIVATE nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME matrix_tests COMMAND matrix_tests)
+
+add_executable(stats_tests tests/stats_tests.cpp)
+target_link_libraries(stats_tests
+  PRIVATE nimblecas_stats nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME stats_tests COMMAND stats_tests)
 
 add_executable(combinatorics_tests tests/combinatorics_tests.cpp)
 target_link_libraries(combinatorics_tests
