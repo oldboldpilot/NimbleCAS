@@ -81,6 +81,10 @@ reviewed):
 - `nimblecas.complex` — exact complex numbers over the rationals, the Gaussian rationals `Q + Qi`:
   overflow-checked add / subtract / multiply / divide / negate / conjugate / reciprocal and the exact
   squared modulus (modulus and argument omitted as irrational — deferred to a later numeric layer).
+- `nimblecas.stats` — exact descriptive statistics over the rationals: mean, sample/population variance
+  and covariance, and the symmetric covariance matrix `Σ` returned as a `nimblecas.matrix` `Matrix` (its
+  diagonal each variable's variance), via a two-pass exact scheme — every result the fraction it is,
+  overflow-checked.
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
