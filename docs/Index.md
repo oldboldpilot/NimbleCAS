@@ -43,7 +43,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff`):
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
 
-The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein}}`; `parallel`):
+The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein} → integrate}}`; `parallel`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
@@ -56,6 +56,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.ratint` | [ratint.md](reference/ratint.md) | Hermite reduction of `int A/B dx` over `Q`: exact rational part plus a square-free-denominator logarithmic integrand. |
 | `nimblecas.resultant` | [resultant.md](reference/resultant.md) | Resultant and discriminant over `Q[x]` via the Euclidean remainder sequence: common-factor / repeated-root detection. |
 | `nimblecas.rothstein` | [rothstein.md](reference/rothstein.md) | Rothstein–Trager logarithmic integration over `Q(x)`: the residue resultant `R(t) = res_x(D, A − t·D')`, rational-residue logarithms of a square-free-denominator integrand. |
+| `nimblecas.integrate` | [integrate.md](reference/integrate.md) | Rational-function integration capstone over `Q(x)`: Hermite reduction then Rothstein–Trager, assembling `int A/B dx = rational part + sum of residue-weighted logarithms`. |
 
 Tooling and integration:
 
@@ -93,6 +94,10 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
               │                     │
               ▼                     ▼
         nimblecas.ratint    nimblecas.rothstein
+              │                     │
+              └──────────┬──────────┘
+                         ▼
+               nimblecas.integrate
 
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)

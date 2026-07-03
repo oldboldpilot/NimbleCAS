@@ -35,6 +35,10 @@ nimblecas.  nimblecas.ratpoly        ▼            ▼
               │                     │
               ▼                     ▼
         nimblecas.ratint    nimblecas.rothstein
+              │                     │
+              └──────────┬──────────┘
+                         ▼
+               nimblecas.integrate
 
 nimblecas.testing  (stands alone; depends only on std)
 nimblecas_ext      (nanobind bindings; imports symbolic, simplify, diff, polyexpr)
@@ -59,6 +63,7 @@ Edges as declared in the sources (`import` statements):
 | [`ratint`](../reference/ratint.md) | `core`, `ratpoly`, `pfd` |
 | [`resultant`](../reference/resultant.md) | `core`, `ratpoly` |
 | [`rothstein`](../reference/rothstein.md) | `core`, `ratpoly`, `resultant` |
+| [`integrate`](../reference/integrate.md) | `core`, `ratpoly`, `ratint`, `rothstein` |
 | bindings (`nimblecas_ext`) | `core`, `symbolic`, `simplify`, `diff`, `polyexpr` |
 
 Two chains sit on the common `core` foundation:
@@ -72,9 +77,12 @@ Two chains sit on the common `core` foundation:
   `pfd` builds square-free partial-fraction decomposition, `ratint` builds
   Hermite reduction (the rational part of rational-function integration),
   `resultant` builds the resultant and discriminant (common-factor and
-  repeated-root detection) via the Euclidean remainder sequence, and `rothstein`
+  repeated-root detection) via the Euclidean remainder sequence, `rothstein`
   builds Rothstein–Trager logarithmic integration (the logarithmic part, for
-  rational residues) on top of that resultant.
+  rational residues) on top of that resultant, and `integrate` is the capstone
+  that joins the two halves — running Hermite reduction then Rothstein–Trager — to
+  assemble the complete `int A/B dx` as a rational part plus residue-weighted
+  logarithms.
 
 ## 2. The immutable, copy-on-write data model
 
@@ -179,5 +187,5 @@ dispatches elementwise `float32` kernels to the best CPU ISA at runtime
 ## See also
 
 - [Parallel tree computation](parallel-tree-computation.md) — the parallel design in depth.
-- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md)
+- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md)
 - [Documentation hub](../Index.md)

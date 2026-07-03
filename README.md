@@ -53,6 +53,9 @@ reviewed):
   residue resultant `R(t) = res_x(D, A − t·D')` sampled and interpolated, emitting the
   rational-residue logarithms of a square-free-denominator integrand — the logarithmic-part
   half of rational-function integration (completing it with Hermite reduction).
+- `nimblecas.integrate` — rational-function integration capstone over `Q(x)`: runs Hermite
+  reduction then Rothstein–Trager to assemble the complete `int A/B dx` as a rational part
+  plus a sum of residue-weighted logarithms (`not_implemented` for the algebraic-residue case).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -85,6 +88,10 @@ polyexpr ratpoly               │
       │           │
       ▼           ▼
     ratint    rothstein
+      │           │
+      └─────┬─────┘
+            ▼
+        integrate
 
 testing  (stands alone)
 ```
