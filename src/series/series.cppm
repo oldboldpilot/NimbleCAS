@@ -71,7 +71,21 @@ auto taylor_coefficients(const Expr& f, std::string_view var, const Expr& point,
             if (!next_derivative) {
                 return make_error<std::vector<Expr>>(next_derivative.error());
             }
-            derivative = std::move(*next_derivative);
+            auto simplified = simplify(*next_derivative);
+            if (!simplified) {
+                return make_error<std::vector<Expr>>(simplified.error());
+            }
+            derivative = std::move(*simplified);
+
+            // Once the derivative vanishes (e.g. past the degree of a polynomial), every
+            // remaining coefficient is 0 — fill them and stop. This also sidesteps the
+            // int64 k! ceiling for high orders of low-degree functions.
+            if (derivative == Expr::integer(0)) {
+                while (static_cast<std::int64_t>(coefficients.size()) <= order) {
+                    coefficients.push_back(Expr::integer(0));
+                }
+                break;
+            }
 
             std::int64_t next_factorial = 0;
             if (__builtin_mul_overflow(factorial, k + 1, &next_factorial)) {

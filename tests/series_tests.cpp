@@ -66,6 +66,26 @@ auto main() -> int {
                   t.expect((*coeffs)[2].is_equivalent_to(zero), "c_2 = 0");
                   t.expect((*coeffs)[3].is_equivalent_to(one), "c_3 = 1");
               })
+        .test("high_order_low_degree_short_circuits",
+              [&](TestContext& t) {
+                  // f = x^2 to order 25: the derivative vanishes past k=2, so the remaining
+                  // coefficients are 0 and the int64 k! ceiling is never reached.
+                  auto f = Expr::power(x, two);
+                  auto coeffs = taylor_coefficients(f, "x", zero, 25);
+                  t.expect(coeffs.has_value(), "order 25 of x^2 does not overflow");
+                  if (!coeffs) {
+                      return;
+                  }
+                  t.expect_eq(coeffs->size(), std::size_t{26}, "returns 26 coefficients");
+                  t.expect((*coeffs)[2].is_equivalent_to(one), "c_2 = 1");
+                  bool rest_zero = true;
+                  for (std::size_t i = 0; i < coeffs->size(); ++i) {
+                      if (i != 2 && !(*coeffs)[i].is_equivalent_to(zero)) {
+                          rest_zero = false;
+                      }
+                  }
+                  t.expect(rest_zero, "every coefficient except c_2 is 0");
+              })
         .test("general_polynomial_about_zero_coefficients",
               [&](TestContext& t) {
                   // f = x^2 + 2x + 1 about 0: c_0=1, c_1=2, c_2=1.
