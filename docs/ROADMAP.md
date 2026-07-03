@@ -724,6 +724,69 @@ auto area = Expr::parse("x^2")
                 .to_double();
 ```
 
+### 7.20. Polynomial Expansion and Division
+Expansion and division are the algebraic substrate the higher polynomial features assume already exists: the GCD / square-free / PFD routines (§7.17) and the Hermite reduction in the integration engine (§7.19) all call polynomial division and degree/coefficient extraction. This section specifies them explicitly.
+
+#### Structural vs. Dense Representations
+Two views of a polynomial coexist and convert lazily:
+- **Structural form**: the ordinary `ExprNode` tree (sums of `MulNode`/`PowerNode` monomials), which is what the user manipulates and what `simplify` canonicalizes.
+- **Dense/recursive form** (`Polynomial`): a `std::vector<Coefficient>` of coefficients indexed by degree in a chosen *main variable*, with each coefficient itself either a `BigInt`/`Rational` (univariate) or a nested `Polynomial` in the remaining variables (multivariate, recursive representation). Coefficient vectors use the aligned allocator so the coefficient-wise add/scale hot loops run through the `nimblecas.simd` waterfall (§4).
+
+Conversion (`Expr::as_polynomial(main_var)`) is a memoized, hash-consed projection so repeated division/GCD calls on the same operand don't re-parse the tree.
+
+#### Expansion (`Expand(u)`)
+`expand()` recursively applies the distributive law to eliminate products-of-sums and powers-of-sums, producing a canonical flattened sum of monomials:
+- **Products**: $\left(\sum_i a_i\right)\left(\sum_j b_j\right) \to \sum_{i,j} a_i b_j$, evaluated as a Cauchy-style convolution when both operands are dense (dispatched to the SIMD/GPU coefficient-multiply path for high degree, Karatsuba above a tuned crossover).
+- **Powers of sums** use the **multinomial theorem**, drawing coefficients directly from the combinatorics engine (§7.18):
+  $$\left(\sum_{i=1}^{m} x_i\right)^{n} = \sum_{k_1+\dots+k_m=n} \binom{n}{k_1, k_2, \dots, k_m}\prod_{i=1}^{m} x_i^{k_i}.$$
+- **Nested expansion** recurses into sub-expressions first (`expand` is idempotent and bottom-up), and the result is re-canonicalized by automatic simplification so like monomials merge and terms sort into the standard monomial order.
+
+#### Division With Remainder
+For $A, B \in \mathbb{F}[x]$ over a field ($\mathbb{Q}$, or $\mathbb{Z}_p$ for the modular GPU path §5.3), recursive polynomial long division produces the unique quotient and remainder with $A = B\,Q + R$ and $\deg R < \deg B$:
+```cpp
+auto divide(const Polynomial& a, const Polynomial& b, std::string_view x)
+    -> Result<std::pair<Polynomial, Polynomial>>            // {quotient, remainder}
+{
+    if (b.is_zero()) { return std::unexpected(MathError::DivisionByZero); }
+    auto q = Polynomial::zero();
+    auto r = a;                                             // remainder starts as dividend
+    const auto lc_b = b.leading_coefficient();
+    while (!r.is_zero() && r.degree(x) >= b.degree(x)) {
+        // leading term of the partial quotient
+        auto t = r.leading_coefficient().divide(lc_b)
+                  .shift(r.degree(x) - b.degree(x), x);     // (lc_r / lc_b) · x^(deg r - deg b)
+        q = q.add(t);
+        r = r.subtract(b.multiply(t));                      // cancel the leading term
+    }
+    return std::pair{ std::move(q), std::move(r) };
+}
+```
+`quotient()`, `remainder()`, and `divides()` are thin fluent wrappers over this.
+
+#### Pseudo-Division over ℤ[x]
+To stay inside $\mathbb{Z}[x]$ and avoid rational coefficient blow-up (essential for the subresultant PRS that §7.17's multivariate GCD relies on), the engine also provides **pseudo-division**, scaling the dividend by a power of $B$'s leading coefficient so no fractions appear:
+$$\operatorname{lc}(B)^{\,\deg A - \deg B + 1}\, A = B\,Q + R, \qquad \deg R < \deg B,$$
+returning the pseudo-quotient $Q$ and pseudo-remainder $R$ (`prem`, `pquo`). Coefficient growth is contained by extracting the content (GCD of coefficients) via the combinatorics/`BigInt` GCD and reducing to the primitive part between steps.
+
+#### Coefficient & Degree Queries
+Supporting operators reused across the CAS: `degree(x)`, `leading_coefficient(x)`, `coeff(x, n)` (extract the coefficient of $x^n$, implementing the PRD `Coeff(u,x,n)` primitive), `content()`, `primitive_part()`, and `is_zero()`. Multivariate queries operate on the recursive representation by selecting the requested main variable, so e.g. `coeff("x", 2)` on a bivariate polynomial returns a `Polynomial` in $y$.
+
+#### Fluent API
+```cpp
+auto expanded = Expr::parse("(x + y)^3")
+                    .expand()                       // x^3 + 3x^2 y + 3x y^2 + y^3  (multinomial)
+                    .to_latex();
+
+auto [q, r] = Expr::parse("x^3 - 2x^2 + 1")
+                  .as_polynomial("x")
+                  .divide(Expr::parse("x - 1").as_polynomial("x"))
+                  .value();                         // q = x^2 - x - 1, r = 0
+
+auto c = Expr::parse("3x^2 y + 5x^2 - 7")
+             .as_polynomial("x")
+             .coeff("x", 2);                        // 3y + 5
+```
+
 ---
 
 ## 8. Railway-Oriented Error Handling
