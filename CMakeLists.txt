@@ -85,6 +85,27 @@ target_sources(nimblecas_ratpoly PUBLIC
 target_link_libraries(nimblecas_ratpoly
   PUBLIC nimblecas_polynomial nimblecas_core std_module)
 
+# ---- nimblecas.matrix : dense exact-rational matrices (§7.2) ----
+add_library(nimblecas_matrix STATIC)
+target_sources(nimblecas_matrix PUBLIC
+  FILE_SET CXX_MODULES FILES src/matrix/matrix.cppm)
+target_link_libraries(nimblecas_matrix
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.combinatorics : factorial/binomial/Bernoulli/Stirling (§7.18) ----
+add_library(nimblecas_combinatorics STATIC)
+target_sources(nimblecas_combinatorics PUBLIC
+  FILE_SET CXX_MODULES FILES src/combinatorics/combinatorics.cppm)
+target_link_libraries(nimblecas_combinatorics
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.orthopoly : classical orthogonal polynomials (§7.16) ----
+add_library(nimblecas_orthopoly STATIC)
+target_sources(nimblecas_orthopoly PUBLIC
+  FILE_SET CXX_MODULES FILES src/orthopoly/orthopoly.cppm)
+target_link_libraries(nimblecas_orthopoly
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -147,6 +168,24 @@ enable_testing()
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
 add_test(NAME core_tests COMMAND core_tests)
+
+add_executable(matrix_tests tests/matrix_tests.cpp)
+target_link_libraries(matrix_tests
+  PRIVATE nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME matrix_tests COMMAND matrix_tests)
+
+add_executable(combinatorics_tests tests/combinatorics_tests.cpp)
+target_link_libraries(combinatorics_tests
+  PRIVATE nimblecas_combinatorics nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME combinatorics_tests COMMAND combinatorics_tests)
+
+add_executable(orthopoly_tests tests/orthopoly_tests.cpp)
+target_link_libraries(orthopoly_tests
+  PRIVATE nimblecas_orthopoly nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME orthopoly_tests COMMAND orthopoly_tests)
 
 add_executable(symbolic_tests tests/symbolic_tests.cpp)
 target_link_libraries(symbolic_tests
