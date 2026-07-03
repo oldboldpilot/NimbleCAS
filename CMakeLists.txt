@@ -70,7 +70,8 @@ add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
   FILE_SET CXX_MODULES FILES src/diff/diff.cppm)
 target_link_libraries(nimblecas_diff
-  PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_parallel nimblecas_core std_module)
+  PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_parallel nimblecas_cache
+         nimblecas_core std_module)
 
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)

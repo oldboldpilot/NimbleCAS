@@ -33,6 +33,12 @@ public:
                                       const std::function<Result<Expr>()>& compute)
         -> Result<Expr>;
 
+    // Overload for total (non-failing) transforms such as raw differentiation.
+    // A memo instance should be used with a single transform, so its cached values
+    // are uniformly value-carrying and this unwrap never hits an error branch.
+    [[nodiscard]] auto get_or_compute(const Expr& key,
+                                      const std::function<Expr()>& compute) -> Expr;
+
     // Number of distinct entries cached (for tests / introspection).
     [[nodiscard]] auto size() const -> std::size_t;
 
@@ -97,6 +103,12 @@ auto ExprMemo::get_or_compute(const Expr& key, const std::function<Result<Expr>(
         bucket.emplace_back(key, result);
     }
     return result;
+}
+
+auto ExprMemo::get_or_compute(const Expr& key, const std::function<Expr()>& compute) -> Expr {
+    auto result = get_or_compute(key, [&]() -> Result<Expr> { return compute(); });
+    assert(result.has_value() && "value-only memo unexpectedly holds an error");
+    return std::move(result).value();
 }
 
 auto ExprMemo::size() const -> std::size_t {

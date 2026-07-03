@@ -14,6 +14,7 @@ import nimblecas.core;
 import nimblecas.symbolic;
 import nimblecas.simplify;
 import nimblecas.parallel;
+import nimblecas.cache;
 
 export namespace nimblecas {
 
@@ -30,7 +31,14 @@ namespace {
 template <typename...>
 inline constexpr bool always_false = false;
 
-[[nodiscard]] auto derivative_raw(const Expr& u, std::string_view var) -> Expr;
+// Subtree size at/above which a raw-derivative result is worth caching.
+inline constexpr std::size_t memo_threshold = 32;
+
+// derivative_raw memoises (hash-cons) for sizeable subtrees; derivative_node does the
+// work. var is fixed per differentiate() call, so keying the memo on the operand
+// alone is sufficient. Repeated operands (Jacobian/Hessian assembly) differentiate once.
+[[nodiscard]] auto derivative_raw(const Expr& u, std::string_view var, ExprMemo& memo) -> Expr;
+[[nodiscard]] auto derivative_node(const Expr& u, std::string_view var, ExprMemo& memo) -> Expr;
 
 // Small construction helpers for the derivative table.
 [[nodiscard]] auto call(std::string name, const Expr& a) -> Expr {
@@ -146,7 +154,7 @@ inline constexpr bool always_false = false;
     return std::nullopt;
 }
 
-auto derivative_raw(const Expr& u, std::string_view var) -> Expr {
+auto derivative_node(const Expr& u, std::string_view var, ExprMemo& memo) -> Expr {
     return std::visit(
         [&]<typename T>(const T& n) -> Expr {
             if constexpr (std::is_same_v<T, ConstantNode>) {
@@ -158,7 +166,7 @@ auto derivative_raw(const Expr& u, std::string_view var) -> Expr {
                 const bool par = u.size() >= parallel::parallel_cost_threshold;
                 auto terms = parallel::transform_index_if(
                     par, n.terms.size(),
-                    [&](std::size_t i) { return derivative_raw(n.terms[i], var); });
+                    [&](std::size_t i) { return derivative_raw(n.terms[i], var, memo); });
                 return Expr::sum(std::move(terms));
             } else if constexpr (std::is_same_v<T, MulNode>) {
                 // Leibniz: d(prod f_i) = sum_i ( f_i' * prod_{j!=i} f_j ). The summand
@@ -167,7 +175,7 @@ auto derivative_raw(const Expr& u, std::string_view var) -> Expr {
                 auto terms = parallel::transform_index_if(par, n.factors.size(), [&](std::size_t i) {
                     std::vector<Expr> parts;
                     parts.reserve(n.factors.size());
-                    parts.push_back(derivative_raw(n.factors[i], var));
+                    parts.push_back(derivative_raw(n.factors[i], var, memo));
                     for (std::size_t j = 0; j < n.factors.size(); ++j) {
                         if (j != i) {
                             parts.push_back(n.factors[j]);
@@ -180,8 +188,8 @@ auto derivative_raw(const Expr& u, std::string_view var) -> Expr {
                 // d(f^g) = f^g * ( g'*ln(f) + g * f' / f )
                 const Expr& f = n.base;
                 const Expr& g = n.exponent;
-                Expr df = derivative_raw(f, var);
-                Expr dg = derivative_raw(g, var);
+                Expr df = derivative_raw(f, var, memo);
+                Expr dg = derivative_raw(g, var, memo);
                 Expr term1 = Expr::product({dg, Expr::apply("ln", {f})});
                 Expr term2 = Expr::product({g, df, Expr::power(f, Expr::integer(-1))});
                 return Expr::product({Expr::power(f, g), Expr::sum({term1, term2})});
@@ -189,22 +197,32 @@ auto derivative_raw(const Expr& u, std::string_view var) -> Expr {
                 if (n.args.size() == 1) {
                     if (auto outer = known_function_derivative(n.name, n.args.front())) {
                         // chain rule: f'(arg) * arg'
-                        return Expr::product({*outer, derivative_raw(n.args.front(), var)});
+                        return Expr::product(
+                            {*outer, derivative_raw(n.args.front(), var, memo)});
                     }
                 }
                 // unknown / multi-argument: leave an unevaluated derivative
                 return Expr::apply("Derivative", {u, Expr::symbol(std::string(var))});
             } else {
-                static_assert(always_false<T>, "derivative_raw: unhandled ExprNode kind");
+                static_assert(always_false<T>, "derivative_node: unhandled ExprNode kind");
             }
         },
         u.node().value);
 }
 
+// Hash-consing wrapper: identical operands differentiate once (var fixed per call).
+auto derivative_raw(const Expr& u, std::string_view var, ExprMemo& memo) -> Expr {
+    if (u.size() < memo_threshold) {
+        return derivative_node(u, var, memo);
+    }
+    return memo.get_or_compute(u, [&] { return derivative_node(u, var, memo); });
+}
+
 }  // namespace
 
 auto differentiate(const Expr& u, std::string_view var) -> Result<Expr> {
-    return simplify(derivative_raw(u, var));
+    ExprMemo memo;  // per-call hash-cons over the raw-derivative pass
+    return simplify(derivative_raw(u, var, memo));
 }
 
 }  // namespace nimblecas
