@@ -39,9 +39,9 @@ inline constexpr bool always_false = false;
 
 // A non-negative integer value if `e` is exactly an integer constant, else nullopt.
 [[nodiscard]] auto as_integer(const Expr& e) -> std::optional<std::int64_t> {
-    if (const auto* c = std::get_if<ConstantNode>(&e.node().value)) {
-        if (const auto* v = std::get_if<std::int64_t>(&c->value)) {
-            return *v;
+    if (auto c = as<ConstantNode>(e.node().value)) {
+        if (auto v = as<std::int64_t>((*c)->value)) {
+            return **v;
         }
     }
     return std::nullopt;
@@ -66,8 +66,8 @@ auto to_polynomial(const Expr& u, std::string_view var) -> Result<Polynomial> {
     return std::visit(
         [&]<typename T>(const T& n) -> Result<Polynomial> {
             if constexpr (std::is_same_v<T, ConstantNode>) {
-                if (const auto* v = std::get_if<std::int64_t>(&n.value)) {
-                    return Polynomial::constant(*v);
+                if (auto v = as<std::int64_t>(n.value)) {
+                    return Polynomial::constant(**v);
                 }
                 return make_error<Polynomial>(MathError::not_implemented);  // non-integer
             } else if constexpr (std::is_same_v<T, SymbolNode>) {

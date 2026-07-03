@@ -112,4 +112,28 @@ private:
     std::shared_ptr<T> ptr_{};
 };
 
+// ---------------------------------------------------------------------------
+// Variant alternative access (Rules 3/4/32).
+// ---------------------------------------------------------------------------
+// Pointer-free, exception-free counterpart to std::get_if. When the variant currently
+// holds a T, returns the alternative wrapped in a std::unique_ptr<const T>; otherwise
+// returns std::nullopt. The presence guard is std::optional — "maybe absent" is the
+// honest meaning of a variant peek, so MathError stays reserved for real failures (a
+// wrong alternative is not an error). Memory is RAII (Rule 4): unique_ptr is the
+// default smart pointer — exclusive, caller-local ownership, no atomic refcount, no
+// sharing. No raw pointer is ever formed: an aliasing pointer would require the
+// address-of the alternative (a raw-pointer expression), so the alternative is copied
+// into the unique_ptr instead. The engaged optional always holds a non-null pointer
+// (make_unique never returns null), so a caller that took the `has_value()` branch may
+// dereference **result without a null check. std::get cannot throw here — it is
+// guarded by holds_alternative and thus unreachable on the wrong alternative (Rule 32).
+template <typename T, typename... Ts>
+[[nodiscard]] auto as(const std::variant<Ts...>& v)
+    -> std::optional<std::unique_ptr<const T>> {
+    if (std::holds_alternative<T>(v)) {
+        return std::make_unique<const T>(std::get<T>(v));
+    }
+    return std::nullopt;
+}
+
 }  // namespace nimblecas

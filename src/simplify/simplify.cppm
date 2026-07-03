@@ -50,8 +50,8 @@ struct ConstVal {
 };
 
 [[nodiscard]] auto as_constant(const Expr& e) -> std::optional<ConstVal> {
-    const auto* c = std::get_if<ConstantNode>(&e.node().value);
-    if (c == nullptr) {
+    auto c = as<ConstantNode>(e.node().value);
+    if (!c) {
         return std::nullopt;
     }
     return std::visit(
@@ -64,7 +64,7 @@ struct ConstVal {
                 return ConstVal{.exact = true, .num = v.first, .den = v.second, .dbl = 0.0};
             }
         },
-        c->value);
+        (*c)->value);
 }
 
 [[nodiscard]] auto is_constant(const Expr& e) -> bool {
@@ -204,13 +204,14 @@ inline constexpr std::size_t memo_threshold = 32;
 // Split a sum term into (constant coefficient, remaining factor product). A leading
 // constant factor of a product is the coefficient; otherwise the coefficient is 1.
 [[nodiscard]] auto split_coefficient(const Expr& term) -> std::pair<Expr, Expr> {
-    if (const auto* m = std::get_if<MulNode>(&term.node().value)) {
-        if (!m->factors.empty() && is_constant(m->factors.front())) {
-            Expr coeff = m->factors.front();
-            if (m->factors.size() == 2) {
-                return {coeff, m->factors[1]};
+    if (auto m = as<MulNode>(term.node().value)) {
+        const MulNode& mul = **m;
+        if (!mul.factors.empty() && is_constant(mul.factors.front())) {
+            Expr coeff = mul.factors.front();
+            if (mul.factors.size() == 2) {
+                return {coeff, mul.factors[1]};
             }
-            std::vector<Expr> rest(m->factors.begin() + 1, m->factors.end());
+            std::vector<Expr> rest(mul.factors.begin() + 1, mul.factors.end());
             return {coeff, Expr::product(std::move(rest))};
         }
     }
@@ -219,8 +220,8 @@ inline constexpr std::size_t memo_threshold = 32;
 
 // Split a product factor into (base, exponent).
 [[nodiscard]] auto split_base_exponent(const Expr& factor) -> std::pair<Expr, Expr> {
-    if (const auto* p = std::get_if<PowerNode>(&factor.node().value)) {
-        return {p->base, p->exponent};
+    if (auto p = as<PowerNode>(factor.node().value)) {
+        return {(*p)->base, (*p)->exponent};
     }
     return {factor, Expr::integer(1)};
 }
@@ -235,8 +236,9 @@ inline constexpr std::size_t memo_threshold = 32;
     while (!stack.empty()) {
         Expr e = std::move(stack.back());
         stack.pop_back();
-        if (const auto* a = std::get_if<AddNode>(&e.node().value)) {
-            for (auto it = a->terms.rbegin(); it != a->terms.rend(); ++it) {
+        if (auto a = as<AddNode>(e.node().value)) {
+            const AddNode& add = **a;
+            for (auto it = add.terms.rbegin(); it != add.terms.rend(); ++it) {
                 stack.push_back(*it);
             }
         } else {
@@ -253,8 +255,9 @@ inline constexpr std::size_t memo_threshold = 32;
     while (!stack.empty()) {
         Expr e = std::move(stack.back());
         stack.pop_back();
-        if (const auto* m = std::get_if<MulNode>(&e.node().value)) {
-            for (auto it = m->factors.rbegin(); it != m->factors.rend(); ++it) {
+        if (auto m = as<MulNode>(e.node().value)) {
+            const MulNode& mul = **m;
+            for (auto it = mul.factors.rbegin(); it != mul.factors.rend(); ++it) {
                 stack.push_back(*it);
             }
         } else {
@@ -299,12 +302,12 @@ auto simplify_power(const Expr& base, const Expr& exponent) -> Result<Expr> {
 
     // (v^w)^n = v^(w*n)  when n is an integer constant
     if (exp_c && exp_c->exact && exp_c->den == 1) {
-        if (const auto* p = std::get_if<PowerNode>(&base.node().value)) {
-            auto inner = simplify_product({p->exponent, exponent});
+        if (auto p = as<PowerNode>(base.node().value)) {
+            auto inner = simplify_product({(*p)->exponent, exponent});
             if (!inner) {
                 return inner;
             }
-            return simplify_power(p->base, *inner);
+            return simplify_power((*p)->base, *inner);
         }
     }
 
@@ -440,9 +443,9 @@ auto simplify_node(const Expr& u, ExprMemo& memo) -> Result<Expr> {
                 return u;
             } else if constexpr (std::is_same_v<T, ConstantNode>) {
                 // normalise pair-form integers (e.g. 4/1 -> 4, 0/1 -> 0)
-                if (const auto* pr = std::get_if<std::pair<std::int64_t, std::int64_t>>(&n.value)) {
-                    if (pr->second == 1) {
-                        return Expr::integer(pr->first);
+                if (auto pr = as<std::pair<std::int64_t, std::int64_t>>(n.value)) {
+                    if ((*pr)->second == 1) {
+                        return Expr::integer((*pr)->first);
                     }
                 }
                 return u;
@@ -469,8 +472,9 @@ auto simplify_node(const Expr& u, ExprMemo& memo) -> Result<Expr> {
                     if (!s) {
                         return s;
                     }
-                    if (const auto* inner = std::get_if<AddNode>(&s->node().value)) {
-                        terms.insert(terms.end(), inner->terms.begin(), inner->terms.end());
+                    if (auto inner = as<AddNode>(s->node().value)) {
+                        const AddNode& add = **inner;
+                        terms.insert(terms.end(), add.terms.begin(), add.terms.end());
                     } else {
                         terms.push_back(std::move(*s));
                     }
@@ -487,9 +491,9 @@ auto simplify_node(const Expr& u, ExprMemo& memo) -> Result<Expr> {
                     if (!s) {
                         return s;
                     }
-                    if (const auto* inner = std::get_if<MulNode>(&s->node().value)) {
-                        factors.insert(factors.end(), inner->factors.begin(),
-                                       inner->factors.end());
+                    if (auto inner = as<MulNode>(s->node().value)) {
+                        const MulNode& mul = **inner;
+                        factors.insert(factors.end(), mul.factors.begin(), mul.factors.end());
                     } else {
                         factors.push_back(std::move(*s));
                     }
