@@ -42,6 +42,8 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff → vector
 | `nimblecas.simplify` | [simplify.md](reference/simplify.md) | Cohen automatic simplification (ASAE): folding, identities, canonical order, like-term combination. |
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
+| `nimblecas.series` | [series.md](reference/series.md) | Taylor series over `diff` + `simplify`: `taylor_coefficients` (`c_k = f^(k)(point)/k!`) and the truncated `taylor_polynomial`, overflow-checked `k!`. |
+| `nimblecas.laplace` | [laplace.md](reference/laplace.md) | Table-driven symbolic Laplace transform `L{f(t)} = F(s)` by linearity over the elementary forms, simplified; `not_implemented` off-table. |
 | `nimblecas.vectorcalc` | [vectorcalc.md](reference/vectorcalc.md) | Vector calculus over `diff`: gradient, divergence, curl, Laplacian, Jacobian, Hessian, directional / total derivatives. |
 | `nimblecas.latex` | [latex.md](reference/latex.md) | Precedence-aware LaTeX math export: `to_latex(Expr)` rendering `\frac`/`\sqrt`, Greek letters, and function control words. |
 
@@ -64,6 +66,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.combinatorics` | [combinatorics.md](reference/combinatorics.md) | Overflow-checked `int64` counting — factorial, binomial, permutations, Catalan, Fibonacci, Stirling numbers — plus exact-`Rational` Bernoulli numbers (Akiyama–Tanigawa, `B_1 = -1/2`). |
 | `nimblecas.orthopoly` | [orthopoly.md](reference/orthopoly.md) | Classical orthogonal polynomials over `Q[x]` (Chebyshev T/U, Legendre, Laguerre, physicists'/probabilists' Hermite) via their three-term recurrences. |
 | `nimblecas.roots` | [roots.md](reference/roots.md) | Rational roots of a polynomial over `Q[x]` with multiplicity, via the rational root theorem plus deflation (analytical equation solving; radical/Cardano/RootOf are a planned extension). |
+| `nimblecas.recurrence` | [recurrence.md](reference/recurrence.md) | Linear homogeneous constant-coefficient recurrences: characteristic polynomial over `Q[x]` and its rational roots via `roots` (rational-root case; irrational e.g. Fibonacci deferred). |
 | `nimblecas.complex` | [complex.md](reference/complex.md) | Exact complex numbers over `Q` — the Gaussian rationals `Q + Qi`: overflow-checked add/subtract/multiply/divide/conjugate/reciprocal and the exact squared modulus (modulus and argument omitted as irrational). |
 | `nimblecas.stats` | [stats.md](reference/stats.md) | Exact descriptive statistics over the rationals: mean, sample/population variance and covariance, and the symmetric covariance matrix `Σ` (returned as a `nimblecas.matrix` `Matrix`, its diagonal each variable's variance). |
 

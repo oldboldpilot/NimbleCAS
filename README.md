@@ -34,6 +34,14 @@ reviewed):
   Laplacian, Jacobian, Hessian, and directional / total derivatives as exact,
   automatically-simplified compositions of partial derivatives (so `curl(grad f)`
   and `div(curl F)` collapse to zero by Clairaut cancellation).
+- `nimblecas.series` — Taylor series expansion over `diff` + `simplify`:
+  `taylor_coefficients` (`c_k = f^(k)(point)/k!`) and the truncated
+  `taylor_polynomial` `Σ c_k (var − point)^k`, each automatically simplified with an
+  overflow-checked `k!` (a negative order is a `domain_error`).
+- `nimblecas.laplace` — table-driven symbolic Laplace transform `L{f(t)} = F(s)`:
+  the elementary forms (`c → c/s`, `t^n → n!/s^(n+1)`, `e^(at) → 1/(s−a)`,
+  `sin(at) → a/(s²+a²)`, `cos(at) → s/(s²+a²)`) combined by linearity and simplified
+  (`not_implemented` off the table, so the operation is total).
 - `nimblecas.latex` — LaTeX math export: a precedence-aware `to_latex(Expr)` that
   renders rationals and reciprocals as `\frac`, the `1/2` power as `\sqrt`, Greek-named
   symbols as their commands, and functions as control words (`\sin`, `\operatorname{…}`).
@@ -78,6 +86,10 @@ reviewed):
 - `nimblecas.roots` — analytical equation solving over `Q[x]`: every rational root of a polynomial
   with its multiplicity, via the rational root theorem plus exact deflation (radical / Cardano /
   symbolic `RootOf` for irrational and complex roots are a planned extension).
+- `nimblecas.recurrence` — linear homogeneous constant-coefficient recurrences: the monic
+  characteristic polynomial over `Q[x]` and its rational roots (with multiplicity) via
+  `nimblecas.roots`, plus whether it splits completely over `Q` (the rational-root case is
+  resolved; the irrational case — Fibonacci's golden-ratio roots — is a planned extension).
 - `nimblecas.complex` — exact complex numbers over the rationals, the Gaussian rationals `Q + Qi`:
   overflow-checked add / subtract / multiply / divide / negate / conjugate / reciprocal and the exact
   squared modulus (modulus and argument omitted as irrational — deferred to a later numeric layer).
