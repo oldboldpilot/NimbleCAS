@@ -40,6 +40,10 @@ def main() -> int:
     assert ncas.simplify(x + x).is_equivalent_to(ncas.Expr.integer(2).mul(x))
     assert ncas.simplify(x + ncas.Expr.integer(0)).is_equivalent_to(x)
 
+    # differentiation: d/dx x^2 = 2*x
+    d = ncas.differentiate(x.pow(ncas.Expr.integer(2)), "x")
+    assert d.is_equivalent_to(ncas.Expr.integer(2).mul(x)), d.to_string()
+
     # rational: canonicalisation and zero-denominator error
     assert ncas.Expr.rational(2, 4).is_equivalent_to(ncas.Expr.rational(1, 2))
     try:

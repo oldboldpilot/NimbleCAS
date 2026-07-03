@@ -17,6 +17,7 @@
 import nimblecas.core;
 import nimblecas.symbolic;
 import nimblecas.simplify;
+import nimblecas.diff;
 
 namespace nb = nanobind;
 using nimblecas::Expr;
@@ -86,4 +87,11 @@ NB_MODULE(nimblecas_ext, m) {
         "simplify", [](const Expr& u) { return unwrap(nimblecas::simplify(u)); }, nb::arg("u"),
         "Automatically simplify an expression (constant folding, identities, "
         "canonical ordering, like-term combination).");
+    m.def(
+        "differentiate",
+        [](const Expr& u, const std::string& var) {
+            return unwrap(nimblecas::differentiate(u, var));
+        },
+        nb::arg("u"), nb::arg("var"),
+        "Differentiate u with respect to the symbol named var (result simplified).");
 }
