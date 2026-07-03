@@ -232,6 +232,13 @@ target_sources(nimblecas_csp PUBLIC
 target_link_libraries(nimblecas_csp
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.sat : internal parallel SAT solver (DPLL/CDCL/WalkSAT/GSAT, distributed) ----
+add_library(nimblecas_sat STATIC)
+target_sources(nimblecas_sat PUBLIC
+  FILE_SET CXX_MODULES FILES src/sat/sat.cppm)
+target_link_libraries(nimblecas_sat
+  PUBLIC nimblecas_rng nimblecas_parallel nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -432,6 +439,12 @@ target_link_libraries(cmatrix_tests
   PRIVATE nimblecas_cmatrix nimblecas_complex nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
+
+add_executable(sat_tests tests/sat_tests.cpp)
+target_link_libraries(sat_tests
+  PRIVATE nimblecas_sat nimblecas_rng nimblecas_parallel nimblecas_core nimblecas_testing
+          std_module)
+add_test(NAME sat_tests COMMAND sat_tests)
 
 add_executable(search_tests tests/search_tests.cpp)
 target_link_libraries(search_tests
