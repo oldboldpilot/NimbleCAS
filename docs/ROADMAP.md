@@ -656,6 +656,74 @@ auto expansion = Expr::symbol("x")
 auto bell = Combinatorics::bell(20).to_string();        // exact BigInt
 ```
 
+### 7.19. Symbolic Differentiation and Integration
+The recursive differentiation engine underpins nearly every other analytical module (Taylor/Laurent series §7.3, HAM/ADM §7.5, Jacobians §7.10/§7.14, Rodrigues' formulas §7.16). It is specified here as a first-class, cache-backed operator rather than being re-derived ad hoc per feature.
+
+#### Differentiation Operator (`Derivative`)
+Differentiation is a pure structural recursion over `ExprNode`, dispatched with `std::visit` and `constexpr if` in the same style as `free_of`/`substitute`. Results feed straight back into automatic simplification so derivatives return in canonical form.
+```cpp
+auto differentiate(const Expr& u, std::string_view x) -> Expr {
+    return std::visit([&](const auto& node) -> Expr {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ConstantNode>) {
+            return Expr::integer(0);                                  // d/dx c = 0
+        } else if constexpr (std::is_same_v<T, SymbolNode>) {
+            return Expr::integer(node.name == x ? 1 : 0);             // d/dx x = 1, else 0
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<AddNode>>) {
+            // Sum rule: differentiate termwise (parallelizable over terms)
+            auto terms = node->terms
+                       | std::views::transform([&](const Expr& t) { return differentiate(t, x); });
+            return Expr::sum(std::ranges::to<std::vector>(terms));
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<MulNode>>) {
+            return differentiate_product(*node, x);                  // Leibniz product rule
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<PowerNode>>) {
+            return differentiate_power(*node, x);                    // general power/exponent rule
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<FunctionNode>>) {
+            return differentiate_function(*node, x);                 // chain rule via derivative table
+        }
+    }, u.node());
+}
+```
+Rules implemented:
+- **Sum**: $\frac{d}{dx}\sum u_i = \sum \frac{d}{dx} u_i$ (termwise, dispatched through `parallel_transform` for wide sums).
+- **Product (Leibniz)**: $\frac{d}{dx}\prod u_i = \sum_i \left(\frac{d u_i}{dx}\prod_{j\ne i} u_j\right)$.
+- **Quotient**: derived from product + power rules ($u/v = u\,v^{-1}$), so no special-casing is needed.
+- **General power**: for $u = f^g$, $\frac{d}{dx} f^g = f^g\left(g'\ln f + \dfrac{g f'}{f}\right)$, collapsing to $g f^{g-1} f'$ when $g$ is `FreeOf` $x$ and to $f^g (\ln f) g'$ when $f$ is constant.
+- **Chain rule**: `FunctionNode` derivatives look up the outer derivative in a Binary-Fuse-guarded (§9) **derivative table** ($\sin\to\cos$, $\cos\to-\sin$, $\ln\to 1/u$, $e^u\to e^u$, $\text{erf}\to\frac{2}{\sqrt\pi}e^{-u^2}$, $\text{lambertW}\to\frac{W(u)}{u(1+W(u))}$, …) and multiply by $u'$.
+- **Higher-order & partials**: `.differentiate(x, n)` iterates $n$ times with simplification between passes; multivariate gradients/Hessians differentiate against each symbol, reusing memoized sub-derivatives.
+
+#### Unevaluated Derivatives & Hash-Consing
+A `DerivativeNode { Expr operand; std::string var; std::uint32_t order; }` keeps derivatives of unknown/opaque functions symbolic (e.g. $\frac{d}{dx}f(x)$ where $f$ is user-defined). Every computed derivative is keyed in the global hash-consing table (§6.2) so repeated $\partial^2/\partial x\,\partial y$ requests in Jacobian/Hessian assembly are served from cache rather than recomputed — critical for the JFNK and HAM solvers that differentiate the same operand many times.
+
+#### Symbolic Integration ($\int u\,dx$)
+Integration follows the standard decomposition into rational and transcendental parts:
+1. **Rational functions** $\int \frac{A(x)}{B(x)}\,dx$:
+   - **Hermite reduction** computes the *rational part* of the integral without factoring $B$, using the square-free factorization $B = \prod b_i^i$ (§7.17) and solving the Bézout identity $s b_i + t b_i' = 1$ to reduce each multiple pole by one order:
+     $$\int \frac{A}{B}\,dx = \frac{C}{D} + \int \frac{A^\ast}{B^\ast}\,dx, \qquad B^\ast \text{ square-free}.$$
+   - **Rothstein–Trager** then computes the *logarithmic part* of the remaining square-free integral via the resultant
+     $$R(t) = \operatorname{res}_x\!\big(A^\ast - t\,{B^\ast}'\,,\; B^\ast\big),$$
+     whose distinct roots $t_k$ give $\int \frac{A^\ast}{B^\ast}\,dx = \sum_k t_k \ln\!\big(\gcd(A^\ast - t_k {B^\ast}', B^\ast)\big)$ — resultant and GCD reuse the subresultant PRS machinery from §7.17.
+2. **Transcendental integrands**: a **table-driven + heuristic** layer applies, in order:
+   - Pattern-matched table lookup (guarded by the Binary Fuse filter) for standard forms ($\int \sin, \int e^{ax}, \int \frac{1}{a^2+x^2}$, …).
+   - **Linear substitution** detection ($u = ax+b$) and derivative-in-integrand recognition ($\int f'(g)g'\,dx$).
+   - **Integration by parts** with the LIATE heuristic, bounded by a recursion/`order` budget and returned as an `std::expected<Expr, MathError>` so non-elementary integrands fail gracefully (`MathError::UndefinedValue`) rather than looping — a lightweight step toward the full Risch algorithm, which is deferred but whose square-free/resultant substrate is already in place.
+3. **Definite integrals**: $\int_a^b u\,dx$ evaluates the antiderivative at the bounds via `substitute` (with limit handling for improper bounds), falling back to the numeric quadrature path (adaptive Gauss–Kronrod, SIMD-vectorized) when no closed form exists.
+
+#### Fluent API
+```cpp
+auto dydx = Expr::parse("sin(x^2) + x*ln(x)")
+                .differentiate("x")          // 2x·cos(x^2) + ln(x) + 1
+                .simplify();
+
+auto F = Expr::parse("(2*x + 1)/(x^2 + x)")
+             .integrate("x")                 // Hermite + Rothstein–Trager → ln(x^2 + x)
+             .to_latex();
+
+auto area = Expr::parse("x^2")
+                .integrate("x", 0, 1)        // definite: 1/3
+                .to_double();
+```
+
 ---
 
 ## 8. Railway-Oriented Error Handling
