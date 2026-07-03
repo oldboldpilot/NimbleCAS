@@ -96,6 +96,11 @@ auto metropolis_hastings(std::function<double(double)> log_density, double x0, d
     if (step <= 0.0 || samples == 0) {
         return make_error<McmcResult>(MathError::domain_error);
     }
+    // burn_in + samples must not wrap: otherwise `total` would be tiny and both the loop
+    // count and the documented `proposed == burn_in + samples` invariant would be violated.
+    if (burn_in > std::numeric_limits<std::uint64_t>::max() - samples) {
+        return make_error<McmcResult>(MathError::overflow);
+    }
 
     auto rng = Rng::seeded(seed);
 
@@ -103,7 +108,11 @@ auto metropolis_hastings(std::function<double(double)> log_density, double x0, d
     double current_log = log_density(x);
 
     McmcResult result{};
-    result.chain.reserve(static_cast<std::size_t>(samples));
+    // Reserve exactly `samples` slots, but never ask for more than the vector can hold (a
+    // pathological caller could pass a `samples` above max_size(); reserve() would then throw
+    // std::length_error, escaping the no-throw railway).
+    result.chain.reserve(
+        static_cast<std::size_t>(std::min<std::uint64_t>(samples, result.chain.max_size())));
     result.accepted = 0;
     result.proposed = 0;
 
@@ -114,10 +123,29 @@ auto metropolis_hastings(std::function<double(double)> log_density, double x0, d
         const double proposal = x + step * (2.0 * u - 1.0);
         const double proposal_log = log_density(proposal);
 
-        // Acceptance draw. log(V) <= Δlog accepts; the IEEE compare rejects −inf proposals
-        // and (via NaN) −inf-from-−inf steps, and always accepts when Δlog >= 0.
+        // Accept with probability min(1, exp(Δlog)), Δlog = log p(x') − log p(x), tested as
+        // log(V) <= Δlog with V ~ Uniform[0, 1). The IEEE edge cases are decided EXPLICITLY
+        // rather than left to the raw `log(V) <= Δ` compare, because next_unit() can return
+        // exactly 0.0 (→ log(V) = −inf), which would otherwise make `−inf <= −inf` wrongly
+        // accept a proposal into a zero-support (Δ = −inf) region:
+        //   * Δ is NaN (only from −inf − −inf, i.e. both densities −inf): reject, hold place.
+        //   * Δ >= 0 (uphill or equal, includes current −inf & finite proposal → Δ = +inf):
+        //     always accept — lets a chain started outside the support walk back in.
+        //   * Δ == −inf (proposal into zero support from a finite point): always reject.
+        //   * otherwise Δ is finite-negative: accept iff log(V) <= Δ.
         const double v = rng.next_unit();
-        if (std::log(v) <= proposal_log - current_log) {
+        const double delta = proposal_log - current_log;
+        bool accept = false;
+        if (std::isnan(delta)) {
+            accept = false;
+        } else if (delta >= 0.0) {
+            accept = true;
+        } else if (delta == -std::numeric_limits<double>::infinity()) {
+            accept = false;
+        } else {
+            accept = std::log(v) <= delta;
+        }
+        if (accept) {
             x = proposal;
             current_log = proposal_log;
             ++result.accepted;

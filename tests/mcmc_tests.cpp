@@ -149,6 +149,51 @@ auto main() -> int {
                       t.expect(same, "parallel ensemble is reproducible across reruns");
                   }
               })
+        .test("zero_support_walk_in_then_stay",
+              [](TestContext& t) {
+                  // Start OUTSIDE the support of Uniform[0, 1] (log-density −inf). The chain
+                  // must walk back in — a finite proposal from an −inf point gives Δ = +inf,
+                  // which the explicit `Δ >= 0` branch always accepts — and thereafter never
+                  // leave, since any proposal back outside gives Δ = −inf and is always
+                  // rejected (this is the branch the v == 0 / log(V) = −inf corner used to
+                  // break). We assert the chain enters the support and its tail is entirely
+                  // inside it. Deterministic seed, step small enough to reach [0,1] from 1.3.
+                  auto r = metropolis_hastings(uniform01_log, 1.3, 0.5, 20000, 2000, 555);
+                  t.expect(r.has_value(), "chain runs from outside the support");
+                  if (r) {
+                      // After burn-in the chain has long since walked in; the whole retained
+                      // portion must lie in [0, 1] — no −inf-support sample survives.
+                      bool tail_in_support = true;
+                      for (const double x : r->chain) {
+                          if (x < 0.0 || x > 1.0) {
+                              tail_in_support = false;
+                              break;
+                          }
+                      }
+                      t.expect(tail_in_support, "retained chain lies entirely in [0, 1]");
+                      t.expect(r->accepted > 0, "at least the walk-in move was accepted");
+                  }
+              })
+        .test("zero_support_hold_when_unreachable",
+              [](TestContext& t) {
+                  // Start far outside the support with a step too small to ever reach it: every
+                  // proposal has −inf density too, so Δ = −inf − −inf = NaN, which the explicit
+                  // isnan branch rejects — the chain holds its place and NOTHING is accepted.
+                  // This pins that a NaN Δ never spuriously accepts.
+                  auto r = metropolis_hastings(uniform01_log, 10.0, 0.5, 500, 0, 3);
+                  t.expect(r.has_value(), "chain runs while stuck outside the support");
+                  if (r) {
+                      t.expect(r->accepted == 0, "no move accepted when every point is −inf");
+                      bool all_start = true;
+                      for (const double x : r->chain) {
+                          if (x != 10.0) {
+                              all_start = false;
+                              break;
+                          }
+                      }
+                      t.expect(all_start, "chain holds exactly at the start (NaN Δ rejects)");
+                  }
+              })
         .test("domain_errors",
               [](TestContext& t) {
                   auto bad_step = metropolis_hastings(standard_normal_log, 0.0, 0.0, 100, 10,

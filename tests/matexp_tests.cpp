@@ -161,6 +161,37 @@ auto main() -> int {
                   t.expect(taylor && pade && taylor->is_equal(*pade),
                            "taylor and pade agree exactly on the nilpotent N");
               })
+        .test("pade_exactness_boundary_on_high_index_nilpotent",
+              [](TestContext& t) {
+                  // The [q/q] Pade approximant matches e^x only through order x^{2q}, so on a
+                  // nilpotent A it is exact ONLY when the nilpotency index m <= 2q+1. The 4x4
+                  // Jordan block J4 has J4^4 = 0 (index m = 4), and the true exponential is
+                  //   e^{J4} = I + J4 + J4^2/2 + J4^3/6.
+                  // With q = 1 (2q+1 = 3 < 4) the J4^3 coefficient comes out 1/4, NOT 1/6, so
+                  // Pade must DISAGREE with the exact Taylor value. With q = 2 (2q+1 = 5 >= 4)
+                  // the approximant is exact and the two must AGREE. This pins the corrected
+                  // "exact for nilpotent iff m <= 2q+1" contract as a regression.
+                  const Matrix j4 = mat({{0, 1, 0, 0},
+                                         {0, 0, 1, 0},
+                                         {0, 0, 0, 1},
+                                         {0, 0, 0, 0}});
+                  auto exact = matrix_exp_taylor(j4, 4);  // terms = index => exact e^{J4}
+                  t.expect(exact.has_value(), "taylor(J4, 4) succeeds");
+                  // The true (0,3) entry is J4^3/6 = 1/6.
+                  t.expect(exact && exact->at(0, 3) == rr(1, 6), "exact (0,3) = 1/6");
+
+                  auto pade_low = matrix_exp_pade(j4, 1);  // 2q+1 = 3 < 4: NOT exact
+                  t.expect(pade_low.has_value(), "pade(J4, 1) succeeds");
+                  t.expect(pade_low && pade_low->at(0, 3) == rr(1, 4),
+                           "pade(J4, 1) (0,3) = 1/4 (approximation, not 1/6)");
+                  t.expect(exact && pade_low && !exact->is_equal(*pade_low),
+                           "pade(J4, 1) disagrees with exact e^{J4} (index 4 > 2q+1 = 3)");
+
+                  auto pade_ok = matrix_exp_pade(j4, 2);  // 2q+1 = 5 >= 4: exact
+                  t.expect(pade_ok.has_value(), "pade(J4, 2) succeeds");
+                  t.expect(exact && pade_ok && exact->is_equal(*pade_ok),
+                           "pade(J4, 2) is exact (index 4 <= 2q+1 = 5)");
+              })
         .test("domain_errors",
               [](TestContext& t) {
                   // terms < 1 => domain_error.

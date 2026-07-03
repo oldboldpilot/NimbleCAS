@@ -10,20 +10,26 @@
 // therefore not representable over Q. What these routines return exactly is:
 //
 //   matrix_exp_taylor(A, terms) -- the truncated Taylor series  Sum_{k=0}^{terms-1} A^k / k!.
-//       This equals e^A EXACTLY iff A is nilpotent AND terms exceeds the nilpotency index
-//       (then the series terminates: every omitted term is a power of A that is already zero).
-//       For a non-nilpotent A it is only a rational polynomial approximation.
+//       This equals e^A EXACTLY iff A is nilpotent AND terms is AT LEAST the nilpotency index
+//       m (the least m with A^m = 0): once terms >= m every omitted term A^k (k >= terms >= m)
+//       is already zero, so the series terminates. For a non-nilpotent A, or a nilpotent A
+//       with terms < m, it is only a rational polynomial approximation.
 //   matrix_exp_pade(A, q)       -- the diagonal [q/q] Pade approximant  D^{-1} N, a rational
-//       (matrix-valued) approximation of e^A. It too is EXACT when A is nilpotent (numerator
-//       and denominator polynomials both terminate at the nilpotency index and reproduce the
-//       finite series). Otherwise it is a distinct rational approximation from Taylor's.
+//       (matrix-valued) approximation of e^A. The [q/q] approximant matches the scalar series
+//       e^x only THROUGH ORDER x^{2q}, so on a nilpotent A it is EXACT ONLY WHEN the nilpotency
+//       index m satisfies m <= 2q+1 (all the powers on which N/D and e^A could disagree, from
+//       x^{2q+1} up, then vanish). For a nilpotent A with m > 2q+1 -- e.g. a 4x4 Jordan block
+//       (m = 4) with q = 1, where this returns I+J+J^2/2+J^3/4 versus the true I+J+J^2/2+J^3/6
+//       -- it is still only an approximation, distinct from Taylor's. Raise q (2q+1 >= m) to
+//       recover exactness. For a non-nilpotent A it is always just a rational approximation.
 //   matrix_exp(A, q, s)         -- scaling-and-squaring: e^A = (e^{A/2^s})^{2^s}, with the
 //       inner factor formed by the [q/q] Pade approximant of A/2^s. This is the numerically
-//       standard route for e^A; it is likewise EXACT for nilpotent A (scaling preserves
-//       nilpotency and the repeated squaring reproduces the exact answer).
+//       standard route for e^A. Scaling preserves the nilpotency index, so it inherits Pade's
+//       condition exactly: EXACT for nilpotent A iff m <= 2q+1, otherwise an approximation.
 //
-// So: nilpotent inputs give genuinely exact matrix exponentials; every other input yields an
-// exact RATIONAL APPROXIMATION (Taylor or Pade), never a claim of the transcendental truth.
+// So: for nilpotent A, matrix_exp_taylor with terms >= m is genuinely exact, while the Pade
+// routes are exact only when m <= 2q+1; every other case yields an exact RATIONAL
+// APPROXIMATION (Taylor or Pade), never a claim of the transcendental truth.
 
 export module nimblecas.matexp;
 
@@ -43,24 +49,29 @@ export namespace nimblecas {
 // The truncated Taylor series  Sum_{k=0}^{terms-1} A^k / k!  of e^A, exact over Rational.
 // Requires A square and terms >= 1, else domain_error. A running power P (P_0 = I,
 // P_k = P_{k-1} * A) and a running 1/k! are accumulated so no large factorial is formed.
-// EXACT e^A precisely when A is nilpotent and terms exceeds the nilpotency index (the tail
-// is then all zero); otherwise a rational polynomial approximation. Overflow is propagated.
+// EXACT e^A precisely when A is nilpotent and terms is at least the nilpotency index m (the
+// tail A^k, k >= terms >= m, is then all zero); otherwise a rational polynomial approximation.
+// Overflow is propagated.
 [[nodiscard]] auto matrix_exp_taylor(const Matrix& a, std::int64_t terms) -> Result<Matrix>;
 
 // The diagonal [q/q] Pade approximant of e^A: with scalar coefficients c_k (c_0 = 1),
 // N = Sum_{k=0}^{q} c_k A^k  and  D = Sum_{k=0}^{q} (-1)^k c_k A^k, returning D^{-1} N.
 // The c_k are built by the ratio recurrence c_k = c_{k-1} * (q-k+1) / (k*(2q-k+1)) to avoid
 // forming huge factorials. Requires A square and q >= 1, else domain_error. A singular D
-// propagates domain_error from the inverse. EXACT for nilpotent A; otherwise a rational
-// approximation of e^A. Rational overflow is propagated.
+// propagates domain_error from the inverse. The [q/q] approximant matches e^x through order
+// x^{2q}, so it is EXACT for a nilpotent A ONLY when the nilpotency index m <= 2q+1; for a
+// nilpotent A with m > 2q+1 (or any non-nilpotent A) it is a rational approximation of e^A.
+// Raise q so that 2q+1 >= m to make a given nilpotent case exact. Rational overflow is
+// propagated.
 [[nodiscard]] auto matrix_exp_pade(const Matrix& a, std::size_t q) -> Result<Matrix>;
 
 // Scaling-and-squaring exponential (the recommended route): with s = scaling_power, form
 // B = A / 2^s exactly, take X = matrix_exp_pade(B, q), then square X back s times
 // (X <- X*X, s times) to recover an approximation of e^A. Requires A square and q >= 1,
 // else domain_error; s may be 0 (then it coincides with matrix_exp_pade(A, q)). This is the
-// numerically standard method and is still EXACT for nilpotent A. Overflow (including in the
-// 2^s scale factor) is propagated.
+// numerically standard method. Scaling preserves the nilpotency index, so it inherits Pade's
+// exactness condition: EXACT for a nilpotent A iff its index m <= 2q+1, else an approximation.
+// Overflow (including in the 2^s scale factor) is propagated.
 [[nodiscard]] auto matrix_exp(const Matrix& a, std::size_t q, std::size_t scaling_power)
     -> Result<Matrix>;
 
