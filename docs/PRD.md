@@ -49,10 +49,14 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 
 ### 2.4. Symbolic Calculus
 - **Symbolic Differentiation**: Implementation of the differentiation operator $\frac{d}{dx}$ using standard rules (sum, product, quotient, power, chain rule) for basic and transcendental functions.
+- **Partial Derivatives**: The product computes partial derivatives $\partial f / \partial x_i$ of multivariate expressions (differentiating with respect to one variable while holding the others fixed), including higher-order and mixed partials $\frac{\partial^{m+n} f}{\partial x^m \partial y^n}$ with automatic enforcement of Clairaut symmetry ($\partial_x \partial_y f = \partial_y \partial_x f$) for suitably smooth expressions.
+- **Vector Calculus Operators**: First-class differential operators over scalar and vector fields — gradient $\nabla f$, divergence $\nabla \cdot \mathbf{F}$, curl $\nabla \times \mathbf{F}$, Laplacian $\nabla^2 f = \nabla \cdot \nabla f$, and directional derivatives $\nabla_{\mathbf{v}} f = \nabla f \cdot \mathbf{v}$ — together with the **Jacobian** matrix $J_{ij} = \partial f_i / \partial x_j$ and the **Hessian** matrix $H_{ij} = \partial^2 f / \partial x_i \partial x_j$ (reusing the linear-algebra engine of §2.7). Supports symbolic verification of the classical identities $\nabla \times \nabla f = \mathbf{0}$ and $\nabla \cdot (\nabla \times \mathbf{F}) = 0$.
+- **Total Derivatives**: The total derivative / total differential via the multivariable chain rule $\frac{df}{dt} = \partial_t f + \sum_i \partial_{x_i} f \, \dot{x}_i$, including the fluid-dynamical **material derivative** $\frac{D}{Dt} = \partial_t + \mathbf{u} \cdot \nabla$, and **implicit differentiation** for relations $F(x, y) = 0$ (e.g. $\frac{dy}{dx} = -\,\partial_x F / \partial_y F$).
 - **Symbolic Integration**:
   - Hermite Reduction for the rational part of integrals.
   - Rothstein-Trager algorithm for the logarithmic part of rational integrals.
   - Table-lookup and heuristic integration for transcendental functions.
+- **Multiple Integrals**: Symbolic double, triple, and general $n$-fold iterated integrals $\int \cdots \int f \, dx_1 \cdots dx_n$ over both rectangular and general (variable-bound) regions, with **change of variables** via the Jacobian determinant $\left| \det \partial(x)/\partial(u) \right|$ (polar, cylindrical, and spherical coordinate systems built in) and **Fubini** reordering of the iterated limits. Includes line, surface, and volume integrals and the classical integral theorems — **Green's**, **Stokes'**, and the **divergence/Gauss** theorem — relating them to the vector-calculus operators above.
 
 ### 2.5. Analytical Equation Solving
 - **Algebraic Solvers**: Solving linear and quadratic polynomial equations exactly.
@@ -85,6 +89,7 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
 
 ### 2.9. Integral Transforms, Series, and Wavelets
 - **Fourier Analysis**: Symbolic computation of Fourier series expansion, continuous Fourier transforms, and discrete/fast Fourier transforms.
+- **Multi-Dimensional Fourier Transforms**: $n$-dimensional continuous Fourier transforms $\hat{f}(\boldsymbol{\xi}) = \int_{\mathbb{R}^n} f(\mathbf{x})\, e^{-2\pi i\, \boldsymbol{\xi} \cdot \mathbf{x}}\, d\mathbf{x}$ and their inverses, and multi-dimensional DFT/FFT computed **separably** along each axis (reusing the 1-D FFT infrastructure of §2.9 and §3.x), for image/field data and the spectral solution of multi-dimensional PDEs (§2.8).
 - **Wavelets**: Continuous Wavelet Transform (CWT) and Discrete Wavelet Transform (DWT) with support for Haar, Daubechies, and Morlet wavelet filters.
 - **Series & Asymptotics**: Infinite sum evaluations, convergence tests, and **Taylor's series expansions** ($f(z) \approx \sum_{k=0}^n \frac{f^{(k)}(a)}{k!}(z-a)^k$) in both the **real** ($\mathbb{R}$) and **complex** ($\mathbb{C}$) domains. Supports Laurent and Puiseux series expansions of expressions around any point $z = a$ up to arbitrary order $n$, automatic differentiation, residue evaluation at singular poles, and computation of the radius of convergence.
 - **Series & Sequence Manipulation**:
@@ -103,6 +108,7 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 
 ### 2.11. Laplace Methods and Integral Transforms
 - **Laplace Transforms**: Analytical computation of forward and inverse Laplace transforms ($\mathcal{L}\{f(t)\}$ and $\mathcal{L}^{-1}\{F(s)\}$), with automatic handling of Dirac delta, Heaviside step, and convolution integrals.
+- **Multi-Dimensional Laplace Transforms**: 2-D and $n$-D (multivariate) Laplace transforms $F(s_1, \dots, s_n) = \int_0^\infty \cdots \int_0^\infty f(t_1, \dots, t_n)\, e^{-(s_1 t_1 + \cdots + s_n t_n)}\, dt_1 \cdots dt_n$ and their inversion, computed by **iterated single-variable transforms** (reusing the 1-D machinery above), for multi-variable initial/boundary-value problems and the joint distributions of several non-negative random variables (§2.12.4).
 - **Laplace's Approximation Method**: Asymptotic evaluation of high-dimensional integrals of the form $\int_a^b e^{M f(x)} g(x) dx$ for large $M$, locating the global maxima of $f(x)$ and using Taylor expansion to find the leading-order asymptotic behavior.
 
 ### 2.12. Statistics, Probability & Generating Functions

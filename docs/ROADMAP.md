@@ -432,6 +432,9 @@ NimbleCAS extends Joel Cohen's core symbolic algebra engine to support advanced 
   - **Fourier Collocation & Pseudo-Spectral Derivatives**: Evaluates derivatives in frequency space using the FFT ($\widehat{u'} = i k \widehat{u}$), while evaluating non-linear products directly on the physical grid to bypass convolution calculations.
   - **Orszag 2/3-rule Dealiasing**: To eliminate quadratic aliasing errors from grid-domain products, the engine zeros out the upper third of the computed Fourier spectrum ($|k| \ge \frac{2}{3} \frac{N}{2}$) at each time step.
   - **Chebyshev Collocation**: Used for non-periodic boundaries, mapping grid points to Chebyshev-Gauss-Lobatto nodes $x_j = \cos(\pi j / N)$ and computing spatial derivatives via Chebyshev differentiation matrices.
+- **Multi-dimensional Fourier transforms**: the $n$-dimensional continuous Fourier transform and its inverse,
+  $$\hat{f}(\mathbf{k}) = \int_{\mathbb{R}^n} f(\mathbf{x})\,e^{-i\mathbf{k}\cdot\mathbf{x}}\,d\mathbf{x}, \qquad f(\mathbf{x}) = \frac{1}{(2\pi)^n}\int_{\mathbb{R}^n} \hat{f}(\mathbf{k})\,e^{\,i\mathbf{k}\cdot\mathbf{x}}\,d\mathbf{k},$$
+  computed by **separable (tensor-product)** application of the 1-D transform along each axis, since the kernel $e^{-i\mathbf{k}\cdot\mathbf{x}} = \prod_j e^{-i k_j x_j}$ factorizes. The discrete case is the multi-dimensional **DFT/FFT**, evaluated dimension-by-dimension (row–column / axis-by-axis decomposition) by reusing the existing 1-D FFT layer along each index in turn. This drives multi-dimensional PDE solves (Poisson, heat, wave) through the same spectral/pseudo-spectral machinery above — e.g. the Poisson equation $\nabla^2 u = f$ transforms to $-|\mathbf{k}|^2 \hat{u} = \hat{f}$, solved algebraically per Fourier mode and inverted back with the multi-dimensional FFT.
 
 ### 7.4. Singular Perturbation of ODEs
 - **Matched Asymptotic Expansions**: Solves boundary layer problems of the form $\epsilon y'' + p(x)y' + q(x)y = 0$.
@@ -482,6 +485,9 @@ For highly non-linear differential equations where classical perturbation method
 - **Laplace's Approximation Method**: Integrals of the form $I(M) = \int_a^b e^{M f(x)} g(x) dx$ are approximated asymptotically for large $M$ using:
   $$I(M) \approx \sqrt{\frac{2\pi}{M |f''(x_0)|}} e^{M f(x_0)} g(x_0)$$
   where $x_0 \in (a, b)$ is the unique point where $f(x)$ attains its maximum.
+- **Multi-dimensional / multivariate Laplace transforms**: the 2-D and $n$-D Laplace transform
+  $$F(s_1,\dots,s_n) = \int_0^\infty\!\!\cdots\int_0^\infty f(t_1,\dots,t_n)\,e^{-(s_1 t_1 + \cdots + s_n t_n)}\,dt_1\cdots dt_n,$$
+  computed as **iterated 1-D transforms** (one $t_i$ at a time, since $e^{-\sum_i s_i t_i} = \prod_i e^{-s_i t_i}$ separates) over the table- and rule-driven engine above, together with the corresponding multidimensional inversion. Used for multi-variable and PDE initial-boundary-value problems and for the **joint distributions** of several non-negative random variables — the multivariate Laplace–Stieltjes transform $\mathbb{E}\!\big[e^{-\sum_i s_i X_i}\big]$ (cross-referencing §7.7.4) — reusing the multiple-integral machinery of §7.19 for the iterated integration.
 
 ### 7.7. Statistics, Probability, Moments & Generating Functions
 NimbleCAS treats statistics and probability as a first-class analytical branch that reuses the exact-arithmetic (`nimblecas.ratpoly` `Rational`), symbolic integration/differentiation (§7.19), combinatorics/Bernoulli-number (§7.18) and parallel/GPU (§4, §5, §6) substrates already specified, so estimators are computed *symbolically and exactly* wherever possible and vectorized when only numeric values are required.
@@ -819,6 +825,30 @@ Beyond the pointwise differentiation/integration above, the engine will support:
   $$\frac{d}{dt} I(t) = f\!\big(b(t), t\big)\,b'(t) - f\!\big(a(t), t\big)\,a'(t) + \int_{a(t)}^{b(t)} \frac{\partial f}{\partial t}(x, t)\,dx,$$
   including the parameter-differentiation ("Feynman") technique for evaluating otherwise-intractable definite integrals by introducing an auxiliary parameter, differentiating under the sign, solving the simpler integral/ODE, and integrating back in the parameter.
 - **Integral recurrences (reduction formulae)**: derive and apply recurrence relations that reduce an integral's order/degree to a base case — e.g. $I_n = \int \sin^n x\,dx = -\frac{\sin^{n-1}x\cos x}{n} + \frac{n-1}{n} I_{n-2}$, and analogous reductions for $\int x^n e^{x}\,dx$, $\int \sec^n x\,dx$, and $\int x^n (\ln x)^m\,dx$ — represented symbolically (with the recurrence carried as a difference equation, §7.9) and unrolled to the base case for concrete $n$.
+
+#### Multivariable Differentiation: Partial Derivatives, Vector Calculus & Total Derivatives
+The scalar `differentiate(u, x)` operator above already holds every symbol other than $x$ fixed, so partial differentiation is **first-class**: $\partial f/\partial x_i$ is differentiation against symbol $x_i$, and the vector-calculus operators are thin compositions over it that all share the memoized `DerivativeNode` / hash-consing cache (§6.2), so a sub-expression differentiated many times across a gradient or Hessian is computed once.
+- **Partial derivatives**: $\dfrac{\partial f}{\partial x_i}$ treats the remaining variables as constants; higher and **mixed** partials $\dfrac{\partial^2 f}{\partial x\,\partial y}$ iterate the operator with simplification between passes. The engine recognizes **Clairaut/Schwarz symmetry** — for $f$ with continuous second partials, $\partial_x\partial_y f = \partial_y\partial_x f$ — canonicalizing the differentiation-variable order so equal mixed partials hash-cons to a single cached `DerivativeNode` rather than being recomputed.
+- **Vector calculus operators** (built on the partials above, over a variable list $\mathbf{x}=(x_1,\dots,x_n)$):
+  - **Gradient**: $\nabla f = \left(\partial_{x_1} f,\dots,\partial_{x_n} f\right)$.
+  - **Divergence**: $\nabla\cdot\mathbf{F} = \sum_i \partial_{x_i} F_i$.
+  - **Curl** (3D): $\nabla\times\mathbf{F} = \left(\partial_y F_z - \partial_z F_y,\; \partial_z F_x - \partial_x F_z,\; \partial_x F_y - \partial_y F_x\right)$.
+  - **Laplacian**: $\nabla^2 f = \sum_i \partial^2_{x_i} f$, with the **vector Laplacian** $\nabla^2\mathbf{F}$ applied componentwise.
+  - **Directional derivative**: $\nabla_{\mathbf{u}} f = \nabla f\cdot\mathbf{u}$ along a unit vector $\mathbf{u}$.
+  - **Jacobian** and **Hessian** as `MatrixNode`s (§7.2): the Jacobian $J_{ij} = \partial F_i/\partial x_j$ of a vector field $\mathbf{F}$, and the symmetric Hessian $H_{ij} = \partial^2 f/\partial x_i\,\partial x_j$ of a scalar $f$ (so $H = J(\nabla f)$), reused directly by the Newton/JFNK optimizer (§7.14) and the dynamical-stability Jacobian (§7.10).
+  - **Verifiable identities**: automatic simplification checks $\nabla\times(\nabla f)=\mathbf{0}$ (curl of a gradient) and $\nabla\cdot(\nabla\times\mathbf{F})=0$ (divergence of a curl), both of which fall out symbolically from Clairaut symmetry.
+- **Total derivative & multivariable chain rule**: for $f\big(t, x_1(t),\dots,x_n(t)\big)$,
+  $$\frac{df}{dt} = \frac{\partial f}{\partial t} + \sum_i \frac{\partial f}{\partial x_i}\frac{dx_i}{dt},$$
+  with the **material/convective derivative** $\dfrac{D}{Dt} = \partial_t + \mathbf{u}\cdot\nabla$ as the special case where the coordinates are advected by a velocity field $\mathbf{u}$. The **total differential** is $df = \sum_i \partial_{x_i} f\,dx_i$, and **implicit differentiation** of $F(x,y)=0$ gives $\dfrac{dy}{dx} = -\dfrac{\partial_x F}{\partial_y F}$ (generalizing to $\partial x_j/\partial x_k = -(\partial_{x_k} F)/(\partial_{x_j} F)$ for implicitly defined surfaces).
+
+#### Multiple Integrals
+Iterated multivariable integration reuses the single-variable antiderivative engine above, integrating one variable at a time and substituting the (possibly variable) limits at each stage.
+- **Iterated & $n$-fold integrals**: double $\iint_R f\,dA$, triple $\iiint_V f\,dV$, and general $n$-fold integrals are evaluated as nested single-variable integrals. **Fubini's theorem** justifies (and the engine exploits) reordering the integration sequence — choosing the order that yields a closed form first — whenever the integrand and region make the iterated integrals agree.
+- **Change of variables**: with the Jacobian determinant of the map $\mathbf{x}(\mathbf{u})$,
+  $$\int_R f(\mathbf{x})\,d\mathbf{x} = \int_{R'} f\big(\mathbf{x}(\mathbf{u})\big)\,\left|\det J\right|\,d\mathbf{u}, \qquad J_{ij} = \frac{\partial x_i}{\partial u_j},$$
+  where $|\det J|$ is assembled from the partials above and the common **polar** ($dA = r\,dr\,d\theta$), **cylindrical** ($dV = r\,dr\,d\theta\,dz$), and **spherical** ($dV = \rho^2\sin\phi\,d\rho\,d\phi\,d\theta$) substitutions are built in.
+- **General (non-rectangular) regions**: integration over regions with **variable limits** — e.g. $\int_a^b\!\int_{g_1(x)}^{g_2(x)} f(x,y)\,dy\,dx$ — where the inner antiderivative is evaluated at symbolic bounds before the outer integration proceeds.
+- **Line, surface & volume integrals**: scalar and vector line integrals $\int_C \mathbf{F}\cdot d\mathbf{r}$, surface/flux integrals $\iint_S \mathbf{F}\cdot d\mathbf{S}$, and volume integrals, tied to the vector-calculus operators above by the classical theorems as **symbolic rewrites**: **Green's** $\oint_{\partial R}(P\,dx+Q\,dy)=\iint_R(\partial_x Q-\partial_y P)\,dA$, **Stokes'** $\oint_{\partial S}\mathbf{F}\cdot d\mathbf{r}=\iint_S(\nabla\times\mathbf{F})\cdot d\mathbf{S}$, and the **divergence/Gauss** theorem $\iint_{\partial V}\mathbf{F}\cdot d\mathbf{S}=\iiint_V(\nabla\cdot\mathbf{F})\,dV$.
 
 ### 7.20. Polynomial Expansion and Division
 Expansion and division are the algebraic substrate the higher polynomial features assume already exists: the GCD / square-free / PFD routines (§7.17) and the Hermite reduction in the integration engine (§7.19) all call polynomial division and degree/coefficient extraction. This section specifies them explicitly.
