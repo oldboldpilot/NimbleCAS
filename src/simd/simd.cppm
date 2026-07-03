@@ -49,6 +49,10 @@ auto mul(std::span<const float> a, std::span<const float> b, std::span<float> ou
 auto axpy(float scale, std::span<const float> a, std::span<const float> b,
           std::span<float> out) noexcept -> void;
 
+// acc = acc * x + c   (elementwise fused multiply-add, c broadcast). One Horner step
+// for evaluating a polynomial at many points at once.
+auto horner_step(std::span<float> acc, std::span<const float> x, float c) noexcept -> void;
+
 }  // namespace nimblecas::simd
 
 // ===========================================================================
@@ -76,6 +80,11 @@ auto axpy_scalar(float s, const float* a, const float* b, float* out, std::size_
         out[i] = std::fma(a[i], s, b[i]);
     }
 }
+auto horner_scalar(float* acc, const float* x, float c, std::size_t n) noexcept -> void {
+    for (std::size_t i = 0; i < n; ++i) {
+        acc[i] = std::fma(acc[i], x[i], c);
+    }
+}
 
 // --- 256-bit AVX paths (add/mul need only AVX, shared by the AVX and AVX2 tiers) ---
 auto add_avx256(const float* a, const float* b, float* out, std::size_t n) noexcept -> void {
@@ -100,6 +109,9 @@ auto axpy_avx(float s, const float* a, const float* b, float* out, std::size_t n
     -> void {
     axpy_scalar(s, a, b, out, n);
 }
+auto horner_avx(float* acc, const float* x, float c, std::size_t n) noexcept -> void {
+    horner_scalar(acc, x, c, n);  // no FMA on this tier -> std::fma keeps it bit-identical
+}
 // AVX2 tier: FMA is available, so axpy vectorises with a single-rounding fmadd.
 auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t n) noexcept
     -> void {
@@ -110,6 +122,15 @@ auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t 
                          _mm256_fmadd_ps(_mm256_loadu_ps(a + i), vs, _mm256_loadu_ps(b + i)));
     }
     axpy_scalar(s, a + i, b + i, out + i, n - i);
+}
+auto horner_avx2(float* acc, const float* x, float c, std::size_t n) noexcept -> void {
+    const __m256 vc = _mm256_set1_ps(c);
+    std::size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        _mm256_storeu_ps(acc + i,
+                         _mm256_fmadd_ps(_mm256_loadu_ps(acc + i), _mm256_loadu_ps(x + i), vc));
+    }
+    horner_scalar(acc + i, x + i, c, n - i);
 }
 
 // --- AVX-512 paths (opt-in per-function so the binary stays portable, Rule 50) ---
@@ -141,6 +162,16 @@ auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t 
     }
     axpy_avx2(s, a + i, b + i, out + i, n - i);
 }
+[[gnu::target("avx512f")]] auto horner_avx512(float* acc, const float* x, float c,
+                                              std::size_t n) noexcept -> void {
+    const __m512 vc = _mm512_set1_ps(c);
+    std::size_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        _mm512_storeu_ps(acc + i,
+                         _mm512_fmadd_ps(_mm512_loadu_ps(acc + i), _mm512_loadu_ps(x + i), vc));
+    }
+    horner_avx2(acc + i, x + i, c, n - i);
+}
 
 // Runtime CPU capability query, evaluated once. Waterfalls
 // AVX-512 -> AVX2(+FMA) -> AVX -> scalar.
@@ -163,20 +194,21 @@ struct Dispatch {
     void (*add)(const float*, const float*, float*, std::size_t);
     void (*mul)(const float*, const float*, float*, std::size_t);
     void (*axpy)(float, const float*, const float*, float*, std::size_t);
+    void (*horner)(float*, const float*, float, std::size_t);
 };
 
 [[nodiscard]] auto make_dispatch() noexcept -> Dispatch {
     switch (detect_isa()) {
         case Isa::avx512:
-            return {Isa::avx512, &add_avx512, &mul_avx512, &axpy_avx512};
+            return {Isa::avx512, &add_avx512, &mul_avx512, &axpy_avx512, &horner_avx512};
         case Isa::avx2:
-            return {Isa::avx2, &add_avx256, &mul_avx256, &axpy_avx2};
+            return {Isa::avx2, &add_avx256, &mul_avx256, &axpy_avx2, &horner_avx2};
         case Isa::avx:
-            return {Isa::avx, &add_avx256, &mul_avx256, &axpy_avx};
+            return {Isa::avx, &add_avx256, &mul_avx256, &axpy_avx, &horner_avx};
         case Isa::scalar:
             break;
     }
-    return {Isa::scalar, &add_scalar, &mul_scalar, &axpy_scalar};
+    return {Isa::scalar, &add_scalar, &mul_scalar, &axpy_scalar, &horner_scalar};
 }
 
 const Dispatch g_dispatch = make_dispatch();
@@ -208,6 +240,11 @@ auto axpy(float scale, std::span<const float> a, std::span<const float> b,
           std::span<float> out) noexcept -> void {
     const std::size_t n = common_size(a.size(), b.size(), out.size());
     g_dispatch.axpy(scale, a.data(), b.data(), out.data(), n);
+}
+
+auto horner_step(std::span<float> acc, std::span<const float> x, float c) noexcept -> void {
+    const std::size_t n = std::min(acc.size(), x.size());
+    g_dispatch.horner(acc.data(), x.data(), c, n);
 }
 
 }  // namespace nimblecas::simd

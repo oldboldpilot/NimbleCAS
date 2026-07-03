@@ -66,6 +66,14 @@ auto main() -> int {
                       simd::axpy(s, a, b, got);
                       for (std::size_t i = 0; i < n; ++i) ref[i] = std::fma(a[i], s, b[i]);
                       t.expect(all_bit_equal(got, ref), std::format("axpy n={}", n));
+
+                      // horner_step: acc = acc*x + c
+                      std::vector<float> acc = a;  // seed
+                      std::vector<float> acc_ref = a;
+                      const float c = 0.75f;
+                      simd::horner_step(acc, b, c);
+                      for (std::size_t i = 0; i < n; ++i) acc_ref[i] = std::fma(a[i], b[i], c);
+                      t.expect(all_bit_equal(acc, acc_ref), std::format("horner_step n={}", n));
                   }
               })
         .run();
