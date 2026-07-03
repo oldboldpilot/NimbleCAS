@@ -108,5 +108,30 @@ auto main() -> int {
                   t.expect(!s.has_value(), "2^63 overflows");
                   t.expect(s.error() == nimblecas::MathError::overflow, "2^63 -> overflow");
               })
+        .test("no_grouping_collision_via_stringification",
+              [&](TestContext& t) {
+                  // A symbol literally named "f(x)" must NOT be fused with the call f(x):
+                  // they are structurally distinct despite identical to_string().
+                  auto sym = Expr::symbol("f(x)");
+                  auto call = Expr::apply("f", {x});
+                  auto s = simplify(sym.add(call));
+                  t.expect(!s.value().is_equivalent_to(Expr::integer(2).mul(call)),
+                           "sym 'f(x)' + call f(x) is not fused into 2*f(x)");
+              })
+        .test("int64_min_exponent_no_ub",
+              [&](TestContext& t) {
+                  auto s = simplify(
+                      Expr::integer(2).pow(Expr::integer(std::numeric_limits<std::int64_t>::min())));
+                  t.expect(!s.has_value(), "2^INT64_MIN reported, not UB");
+                  t.expect(s.error() == nimblecas::MathError::overflow, "-> overflow");
+              })
+        .test("huge_exponent_on_minus_one_terminates",
+              [&](TestContext& t) {
+                  // With O(log n) exponentiation this returns instantly; the linear
+                  // loop would run ~10^9 iterations. (-1)^even == 1.
+                  auto s = simplify(Expr::integer(-1).pow(Expr::integer(1'000'000'000)));
+                  t.expect(s.has_value() && s->is_equivalent_to(Expr::integer(1)),
+                           "(-1)^1e9 -> 1 (fast)");
+              })
         .run();
 }

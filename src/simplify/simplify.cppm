@@ -141,10 +141,32 @@ struct ConstVal {
     return make_number(numerator, denominator);
 }
 
+// base^exp for exp >= 0 via exponentiation by squaring (O(log exp), not O(exp), so
+// crafted large exponents cannot hang the simplifier). Returns true on overflow.
+[[nodiscard]] auto ipow_checked(std::int64_t base, std::int64_t exp, std::int64_t& out) -> bool {
+    std::int64_t result = 1;
+    std::int64_t b = base;
+    while (exp > 0) {
+        if ((exp & 1) != 0 && mul_ov(result, b, result)) {
+            return true;
+        }
+        exp >>= 1;
+        if (exp > 0 && mul_ov(b, b, b)) {
+            return true;
+        }
+    }
+    out = result;
+    return false;
+}
+
 // base^exponent for an exact rational base and integer exponent, overflow-checked.
 [[nodiscard]] auto pow_constant(const ConstVal& base, std::int64_t exponent) -> Result<Expr> {
     if (!base.exact) {
         return Expr::real(std::pow(base.dbl, static_cast<double>(exponent)));
+    }
+    // Negating INT64_MIN is signed-overflow UB; reject before the sign flip below.
+    if (exponent == std::numeric_limits<std::int64_t>::min()) {
+        return make_error<Expr>(MathError::overflow);
     }
     std::int64_t num = base.num;
     std::int64_t den = base.den;
@@ -153,14 +175,12 @@ struct ConstVal {
             return make_error<Expr>(MathError::division_by_zero);
         }
         std::swap(num, den);
-        exponent = -exponent;  // exponent != INT64_MIN because base guarded elsewhere
+        exponent = -exponent;  // safe: exponent != INT64_MIN (guarded above)
     }
-    std::int64_t rnum = 1;
-    std::int64_t rden = 1;
-    for (std::int64_t i = 0; i < exponent; ++i) {
-        if (mul_ov(rnum, num, rnum) || mul_ov(rden, den, rden)) {
-            return make_error<Expr>(MathError::overflow);
-        }
+    std::int64_t rnum = 0;
+    std::int64_t rden = 0;
+    if (ipow_checked(num, exponent, rnum) || ipow_checked(den, exponent, rden)) {
+        return make_error<Expr>(MathError::overflow);
     }
     return make_number(rnum, rden);
 }
@@ -284,8 +304,10 @@ auto simplify_power(const Expr& base, const Expr& exponent) -> Result<Expr> {
 auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
     terms = flatten_terms(std::move(terms));  // self-contained: never rely on caller flattening
     Expr constant_sum = Expr::integer(0);
-    std::vector<std::string> order;  // insertion order of group keys
-    std::unordered_map<std::string, std::pair<Expr, Expr>> groups;  // key -> (coeff, rest)
+    // Groups of (coefficient, rest). Matched by structural equality — NOT by a
+    // to_string key, which is not injective (e.g. a symbol named "f(x)" would
+    // collide with the call f(x) and wrongly fuse).
+    std::vector<std::pair<Expr, Expr>> groups;
 
     for (const Expr& term : terms) {
         if (is_constant(term)) {
@@ -297,23 +319,21 @@ auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
             continue;
         }
         auto [coeff, rest] = split_coefficient(term);
-        const std::string key = rest.to_string();
-        auto it = groups.find(key);
+        auto it = std::ranges::find_if(
+            groups, [&rest](const auto& g) { return g.second.is_equivalent_to(rest); });
         if (it == groups.end()) {
-            order.push_back(key);
-            groups.emplace(key, std::pair{std::move(coeff), std::move(rest)});
+            groups.emplace_back(std::move(coeff), std::move(rest));
         } else {
-            auto combined = add_constants(*as_constant(it->second.first), *as_constant(coeff));
+            auto combined = add_constants(*as_constant(it->first), *as_constant(coeff));
             if (!combined) {
                 return combined;
             }
-            it->second.first = *combined;
+            it->first = *combined;
         }
     }
 
     std::vector<Expr> result;
-    for (const std::string& key : order) {
-        auto& [coeff, rest] = groups.at(key);
+    for (auto& [coeff, rest] : groups) {
         if (is_zero(coeff)) {
             continue;
         }
@@ -344,8 +364,8 @@ auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
 auto simplify_product(std::vector<Expr> factors) -> Result<Expr> {
     factors = flatten_factors(std::move(factors));  // self-contained: flatten nested products
     Expr constant_product = Expr::integer(1);
-    std::vector<std::string> order;
-    std::unordered_map<std::string, std::pair<Expr, Expr>> groups;  // key -> (base, exponent)
+    // Groups of (base, exponent), matched by structural equality (see simplify_sum).
+    std::vector<std::pair<Expr, Expr>> groups;
 
     for (const Expr& factor : factors) {
         if (is_zero(factor)) {
@@ -360,23 +380,21 @@ auto simplify_product(std::vector<Expr> factors) -> Result<Expr> {
             continue;
         }
         auto [base, exponent] = split_base_exponent(factor);
-        const std::string key = base.to_string();
-        auto it = groups.find(key);
+        auto it = std::ranges::find_if(
+            groups, [&base](const auto& g) { return g.first.is_equivalent_to(base); });
         if (it == groups.end()) {
-            order.push_back(key);
-            groups.emplace(key, std::pair{std::move(base), std::move(exponent)});
+            groups.emplace_back(std::move(base), std::move(exponent));
         } else {
-            auto combined = simplify_sum({it->second.second, exponent});
+            auto combined = simplify_sum({it->second, exponent});
             if (!combined) {
                 return combined;
             }
-            it->second.second = *combined;
+            it->second = *combined;
         }
     }
 
     std::vector<Expr> result;
-    for (const std::string& key : order) {
-        auto& [base, exponent] = groups.at(key);
+    for (auto& [base, exponent] : groups) {
         auto factor = simplify_power(base, exponent);
         if (!factor) {
             return factor;
