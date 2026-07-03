@@ -162,6 +162,13 @@ target_sources(nimblecas_eigen PUBLIC
 target_link_libraries(nimblecas_eigen
   PUBLIC nimblecas_matrix nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.montecarlo : Monte Carlo integration & rejection sampling (§7.8) ----
+add_library(nimblecas_montecarlo STATIC)
+target_sources(nimblecas_montecarlo PUBLIC
+  FILE_SET CXX_MODULES FILES src/montecarlo/montecarlo.cppm)
+target_link_libraries(nimblecas_montecarlo
+  PUBLIC nimblecas_rng nimblecas_core std_module)
+
 # ---- nimblecas.powerseries : truncated formal power series over Q (§7.4/7.5 dependency) ----
 add_library(nimblecas_powerseries STATIC)
 target_sources(nimblecas_powerseries PUBLIC
@@ -322,6 +329,11 @@ target_link_libraries(powerseries_tests
   PRIVATE nimblecas_powerseries nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME powerseries_tests COMMAND powerseries_tests)
+
+add_executable(montecarlo_tests tests/montecarlo_tests.cpp)
+target_link_libraries(montecarlo_tests
+  PRIVATE nimblecas_montecarlo nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME montecarlo_tests COMMAND montecarlo_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
