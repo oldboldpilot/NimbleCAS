@@ -60,6 +60,16 @@ public:
     [[nodiscard]] auto pseudo_remainder(const Polynomial& divisor) const -> Result<Polynomial>;
     // Greatest common divisor in Z[x] via the primitive Euclidean PRS.
     [[nodiscard]] auto gcd(const Polynomial& other) const -> Result<Polynomial>;
+    // Formal derivative d/dx.
+    [[nodiscard]] auto derivative() const -> Result<Polynomial>;
+    // Exact quotient this / divisor over Z[x]; fails (domain_error) if the division
+    // is not exact, or division_by_zero on a zero divisor.
+    [[nodiscard]] auto divide_exact(const Polynomial& divisor) const -> Result<Polynomial>;
+    // Yun square-free factorization: returns (factor, multiplicity) pairs such that
+    // the primitive part of this equals the product of factor^multiplicity, each
+    // factor square-free and pairwise coprime.
+    [[nodiscard]] auto square_free_factorization() const
+        -> Result<std::vector<std::pair<Polynomial, std::int64_t>>>;
 
     // Exact evaluation at an integer point (Horner, overflow-checked).
     [[nodiscard]] auto evaluate(std::int64_t x) const -> Result<std::int64_t>;
@@ -300,6 +310,123 @@ auto Polynomial::gcd(const Polynomial& other) const -> Result<Polynomial> {
         pb = *prim;
     }
     return pa.scale(*d);  // primitive gcd scaled by the content gcd
+}
+
+auto Polynomial::derivative() const -> Result<Polynomial> {
+    if (coeffs_.size() <= 1) {
+        return Polynomial{};  // derivative of a constant / zero is 0
+    }
+    std::vector<std::int64_t> r(coeffs_.size() - 1, 0);
+    for (std::size_t i = 1; i < coeffs_.size(); ++i) {
+        if (mul_ov(coeffs_[i], static_cast<std::int64_t>(i), r[i - 1])) {
+            return make_error<Polynomial>(MathError::overflow);
+        }
+    }
+    return Polynomial{std::move(r)};
+}
+
+auto Polynomial::divide_exact(const Polynomial& divisor) const -> Result<Polynomial> {
+    if (divisor.is_zero()) {
+        return make_error<Polynomial>(MathError::division_by_zero);
+    }
+    if (is_zero()) {
+        return Polynomial{};
+    }
+    if (degree() < divisor.degree()) {
+        return make_error<Polynomial>(MathError::domain_error);  // non-zero, lower degree
+    }
+    const std::int64_t lc_b = divisor.leading_coefficient();
+    const std::int64_t nb = divisor.degree();
+    std::vector<std::int64_t> quotient(static_cast<std::size_t>(degree() - nb) + 1, 0);
+    Polynomial r = *this;
+    while (!r.is_zero() && r.degree() >= nb) {
+        const std::int64_t lc_r = r.leading_coefficient();
+        if (lc_r % lc_b != 0) {
+            return make_error<Polynomial>(MathError::domain_error);  // not exact over Z
+        }
+        const std::int64_t q = lc_r / lc_b;
+        const std::size_t k = static_cast<std::size_t>(r.degree() - nb);
+        quotient[k] = q;
+        auto qb = Polynomial::monomial(q, k).multiply(divisor);
+        if (!qb) {
+            return qb;
+        }
+        auto next = r.subtract(*qb);
+        if (!next) {
+            return next;
+        }
+        r = *next;
+    }
+    if (!r.is_zero()) {
+        return make_error<Polynomial>(MathError::domain_error);  // remainder != 0
+    }
+    return Polynomial{std::move(quotient)};
+}
+
+auto Polynomial::square_free_factorization() const
+    -> Result<std::vector<std::pair<Polynomial, std::int64_t>>> {
+    std::vector<std::pair<Polynomial, std::int64_t>> factors;
+    if (degree() <= 0) {
+        return factors;  // constants have no square-free factors
+    }
+    auto prim = primitive_part();
+    if (!prim) {
+        return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(prim.error());
+    }
+    const Polynomial f = *prim;
+
+    // Yun: a0 = gcd(f, f'); b1 = f/a0; c1 = f'/a0; d1 = c1 - b1'.
+    auto fp = f.derivative();
+    if (!fp) {
+        return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(fp.error());
+    }
+    auto a0 = f.gcd(*fp);
+    if (!a0) {
+        return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(a0.error());
+    }
+    auto b = f.divide_exact(*a0);
+    auto c = fp->divide_exact(*a0);
+    if (!b || !c) {
+        return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(
+            b ? c.error() : b.error());
+    }
+    auto bd = b->derivative();
+    if (!bd) {
+        return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(bd.error());
+    }
+    auto d = c->subtract(*bd);
+    if (!d) {
+        return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(d.error());
+    }
+
+    Polynomial bi = *b;
+    Polynomial di = *d;
+    for (std::int64_t i = 1; bi.degree() > 0; ++i) {
+        auto ai = bi.gcd(di);  // product of the factors of multiplicity exactly i
+        if (!ai) {
+            return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(ai.error());
+        }
+        if (ai->degree() > 0) {
+            factors.emplace_back(*ai, i);
+        }
+        auto bn = bi.divide_exact(*ai);
+        auto cn = di.divide_exact(*ai);
+        if (!bn || !cn) {
+            return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(
+                bn ? cn.error() : bn.error());
+        }
+        auto bnd = bn->derivative();
+        if (!bnd) {
+            return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(bnd.error());
+        }
+        auto dn = cn->subtract(*bnd);
+        if (!dn) {
+            return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(dn.error());
+        }
+        bi = *bn;
+        di = *dn;
+    }
+    return factors;
 }
 
 auto Polynomial::evaluate(std::int64_t x) const -> Result<std::int64_t> {

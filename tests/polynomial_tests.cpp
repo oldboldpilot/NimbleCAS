@@ -95,6 +95,44 @@ auto main() -> int {
                   t.expect(g4.has_value() && g4->is_equal(poly({-2, 2})),
                            "gcd(2x^2-2, 2x-2) = 2x-2 (content 2)");
               })
+        .test("derivative_and_exact_division",
+              [](TestContext& t) {
+                  // d/dx (1 + 2x + x^3) = 2 + 3x^2
+                  t.expect(poly({1, 2, 0, 1}).derivative().value().is_equal(poly({2, 0, 3})),
+                           "derivative of 1 + 2x + x^3");
+                  // (x^2 - 1) / (x - 1) = x + 1
+                  auto q = poly({-1, 0, 1}).divide_exact(poly({-1, 1}));
+                  t.expect(q.has_value() && q->is_equal(poly({1, 1})), "(x^2-1)/(x-1) = x+1");
+                  // not exact over Z
+                  t.expect(poly({0, 0, 1}).divide_exact(poly({0, 2})).error() ==
+                               MathError::domain_error,
+                           "x^2 / 2x is not exact over Z");
+                  // nonzero remainder
+                  t.expect(poly({1, 0, 1}).divide_exact(poly({-1, 1})).error() ==
+                               MathError::domain_error,
+                           "(x^2+1)/(x-1) has a remainder");
+              })
+        .test("square_free_factorization",
+              [](TestContext& t) {
+                  auto has = [](const auto& fs, const Polynomial& p, std::int64_t m) {
+                      return std::ranges::any_of(fs, [&](const auto& f) {
+                          return f.second == m && f.first.is_equal(p);
+                      });
+                  };
+                  // (x+1)^2 -> one factor (x+1) with multiplicity 2
+                  auto f1 = poly({1, 2, 1}).square_free_factorization();
+                  t.expect(f1.has_value() && f1->size() == 1 && has(*f1, poly({1, 1}), 2),
+                           "(x+1)^2 -> (x+1)^2");
+                  // x^2 - 1 is square-free -> itself with multiplicity 1
+                  auto f2 = poly({-1, 0, 1}).square_free_factorization();
+                  t.expect(f2.has_value() && f2->size() == 1 && has(*f2, poly({-1, 0, 1}), 1),
+                           "x^2-1 is square-free");
+                  // (x-1)^2 (x+1) -> (x+1)^1 and (x-1)^2
+                  auto f3 = poly({1, -1, -1, 1}).square_free_factorization();
+                  t.expect(f3.has_value() && f3->size() == 2 &&
+                               has(*f3, poly({1, 1}), 1) && has(*f3, poly({-1, 1}), 2),
+                           "(x-1)^2 (x+1) factors by multiplicity");
+              })
         .test("evaluate_batch_matches_scalar_reference",
               [](TestContext& t) {
                   auto p = poly({2, -3, 1});  // 2 - 3x + x^2
