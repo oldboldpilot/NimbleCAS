@@ -24,6 +24,16 @@ target_sources(nimblecas_core PUBLIC
   FILE_SET CXX_MODULES FILES src/core/core.cppm)
 target_link_libraries(nimblecas_core PUBLIC std_module)
 
+# ---- nimblecas.parallel : fork-join runtime & tree combinators (TBB / PPL) ----
+add_library(nimblecas_parallel STATIC)
+target_sources(nimblecas_parallel PUBLIC
+  FILE_SET CXX_MODULES FILES src/parallel/parallel.cppm)
+target_link_libraries(nimblecas_parallel PUBLIC std_module)
+if(NOT WIN32)
+  # Intel oneTBB backend on Linux/macOS (PPL is header/CRT-provided on Windows).
+  target_link_libraries(nimblecas_parallel PUBLIC tbb)
+endif()
+
 # ---- nimblecas.symbolic : expression trees, FreeOf, Substitute (Cohen) ----
 add_library(nimblecas_symbolic STATIC)
 target_sources(nimblecas_symbolic PUBLIC
@@ -47,7 +57,7 @@ add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
   FILE_SET CXX_MODULES FILES src/diff/diff.cppm)
 target_link_libraries(nimblecas_diff
-  PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+  PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
@@ -81,6 +91,11 @@ add_test(NAME diff_tests COMMAND diff_tests)
 add_executable(simd_tests tests/simd_tests.cpp)
 target_link_libraries(simd_tests PRIVATE nimblecas_simd nimblecas_testing std_module)
 add_test(NAME simd_tests COMMAND simd_tests)
+
+add_executable(parallel_tests tests/parallel_tests.cpp)
+target_link_libraries(parallel_tests
+  PRIVATE nimblecas_parallel nimblecas_testing std_module)
+add_test(NAME parallel_tests COMMAND parallel_tests)
 
 # ---- Python bindings (nanobind, ROADMAP 10) — opt-in via -DNIMBLECAS_PYTHON=ON ----
 option(NIMBLECAS_PYTHON "Build the nanobind Python bindings" OFF)

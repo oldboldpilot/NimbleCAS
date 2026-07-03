@@ -115,6 +115,25 @@ auto main() -> int {
                        fn("exp", ng(sq(sq(x)))), Expr::integer(2), x});
                   diffs_to(t, fn("erf", sq(x)), "x", chained, "d/dx erf(x^2) chain rule");
               })
+        .test("large_sum_differentiates_correctly_via_parallel_path",
+              [&](TestContext& t) {
+                  // A sum of 400 terms (> the parallel grain cutoff) exercises the
+                  // parallel sum rule; the result must equal the serial-correct answer.
+                  // d/dx sum_{k=1..N} x^k = sum_{k=1..N} k * x^(k-1)
+                  constexpr std::int64_t nterms = 400;
+                  std::vector<Expr> terms;
+                  std::vector<Expr> expected_terms;
+                  for (std::int64_t k = 1; k <= nterms; ++k) {
+                      terms.push_back(x.pow(Expr::integer(k)));
+                      expected_terms.push_back(
+                          Expr::integer(k).mul(x.pow(Expr::integer(k - 1))));
+                  }
+                  auto d = differentiate(Expr::sum(std::move(terms)), "x");
+                  auto expected = simplify(Expr::sum(std::move(expected_terms)));
+                  t.expect(d.has_value() && expected.has_value() &&
+                               d->is_equivalent_to(*expected),
+                           "d/dx sum x^k == sum k x^(k-1) over 400 terms");
+              })
         .test("unknown_function_is_left_unevaluated",
               [&](TestContext& t) {
                   auto u = fn("f", x);  // unknown function
