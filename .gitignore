@@ -29,6 +29,14 @@ config/.env
 *.log
 logs/
 
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Review artifacts (transient adversarial-review outputs)
+.review_*.out
+
 # Backup and Cache
 .av_cache/
 .claude/

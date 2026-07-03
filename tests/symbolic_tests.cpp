@@ -3,6 +3,7 @@
 // @author Olumuyiwa Oluwasanmi
 
 import std;
+import nimblecas.core;
 import nimblecas.symbolic;
 import nimblecas.testing;
 
@@ -30,8 +31,29 @@ auto main() -> int {
                   t.expect(Expr::integer(2).is_equivalent_to(Expr::integer(2)), "2 == 2");
                   t.expect(!Expr::integer(2).is_equivalent_to(Expr::real(2.0)),
                            "int 2 != real 2.0 (distinct constant kinds)");
-                  t.expect(Expr::rational(1, 2).is_equivalent_to(Expr::rational(1, 2)),
-                           "1/2 == 1/2");
+              })
+        .test("rational_validates_and_canonicalises",
+              [](TestContext& t) {
+                  auto half = Expr::rational(1, 2);
+                  t.expect(half.has_value(), "1/2 is a valid rational");
+                  // 2/4 reduces to 1/2; sign moves to numerator
+                  t.expect(Expr::rational(2, 4).value().is_equivalent_to(half.value()),
+                           "2/4 canonicalises to 1/2");
+                  t.expect(Expr::rational(1, -2).value().is_equivalent_to(
+                               Expr::rational(-1, 2).value()),
+                           "1/-2 canonicalises to -1/2");
+                  auto bad = Expr::rational(1, 0);
+                  t.expect(!bad.has_value(), "zero denominator is rejected");
+                  t.expect(bad.error() == nimblecas::MathError::division_by_zero,
+                           "zero denominator yields division_by_zero");
+              })
+        .test("nan_leaf_is_equivalent_to_itself",
+              [](TestContext& t) {
+                  auto nan_expr = Expr::real(std::numeric_limits<double>::quiet_NaN());
+                  // structural identity must be syntactic, not IEEE (NaN != NaN)
+                  t.expect(nan_expr.is_equivalent_to(nan_expr), "NaN leaf equals itself");
+                  t.expect(!nimblecas::free_of(nan_expr, nan_expr),
+                           "NaN expression is not free of itself");
               })
         .test("free_of",
               [](TestContext& t) {

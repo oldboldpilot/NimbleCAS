@@ -27,7 +27,11 @@ public:
     [[nodiscard]] static auto symbol(std::string name) -> Expr;
     [[nodiscard]] static auto integer(std::int64_t value) -> Expr;
     [[nodiscard]] static auto real(double value) -> Expr;
-    [[nodiscard]] static auto rational(std::int64_t numerator, std::int64_t denominator) -> Expr;
+    // Exact rational. Fails with MathError::division_by_zero on a zero denominator
+    // (Rule 32); the result is canonicalised (sign on the numerator, reduced by gcd)
+    // so structurally-equal fractions like 2/4 and 1/2 compare equivalent.
+    [[nodiscard]] static auto rational(std::int64_t numerator, std::int64_t denominator)
+        -> Result<Expr>;
 
     // --- compound factories ---
     [[nodiscard]] static auto sum(std::vector<Expr> terms) -> Expr;
@@ -111,12 +115,37 @@ namespace nimblecas {
 
 namespace {
 
+// Dependent-false helper so a non-exhaustive std::visit chain fails to compile
+// (rather than silently running off the end of a non-void lambda → UB) if a new
+// ExprNode alternative is added without updating every visitor.
+template <typename...>
+inline constexpr bool always_false = false;
+
 [[nodiscard]] auto vectors_equivalent(const std::vector<Expr>& a, const std::vector<Expr>& b)
     -> bool {
     return a.size() == b.size() &&
            std::ranges::equal(a, b, [](const Expr& x, const Expr& y) {
                return x.is_equivalent_to(y);
            });
+}
+
+// Structural (syntactic) equality of constants: doubles are compared bitwise so a
+// NaN leaf is equivalent to itself and +0.0/-0.0 stay distinct, keeping equality
+// syntactic rather than delegating to IEEE float semantics.
+[[nodiscard]] auto constant_equal(const ConstantNode& a, const ConstantNode& b) -> bool {
+    if (a.value.index() != b.value.index()) {
+        return false;
+    }
+    return std::visit(
+        [&b]<typename V>(const V& x) -> bool {
+            const V& y = std::get<V>(b.value);
+            if constexpr (std::is_same_v<V, double>) {
+                return std::bit_cast<std::uint64_t>(x) == std::bit_cast<std::uint64_t>(y);
+            } else {
+                return x == y;  // std::int64_t or std::pair<int64,int64>
+            }
+        },
+        a.value);
 }
 
 [[nodiscard]] auto join(const std::vector<Expr>& items, std::string_view separator)
@@ -138,7 +167,19 @@ auto Expr::real(double value) -> Expr {
     return Expr(ExprNode{.value = ConstantNode{.value = value}});
 }
 
-auto Expr::rational(std::int64_t numerator, std::int64_t denominator) -> Expr {
+auto Expr::rational(std::int64_t numerator, std::int64_t denominator) -> Result<Expr> {
+    if (denominator == 0) {
+        return make_error<Expr>(MathError::division_by_zero);
+    }
+    if (denominator < 0) {  // keep the sign on the numerator
+        numerator = -numerator;
+        denominator = -denominator;
+    }
+    const std::int64_t divisor = std::gcd(numerator, denominator);
+    if (divisor > 1) {
+        numerator /= divisor;
+        denominator /= divisor;
+    }
     return Expr(ExprNode{
         .value = ConstantNode{.value = std::pair{numerator, denominator}}});
 }
@@ -177,7 +218,7 @@ auto Expr::is_equivalent_to(const Expr& other) const -> bool {
             if constexpr (std::is_same_v<T, SymbolNode>) {
                 return lhs.name == rhs.name;
             } else if constexpr (std::is_same_v<T, ConstantNode>) {
-                return lhs.value == rhs.value;
+                return constant_equal(lhs, rhs);
             } else if constexpr (std::is_same_v<T, AddNode>) {
                 return vectors_equivalent(lhs.terms, rhs.terms);
             } else if constexpr (std::is_same_v<T, MulNode>) {
@@ -187,6 +228,8 @@ auto Expr::is_equivalent_to(const Expr& other) const -> bool {
                        lhs.exponent.is_equivalent_to(rhs.exponent);
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
                 return lhs.name == rhs.name && vectors_equivalent(lhs.args, rhs.args);
+            } else {
+                static_assert(always_false<T>, "is_equivalent_to: unhandled ExprNode kind");
             }
         },
         a.value);
@@ -216,6 +259,8 @@ auto Expr::to_string() const -> std::string {
                 return std::format("{}^{}", n.base.to_string(), n.exponent.to_string());
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
                 return std::format("{}({})", n.name, join(n.args, ", "));
+            } else {
+                static_assert(always_false<T>, "to_string: unhandled ExprNode kind");
             }
         },
         node().value);
@@ -255,6 +300,8 @@ auto free_of(const Expr& u, const Expr& t) -> bool {
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
                 return std::ranges::all_of(n.args,
                                            [&t](const Expr& e) { return free_of(e, t); });
+            } else {
+                static_assert(always_false<T>, "free_of: unhandled ExprNode kind");
             }
         },
         u.node().value);
@@ -292,6 +339,8 @@ auto substitute(const Expr& u, const Expr& t, const Expr& r) -> Expr {
                     out.push_back(substitute(e, t, r));
                 }
                 return Expr::apply(n.name, std::move(out));
+            } else {
+                static_assert(always_false<T>, "substitute: unhandled ExprNode kind");
             }
         },
         u.node().value);

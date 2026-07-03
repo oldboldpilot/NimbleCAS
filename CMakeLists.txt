@@ -47,3 +47,19 @@ add_executable(symbolic_tests tests/symbolic_tests.cpp)
 target_link_libraries(symbolic_tests
   PRIVATE nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
 add_test(NAME symbolic_tests COMMAND symbolic_tests)
+
+# ---- Python bindings (nanobind, ROADMAP 10) — opt-in via -DNIMBLECAS_PYTHON=ON ----
+option(NIMBLECAS_PYTHON "Build the nanobind Python bindings" OFF)
+if(NIMBLECAS_PYTHON)
+  find_package(Python 3.10 COMPONENTS Interpreter Development.Module REQUIRED)
+  find_package(nanobind CONFIG REQUIRED)
+
+  nanobind_add_module(nimblecas_ext src/bindings/bindings.cpp)
+  target_link_libraries(nimblecas_ext
+    PRIVATE nimblecas_symbolic nimblecas_core std_module)
+
+  add_test(NAME python_bindings
+           COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_bindings.py)
+  set_tests_properties(python_bindings PROPERTIES
+    ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:nimblecas_ext>")
+endif()
