@@ -4,8 +4,10 @@ A high-performance, modern **Computer Algebra System** in **C++23** — symbolic
 (Joel S. Cohen's algorithms), numeric solvers, multi-register SIMD, TBB/PPL parallelism,
 and multi-GPU acceleration.
 
-See [docs/PRD.md](docs/PRD.md) for the product scope and
-[docs/ROADMAP.md](docs/ROADMAP.md) for the technical architecture and implementation plan.
+**Start here: [docs/Index.md](docs/Index.md) — the documentation hub** (architecture,
+per-module reference, and testing guides). See [docs/PRD.md](docs/PRD.md) for the
+product scope and [docs/ROADMAP.md](docs/ROADMAP.md) for the technical architecture
+and implementation plan.
 
 ## Status
 
@@ -17,12 +19,27 @@ reviewed):
 - `nimblecas.symbolic` — immutable `Expr` expression trees (a `std::variant` of
   symbol / constant / add / mul / power / function nodes), structural equality,
   structural hashing, and the Cohen primitives `free_of` and `substitute`.
+- `nimblecas.parallel` — deterministic fork–join runtime and order-preserving tree
+  combinators over Intel oneTBB (Linux/macOS), Microsoft PPL (Windows), or a serial
+  fallback, with grain-size cost gating.
 - `nimblecas.simplify` — Cohen automatic simplification: exact overflow-checked
   rational constant folding, algebraic identities, flattening, canonical ordering,
   and combination of like terms / like bases.
+- `nimblecas.cache` — `ExprMemo`, a sharded concurrent hash-consing / memoization
+  table keyed by structural identity (each unique subtree transformed once).
 - `nimblecas.diff` — symbolic differentiation (sum, product/Leibniz, general power,
   and chain rules) with an elementary + special-function derivative table
   (trig, inverse-trig, hyperbolic, `erf`, `gamma`, `lambertW`, …).
+- `nimblecas.simd` — multi-register SIMD engine with runtime dynamic dispatch
+  (AVX-512 → AVX2 → scalar) for bit-identical elementwise `float32` kernels.
+- `nimblecas.polynomial` — dense univariate `int64` polynomials: overflow-checked
+  ring operations, primitive-Euclidean gcd, Yun square-free factorization, exact
+  and SIMD-batch evaluation.
+- `nimblecas.ratpoly` — exact `Rational` fractions and dense polynomials over
+  `Q[x]`: overflow-checked field arithmetic, division-with-remainder, and a monic
+  Euclidean gcd (the field the integer `Polynomial` is not).
+- `nimblecas.polyexpr` — bridge between symbolic `Expr` and dense `Polynomial`
+  (`to_polynomial` / `from_polynomial`, polynomial gcd and square-free factoring).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -34,12 +51,29 @@ to read concurrently — the foundation for later parallel evaluation. Nodes are
 type-safe `std::variant` (no inheritance) to stay small and cache-friendly.
 
 The engine is layered as one C++23 **module per concern**, with explicit dependency
-edges:
+edges. Two chains sit on the common `core` foundation — a symbolic chain and a
+numeric chain — joined by `polyexpr`:
 
 ```
-core  ─►  symbolic  ─►  simplify  ─►  diff
-                └────────────┴───────────┴──►  bindings (nanobind)
+                core
+                  │
+   ┌──────────────┼────────────────────────┐
+   │              │                         │
+  simd        parallel                  symbolic
+   │              │      │                  │
+   ▼              └──────┼────────┐         │
+polynomial              cache   simplify    │
+   │    │                 │        │        │
+   ▼    ▼                 └────┬───┴────► diff
+polyexpr ratpoly               │
+                               ▼
+                      bindings (nanobind: symbolic, simplify, diff, polyexpr)
+
+testing  (stands alone)
 ```
+
+See [docs/architecture/overview.md](docs/architecture/overview.md) for the exact
+`import` edges and rationale.
 
 Errors use **railway-oriented programming** — fallible operations return
 `Result<T> = std::expected<T, MathError>` rather than throwing (e.g. a zero
