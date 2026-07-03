@@ -218,6 +218,20 @@ target_sources(nimblecas_cmatrix PUBLIC
 target_link_libraries(nimblecas_cmatrix
   PUBLIC nimblecas_complex nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.search : graph/tree search & dynamic programming (parallel algorithmics) ----
+add_library(nimblecas_search STATIC)
+target_sources(nimblecas_search PUBLIC
+  FILE_SET CXX_MODULES FILES src/search/search.cppm)
+target_link_libraries(nimblecas_search
+  PUBLIC nimblecas_parallel nimblecas_core std_module)
+
+# ---- nimblecas.csp : finite-domain constraint satisfaction (AC-3, backtracking, FC) ----
+add_library(nimblecas_csp STATIC)
+target_sources(nimblecas_csp PUBLIC
+  FILE_SET CXX_MODULES FILES src/csp/csp.cppm)
+target_link_libraries(nimblecas_csp
+  PUBLIC nimblecas_parallel nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -418,6 +432,16 @@ target_link_libraries(cmatrix_tests
   PRIVATE nimblecas_cmatrix nimblecas_complex nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
+
+add_executable(search_tests tests/search_tests.cpp)
+target_link_libraries(search_tests
+  PRIVATE nimblecas_search nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME search_tests COMMAND search_tests)
+
+add_executable(csp_tests tests/csp_tests.cpp)
+target_link_libraries(csp_tests
+  PRIVATE nimblecas_csp nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME csp_tests COMMAND csp_tests)
 
 add_executable(bandsolve_tests tests/bandsolve_tests.cpp)
 target_link_libraries(bandsolve_tests
