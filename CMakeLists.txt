@@ -176,6 +176,20 @@ target_sources(nimblecas_powerseries PUBLIC
 target_link_libraries(nimblecas_powerseries
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.dynamics : linear/affine stability via Routh-Hurwitz + eigen (§7.10) ----
+add_library(nimblecas_dynamics STATIC)
+target_sources(nimblecas_dynamics PUBLIC
+  FILE_SET CXX_MODULES FILES src/dynamics/dynamics.cppm)
+target_link_libraries(nimblecas_dynamics
+  PUBLIC nimblecas_eigen nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.pade : [m/n] Pade approximants for resummation (§7.4/7.5) ----
+add_library(nimblecas_pade STATIC)
+target_sources(nimblecas_pade PUBLIC
+  FILE_SET CXX_MODULES FILES src/pade/pade.cppm)
+target_link_libraries(nimblecas_pade
+  PUBLIC nimblecas_powerseries nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -334,6 +348,18 @@ add_executable(montecarlo_tests tests/montecarlo_tests.cpp)
 target_link_libraries(montecarlo_tests
   PRIVATE nimblecas_montecarlo nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME montecarlo_tests COMMAND montecarlo_tests)
+
+add_executable(dynamics_tests tests/dynamics_tests.cpp)
+target_link_libraries(dynamics_tests
+  PRIVATE nimblecas_dynamics nimblecas_eigen nimblecas_matrix nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME dynamics_tests COMMAND dynamics_tests)
+
+add_executable(pade_tests tests/pade_tests.cpp)
+target_link_libraries(pade_tests
+  PRIVATE nimblecas_pade nimblecas_powerseries nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME pade_tests COMMAND pade_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
