@@ -63,6 +63,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.matrix` | [matrix.md](reference/matrix.md) | Dense matrices over exact `Rational`: add/multiply/transpose/trace, exact determinant, `A x = b` solve, inverse, and rank via Gaussian / Gauss-Jordan elimination over `Q`. |
 | `nimblecas.combinatorics` | [combinatorics.md](reference/combinatorics.md) | Overflow-checked `int64` counting — factorial, binomial, permutations, Catalan, Fibonacci, Stirling numbers — plus exact-`Rational` Bernoulli numbers (Akiyama–Tanigawa, `B_1 = -1/2`). |
 | `nimblecas.orthopoly` | [orthopoly.md](reference/orthopoly.md) | Classical orthogonal polynomials over `Q[x]` (Chebyshev T/U, Legendre, Laguerre, physicists'/probabilists' Hermite) via their three-term recurrences. |
+| `nimblecas.roots` | [roots.md](reference/roots.md) | Rational roots of a polynomial over `Q[x]` with multiplicity, via the rational root theorem plus deflation (analytical equation solving; radical/Cardano/RootOf are a planned extension). |
 
 Tooling and integration:
 
@@ -106,7 +107,7 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
                          ▼
                nimblecas.integrate
 
-nimblecas.matrix  nimblecas.combinatorics  nimblecas.orthopoly
+nimblecas.matrix  nimblecas.combinatorics  nimblecas.orthopoly  nimblecas.roots
                     (ratpoly consumers; each depends on core + ratpoly)
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)

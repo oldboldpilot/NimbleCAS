@@ -75,6 +75,9 @@ reviewed):
 - `nimblecas.orthopoly` — the classical orthogonal polynomials over `Q[x]` (Chebyshev first/second
   kind, Legendre, Laguerre, physicists'/probabilists' Hermite), each generated exactly from its
   three-term recurrence.
+- `nimblecas.roots` — analytical equation solving over `Q[x]`: every rational root of a polynomial
+  with its multiplicity, via the rational root theorem plus exact deflation (radical / Cardano /
+  symbolic `RootOf` for irrational and complex roots are a planned extension).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
