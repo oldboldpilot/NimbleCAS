@@ -156,6 +156,13 @@ target_sources(nimblecas_vectorcalc PUBLIC
 target_link_libraries(nimblecas_vectorcalc
   PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.latex : Expr -> LaTeX exporter (§7.12) ----
+add_library(nimblecas_latex STATIC)
+target_sources(nimblecas_latex PUBLIC
+  FILE_SET CXX_MODULES FILES src/latex/latex.cppm)
+target_link_libraries(nimblecas_latex
+  PUBLIC nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
 target_sources(nimblecas_testing PUBLIC
@@ -186,6 +193,11 @@ target_link_libraries(orthopoly_tests
   PRIVATE nimblecas_orthopoly nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME orthopoly_tests COMMAND orthopoly_tests)
+
+add_executable(latex_tests tests/latex_tests.cpp)
+target_link_libraries(latex_tests
+  PRIVATE nimblecas_latex nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
+add_test(NAME latex_tests COMMAND latex_tests)
 
 add_executable(symbolic_tests tests/symbolic_tests.cpp)
 target_link_libraries(symbolic_tests
