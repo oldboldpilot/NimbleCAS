@@ -36,6 +36,12 @@ target_sources(nimblecas_simplify PUBLIC
   FILE_SET CXX_MODULES FILES src/simplify/simplify.cppm)
 target_link_libraries(nimblecas_simplify PUBLIC nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.simd : multi-register SIMD engine with dynamic dispatch ----
+add_library(nimblecas_simd STATIC)
+target_sources(nimblecas_simd PUBLIC
+  FILE_SET CXX_MODULES FILES src/simd/simd.cppm)
+target_link_libraries(nimblecas_simd PUBLIC std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -71,6 +77,10 @@ target_link_libraries(diff_tests
   PRIVATE nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME diff_tests COMMAND diff_tests)
+
+add_executable(simd_tests tests/simd_tests.cpp)
+target_link_libraries(simd_tests PRIVATE nimblecas_simd nimblecas_testing std_module)
+add_test(NAME simd_tests COMMAND simd_tests)
 
 # ---- Python bindings (nanobind, ROADMAP 10) — opt-in via -DNIMBLECAS_PYTHON=ON ----
 option(NIMBLECAS_PYTHON "Build the nanobind Python bindings" OFF)
