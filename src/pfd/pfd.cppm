@@ -45,6 +45,24 @@ struct PartialFraction {
     std::vector<PartialFractionTerm> terms;  // the proper part, split per prime power
 };
 
+// One square-free "tower": numerator(x) / base(x)^exponent, with base monic and
+// square-free and deg numerator < exponent * deg base. This is the proper part grouped
+// by square-free factor -- one summand per distinct multiplicity -- BEFORE spreading
+// each numerator across the individual powers base^1 .. base^exponent. It is the form
+// Hermite reduction consumes (nimblecas.ratint) and the intermediate partial_fractions
+// itself expands.
+struct SquareFreeTerm {
+    RationalPoly base;        // b_i — a monic, square-free base
+    std::int64_t exponent;    // e_i >= 1 — the multiplicity of b_i in the denominator
+    RationalPoly numerator;   // N_i — deg < e_i * deg b_i
+};
+
+// A(x)/B(x) = polynomial_part + sum_i numerator_i / base_i^{exponent_i}.
+struct SquareFreePartialFraction {
+    RationalPoly polynomial_part;
+    std::vector<SquareFreeTerm> towers;  // one per pairwise-coprime prime power
+};
+
 // Square-free factorization of f over Q via Yun's algorithm. Returns pairs (a_i, i)
 // with each a_i monic, square-free, of degree >= 1, the a_i pairwise coprime, and
 //     leading_coefficient(f) * prod_i a_i^i == f.
@@ -52,8 +70,15 @@ struct PartialFraction {
 [[nodiscard]] auto square_free_factorization(const RationalPoly& f)
     -> Result<std::vector<std::pair<RationalPoly, std::int64_t>>>;
 
-// Partial-fraction decomposition of numerator/denominator over Q[x].
-// Fails with division_by_zero (denominator == 0) or overflow (int64 coefficient limit).
+// Square-free (per-prime-power) partial-fraction decomposition of numerator/denominator
+// over Q[x]: the proper part is grouped by square-free factor, one tower per distinct
+// multiplicity. Fails with division_by_zero (denominator == 0) or overflow.
+[[nodiscard]] auto square_free_partial_fractions(const RationalPoly& numerator,
+                                                 const RationalPoly& denominator)
+    -> Result<SquareFreePartialFraction>;
+
+// Partial-fraction decomposition of numerator/denominator over Q[x], spread across the
+// individual powers. Fails with division_by_zero (denominator == 0) or overflow.
 [[nodiscard]] auto partial_fractions(const RationalPoly& numerator,
                                      const RationalPoly& denominator)
     -> Result<PartialFraction>;
@@ -335,39 +360,40 @@ auto square_free_factorization(const RationalPoly& f)
     return square_free_impl(f);
 }
 
-auto partial_fractions(const RationalPoly& numerator, const RationalPoly& denominator)
-    -> Result<PartialFraction> {
+auto square_free_partial_fractions(const RationalPoly& numerator,
+                                   const RationalPoly& denominator)
+    -> Result<SquareFreePartialFraction> {
     if (denominator.is_zero()) {
-        return make_error<PartialFraction>(MathError::division_by_zero);
+        return make_error<SquareFreePartialFraction>(MathError::division_by_zero);
     }
     // Normalise the denominator to monic, folding the leading constant into the
     // numerator so the rational function's value is unchanged: A/B == (A/lc)/(B/lc).
     const Rational lc = denominator.leading_coefficient();
     auto bm = denominator.monic();
     if (!bm) {
-        return make_error<PartialFraction>(bm.error());
+        return make_error<SquareFreePartialFraction>(bm.error());
     }
     auto inv_lc = Rational::from_int(1).divide(lc);  // lc != 0 (B is non-zero)
     if (!inv_lc) {
-        return make_error<PartialFraction>(inv_lc.error());
+        return make_error<SquareFreePartialFraction>(inv_lc.error());
     }
     auto am = numerator.scale(*inv_lc);
     if (!am) {
-        return make_error<PartialFraction>(am.error());
+        return make_error<SquareFreePartialFraction>(am.error());
     }
     // Split off the polynomial part: Am = P*Bm + R, deg R < deg Bm.
     auto dm = am->divide(*bm);
     if (!dm) {
-        return make_error<PartialFraction>(dm.error());
+        return make_error<SquareFreePartialFraction>(dm.error());
     }
-    PartialFraction result;
+    SquareFreePartialFraction result;
     result.polynomial_part = std::move(dm->quotient);
     const RationalPoly remainder = std::move(dm->remainder);
 
     // Square-free factorization of the monic denominator: Bm = prod bases[k]^exps[k].
     auto sqf = square_free_impl(*bm);
     if (!sqf) {
-        return make_error<PartialFraction>(sqf.error());
+        return make_error<SquareFreePartialFraction>(sqf.error());
     }
     // Assemble the pairwise-coprime prime powers pk[k] = bases[k]^exps[k].
     std::vector<RationalPoly> bases;
@@ -379,7 +405,7 @@ auto partial_fractions(const RationalPoly& numerator, const RationalPoly& denomi
     for (const auto& [base, e] : *sqf) {
         auto pk = pow_poly(base, e);
         if (!pk) {
-            return make_error<PartialFraction>(pk.error());
+            return make_error<SquareFreePartialFraction>(pk.error());
         }
         bases.push_back(base);
         exps.push_back(e);
@@ -388,21 +414,38 @@ auto partial_fractions(const RationalPoly& numerator, const RationalPoly& denomi
     // Distinct-factor split of the proper part: R/Bm = sum_k N[k]/prime_powers[k].
     auto numerators = split_distinct(remainder, prime_powers);
     if (!numerators) {
-        return make_error<PartialFraction>(numerators.error());
+        return make_error<SquareFreePartialFraction>(numerators.error());
     }
-    // Expand each N[k] / base^e across the ascending powers base^1 .. base^e.
+    result.towers.reserve(bases.size());
     for (std::size_t k = 0; k < bases.size(); ++k) {
-        auto digits = power_expand((*numerators)[k], bases[k], exps[k]);
+        result.towers.push_back({.base = std::move(bases[k]),
+                                 .exponent = exps[k],
+                                 .numerator = std::move((*numerators)[k])});
+    }
+    return result;
+}
+
+auto partial_fractions(const RationalPoly& numerator, const RationalPoly& denominator)
+    -> Result<PartialFraction> {
+    auto sf = square_free_partial_fractions(numerator, denominator);
+    if (!sf) {
+        return make_error<PartialFraction>(sf.error());
+    }
+    PartialFraction result;
+    result.polynomial_part = std::move(sf->polynomial_part);
+    // Expand each tower N / base^e across the ascending powers base^1 .. base^e.
+    for (auto& tower : sf->towers) {
+        auto digits = power_expand(tower.numerator, tower.base, tower.exponent);
         if (!digits) {
             return make_error<PartialFraction>(digits.error());
         }
-        for (std::int64_t j = 1; j <= exps[k]; ++j) {
+        for (std::int64_t j = 1; j <= tower.exponent; ++j) {
             RationalPoly& cj = (*digits)[static_cast<std::size_t>(j - 1)];
             if (cj.is_zero()) {
                 continue;  // omit vanishing numerators
             }
             result.terms.push_back(
-                {.factor = bases[k], .power = j, .numerator = std::move(cj)});
+                {.factor = tower.base, .power = j, .numerator = std::move(cj)});
         }
     }
     return result;
