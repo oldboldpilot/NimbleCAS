@@ -46,12 +46,18 @@ target_sources(nimblecas_symbolic PUBLIC
   FILE_SET CXX_MODULES FILES src/symbolic/symbolic.cppm)
 target_link_libraries(nimblecas_symbolic PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.cache : concurrent hash-consing / memoization ----
+add_library(nimblecas_cache STATIC)
+target_sources(nimblecas_cache PUBLIC
+  FILE_SET CXX_MODULES FILES src/cache/cache.cppm)
+target_link_libraries(nimblecas_cache PUBLIC nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.simplify : Cohen automatic simplification ----
 add_library(nimblecas_simplify STATIC)
 target_sources(nimblecas_simplify PUBLIC
   FILE_SET CXX_MODULES FILES src/simplify/simplify.cppm)
 target_link_libraries(nimblecas_simplify
-  PUBLIC nimblecas_symbolic nimblecas_parallel nimblecas_core std_module)
+  PUBLIC nimblecas_symbolic nimblecas_parallel nimblecas_cache nimblecas_core std_module)
 
 # ---- nimblecas.simd : multi-register SIMD engine with dynamic dispatch ----
 add_library(nimblecas_simd STATIC)
@@ -88,6 +94,11 @@ add_executable(simplify_tests tests/simplify_tests.cpp)
 target_link_libraries(simplify_tests
   PRIVATE nimblecas_simplify nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
 add_test(NAME simplify_tests COMMAND simplify_tests)
+
+add_executable(cache_tests tests/cache_tests.cpp)
+target_link_libraries(cache_tests
+  PRIVATE nimblecas_cache nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
+add_test(NAME cache_tests COMMAND cache_tests)
 
 add_executable(diff_tests tests/diff_tests.cpp)
 target_link_libraries(diff_tests

@@ -19,6 +19,7 @@ import std;
 import nimblecas.core;
 import nimblecas.symbolic;
 import nimblecas.parallel;
+import nimblecas.cache;
 
 export namespace nimblecas {
 
@@ -187,10 +188,18 @@ struct ConstVal {
 }
 
 // --- forward declarations of the mutually-recursive simplifiers ------------
-[[nodiscard]] auto simplify_impl(const Expr& u) -> Result<Expr>;
+// simplify_impl memoises (hash-cons) for sizeable subtrees; simplify_node does the
+// actual work. The shared ExprMemo means identical subtrees are simplified once,
+// even across the parallel recursion.
+[[nodiscard]] auto simplify_impl(const Expr& u, ExprMemo& memo) -> Result<Expr>;
+[[nodiscard]] auto simplify_node(const Expr& u, ExprMemo& memo) -> Result<Expr>;
 [[nodiscard]] auto simplify_power(const Expr& base, const Expr& exponent) -> Result<Expr>;
 [[nodiscard]] auto simplify_sum(std::vector<Expr> terms) -> Result<Expr>;
 [[nodiscard]] auto simplify_product(std::vector<Expr> factors) -> Result<Expr>;
+
+// Subtree size at/above which a simplify result is worth caching (below it, the
+// memo lookup/lock costs more than recomputing the small node).
+inline constexpr std::size_t memo_threshold = 32;
 
 // Split a sum term into (constant coefficient, remaining factor product). A leading
 // constant factor of a product is the coefficient; otherwise the coefficient is 1.
@@ -424,9 +433,9 @@ auto simplify_product(std::vector<Expr> factors) -> Result<Expr> {
 
 // Recursively simplify operands, flattening nested sums/products, then apply the
 // operator-specific simplification.
-auto simplify_impl(const Expr& u) -> Result<Expr> {
+auto simplify_node(const Expr& u, ExprMemo& memo) -> Result<Expr> {
     return std::visit(
-        [&u]<typename T>(const T& n) -> Result<Expr> {
+        [&u, &memo]<typename T>(const T& n) -> Result<Expr> {
             if constexpr (std::is_same_v<T, SymbolNode>) {
                 return u;
             } else if constexpr (std::is_same_v<T, ConstantNode>) {
@@ -438,11 +447,11 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
                 }
                 return u;
             } else if constexpr (std::is_same_v<T, PowerNode>) {
-                auto base = simplify_impl(n.base);
+                auto base = simplify_impl(n.base, memo);
                 if (!base) {
                     return base;
                 }
-                auto exponent = simplify_impl(n.exponent);
+                auto exponent = simplify_impl(n.exponent, memo);
                 if (!exponent) {
                     return exponent;
                 }
@@ -452,7 +461,8 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
                 // the tree is immutable (COW). Errors resolved in index order after.
                 const bool par = u.size() >= parallel::parallel_cost_threshold;
                 auto results = parallel::transform_index_if(
-                    par, n.terms.size(), [&](std::size_t i) { return simplify_impl(n.terms[i]); });
+                    par, n.terms.size(),
+                    [&](std::size_t i) { return simplify_impl(n.terms[i], memo); });
                 std::vector<Expr> terms;
                 terms.reserve(results.size());
                 for (auto& s : results) {
@@ -470,7 +480,7 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
                 const bool par = u.size() >= parallel::parallel_cost_threshold;
                 auto results = parallel::transform_index_if(
                     par, n.factors.size(),
-                    [&](std::size_t i) { return simplify_impl(n.factors[i]); });
+                    [&](std::size_t i) { return simplify_impl(n.factors[i], memo); });
                 std::vector<Expr> factors;
                 factors.reserve(results.size());
                 for (auto& s : results) {
@@ -488,7 +498,8 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
                 const bool par = u.size() >= parallel::parallel_cost_threshold;
                 auto results = parallel::transform_index_if(
-                    par, n.args.size(), [&](std::size_t i) { return simplify_impl(n.args[i]); });
+                    par, n.args.size(),
+                    [&](std::size_t i) { return simplify_impl(n.args[i], memo); });
                 std::vector<Expr> args;
                 args.reserve(results.size());
                 for (auto& s : results) {
@@ -505,8 +516,20 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
         u.node().value);
 }
 
+// Hash-consing wrapper: reuse a cached simplify result for structurally-identical
+// subtrees. Small nodes skip the memo (the lookup/lock costs more than recomputing).
+auto simplify_impl(const Expr& u, ExprMemo& memo) -> Result<Expr> {
+    if (u.size() < memo_threshold) {
+        return simplify_node(u, memo);
+    }
+    return memo.get_or_compute(u, [&] { return simplify_node(u, memo); });
+}
+
 }  // namespace
 
-auto simplify(const Expr& u) -> Result<Expr> { return simplify_impl(u); }
+auto simplify(const Expr& u) -> Result<Expr> {
+    ExprMemo memo;  // per-call hash-cons: identical subtrees simplified once
+    return simplify_impl(u, memo);
+}
 
 }  // namespace nimblecas
