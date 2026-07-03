@@ -113,6 +113,13 @@ target_sources(nimblecas_rothstein PUBLIC
 target_link_libraries(nimblecas_rothstein
   PUBLIC nimblecas_resultant nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.integrate : rational-function integration capstone (Hermite + RT) ----
+add_library(nimblecas_integrate STATIC)
+target_sources(nimblecas_integrate PUBLIC
+  FILE_SET CXX_MODULES FILES src/integrate/integrate.cppm)
+target_link_libraries(nimblecas_integrate
+  PUBLIC nimblecas_ratint nimblecas_rothstein nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -198,6 +205,13 @@ target_link_libraries(rothstein_tests
   PRIVATE nimblecas_rothstein nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME rothstein_tests COMMAND rothstein_tests)
+
+add_executable(integrate_tests tests/integrate_tests.cpp)
+target_link_libraries(integrate_tests
+  PRIVATE nimblecas_integrate nimblecas_ratint nimblecas_rothstein nimblecas_pfd
+          nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME integrate_tests COMMAND integrate_tests)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
