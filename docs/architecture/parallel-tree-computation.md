@@ -9,6 +9,25 @@ a rich body of parallel tree algorithms, and NimbleCAS's data model is chosen
 specifically to make them safe and cheap. This document sets the design so that every
 symbolic operation parallelizes by construction rather than as an afterthought.
 
+## 0. Framing: a parallel parse-tree transformation
+
+An `Expr` is essentially a **parsed expression tree** (a PEG/parse tree), and
+`simplify` / `differentiate` / `substitute` are **tree transformations** over it —
+exactly the setting parallel tree-processing theory targets (parallel tree automata,
+tree contraction, the Euler-tour technique, parallel prefix). Two mature bodies of
+technology apply directly:
+
+- **Parallel tree transformation**: independent subtrees are rewritten concurrently;
+  bottom-up combines are associative folds. This is what §2–§4 below build.
+- **Parallel parsing** (for the front end, when it lands): parallel lexing and
+  chunked/speculative parsing (e.g. parallel PEG / packrat, split-and-merge parsing)
+  build the initial tree across cores, so even constructing large expressions from
+  text is not a serial bottleneck.
+
+So "evaluate/manipulate the tree" is a data-parallel problem end to end — from parsing
+the input to transforming the tree — not a serial recursion that merely *happens* to be
+threadable.
+
 ## 1. The enabling property: COW immutability
 
 Expressions are **immutable** trees shared through a copy-on-write pointer

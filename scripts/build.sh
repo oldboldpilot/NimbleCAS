@@ -52,4 +52,10 @@ cmake "${CMAKE_ARGS[@]}"
 
 cmake --build "${BUILD_DIR}"
 
+# ThreadSanitizer: silence the uninstrumented-TBB false positives (config/tsan.supp)
+# so a clean run validates NimbleCAS's own concurrency (Code Policy Rule 36).
+if [[ "${SANITIZER}" == "thread" ]]; then
+  export TSAN_OPTIONS="suppressions=${REPO_ROOT}/config/tsan.supp ${TSAN_OPTIONS:-}"
+fi
+
 ctest --test-dir "${BUILD_DIR}" --output-on-failure
