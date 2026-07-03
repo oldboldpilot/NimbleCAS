@@ -33,7 +33,7 @@ in the repository.
 
 ## Module reference
 
-The symbolic chain (`core → symbolic → {simplify, cache} → diff`):
+The symbolic chain (`core → symbolic → {simplify, cache} → diff → vectorcalc`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
@@ -42,6 +42,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff`):
 | `nimblecas.simplify` | [simplify.md](reference/simplify.md) | Cohen automatic simplification (ASAE): folding, identities, canonical order, like-term combination. |
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
+| `nimblecas.vectorcalc` | [vectorcalc.md](reference/vectorcalc.md) | Vector calculus over `diff`: gradient, divergence, curl, Laplacian, Jacobian, Hessian, directional / total derivatives. |
 
 The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein} → integrate}}`; `parallel`):
 
@@ -88,8 +89,9 @@ nimblecas.polynomial           ▼          ▼        ▼
 nimblecas.  nimblecas.ratpoly  └────────┬──────────┤
  polyexpr                │              ▼          ▼
                          │       nimblecas.diff ◄──┘
-              ┌──────────┴──────────┐
-              ▼                     ▼
+                         │                 │
+              ┌──────────┴──────────┐      ▼
+              ▼                     ▼      nimblecas.vectorcalc
         nimblecas.pfd       nimblecas.resultant
               │                     │
               ▼                     ▼

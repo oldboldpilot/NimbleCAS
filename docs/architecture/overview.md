@@ -29,8 +29,8 @@ nimblecas.polynomial     nimblecas.cache   nimblecas.simplify   (free_of,
       ▼      ▼                 └──────┬────────────┤
 nimblecas.  nimblecas.ratpoly        ▼            ▼
  polyexpr                │     nimblecas.diff  ◄──┘
-              ┌──────────┴──────────┐
-              ▼                     ▼
+              ┌──────────┴──────────┐   │
+              ▼                     ▼   nimblecas.vectorcalc
         nimblecas.pfd       nimblecas.resultant
               │                     │
               ▼                     ▼
@@ -56,6 +56,7 @@ Edges as declared in the sources (`import` statements):
 | [`cache`](../reference/cache.md) | `core`, `symbolic` |
 | [`simplify`](../reference/simplify.md) | `core`, `symbolic`, `parallel`, `cache` |
 | [`diff`](../reference/diff.md) | `core`, `symbolic`, `simplify`, `parallel`, `cache` |
+| [`vectorcalc`](../reference/vectorcalc.md) | `core`, `symbolic`, `diff`, `simplify` |
 | [`polynomial`](../reference/polynomial.md) | `core`, `simd` |
 | [`ratpoly`](../reference/ratpoly.md) | `core`, `polynomial` |
 | [`polyexpr`](../reference/polyexpr.md) | `core`, `symbolic`, `polynomial` |
@@ -68,8 +69,11 @@ Edges as declared in the sources (`import` statements):
 
 Two chains sit on the common `core` foundation:
 
-- **The symbolic chain** — `core → parallel/symbolic → {simplify, cache} → diff`
-  — does exact tree manipulation.
+- **The symbolic chain** — `core → parallel/symbolic → {simplify, cache} → diff
+  → vectorcalc` — does exact tree manipulation, with `vectorcalc` layering the
+  multivariable / vector-calculus operators (gradient, divergence, curl,
+  Laplacian, Jacobian, Hessian, directional and total derivatives) on top of
+  `diff` as exact, simplified compositions of partial derivatives.
 - **The numeric chain** — `core → simd → polynomial → {polyexpr, ratpoly}` —
   does dense polynomial arithmetic and the SIMD numeric fast path, with
   `polyexpr` bridging back to the symbolic `Expr` and `ratpoly` lifting `Z[x]`
@@ -187,5 +191,5 @@ dispatches elementwise `float32` kernels to the best CPU ISA at runtime
 ## See also
 
 - [Parallel tree computation](parallel-tree-computation.md) — the parallel design in depth.
-- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md)
+- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [vectorcalc](../reference/vectorcalc.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md)
 - [Documentation hub](../Index.md)

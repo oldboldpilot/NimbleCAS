@@ -30,6 +30,10 @@ reviewed):
 - `nimblecas.diff` — symbolic differentiation (sum, product/Leibniz, general power,
   and chain rules) with an elementary + special-function derivative table
   (trig, inverse-trig, hyperbolic, `erf`, `gamma`, `lambertW`, …).
+- `nimblecas.vectorcalc` — vector calculus over `diff`: gradient, divergence, curl,
+  Laplacian, Jacobian, Hessian, and directional / total derivatives as exact,
+  automatically-simplified compositions of partial derivatives (so `curl(grad f)`
+  and `div(curl F)` collapse to zero by Clairaut cancellation).
 - `nimblecas.simd` — multi-register SIMD engine with runtime dynamic dispatch
   (AVX-512 → AVX2 → scalar) for bit-identical elementwise `float32` kernels.
 - `nimblecas.polynomial` — dense univariate `int64` polynomials: overflow-checked
@@ -80,7 +84,7 @@ numeric chain — joined by `polyexpr`:
    ▼              └──────┼────────┐         │
 polynomial              cache   simplify    │
    │    │                 │        │        │
-   ▼    ▼                 └────┬───┴────► diff
+   ▼    ▼                 └────┬───┴────► diff ──► vectorcalc
 polyexpr ratpoly               │
       ┌─────┴─────┐            │
       ▼           ▼            ▼
