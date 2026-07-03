@@ -58,6 +58,9 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
   - Rothstein-Trager algorithm for the logarithmic part of rational integrals.
   - Table-lookup and heuristic integration for transcendental functions.
 - **Multiple Integrals**: Symbolic double, triple, and general $n$-fold iterated integrals $\int \cdots \int f \, dx_1 \cdots dx_n$ over both rectangular and general (variable-bound) regions, with **change of variables** via the Jacobian determinant $\left| \det \partial(x)/\partial(u) \right|$ (polar, cylindrical, and spherical coordinate systems built in) and **Fubini** reordering of the iterated limits. Includes line, surface, and volume integrals and the classical integral theorems — **Green's**, **Stokes'**, and the **divergence/Gauss** theorem — relating them to the vector-calculus operators above.
+- **Fractional Calculus**: Gamma-based non-integer-order operators (reusing the Gamma function, §2.6) — the **Riemann–Liouville fractional integral** $I^\alpha f(x) = \frac{1}{\Gamma(\alpha)}\int_a^x (x-t)^{\alpha-1} f(t)\,dt$, the **Riemann–Liouville** ($D^\alpha f = \frac{d^n}{dx^n} I^{n-\alpha} f$) and **Caputo** (${}^{C}\!D^\alpha f = I^{n-\alpha}\frac{d^n}{dx^n} f$) fractional derivatives, and the **Grünwald–Letnikov** limit-of-difference-quotient definition. Enforces the semigroup law $I^\alpha I^\beta = I^{\alpha+\beta}$ and closed forms such as $D^\alpha x^p = \frac{\Gamma(p+1)}{\Gamma(p-\alpha+1)} x^{p-\alpha}$ and $D^\alpha e^{\lambda x} = \lambda^\alpha e^{\lambda x}$, with Mittag-Leffler-function solutions of linear fractional ODEs.
+- **Pseudo-Differential Operators**: operators $P = p(x, D)$ defined by a **symbol** $p(x,\xi)$ acting through the Fourier transform (§2.9), $(Pu)(x) = \frac{1}{(2\pi)^n}\int p(x,\xi)\,\hat u(\xi)\,e^{i x\cdot\xi}\,d\xi$, generalizing constant-coefficient differential operators. Provides **symbol calculus** (composition and adjoint of symbols with order tracking), **Weyl quantization** (symmetric ordering, formally self-adjoint for real symbols, §2.19), and the **fractional Laplacian** $(-\Delta)^s$ (symbol $|\xi|^{2s}$) as the canonical non-local example.
+- **Operational & Umbral Calculus**: the algebra of the differential operator $D = \frac{d}{dx}$ and the **shift operator** $E$ ($E^h f(x) = f(x+h)$); **Heaviside operational calculus** solving linear ODEs by treating $D$ algebraically (justified via the Laplace transform, §2.11); the **exponential-shift** identity $e^{aD} f(x) = f(x+a)$ and shift rule $P(D)(e^{ax} g) = e^{ax} P(D+a) g$; the finite-difference operators $\Delta = E - I$ and $\nabla = I - E^{-1}$ with $\Delta = e^{D} - I$; and **umbral calculus** with Sheffer/Appell polynomial sequences $\sum_n s_n(x)\frac{t^n}{n!} = A(t)\, e^{x B(t)}$ (reusing the orthogonal-polynomial families of §2.20).
 
 ### 2.5. Analytical Equation Solving
 - **Algebraic Solvers**: Solving linear and quadratic polynomial equations exactly.
@@ -87,6 +90,29 @@ NimbleCAS supports rigorous polynomial computations in $\mathbb{Z}[x]$ and multi
   - **Dense Matrices**: Power iteration and the QR algorithm.
   - **Sparse/Large Matrices**: Lanczos iteration (for symmetric matrices) and Arnoldi iteration (for general matrices) yielding Ritz eigenvalues.
 - **Iterative Linear Solvers**: High-performance solvers for large systems ($A x = b$), including stationary methods (Jacobi, Gauss-Seidel, Successive Over-Relaxation (SOR)) and Krylov subspace methods (Conjugate Gradient (CG), generalized minimal residual (GMRES), and Bi-Conjugate Gradient Stabilized (BiCGSTAB)).
+
+#### 2.7.1. Special Matrix Structures
+Dense matrices (the exact-`Rational` `nimblecas.matrix` module) are tagged with a recognized **structure** at construction so that operations select a structure-aware fast path and compact storage rather than treating every matrix as dense-general.
+- **Symmetry classes**: symmetric / Hermitian ($A = A^\dagger$), skew-symmetric / skew-Hermitian ($A = -A^\dagger$), orthogonal / unitary ($A^\dagger A = I$), normal ($A A^\dagger = A^\dagger A$), and positive-(semi)definite; the Hermitian/unitary types reuse the complex field of §2.6.
+- **Bandedness / triangularity**: diagonal, bidiagonal, tridiagonal, banded with bandwidth $(p, q)$, upper/lower triangular, and upper/lower Hessenberg.
+- **Displacement / combinatorial structure**: Toeplitz, Hankel, circulant, Vandermonde, permutation, block / block-diagonal, and sparse.
+
+#### 2.7.2. Matrix Decompositions
+A structure-aware factorization layer: **LU** (partial/full pivoting), **Cholesky** and **$LDL^\dagger$** (Hermitian positive-definite), **QR** (Householder / Givens / modified Gram–Schmidt), **Hessenberg reduction and tridiagonalization**, **eigen-decomposition** (real-spectrum Jacobi or symmetric QR for Hermitian/symmetric matrices; the Francis double-shift QR on Hessenberg form for general matrices), **Schur decomposition**, **Jordan canonical form**, **singular value decomposition (SVD)**, **polar decomposition**, and **spectral decomposition**.
+
+#### 2.7.3. Matrix Functions, Invariants & Transforms
+- **Matrix functions**: matrix exponential $e^{A}$ (scaling-and-squaring with Padé, or eigen / Schur–Parlett), logarithm, square root, and general $f(A)$; integer/real powers, inverse, and Moore–Penrose pseudoinverse.
+- **Invariants & norms**: determinant, trace, rank, condition number, and the $1$-, $2$-/spectral, $\infty$-, Frobenius, and nuclear norms.
+- **Products & characteristic apparatus**: Kronecker/tensor product and direct sum; the characteristic and minimal polynomials, the Cayley–Hamilton theorem, and the adjugate; and similarity ($P^{-1}AP$) and congruence ($P^\dagger A P$) transforms.
+
+#### 2.7.4. Structure-Aware Fast Algorithms
+Recognized structure is exploited for asymptotically faster, more stable kernels: triangular forward/back substitution; banded LU/Cholesky; **Toeplitz solvers** (Levinson–Durbin $O(n^2)$ and superfast $O(n\log^2 n)$, feeding the Yule–Walker estimation of §2.13.3); **circulant** matrices diagonalized by the DFT for $O(n\log n)$ mat-vec products and solves via the FFT (§2.9); Hessenberg QR iteration for eigenvalues; and exploitation of Hermitian/unitary structure for stable, real-spectrum eigensolvers.
+
+#### 2.7.5. Tensor Analysis
+Tensors generalize the rank-2 matrices of §2.7 and rank-1 vectors to arbitrary rank; the algebraic layer sits with the matrix engine, while the differential-geometric operators extend the vector calculus of §2.4.
+- **Tensors & Tensor Algebra**: multilinear tensors of arbitrary rank with tracked **covariant (lower)** and **contravariant (upper)** indices under the **Einstein summation convention**; the **metric tensor** $g_{ij}$ and its inverse $g^{ij}$ for raising/lowering indices, with the **Kronecker delta** $\delta^i_j$ and **Levi-Civita symbol** $\varepsilon_{ijk}$ as built-in invariants; and the operations **outer (tensor) product** $\otimes$, **contraction**, **trace**, and **symmetrization / antisymmetrization**.
+- **Tensor Calculus (Differential Geometry)**: the **covariant derivative** $\nabla_i$ (vs. the partial derivative) with **Christoffel symbols** $\Gamma^k_{ij}$ derived from the metric, **parallel transport**, and **geodesics**; the **Riemann curvature tensor** $R^\rho{}_{\sigma\mu\nu}$, the **Ricci tensor** $R_{\mu\nu}$ and **scalar curvature** $R$, and the **Einstein tensor** $G_{\mu\nu} = R_{\mu\nu} - \tfrac12 R\,g_{\mu\nu}$; and curvilinear vector-calculus operators generalizing §2.4 — gradient, divergence, curl, and the **Laplace–Beltrami** operator $\Delta f = \tfrac{1}{\sqrt{g}}\partial_i(\sqrt{g}\,g^{ij}\partial_j f)$.
+- **Differential Forms & Exterior Calculus**: $p$-forms, the **wedge product** $\wedge$, the **exterior derivative** $d$ (with $d^2 = 0$), the **Hodge star** $\star$, and the **generalized Stokes theorem** $\int_M d\omega = \int_{\partial M}\omega$ unifying the Green / Stokes / divergence theorems of §2.4.
 
 ### 2.8. Differential Equations (ODEs and PDEs)
 - **Analytical Solvers**: Automatic classification and exact solving of 1st and 2nd order linear ODEs and classical PDEs (heat, wave, Laplace equations).
@@ -124,6 +150,7 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 ### 2.12. Statistics, Probability & Generating Functions
 - **Probability Distributions**: Symbolic representation of continuous and discrete random variables, computing probability density functions (PDF), cumulative distribution functions (CDF), expected values, variance, higher-order moments, and moment-generating functions (MGF) for standard distributions.
 - **Generating Functions**: Support for Ordinary Generating Functions (OGF) and Exponential Generating Functions (EGF). Ability to convert symbolic sequences to generating functions and vice versa.
+- **Inclusion–Exclusion & Bonferroni Bounds**: the inclusion–exclusion principle in both its counting form $\left|\bigcup_i A_i\right| = \sum_i |A_i| - \sum_{i<j}|A_i\cap A_j| + \cdots$ (reusing the combinatorics engine, §2.6) and its probability form $P\!\left(\bigcup_i E_i\right)=\sum_k (-1)^{k+1}\!\!\sum_{|S|=k} P\!\left(\bigcap_{i\in S}E_i\right)$, with the **Bonferroni inequalities** as its truncated partial sums giving alternating upper/lower bounds and the **union bound** $P(\bigcup_i E_i)\le\sum_i P(E_i)$ as the first-order case.
 
 #### 2.12.1. Descriptive Statistics
 - **Measures of Location**: Arithmetic mean $\bar{x} = \frac{1}{n}\sum_i x_i$, weighted mean $\frac{\sum_i w_i x_i}{\sum_i w_i}$, geometric mean $\left(\prod_i x_i\right)^{1/n}$, and harmonic mean $n / \sum_i \tfrac{1}{x_i}$, together with the median, mode(s), and arbitrary quantiles/percentiles (with selectable interpolation conventions).
@@ -154,6 +181,24 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **Regression**: Least-squares regression (ordinary, weighted, and ridge/Tikhonov-regularized) solved via the normal equations $(X^\top X)\,\hat{\beta} = X^\top y$ on the linear-algebra engine (§2.7), with goodness-of-fit diagnostics ($R^2$, residual analysis).
 - **Bayesian Inference**: Conjugate-prior posterior updates and maximum a posteriori (MAP) estimation for standard likelihood/prior families.
 
+#### 2.12.6. Concentration & Tail Inequalities
+Analysis tools bounding the probability that a random variable deviates from its mean — the backbone of randomized-algorithm and probabilistic-method analysis. The exponential bounds reuse the moment-generating-function machinery of §2.12.4.
+- **Basic bounds**: **Markov's inequality** $P(X\ge a)\le \mathbb{E}[X]/a$ for $X\ge0$, and **Chebyshev's inequality** $P(|X-\mu|\ge k\sigma)\le 1/k^2$.
+- **Chernoff Bounds**: the exponential tail bound $P(X\ge a)\le \inf_{t>0} e^{-ta} M_X(t)$ obtained by the moment-generating-function method (§2.12.4), with closed forms for sums of independent Bernoulli/Poisson variables.
+- **Hoeffding's Inequality**: for a sum $S$ of bounded independent variables $X_i\in[a_i,b_i]$, $P(|S-\mathbb{E}S|\ge t)\le 2\exp\!\big(-2t^2/\sum_i (b_i-a_i)^2\big)$.
+- **Azuma–Hoeffding Inequality**: the martingale (§2.13.1) analogue for bounded differences $|Y_k-Y_{k-1}|\le c_k$, $P(|Y_n-Y_0|\ge t)\le 2\exp\!\big(-t^2/(2\sum_k c_k^2)\big)$.
+- **McDiarmid & Bernstein**: **McDiarmid's bounded-differences inequality** for functions of independent inputs, and **Bernstein's inequality** as a variance-aware refinement of Hoeffding for bounded summands.
+- **Purpose**: these supply the exponential tail bounds used throughout randomized analysis — Monte Carlo error control and randomized-algorithm success amplification (§2.13.5) and the probabilistic method (§2.12.7).
+
+#### 2.12.7. The Probabilistic Method
+The existence-proof toolkit of Alon & Spencer's *The Probabilistic Method* — proving a combinatorial object with a target property exists by showing a random construction has it with positive probability — applied to combinatorial existence and threshold results (reusing the combinatorics engine, §2.6).
+- **First-Moment / Expectation Argument**: existence from $\mathbb{E}[X]<1$ (so $P(X=0)>0$) or from $\exists\,\omega: X(\omega)\ge\mathbb{E}[X]$, combined with the union bound (§2.12).
+- **Second-Moment Method**: $P(X=0)\le\operatorname{Var}(X)/\mathbb{E}[X]^2$ via Chebyshev (§2.12.6), giving sharp thresholds for random structures.
+- **Lovász Local Lemma**: symmetric form ($e\,p\,(d+1)\le1$) and general/asymmetric form for simultaneously avoiding many sparsely-dependent rare events.
+- **Alteration / Deletion Method**: random construction followed by removal of offending elements to improve first-moment bounds.
+- **Janson Inequalities**: exponential bounds on $P(X=0)$ for sums of monotone dependent events, reaching beyond the second-moment regime.
+- **Entropy & Martingale (Azuma) Concentration**: entropy/subadditivity counting bounds and Azuma-based (§2.12.6, §2.13.1) Doob-martingale concentration techniques.
+
 ### 2.13. Stochastic Processes and Stochastic Differential Equations
 - **Stochastic Calculus**: Support for Itô and Stratonovich calculus representations, implementing Itô's lemma for multidimensional stochastic variables.
 - **SDE/SPDE Solvers**: Analytical solving of simple linear SDEs (e.g. Geometric Brownian Motion, Ornstein-Uhlenbeck process). High-performance numerical simulation using the parallelized **Euler-Maruyama** and **Milstein schemes** on CPU (PPL) and GPUs, and solving associated **Fokker-Planck equations** analytically or numerically.
@@ -180,6 +225,7 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 #### 2.13.5. Monte Carlo Simulation
 - **High-Performance Sampling**: Massively parallel pseudo-random sampling of distributions and process paths, with **variance-reduction** techniques (antithetic variates, control variates, importance sampling) to accelerate convergence.
 - **MCMC**: Markov chain Monte Carlo samplers, including **Metropolis–Hastings** and **Gibbs** sampling, for posterior and high-dimensional integration problems.
+- **Las Vegas & Monte Carlo Algorithms**: the two randomized-algorithm classes — **Las Vegas** (always correct, randomized running time analyzed in expectation, e.g. randomized quicksort/selection) and **Monte Carlo** (bounded error probability, deterministic running time), formalized by the complexity classes **RP / co-RP / BPP / ZPP**. **Probability amplification** by $k$ independent repetitions reduces the error to $\le\delta^k$, with expected-runtime and success-probability analyses drawn from the concentration bounds of §2.12.6.
 - **Execution Infrastructure**: Simulations execute on the parallel CPU/GPU engine (§3.1–§3.3) and are distributed across worker nodes via the **StochasticGraphExecutionEngine** (§3.4) for large-scale ensembles.
 
 ### 2.14. Difference Equations and Recurrence Relations
