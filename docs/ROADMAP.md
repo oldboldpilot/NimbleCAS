@@ -355,6 +355,20 @@ For heavy parallelized numeric evaluations (such as simulating $10^6$ Euler-Maru
 - **Triton Advantages**: Automatically handles memory coalescing, block-level execution scheduling, and shared memory management, producing kernels that rival hand-tuned CUDA.
 - **Multi-GPU Parallelism**: The `nimblecas.gpu` layer launches independent Triton execution streams across multiple local GPUs concurrently, using PyTorch/CUDA multi-stream orchestration.
 
+### 5.5. GPU Technology Stack (`nimblecas.gpu`)
+The `nimblecas.gpu` module is a thin, capability-detecting layer with a **CPU fallback**: if no CUDA device is present (or the toolkit is absent), every entry point transparently runs the existing SIMD/TBB CPU path, so the engine is always usable. When a device is available it dispatches to the appropriate GPU technology:
+
+- **CUDA (nvcc / driver API)**: hand-written kernels for the parallelizable numeric cores — modular polynomial arithmetic (Montgomery/Barrett), parallel CRT/MRC reconstruction (§5.3), flattened-Polish symbolic scans (§5.2), and Euler-Maruyama / Milstein SDE path batches (§7.8).
+- **NVRTC**: runtime JIT of automatically-simplified expression trees into CUDA kernels for grid evaluation over millions of points (§5.1), avoiding pointer-chasing on the device.
+- **CUDA Graphs**: capture-and-replay of repeated launch sequences — SDE time-stepping loops, Krylov/JFNK iterations, parameter sweeps — to eliminate per-launch overhead on long iterative runs.
+- **cuTile**: tile-based kernels (CUDA tile programming model) for structured dense/blocked numeric work (matrix tiles, convolution/coefficient tiles) that maps cleanly to Blackwell tensor/tile hardware.
+- **cuBLAS / cuBLASLt**: dense linear algebra — GEMM and the factorization building blocks behind the numeric matrix layer (Cholesky, QR, SVD, iterative solvers, §7.2).
+- **Triton (Python)**: high-level custom math kernels (§5.4) — batched SDE simulation, dense Lyapunov exponents, Daubechies DWT filters — compiled to PTX, orchestrated across multiple GPUs.
+
+**Reproducibility & precision**: GPU numeric paths follow the same BF16/FP32 policy as the CPU (NFR-1); results are validated against the CPU reference within documented tolerances, and determinism-sensitive reductions use fixed ordering.
+
+**Toolchain**: CUDA 13.2 (nvcc + NVRTC + cuBLAS) is the reference; the CMake build adds an optional CUDA language target guarded by device/toolkit detection (like the nanobind/Python option), and Triton is provisioned into the uv environment (`torch` + `triton`).
+
 ---
 
 ## 6. Distributed Symbolic Scaling via StochasticGraphExecutionEngine
