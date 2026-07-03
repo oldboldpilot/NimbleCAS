@@ -28,6 +28,7 @@ SRC="${REPO_ROOT}/src"; TST="${REPO_ROOT}/tests"
 # MSan + MSan-libc++ compile/link flags.
 M=(-std=c++23 -stdlib=libc++ -nostdinc++ -isystem "${MSAN_LIBCXX}/include/c++/v1"
    -fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1
+   -march=x86-64-v3 -mtune=generic -mavx -mavx2 -mfma
    -Wno-reserved-module-identifier -Wno-include-angled-in-module-purview -pthread)
 LINK=(-fsanitize=memory -nostdlib++ -L"${MSAN_LIBCXX}/lib" -Wl,-rpath,"${MSAN_LIBCXX}/lib"
       -lc++ -lc++abi -pthread)
