@@ -215,7 +215,7 @@ auto derivative_raw(const Expr& u, std::string_view var, ExprMemo& memo) -> Expr
     if (u.size() < memo_threshold) {
         return derivative_node(u, var, memo);
     }
-    return memo.get_or_compute(u, [&] { return derivative_node(u, var, memo); });
+    return memo.get_or_compute_value(u, [&] { return derivative_node(u, var, memo); });
 }
 
 }  // namespace
