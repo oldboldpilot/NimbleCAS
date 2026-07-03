@@ -92,6 +92,13 @@ target_sources(nimblecas_pfd PUBLIC
 target_link_libraries(nimblecas_pfd
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.resultant : resultant & discriminant over Q[x] ----
+add_library(nimblecas_resultant STATIC)
+target_sources(nimblecas_resultant PUBLIC
+  FILE_SET CXX_MODULES FILES src/resultant/resultant.cppm)
+target_link_libraries(nimblecas_resultant
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.ratint : rational-function integration (Hermite reduction) ----
 add_library(nimblecas_ratint STATIC)
 target_sources(nimblecas_ratint PUBLIC
@@ -166,6 +173,12 @@ target_link_libraries(pfd_tests
   PRIVATE nimblecas_pfd nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME pfd_tests COMMAND pfd_tests)
+
+add_executable(resultant_tests tests/resultant_tests.cpp)
+target_link_libraries(resultant_tests
+  PRIVATE nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME resultant_tests COMMAND resultant_tests)
 
 add_executable(ratint_tests tests/ratint_tests.cpp)
 target_link_libraries(ratint_tests
