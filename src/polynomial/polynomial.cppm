@@ -84,6 +84,10 @@ public:
     // the returning form is dominated by the per-call output allocation on large sweeps;
     // reusing one caller buffer across calls removes that cost, leaving only the SIMD Horner
     // and DRAM bandwidth.
+    //
+    // PRECONDITION: `xs` and `out` must NOT overlap. The vectorised Horner seeds `out` with
+    // the leading coefficient before it reads `xs`, so aliasing the two buffers would clobber
+    // the inputs. (evaluate_batch() always passes a fresh, disjoint buffer.)
     [[nodiscard]] auto evaluate_batch_into(std::span<const float> xs, std::span<float> out) const
         -> bool;
 
