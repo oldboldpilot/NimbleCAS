@@ -820,6 +820,43 @@ auto quad = Expr::parse("a*x^2 + b*x + c = 0")
                 .transform([](auto rs){ return rs.front().to_latex(); });
 ```
 
+### 7.22. Linear Programming (Simplex and Interior-Point)
+The optimization engine of §7.14 covers unconstrained and non-linear least-squares problems; this section specifies the **constrained linear** solvers required by PRD §2.18. Both methods solve the standard form
+$$\min_{x}\; c^\top x \quad \text{s.t.}\quad A x = b,\; x \ge 0,$$
+with automatic conversion of inequality constraints (via slack/surplus variables) and free variables (via difference splitting) from the user's natural formulation.
+
+#### Problem Assembly
+An `LinearProgram` fluent builder collects the objective and constraints, canonicalizes to standard form, and exposes both a dense (`Matrix`, §7.2) and CSR-sparse representation of $A$. Coefficient arithmetic runs through the SIMD waterfall (§4); large constraint matrices dispatch matrix-vector products to the parallel/GPU paths. The builder returns `Result<Solution>` so infeasible/unbounded outcomes surface as `MathError` values (`Infeasible`, `Unbounded`) rather than exceptions (§8).
+
+#### Simplex Method (Revised, Bland-safe)
+- **Revised simplex** maintains the basis inverse $B^{-1}$ (updated by product-form / eta-file updates rather than full re-inversion) and prices non-basic columns $\bar{c}_j = c_j - c_B^\top B^{-1} A_j$ to choose an entering variable, then a ratio test for the leaving variable.
+- **Two-phase / Big-M** start: Phase I drives artificial variables to zero to find an initial feasible basis; Phase II optimizes the true objective.
+- **Anti-cycling**: **Bland's rule** (smallest-index selection) is used as the tie-break fallback to guarantee termination on degenerate vertices; the default pivot is Dantzig / steepest-edge for speed.
+- **Exact vs numeric modes**: over `Rational` coefficients the tableau stays exact (no round-off, useful for small symbolic LPs); the FP32/BF16 numeric mode is the high-throughput path for large systems.
+
+#### Interior-Point Method (Primal–Dual)
+For large, sparse problems the **primal–dual path-following** interior-point solver is preferred (polynomial complexity, far fewer iterations than simplex on big models):
+- Applies **Newton's method** (reusing the §7.14 linear-algebra stack) to the perturbed KKT system enforcing $x_i s_i = \mu$ along the central path, with $\mu \to 0$:
+  $$\begin{aligned} A x &= b, & A^\top y + s &= c, & x_i s_i &= \mu, & x,s &\ge 0.\end{aligned}$$
+- Uses **Mehrotra's predictor–corrector** for the step direction and adaptive $\mu$ reduction, solving the normal equations $A D A^\top \Delta y = r$ (with $D = \operatorname{diag}(x/s)$) via **Cholesky** (§7.2) on the SPD system, or CG/preconditioned Krylov (§7.2) for very large sparse instances.
+- **Step control** keeps iterates strictly interior ($x, s > 0$) via a fraction-to-the-boundary rule.
+
+#### Solver Selection & Output
+`.solve()` auto-selects: exact-rational simplex for small/exact problems, revised simplex for medium dense, interior-point for large sparse — overridable via `.with_method(Method::InteriorPoint)`. The `Solution` exposes the optimal $x^\ast$, objective value, and dual/shadow prices $y^\ast$ for sensitivity analysis.
+
+#### Fluent API
+```cpp
+auto sol = LinearProgram::minimize({ {"x", 2.0}, {"y", 3.0} })   // min 2x + 3y
+               .subject_to("x + y >= 10")
+               .subject_to("x - y <= 4")
+               .with_bounds("x", 0.0, Inf)
+               .with_bounds("y", 0.0, Inf)
+               .solve();                                          // auto method selection
+
+auto value  = sol.transform([](const auto& s){ return s.objective(); });
+auto shadow = sol.transform([](const auto& s){ return s.dual_prices(); });
+```
+
 ---
 
 ## 8. Railway-Oriented Error Handling
