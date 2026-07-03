@@ -198,6 +198,13 @@ target_sources(nimblecas_series PUBLIC
 target_link_libraries(nimblecas_series
   PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.laplace : table-driven symbolic Laplace transform (§7.6) ----
+add_library(nimblecas_laplace STATIC)
+target_sources(nimblecas_laplace PUBLIC
+  FILE_SET CXX_MODULES FILES src/laplace/laplace.cppm)
+target_link_libraries(nimblecas_laplace
+  PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
 target_sources(nimblecas_testing PUBLIC
@@ -263,6 +270,12 @@ target_link_libraries(series_tests
   PRIVATE nimblecas_series nimblecas_diff nimblecas_simplify nimblecas_symbolic
           nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME series_tests COMMAND series_tests)
+
+add_executable(laplace_tests tests/laplace_tests.cpp)
+target_link_libraries(laplace_tests
+  PRIVATE nimblecas_laplace nimblecas_simplify nimblecas_symbolic nimblecas_cache
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME laplace_tests COMMAND laplace_tests)
 
 add_executable(symbolic_tests tests/symbolic_tests.cpp)
 target_link_libraries(symbolic_tests
