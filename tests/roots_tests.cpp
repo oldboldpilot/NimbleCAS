@@ -50,8 +50,8 @@ auto main() -> int {
               })
         .test("repeated_root_multiplicity",
               [](TestContext& t) {
-                  // (x-1)^2 (x+2) = x^3 - 3x + 2
-                  auto roots = rational_roots(ipoly({2, 0, -3, 1})).value();
+                  // (x-1)^2 (x+2) = x^3 - 3x + 2  (coeffs low degree first: 2, -3, 0, 1)
+                  auto roots = rational_roots(ipoly({2, -3, 0, 1})).value();
                   t.expect(roots.size() == 2, "two distinct roots");
                   t.expect(has_root(roots, Rational::from_int(1), 2), "root 1 has multiplicity 2");
                   t.expect(has_root(roots, Rational::from_int(-2), 1), "root -2 (mult 1)");
