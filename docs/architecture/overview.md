@@ -28,7 +28,9 @@ nimblecas.polynomial     nimblecas.cache   nimblecas.simplify   (free_of,
       │      │                 │                   │             substitute)
       ▼      ▼                 └──────┬────────────┤
 nimblecas.  nimblecas.ratpoly        ▼            ▼
- polyexpr                      nimblecas.diff  ◄──┘
+ polyexpr                │     nimblecas.diff  ◄──┘
+                         ▼
+                   nimblecas.pfd
 
 nimblecas.testing  (stands alone; depends only on std)
 nimblecas_ext      (nanobind bindings; imports symbolic, simplify, diff, polyexpr)
@@ -49,6 +51,7 @@ Edges as declared in the sources (`import` statements):
 | [`polynomial`](../reference/polynomial.md) | `core`, `simd` |
 | [`ratpoly`](../reference/ratpoly.md) | `core`, `polynomial` |
 | [`polyexpr`](../reference/polyexpr.md) | `core`, `symbolic`, `polynomial` |
+| [`pfd`](../reference/pfd.md) | `core`, `ratpoly` |
 | bindings (`nimblecas_ext`) | `core`, `symbolic`, `simplify`, `diff`, `polyexpr` |
 
 Two chains sit on the common `core` foundation:
@@ -58,7 +61,8 @@ Two chains sit on the common `core` foundation:
 - **The numeric chain** — `core → simd → polynomial → {polyexpr, ratpoly}` —
   does dense polynomial arithmetic and the SIMD numeric fast path, with
   `polyexpr` bridging back to the symbolic `Expr` and `ratpoly` lifting `Z[x]`
-  into the coefficient field `Q[x]` for exact division-with-remainder.
+  into the coefficient field `Q[x]` for exact division-with-remainder, on which
+  `pfd` builds square-free partial-fraction decomposition.
 
 ## 2. The immutable, copy-on-write data model
 
@@ -163,5 +167,5 @@ dispatches elementwise `float32` kernels to the best CPU ISA at runtime
 ## See also
 
 - [Parallel tree computation](parallel-tree-computation.md) — the parallel design in depth.
-- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md)
+- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md)
 - [Documentation hub](../Index.md)
