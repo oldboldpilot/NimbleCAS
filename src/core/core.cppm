@@ -5,6 +5,9 @@
 // Conforms to config/cpp_details.txt: C++23 modules, `import std`, trailing return
 // types, no owning raw pointers, std::expected error handling (no exceptions).
 
+module;
+#include <cassert>  // assert macro (unavailable via `import std`); active when !NDEBUG
+
 export module nimblecas.core;
 
 import std;
@@ -52,10 +55,23 @@ template <typename T>
 // ---------------------------------------------------------------------------
 // Copy-on-write pointer (Rule 22).
 //
-// Wraps an immutable payload in std::shared_ptr<const T>. Copies are O(1) atomic
-// refcount bumps and are safe to read concurrently across threads (the payload is
-// const while shared). write() first detaches a private copy when the payload is
-// shared, so mutation never races another reader.
+// Wraps a payload in std::shared_ptr<T>. The payload is treated as logically
+// immutable: only read()/operator* expose it, and they hand back a const view, so
+// shared instances are never mutated in place. Copies are O(1) atomic refcount
+// bumps. write() detaches a private copy first whenever the payload is shared
+// (use_count > 1), then returns a mutable reference to that now-unique copy.
+//
+// The shared_ptr owns a NON-const T deliberately: creating the object as
+// `const T` and later const_cast-ing it to mutate would be undefined behaviour
+// ([dcl.type.cv]), so immutability is enforced by the API surface, not by a const
+// dynamic type.
+//
+// Thread-safety: distinct CowPtr handles (e.g. one per thread, obtained by copy)
+// may be read concurrently, and any one of them may call write() concurrently with
+// reads of the OTHER handles — the COW detach guarantees writers never touch a
+// payload another handle observes. A SINGLE shared CowPtr instance is NOT safe for
+// concurrent read()+write(): write() reassigns the ptr_ member, which races a
+// concurrent reader of the same handle. Give each thread its own copy.
 // ---------------------------------------------------------------------------
 
 template <typename T>
@@ -68,28 +84,32 @@ public:
     template <typename... Args>
     [[nodiscard]] static auto make(Args&&... args) -> CowPtr {
         CowPtr p;
-        p.ptr_ = std::make_shared<const T>(std::forward<Args>(args)...);
+        p.ptr_ = std::make_shared<T>(std::forward<Args>(args)...);
         return p;
     }
 
-    [[nodiscard]] auto read() const noexcept -> const T& { return *ptr_; }
+    [[nodiscard]] auto read() const noexcept -> const T& {
+        assert(ptr_ && "CowPtr::read() on an empty handle");
+        return *ptr_;
+    }
 
     // Returns a mutable reference to a payload owned solely by this handle,
     // performing a copy-on-write detach first if the payload is currently shared.
     [[nodiscard]] auto write() -> T& {
+        assert(ptr_ && "CowPtr::write() on an empty handle");
         if (ptr_.use_count() > 1) {
-            ptr_ = std::make_shared<const T>(*ptr_);
+            ptr_ = std::make_shared<T>(*ptr_);  // detach a private copy before mutating
         }
-        return const_cast<T&>(*ptr_);  // sole owner after detach: mutation is safe
+        return *ptr_;
     }
 
-    [[nodiscard]] auto operator*() const noexcept -> const T& { return *ptr_; }
+    [[nodiscard]] auto operator*() const noexcept -> const T& { return read(); }
     [[nodiscard]] auto operator->() const noexcept -> const T* { return ptr_.get(); }
     [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(ptr_); }
     [[nodiscard]] auto use_count() const noexcept -> long { return ptr_.use_count(); }
 
 private:
-    std::shared_ptr<const T> ptr_{};
+    std::shared_ptr<T> ptr_{};
 };
 
 }  // namespace nimblecas
