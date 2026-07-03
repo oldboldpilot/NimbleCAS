@@ -128,6 +128,13 @@ target_link_libraries(nimblecas_diff
   PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_parallel nimblecas_cache
          nimblecas_core std_module)
 
+# ---- nimblecas.vectorcalc : vector calculus (grad/div/curl/laplacian/jacobian/hessian) ----
+add_library(nimblecas_vectorcalc STATIC)
+target_sources(nimblecas_vectorcalc PUBLIC
+  FILE_SET CXX_MODULES FILES src/vectorcalc/vectorcalc.cppm)
+target_link_libraries(nimblecas_vectorcalc
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
 target_sources(nimblecas_testing PUBLIC
@@ -161,6 +168,12 @@ target_link_libraries(diff_tests
   PRIVATE nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME diff_tests COMMAND diff_tests)
+
+add_executable(vectorcalc_tests tests/vectorcalc_tests.cpp)
+target_link_libraries(vectorcalc_tests
+  PRIVATE nimblecas_vectorcalc nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME vectorcalc_tests COMMAND vectorcalc_tests)
 
 add_executable(simd_tests tests/simd_tests.cpp)
 target_link_libraries(simd_tests PRIVATE nimblecas_simd nimblecas_testing std_module)
