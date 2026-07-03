@@ -69,6 +69,8 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.recurrence` | [recurrence.md](reference/recurrence.md) | Linear homogeneous constant-coefficient recurrences: characteristic polynomial over `Q[x]` and its rational roots via `roots` (rational-root case; irrational e.g. Fibonacci deferred). |
 | `nimblecas.complex` | [complex.md](reference/complex.md) | Exact complex numbers over `Q` — the Gaussian rationals `Q + Qi`: overflow-checked add/subtract/multiply/divide/conjugate/reciprocal and the exact squared modulus (modulus and argument omitted as irrational). |
 | `nimblecas.stats` | [stats.md](reference/stats.md) | Exact descriptive statistics over the rationals: mean, sample/population variance and covariance, and the symmetric covariance matrix `Σ` (returned as a `nimblecas.matrix` `Matrix`, its diagonal each variable's variance). |
+| `nimblecas.lp` | [lp.md](reference/lp.md) | Exact-rational linear programming via single-phase Simplex: `maximize(A, b, c)` for `max c·x s.t. A x <= b, x >= 0` (`b >= 0`), Bland's rule anti-cycling, exact optimum / unbounded detection. |
+| `nimblecas.numeric` | [numeric.md](reference/numeric.md) | Floating-point polynomial root-finders (Newton, bisection, secant) with Horner `eval` / `eval_derivative`; standalone numeric solver depending only on `core`. |
 
 Tooling and integration:
 
@@ -113,8 +115,9 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
                nimblecas.integrate
 
 nimblecas.matrix  nimblecas.combinatorics  nimblecas.orthopoly  nimblecas.roots
-nimblecas.complex   (ratpoly consumers; each depends on core + ratpoly)
+nimblecas.complex  nimblecas.lp   (ratpoly consumers; each depends on core + ratpoly)
 nimblecas.stats     (matrix consumer; depends on core + ratpoly + matrix)
+nimblecas.numeric   (standalone numeric root-finder; depends only on core)
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)
 nimblecas.gpu       (optional CUDA; depends on core — opt-in via -DNIMBLECAS_CUDA=ON)

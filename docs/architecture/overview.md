@@ -75,6 +75,8 @@ Edges as declared in the sources (`import` statements):
 | [`recurrence`](../reference/recurrence.md) | `core`, `ratpoly`, `roots` |
 | [`complex`](../reference/complex.md) | `core`, `ratpoly` |
 | [`stats`](../reference/stats.md) | `core`, `ratpoly`, `matrix` |
+| [`lp`](../reference/lp.md) | `core`, `ratpoly` |
+| [`numeric`](../reference/numeric.md) | `core` |
 | [`gpu`](../reference/gpu.md) (optional) | `core` (plus external `nvcc` + `cudart` at build time) |
 | bindings (`nimblecas_ext`) | `core`, `symbolic`, `simplify`, `diff`, `polyexpr` |
 
@@ -217,5 +219,5 @@ across GPU architectures without a rebuild.
 ## See also
 
 - [Parallel tree computation](parallel-tree-computation.md) — the parallel design in depth.
-- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [series](../reference/series.md) · [laplace](../reference/laplace.md) · [vectorcalc](../reference/vectorcalc.md) · [latex](../reference/latex.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md) · [matrix](../reference/matrix.md) · [combinatorics](../reference/combinatorics.md) · [orthopoly](../reference/orthopoly.md) · [roots](../reference/roots.md) · [recurrence](../reference/recurrence.md) · [complex](../reference/complex.md) · [stats](../reference/stats.md) · [gpu](../reference/gpu.md)
+- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [series](../reference/series.md) · [laplace](../reference/laplace.md) · [vectorcalc](../reference/vectorcalc.md) · [latex](../reference/latex.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md) · [matrix](../reference/matrix.md) · [combinatorics](../reference/combinatorics.md) · [orthopoly](../reference/orthopoly.md) · [roots](../reference/roots.md) · [recurrence](../reference/recurrence.md) · [complex](../reference/complex.md) · [stats](../reference/stats.md) · [lp](../reference/lp.md) · [numeric](../reference/numeric.md) · [gpu](../reference/gpu.md)
 - [Documentation hub](../Index.md)

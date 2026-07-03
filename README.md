@@ -97,6 +97,14 @@ reviewed):
   and covariance, and the symmetric covariance matrix `Σ` returned as a `nimblecas.matrix` `Matrix` (its
   diagonal each variable's variance), via a two-pass exact scheme — every result the fraction it is,
   overflow-checked.
+- `nimblecas.lp` — exact-rational linear programming via the single-phase Simplex method:
+  `maximize(A, b, c)` solves `max c·x s.t. A x <= b, x >= 0` (with `b >= 0`) over exact
+  `Rational`s, using Bland's rule for anti-cycling, an overflow-checked min-ratio test, and
+  returning either the exact optimum with its vertex or an unbounded certificate.
+- `nimblecas.numeric` — floating-point polynomial root-finders (Newton–Raphson, bisection,
+  secant) over ascending double coefficients, with Horner `eval` / `eval_derivative`; a
+  standalone numeric solver depending only on `core` (`domain_error` on a bad bracket,
+  `not_implemented` on non-convergence).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
