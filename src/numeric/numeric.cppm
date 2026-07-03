@@ -89,6 +89,15 @@ export namespace nimblecas::numeric {
     if (flo * fhi > 0.0) {
         return make_error<double>(MathError::domain_error);  // no bracketed root
     }
+    // Roots exactly on an endpoint must be returned directly: with flo == 0 the sign
+    // test flo*fmid < 0.0 can never fire, so the bracket would otherwise drift off the
+    // true root toward the opposite bound. (fhi == 0 converges anyway, but is symmetric.)
+    if (flo == 0.0) {
+        return lo;
+    }
+    if (fhi == 0.0) {
+        return hi;
+    }
     while (std::abs(hi - lo) >= tol) {
         const double mid = std::midpoint(lo, hi);
         const double fmid = eval(coeffs, mid);

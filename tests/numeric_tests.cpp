@@ -43,6 +43,23 @@ auto main() -> int {
                   t.expect(r.has_value() && std::abs(num::eval(sq_minus_two, *r)) < 1e-6,
                            "p(root) ~ 0");
               })
+        .test("bisection_root_on_lower_endpoint",
+              [&](TestContext& t) {
+                  // p(x) = x has its root exactly at the lower bracket endpoint. With
+                  // f(lo)==0 the sign test can never fire, so a naive loop would drift to
+                  // the far bound; the endpoint guard must return lo directly.
+                  const std::array<double, 2> line{0.0, 1.0};  // 0 + 1*x
+                  auto r = num::bisection(line, 0.0, 2.0, 1e-9);
+                  t.expect(r.has_value(), "bisection brackets [0, 2] with root at 0");
+                  t.expect(r.has_value() && close(*r, 0.0),
+                           "root at lower endpoint == 0 (not the far bound)");
+              })
+        .test("bisection_root_on_upper_endpoint",
+              [&](TestContext& t) {
+                  const std::array<double, 2> line{-2.0, 1.0};  // x - 2, root at x=2
+                  auto r = num::bisection(line, 0.0, 2.0, 1e-9);
+                  t.expect(r.has_value() && close(*r, 2.0), "root at upper endpoint == 2");
+              })
         .test("secant_sqrt2",
               [&](TestContext& t) {
                   auto r = num::secant(sq_minus_two, 1.0, 2.0, 1e-12, 100);
