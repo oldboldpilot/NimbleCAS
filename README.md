@@ -46,6 +46,9 @@ reviewed):
 - `nimblecas.ratint` — Hermite reduction of `int A/B dx` over `Q`: an exact rational
   part plus a square-free-denominator logarithmic integrand, without fully factoring
   `B` — the rational-part half of rational-function integration (Rothstein–Trager next).
+- `nimblecas.resultant` — resultant and discriminant over `Q[x]` via the Euclidean
+  remainder sequence: common-factor / repeated-root detection — the substrate for the
+  subresultant PRS, multivariate GCD, and the Rothstein–Trager resultant.
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -72,12 +75,12 @@ polynomial              cache   simplify    │
    │    │                 │        │        │
    ▼    ▼                 └────┬───┴────► diff
 polyexpr ratpoly               │
-            │                  │
-            ▼                  ▼
-           pfd          bindings (nanobind: symbolic, simplify, diff, polyexpr)
-            │
-            ▼
-          ratint
+      ┌─────┴─────┐            │
+      ▼           ▼            ▼
+     pfd      resultant  bindings (nanobind: symbolic, simplify, diff, polyexpr)
+      │
+      ▼
+    ratint
 
 testing  (stands alone)
 ```
