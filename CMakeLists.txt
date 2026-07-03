@@ -226,6 +226,11 @@ target_link_libraries(integrate_tests
           nimblecas_testing std_module)
 add_test(NAME integrate_tests COMMAND integrate_tests)
 
+# CPU profiling harness (perf / VTune) — a plain executable, not a ctest target.
+add_executable(cpu_bench tools/cpu_bench.cpp)
+target_link_libraries(cpu_bench
+  PRIVATE nimblecas_polynomial nimblecas_simd nimblecas_core std_module)
+
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
   PRIVATE nimblecas_parallel nimblecas_testing std_module)
