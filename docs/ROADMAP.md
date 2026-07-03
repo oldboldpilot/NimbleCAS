@@ -483,15 +483,89 @@ For highly non-linear differential equations where classical perturbation method
   $$I(M) \approx \sqrt{\frac{2\pi}{M |f''(x_0)|}} e^{M f(x_0)} g(x_0)$$
   where $x_0 \in (a, b)$ is the unique point where $f(x)$ attains its maximum.
 
-### 7.7. Probability and Generating Functions
+### 7.7. Statistics, Probability, Moments & Generating Functions
+NimbleCAS treats statistics and probability as a first-class analytical branch that reuses the exact-arithmetic (`nimblecas.ratpoly` `Rational`), symbolic integration/differentiation (§7.19), combinatorics/Bernoulli-number (§7.18) and parallel/GPU (§4, §5, §6) substrates already specified, so estimators are computed *symbolically and exactly* wherever possible and vectorized when only numeric values are required.
 - **Generating Functions**: Algebraic solvers to convert linear recurrence equations to generating functions $G(x) = \sum a_n x^n$. Computes Taylor series coefficients of rational/transcendental generating functions to find closed-form recurrence sequences.
 - **Probability distributions**: Symbolic representation of continuous/discrete PDFs. Computes expected values and variances using symbolic integration:
   $$\mathbb{E}[X] = \int_{-\infty}^{\infty} x \cdot f(x) dx$$
 
-### 7.8. Stochastic Differential Equations (SDEs and SPDEs)
+#### 7.7.1. Descriptive Statistics
+Summary statistics over a data vector (or a symbolic sample) are grouped into location, dispersion, and shape, and are computed by **numerically stable, parallel** algorithms mapped onto the `nimblecas.parallel` fork-join engine. On integer/rational data every quantity is carried as an exact `Rational` (via `nimblecas.ratpoly`), so e.g. a variance over integer samples is a reduced fraction rather than a rounded float.
+- **Location**: arithmetic mean $\bar{x} = \frac{1}{n}\sum_i x_i$, weighted mean $\frac{\sum_i w_i x_i}{\sum_i w_i}$, geometric mean $\left(\prod_i x_i\right)^{1/n}$ (evaluated as $\exp\!\big(\tfrac1n\sum_i \ln x_i\big)$ for stability), harmonic mean $n / \sum_i x_i^{-1}$, **median** and general **quantiles / percentiles** (order-statistic selection with configurable interpolation), and the **mode**.
+- **Dispersion**: population variance $\sigma^2 = \frac{1}{n}\sum_i (x_i-\mu)^2$ versus sample variance with **Bessel's correction** $s^2 = \frac{1}{n-1}\sum_i (x_i-\bar{x})^2$, the **standard deviation** $\sigma = \sqrt{\operatorname{Var}}$, mean absolute deviation $\frac{1}{n}\sum_i |x_i-\bar{x}|$, coefficient of variation $c_v = \sigma/\mu$, range, and interquartile range $\text{IQR}=Q_3-Q_1$.
+- **Shape**: raw moments $m_k = \frac{1}{n}\sum_i x_i^k$ and central moments $\mu_k = \mathbb{E}[(X-\mu)^k]$, standardized moments $\tilde{\mu}_k = \mu_k/\sigma^k$, **skewness** $\gamma_1 = \mu_3/\sigma^3$, and **excess kurtosis** $\gamma_2 = \mu_4/\sigma^4 - 3$.
+- **Stable + parallel algorithms**: single-pass statistics use **Welford's online update** for the running mean and $M_2$ (and its higher-order extensions to $M_3, M_4$ for skew/kurtosis), avoiding the catastrophic cancellation of the naive $\sum x^2 - (\sum x)^2/n$ form. Partial (co)moments computed on disjoint chunks are merged with the **Chan/pairwise parallel combination** formulas — e.g. for two chunks $A, B$ with counts $n_A, n_B$ and mean gap $\delta = \bar{x}_B - \bar{x}_A$, $M_{2} = M_{2,A} + M_{2,B} + \delta^2 \frac{n_A n_B}{n_A+n_B}$ — which map directly onto the fork-join reduction tree of `nimblecas.parallel` and, for very large arrays, onto the GPU reduction kernels (§5).
+
+#### 7.7.2. Correlation & Covariance
+- **Covariance**: sample covariance $\operatorname{Cov}(X,Y) = \frac{1}{n-1}\sum_i (x_i-\bar{x})(y_i-\bar{y})$ (population form divides by $n$), assembled for $d$ variables into the symmetric **covariance matrix** $\Sigma$ with $\Sigma_{jk} = \operatorname{Cov}(X_j, X_k)$, represented as a `MatrixNode` (§7.2).
+- **Correlation**: the **Pearson correlation** $r = \dfrac{\operatorname{Cov}(X,Y)}{\sigma_X \sigma_Y}$ and the associated **correlation matrix** $R$ with $R_{jk} = \Sigma_{jk}/\sqrt{\Sigma_{jj}\Sigma_{kk}}$; **rank correlations** — Spearman's $\rho$ (Pearson correlation of the rank-transformed data) and Kendall's $\tau = \frac{(\#\text{concordant}) - (\#\text{discordant})}{\binom{n}{2}}$ — for monotone/non-linear association.
+- **Time-series correlation**: the **autocovariance** $\gamma(h) = \operatorname{Cov}(X_t, X_{t+h})$ and **autocorrelation function** (ACF) $\rho(h) = \gamma(h)/\gamma(0)$, the **partial autocorrelation** (PACF) $\phi_{hh}$ obtained by solving the Durbin–Levinson / Yule–Walker recursions (§7.8.4), and the **cross-correlation** between two series.
+- **Stable parallel co-moments**: covariance co-moments $C_2 = \sum_i (x_i-\bar{x})(y_i-\bar{y})$ use the same Welford/Chan online-and-merge scheme as §7.7.1 (extended to the bivariate update $C_2 \mathrel{+}= C_{2,A} + C_{2,B} + \delta_x \delta_y \frac{n_A n_B}{n_A+n_B}$), so full covariance/correlation matrices are formed in one parallel pass over the fork-join tree.
+
+#### 7.7.3. Statistical Distribution Catalog
+A catalog of named distributions is provided, each as a symbolic object carrying its parameters. For every distribution the engine exposes the symbolic **PMF/PDF**, **CDF**, **quantile (inverse CDF)**, **MGF and characteristic function**, and **closed-form mean / variance / skewness / kurtosis / entropy**, together with the **limiting relationships** that connect the family.
+- **Discrete**: Bernoulli, Binomial, Poisson, Geometric, Negative Binomial, Hypergeometric, Discrete Uniform, Multinomial.
+- **Continuous**: Uniform, Normal/Gaussian, Exponential, Gamma, Beta, Chi-squared, Student's $t$, F, Cauchy, Log-normal, Weibull, Pareto, Multivariate Normal.
+- **Limiting relationships**: recognized rewrites such as Binomial $\to$ Poisson (rare-event limit $np\to\lambda$) $\to$ Normal (de Moivre–Laplace / CLT), Gamma $\to$ Chi-squared (shape/scale specialization), and Student's $t \to$ Normal as $\nu\to\infty$, used both for simplification and for asymptotic approximation.
+- **Symbolic moments computed two ways**: (i) directly by integration, $\mathbb{E}[X^n] = \int x^n f(x)\,dx$, dispatched to the rational/symbolic **integration engine** (§7.19); and (ii) by differentiating the MGF/characteristic function at the origin, $\mathbb{E}[X^n] = M_X^{(n)}(0) = i^{-n}\varphi_X^{(n)}(0)$, via the symbolic **differentiation engine** (§7.19). The two paths cross-check each other, and results are canonicalized by automatic simplification.
+- **Sampling**: each distribution supplies an inverse-CDF sampler (and, where sharper, a specialized sampler — Box–Muller/Ziggurat for the Normal, Marsaglia–Tsang for the Gamma) that feeds the Monte Carlo layer (§7.8.6).
+
+#### 7.7.4. Moments, Cumulants & Generating Functions
+- **Transforms**: the **moment-generating function** $M_X(t) = \mathbb{E}[e^{tX}]$, the **characteristic function** $\varphi_X(t) = \mathbb{E}[e^{itX}]$, the **probability-generating function** $G_X(z) = \mathbb{E}[z^X]$ (discrete), and the **cumulant-generating function** $K_X(t) = \log M_X(t)$.
+- **Laplace transform of a distribution**: for a non-negative random variable the **Laplace–Stieltjes transform** $\tilde{f}_X(s) = \mathbb{E}[e^{-sX}] = \int_0^\infty e^{-sx} f(x)\,dx$ is computed with the existing symbolic Laplace-transform machinery (§7.6). It equals the MGF evaluated at $-s$ (and the characteristic function at $is$), **uniquely determines** the distribution, and yields moments via $\mathbb{E}[X^n] = (-1)^n \tilde{f}_X^{(n)}(0)$ through the symbolic differentiation engine (§7.19); closed forms exist for the Exponential ($\tilde{f}_X(s) = \lambda/(\lambda+s)$), Gamma ($(\lambda/(\lambda+s))^k$), and related families, and inversion (§7.6) recovers densities of sums/convolutions of independent variables since $\tilde{f}_{X+Y} = \tilde{f}_X \tilde{f}_Y$.
+- **Moments & cumulants**: raw moments $m_k$, central moments $\mu_k$, factorial moments $\mathbb{E}[X^{\underline{k}}]$ (from $G_X$), and cumulants $\kappa_k = K_X^{(k)}(0)$. The **moment $\leftrightarrow$ cumulant** relations are generated with the **Bell polynomials** $\mu_n' = B_n(\kappa_1,\dots,\kappa_n)$ (and its inverse), reusing the combinatorics / Bernoulli-number machinery of §7.18, so conversions stay exact for symbolic parameters.
+- **Series expansions**: the **Edgeworth** and **Gram–Charlier A** expansions approximate a density by a Normal reference weighted by Hermite polynomials (§7.16), with coefficients driven by the standardized cumulants $\kappa_3, \kappa_4, \dots$ — used to correct Gaussian approximations of sums toward the true skew/kurtosis.
+
+#### 7.7.5. Inferential Statistics & Regression
+- **Estimation**: the **method of moments** (equate sample moments §7.7.1 to distribution moments §7.7.3 and solve, via §7.21), and **maximum likelihood** with the symbolic **score** $U(\theta) = \nabla_\theta \log L(\theta)$ and **Fisher information** $\mathcal{I}(\theta) = -\mathbb{E}[\nabla^2_\theta \log L]$ formed by symbolic differentiation (§7.19); the MLE solves $U(\theta)=0$ through the numeric/Newton machinery of §7.14.
+- **Confidence intervals & hypothesis tests**: symbolic and numeric $z$-, $t$-, $\chi^2$-, and $F$-tests with the corresponding CDFs (§7.7.3) supplying **p-values** and interval endpoints (e.g. $\bar{x} \pm t_{1-\alpha/2,\,n-1}\, s/\sqrt{n}$).
+- **Regression**: ordinary, weighted, and ridge **least-squares** solved through the symbolic **normal equations** $X^\top X\,\beta = X^\top y$ (ridge: $(X^\top X + \lambda I)\beta = X^\top y$), reusing the matrix/linear-algebra factorizations of §7.2 (Cholesky/QR) and the covariance machinery of §7.7.2, with **goodness-of-fit** $R^2 = 1 - \frac{\sum_i (y_i-\hat{y}_i)^2}{\sum_i (y_i-\bar{y})^2}$.
+- **Bayesian inference**: **conjugate posteriors** (Beta–Binomial, Gamma–Poisson, Normal–Normal, Normal-inverse-Gamma) evaluated in closed form by symbolic manipulation of the prior $\times$ likelihood, plus **MAP** point estimates $\hat{\theta}_{\text{MAP}} = \arg\max_\theta p(\theta \mid x)$ via §7.14.
+
+### 7.8. Stochastic Processes, SDEs & Monte Carlo
+This section covers the full stochastic stack — from continuous SDEs/SPDEs through discrete- and continuous-time processes and time series to the Monte Carlo estimators that drive them — building on the probability/distribution machinery of §7.7 and executing on the parallel/GPU (§4, §5) and distributed (§6) infrastructure.
+
+#### 7.8.1. Stochastic Differential Equations (SDEs and SPDEs)
 - **Itô Calculus**: Multidimensional Itô lemma implementation:
   $$d f(t, X_t) = \left( \frac{\partial f}{\partial t} + \mu_t \frac{\partial f}{\partial x} + \frac{1}{2} \sigma_t^2 \frac{\partial^2 f}{\partial x^2} \right) dt + \sigma_t \frac{\partial f}{\partial x} d W_t$$
 - **Euler-Maruyama & Milstein Simulation**: Numeric loops parallelized via PPL and compiled to GPU kernels for high-speed paths simulation of multi-asset SDEs.
+- **Fokker–Planck / Kolmogorov forward equation**: the evolution of the transition density $p(x,t)$ of $dX_t = \mu(X_t,t)\,dt + \sigma(X_t,t)\,dW_t$,
+  $$\frac{\partial p}{\partial t} = -\frac{\partial}{\partial x}\big[\mu\, p\big] + \frac{1}{2}\frac{\partial^2}{\partial x^2}\big[\sigma^2\, p\big],$$
+  solved via the spectral/pseudo-spectral and finite-difference machinery of §7.3, with stationary densities obtained symbolically.
+
+#### 7.8.2. Discrete-Time Processes
+- **Markov chains**: a `TransitionMatrix` $P$ with $P_{ij} = \Pr(X_{t+1}=j \mid X_t=i)$; $n$-step transitions from the **Chapman–Kolmogorov** relation $P^{(n)} = P^n$. The **stationary distribution** $\pi$ (with $\pi P = \pi$) is solved *symbolically* as the left eigenvector for eigenvalue $1$, i.e. the null space of $(P^\top - I)$ under $\sum_i \pi_i = 1$ (§7.2). **Absorption probabilities** and **expected hitting times** are obtained from the fundamental matrix $N = (I-Q)^{-1}$ of the absorbing-chain canonical form.
+- **Random walks**: simple/biased walks on $\mathbb{Z}$ and $\mathbb{Z}^d$, with gambler's-ruin absorption probabilities and expected durations in closed form.
+- **Galton–Watson branching processes**: extinction probability as the smallest fixed point $q = G(q)$ of the offspring **probability-generating function** (§7.7.4), with the mean-offspring criterion $m \lessgtr 1$ classifying sub/critical/supercritical regimes.
+- **Martingales**: recognition of the martingale/sub-/super-martingale property $\mathbb{E}[X_{t+1}\mid \mathcal{F}_t] = X_t$, with optional-stopping and Doob-decomposition rewrites used in derivations.
+
+#### 7.8.3. Continuous-Time Processes
+- **Poisson & compound-Poisson processes**: counting process $N_t \sim \text{Poisson}(\lambda t)$ and jump process $Y_t = \sum_{k=1}^{N_t} J_k$, with mean/variance and MGF assembled from §7.7.
+- **Birth–death / continuous-time Markov chains**: a generator (rate) matrix $Q$ with $\dot{p}(t) = p(t) Q$, transition semigroup $P(t) = e^{Qt}$ (via the matrix exponential of §7.2), and stationary distribution from $\pi Q = 0$.
+- **Brownian motion / Wiener process & Gaussian processes**: standard and drifting Brownian motion, and general Gaussian processes specified by a mean function and a **covariance kernel** $k(s,t)$ (RBF/Matérn/Brownian kernels), with sampling by Cholesky factorization (§7.2) of the covariance matrix.
+- **Ornstein–Uhlenbeck**: the mean-reverting SDE $dX_t = \theta(\mu - X_t)\,dt + \sigma\,dW_t$, with closed-form transition density, stationary $\mathcal{N}\!\big(\mu, \sigma^2/(2\theta)\big)$, and autocovariance $\gamma(h) = \frac{\sigma^2}{2\theta} e^{-\theta|h|}$.
+
+#### 7.8.4. Time Series
+- **AR / MA / ARMA / ARIMA models**: autoregressive $\phi(B)X_t = \varepsilon_t$, moving-average $X_t = \theta(B)\varepsilon_t$, their ARMA combination, and the differenced ARIMA$(p,d,q)$ form (with the backshift operator $B$).
+- **Stationarity**: characterized via the roots of the characteristic polynomial (unit-root/stability check reusing §7.20/§7.21), with the ACF/PACF (§7.7.2) used for order identification.
+- **Yule–Walker equations**: the AR coefficients solved from $\gamma(k) = \sum_{j=1}^{p}\phi_j \gamma(k-j)$ (a symmetric Toeplitz system, §7.2), driving the PACF via Durbin–Levinson.
+- **Spectral density**: the power spectral density $S(\omega) = \sum_h \gamma(h) e^{-i\omega h}$ evaluated through the FFT/spectral layer of §7.3.
+
+#### 7.8.5. Laplace-Transform Methods for Stochastic Processes
+The symbolic Laplace/integral-transform engine (§7.6) is the natural tool for the *time* variable of many stochastic problems; NimbleCAS reuses it directly here.
+- **First-passage / hitting times**: the Laplace transform $\mathbb{E}[e^{-s\tau}]$ of a first-passage time $\tau$ is obtained in closed form for Brownian motion, random walks, and birth–death chains; inversion (§7.6) or moment extraction $\mathbb{E}[\tau^n] = (-1)^n \frac{d^n}{ds^n}\mathbb{E}[e^{-s\tau}]\big|_{s=0}$ recovers the hitting-time distribution and its moments.
+- **Renewal theory**: the **renewal equation** $m(t) = F(t) + \int_0^t m(t-x)\,dF(x)$ is solved algebraically in transform space, where the renewal function's transform is $\tilde{m}(s) = \tilde{f}(s)/\big(1-\tilde{f}(s)\big)$ from the inter-arrival Laplace–Stieltjes transform $\tilde{f}$ (§7.7.4).
+- **Queueing theory**: the **M/G/1** waiting-time distribution via the **Pollaczek–Khinchine transform** $\tilde{W}(s) = \dfrac{(1-\rho)\,s}{s - \lambda(1 - \tilde{B}(s))}$, with $\tilde{B}$ the service-time transform and $\rho = \lambda \mathbb{E}[B]$.
+- **Fokker–Planck / linear SDEs in transform space**: Laplace-transforming §7.8.1's Kolmogorov equations in $t$ turns them into ODEs/boundary-value problems in $x$ (solved by §7.14/§7.19), then inverted back to the time domain.
+- **Markov resolvent**: the **resolvent** $(sI - Q)^{-1}$ — the Laplace transform of the transition semigroup $P(t) = e^{Qt}$ of §7.8.3 — gives transform-domain transition densities and expected-occupation quantities for continuous-time chains.
+- **Lévy / compound-Poisson processes**: the **Laplace exponent** $\psi(s)$ with $\mathbb{E}[e^{-sX_t}] = e^{-t\psi(s)}$, and the **Lévy–Khintchine** representation of $\psi$ (drift + Gaussian + jump-measure terms), specialized in closed form for compound-Poisson jumps.
+
+#### 7.8.6. Monte Carlo
+- **Sampling**: draws from the distribution catalog (§7.7.3) via inverse-CDF and specialized samplers, seeding SDE-path, expectation, and integral estimators.
+- **Variance reduction**: **antithetic variates** (pair $U$ with $1-U$), **control variates** (subtract a correlated known-mean statistic), and **importance sampling** (reweight by a likelihood ratio), each estimating the achieved variance-reduction factor.
+- **MCMC**: **Metropolis–Hastings** and **Gibbs** samplers for posteriors (§7.7.5) and Boltzmann-type targets, with convergence diagnostics.
+- **Quasi-Monte Carlo**: low-discrepancy sequences (Sobol/Halton) for faster $O((\log N)^d/N)$ convergence on smooth integrands.
+- **Execution**: all estimators run as batched kernels on `nimblecas.parallel` / GPU (§5.4 Triton path for $10^6$-scale path batches) and are distributed across nodes through the `StochasticGraphExecutionEngine` (§6), which models each independent replicate/chain as a task node with execution-time variance for stochastic load balancing.
 
 ### 7.9. Difference Equations and Recurrence Relations
 - **Difference Equation Solvers**: Solver classes for $a_n y_{n+k} + \dots + a_0 y_n = f(n)$ using characteristic polynomials and Z-transforms.
@@ -1121,7 +1195,7 @@ As soon as a stable compiler toolchain with C++26 reflection is available, Nimbl
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | **Core Framework** | Setup CMake, vendored libc++, custom internal test framework. | 1 Week |
 | **Phase 2** | **Symbolic Basics** | Implement `CowPtr`, `ExprNode` variant, `FreeOf`, `Substitute` (Cohen guide). | 2 Weeks |
-| **Phase 3** | **Special Functions & Simplification** | Automatic simplification, Lambert W, complex numbers, combinatorics, probability PDFs. | 3 Weeks |
+| **Phase 3** | **Special Functions & Simplification** | Automatic simplification, Lambert W, complex numbers, combinatorics, probability PDFs, descriptive/inferential statistics & stochastic processes. | 3 Weeks |
 | **Phase 4** | **PPL, SIMD & Linear Algebra** | Microsoft PPL, dynamic SIMD dispatcher, symbolic/numeric matrices. | 2 Weeks |
 | **Phase 5** | **Differential, Series & Laplace** | ODE/PDE/SDE/SPDE solvers, Laplace transforms, Z-transforms, difference equations. | 4 Weeks |
 | **Phase 6** | **Dynamical Systems & Homotopy** | Singular perturbation, HAM, ADM, HPM, HAP, stability, bifurcation and chaos. | 3 Weeks |

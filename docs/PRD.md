@@ -13,6 +13,8 @@
 
 Unlike legacy systems which rely on heavyweight, single-threaded architectures and legacy C-style pointer structures, NimbleCAS uses **Copy-on-Write (COW) Expression Trees**, monadic error-handling via `std::expected`, and a compiler-optimized C++23 module dependency graph. The mathematical foundations of the system are based directly on the rigorous algebraic algorithms detailed in **Joel S. Cohen's** *Computer Algebra and Symbolic Computation: Elementary Algorithms* and *Mathematical Methods*.
 
+Beyond deterministic symbolic algebra, NimbleCAS delivers a first-class **statistics, probability, and stochastic-processes engine** — from exact descriptive statistics and a symbolic distribution catalog through inferential modelling and high-performance Monte Carlo and stochastic-process simulation on the parallel CPU/GPU and distributed execution infrastructure.
+
 ---
 
 ## 2. Mathematical & Algorithmic Scope (Joel S. Cohen Guide)
@@ -103,13 +105,66 @@ NimbleCAS supports advanced symbolic solvers for highly non-linear or singular m
 - **Laplace Transforms**: Analytical computation of forward and inverse Laplace transforms ($\mathcal{L}\{f(t)\}$ and $\mathcal{L}^{-1}\{F(s)\}$), with automatic handling of Dirac delta, Heaviside step, and convolution integrals.
 - **Laplace's Approximation Method**: Asymptotic evaluation of high-dimensional integrals of the form $\int_a^b e^{M f(x)} g(x) dx$ for large $M$, locating the global maxima of $f(x)$ and using Taylor expansion to find the leading-order asymptotic behavior.
 
-### 2.12. Probability and Generating Functions
+### 2.12. Statistics, Probability & Generating Functions
 - **Probability Distributions**: Symbolic representation of continuous and discrete random variables, computing probability density functions (PDF), cumulative distribution functions (CDF), expected values, variance, higher-order moments, and moment-generating functions (MGF) for standard distributions.
 - **Generating Functions**: Support for Ordinary Generating Functions (OGF) and Exponential Generating Functions (EGF). Ability to convert symbolic sequences to generating functions and vice versa.
 
-### 2.13. Stochastic Differential Equations (SDEs and SPDEs)
+#### 2.12.1. Descriptive Statistics
+- **Measures of Location**: Arithmetic mean $\bar{x} = \frac{1}{n}\sum_i x_i$, weighted mean $\frac{\sum_i w_i x_i}{\sum_i w_i}$, geometric mean $\left(\prod_i x_i\right)^{1/n}$, and harmonic mean $n / \sum_i \tfrac{1}{x_i}$, together with the median, mode(s), and arbitrary quantiles/percentiles (with selectable interpolation conventions).
+- **Measures of Dispersion**: Population variance $\sigma^2 = \frac{1}{n}\sum_i (x_i - \bar{x})^2$ and sample variance $s^2 = \frac{1}{n-1}\sum_i (x_i - \bar{x})^2$ (Bessel's correction), the corresponding **standard deviation** $\sigma$ / $s$, mean absolute deviation, coefficient of variation $\sigma/\bar{x}$, range, and interquartile range (IQR).
+- **Measures of Shape**: Raw moments $m_k' = \frac{1}{n}\sum_i x_i^k$, central moments $m_k = \frac{1}{n}\sum_i (x_i - \bar{x})^k$, standardized moments, skewness $\gamma_1 = m_3/\sigma^3$, and excess kurtosis $\gamma_2 = m_4/\sigma^4 - 3$.
+- **Exact & Numeric Dual Modes**: All descriptive statistics are computed both **exactly** (via the exact rational-arithmetic engine when given exact data, avoiding floating-point drift) and **numerically**. Numeric evaluation uses numerically stable, single-pass and parallelizable algorithms (**Welford's online recurrence** and **pairwise/parallel combination** of partial moments) that scale across the CPU/GPU parallel engine for large datasets.
+
+#### 2.12.2. Correlation & Covariance
+- **Covariance**: Sample and population covariance $\operatorname{cov}(X, Y)$ and the symmetric covariance matrix $\Sigma$ for multivariate data.
+- **Correlation**: Pearson product-moment correlation $\rho_{XY} = \operatorname{cov}(X, Y)/(\sigma_X \sigma_Y)$ and the associated correlation matrix, plus rank correlations (**Spearman's $\rho$** and **Kendall's $\tau$**) for monotonic and ordinal association.
+- **Time-Series Dependence**: Autocorrelation and partial-autocorrelation functions (ACF/PACF) and cross-correlation functions for sequential/time-series data, reusing the parallel FFT infrastructure (§2.9) for large lags.
+
+#### 2.12.3. Statistical Distributions (Catalog)
+- **Discrete Distributions**: Bernoulli, Binomial, Poisson, Geometric, Negative Binomial, Hypergeometric, Discrete Uniform, and Multinomial.
+- **Continuous Distributions**: Uniform, Normal/Gaussian, Exponential, Gamma, Beta, Chi-squared, Student's $t$, F, Cauchy, Log-normal, Weibull, Pareto, and Multivariate Normal.
+- **Per-Distribution Capabilities**: For each distribution the product exposes the symbolic PMF/PDF, CDF, quantile (inverse-CDF) function, MGF and characteristic function, closed-form mean/variance/skewness/kurtosis/entropy, documented **limiting relationships** between distributions (e.g. Binomial $\to$ Poisson, Poisson $\to$ Normal, Student's $t \to$ Normal), and random sampling for simulation.
+- **Symbolic Reuse**: Symbolic moments and expected values are obtained by reusing the symbolic **integration** engine (§2.4), $\mathbb{E}[X^n] = \int x^n f(x)\,dx$, while moments derived from the MGF are obtained via the symbolic **differentiation** engine, $\mathbb{E}[X^n] = M_X^{(n)}(0)$.
+
+#### 2.12.4. Moments, Cumulants & Generating Functions
+- **Generating Functions**: Moment-generating function $M_X(t) = \mathbb{E}[e^{tX}]$, characteristic function $\varphi_X(t) = \mathbb{E}[e^{itX}]$, probability-generating function $G_X(z) = \mathbb{E}[z^X]$, and cumulant-generating function $K_X(t) = \ln M_X(t)$.
+- **Laplace Transform of a Distribution**: The Laplace–Stieltjes transform $\tilde{f}_X(s) = \mathbb{E}[e^{-sX}]$ of a non-negative random variable $X$ — equivalently the MGF evaluated at $-s$, and closely related to the characteristic function $\varphi_X(is)$. The transform **uniquely characterises** the distribution, yields raw moments by differentiation at the origin ($\mathbb{E}[X^n] = (-1)^n \tilde{f}_X^{(n)}(0)$), and has documented closed forms for the standard distributions in the catalog. This capability reuses the existing symbolic Laplace-transform engine (§2.11), including its inversion machinery for recovering densities.
+- **Moments & Cumulants**: Raw, central, and factorial moments and cumulants $\kappa_n$, with the full moment$\leftrightarrow$cumulant conversion relations (via Bell-polynomial expansions, connecting to the combinatorics engine of §2.6).
+- **Series Expansions**: Edgeworth and Gram–Charlier A-series expansions for approximating densities from their moments/cumulants.
+
+#### 2.12.5. Inferential Statistics & Regression
+- **Parameter Estimation**: Method of moments and maximum-likelihood estimation (MLE), with symbolic score function $\partial_\theta \ln L$ and Fisher information $\mathcal{I}(\theta)$.
+- **Confidence & Testing**: Confidence intervals and hypothesis testing, including $z$, $t$, $\chi^2$, and F tests with symbolic and numeric p-values.
+- **Regression**: Least-squares regression (ordinary, weighted, and ridge/Tikhonov-regularized) solved via the normal equations $(X^\top X)\,\hat{\beta} = X^\top y$ on the linear-algebra engine (§2.7), with goodness-of-fit diagnostics ($R^2$, residual analysis).
+- **Bayesian Inference**: Conjugate-prior posterior updates and maximum a posteriori (MAP) estimation for standard likelihood/prior families.
+
+### 2.13. Stochastic Processes and Stochastic Differential Equations
 - **Stochastic Calculus**: Support for Itô and Stratonovich calculus representations, implementing Itô's lemma for multidimensional stochastic variables.
 - **SDE/SPDE Solvers**: Analytical solving of simple linear SDEs (e.g. Geometric Brownian Motion, Ornstein-Uhlenbeck process). High-performance numerical simulation using the parallelized **Euler-Maruyama** and **Milstein schemes** on CPU (PPL) and GPUs, and solving associated **Fokker-Planck equations** analytically or numerically.
+
+#### 2.13.1. Discrete-Time Stochastic Processes
+- **Markov Chains**: Symbolic and numeric transition matrices $P$, $n$-step transition probabilities $P^n$, stationary/limiting distributions $\pi P = \pi$, classification of states, absorption probabilities, and expected hitting/absorption times — solved via the linear-algebra engine (§2.7).
+- **Random Walks & Branching Processes**: Simple and general random walks (including gambler's-ruin analysis) and Galton–Watson branching processes with extinction-probability computation via probability-generating functions (§2.12.4).
+- **Martingales**: Symbolic representation and verification of the martingale property $\mathbb{E}[X_{n+1} \mid \mathcal{F}_n] = X_n$, sub-/super-martingales, and optional-stopping arguments.
+
+#### 2.13.2. Continuous-Time Processes
+- **Poisson & Counting Processes**: Homogeneous and inhomogeneous Poisson processes and compound-Poisson processes, with interarrival-time and jump-size distributions drawn from the catalog (§2.12.3).
+- **Continuous-Time Markov Chains**: Generator (rate) matrices $Q$, Kolmogorov forward/backward equations, and stationary distributions solved via matrix exponentials $e^{Qt}$.
+- **Gaussian & Diffusion Processes**: Brownian motion / Wiener processes, general Gaussian processes (specified by mean and covariance kernels), and the Ornstein–Uhlenbeck mean-reverting process.
+
+#### 2.13.3. Time-Series Models
+- **Model Families**: Autoregressive (AR), moving-average (MA), ARMA, and ARIMA models with symbolic coefficient handling.
+- **Analysis & Estimation**: Stationarity and invertibility analysis, autocorrelation/partial-autocorrelation structure (§2.12.2), and parameter estimation via the **Yule–Walker equations** solved on the linear-algebra engine (§2.7).
+
+#### 2.13.4. Laplace-Transform Methods for Stochastic Processes
+- **First-Passage & Renewal Theory**: Laplace transforms of first-passage/hitting-time distributions, and renewal theory — solving the renewal equation and obtaining the renewal function $m(t)$ through its Laplace transform.
+- **Queueing Analysis**: Transform-domain analysis of queues, including the M/G/1 **Pollaczek–Khinchine** waiting-time/queue-length transform.
+- **Transform Solution of Evolution Equations**: Laplace transformation of the time variable in Fokker–Planck / Kolmogorov equations and in linear SDEs, reducing them to boundary-value problems in the transform domain; the **resolvent** / Laplace transform of a Markov process's transition density; and the **Laplace exponent** (Lévy–Khintchine representation) characterising compound-Poisson and general Lévy processes. All transform and inversion steps reuse the symbolic Laplace-transform capability of §2.11.
+
+#### 2.13.5. Monte Carlo Simulation
+- **High-Performance Sampling**: Massively parallel pseudo-random sampling of distributions and process paths, with **variance-reduction** techniques (antithetic variates, control variates, importance sampling) to accelerate convergence.
+- **MCMC**: Markov chain Monte Carlo samplers, including **Metropolis–Hastings** and **Gibbs** sampling, for posterior and high-dimensional integration problems.
+- **Execution Infrastructure**: Simulations execute on the parallel CPU/GPU engine (§3.1–§3.3) and are distributed across worker nodes via the **StochasticGraphExecutionEngine** (§3.4) for large-scale ensembles.
 
 ### 2.14. Difference Equations and Recurrence Relations
 - **Recurrence Relations**: Solving linear and non-linear difference equations analytically using characteristic equations, generating functions, and Z-transforms.
