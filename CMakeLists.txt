@@ -85,6 +85,13 @@ target_sources(nimblecas_ratpoly PUBLIC
 target_link_libraries(nimblecas_ratpoly
   PUBLIC nimblecas_polynomial nimblecas_core std_module)
 
+# ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
+add_library(nimblecas_pfd STATIC)
+target_sources(nimblecas_pfd PUBLIC
+  FILE_SET CXX_MODULES FILES src/pfd/pfd.cppm)
+target_link_libraries(nimblecas_pfd
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -146,6 +153,12 @@ add_executable(ratpoly_tests tests/ratpoly_tests.cpp)
 target_link_libraries(ratpoly_tests
   PRIVATE nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME ratpoly_tests COMMAND ratpoly_tests)
+
+add_executable(pfd_tests tests/pfd_tests.cpp)
+target_link_libraries(pfd_tests
+  PRIVATE nimblecas_pfd nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME pfd_tests COMMAND pfd_tests)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
