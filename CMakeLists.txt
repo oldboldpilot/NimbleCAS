@@ -106,6 +106,13 @@ target_sources(nimblecas_ratint PUBLIC
 target_link_libraries(nimblecas_ratint
   PUBLIC nimblecas_pfd nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.rothstein : Rothstein-Trager logarithmic integration ----
+add_library(nimblecas_rothstein STATIC)
+target_sources(nimblecas_rothstein PUBLIC
+  FILE_SET CXX_MODULES FILES src/rothstein/rothstein.cppm)
+target_link_libraries(nimblecas_rothstein
+  PUBLIC nimblecas_resultant nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -185,6 +192,12 @@ target_link_libraries(ratint_tests
   PRIVATE nimblecas_ratint nimblecas_pfd nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME ratint_tests COMMAND ratint_tests)
+
+add_executable(rothstein_tests tests/rothstein_tests.cpp)
+target_link_libraries(rothstein_tests
+  PRIVATE nimblecas_rothstein nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME rothstein_tests COMMAND rothstein_tests)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
