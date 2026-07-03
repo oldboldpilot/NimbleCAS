@@ -50,6 +50,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | :--- | :--- | :--- |
 | `nimblecas.parallel` | [parallel.md](reference/parallel.md) | Deterministic fork–join over TBB/PPL/serial; order-preserving tree combinators. |
 | `nimblecas.simd` | [simd.md](reference/simd.md) | Runtime-dispatched elementwise `float32` SIMD kernels (AVX-512 → AVX2 → scalar). |
+| `nimblecas.gpu` | [gpu.md](reference/gpu.md) | Optional CUDA GPU acceleration (opt-in `-DNIMBLECAS_CUDA=ON`): batch polynomial evaluation on the device, plus a portable Triton kernel. |
 | `nimblecas.polynomial` | [polynomial.md](reference/polynomial.md) | Dense univariate `int64` polynomials: ring ops, gcd, square-free factorization, SIMD batch eval. |
 | `nimblecas.ratpoly` | [ratpoly.md](reference/ratpoly.md) | Exact `Rational` and dense polynomials over `Q[x]`: division-with-remainder, monic Euclidean gcd. |
 | `nimblecas.polyexpr` | [polyexpr.md](reference/polyexpr.md) | Bridge between `Expr` and `Polynomial`; polynomial gcd / square-free factor at the `Expr` level. |
@@ -103,6 +104,7 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
 
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)
+nimblecas.gpu       (optional CUDA; depends on core — opt-in via -DNIMBLECAS_CUDA=ON)
 ```
 
 See the [architecture overview](architecture/overview.md) for the exact `import`

@@ -36,6 +36,9 @@ reviewed):
   and `div(curl F)` collapse to zero by Clairaut cancellation).
 - `nimblecas.simd` — multi-register SIMD engine with runtime dynamic dispatch
   (AVX-512 → AVX2 → scalar) for bit-identical elementwise `float32` kernels.
+- `nimblecas.gpu` — optional CUDA GPU acceleration (opt-in via `-DNIMBLECAS_CUDA=ON`):
+  batch polynomial evaluation on the device over a plain C ABI, plus a portable
+  Triton kernel that JIT-compiles across GPU architectures without a rebuild.
 - `nimblecas.polynomial` — dense univariate `int64` polynomials: overflow-checked
   ring operations, primitive-Euclidean gcd, Yun square-free factorization, exact
   and SIMD-batch evaluation.

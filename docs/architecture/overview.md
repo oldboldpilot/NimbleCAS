@@ -65,6 +65,7 @@ Edges as declared in the sources (`import` statements):
 | [`resultant`](../reference/resultant.md) | `core`, `ratpoly` |
 | [`rothstein`](../reference/rothstein.md) | `core`, `ratpoly`, `resultant` |
 | [`integrate`](../reference/integrate.md) | `core`, `ratpoly`, `ratint`, `rothstein` |
+| [`gpu`](../reference/gpu.md) (optional) | `core` (plus external `nvcc` + `cudart` at build time) |
 | bindings (`nimblecas_ext`) | `core`, `symbolic`, `simplify`, `diff`, `polyexpr` |
 
 Two chains sit on the common `core` foundation:
@@ -188,8 +189,18 @@ The numeric layer parallelizes differently: [`nimblecas.simd`](../reference/simd
 dispatches elementwise `float32` kernels to the best CPU ISA at runtime
 (AVX-512 → AVX2 → AVX → scalar), keeping every path bit-identical via `std::fma`.
 
+An **optional GPU acceleration layer** ([`nimblecas.gpu`](../reference/gpu.md),
+ROADMAP §5) extends the numeric path onto CUDA devices — today, batch polynomial
+evaluation on the device. It is opt-in via `-DNIMBLECAS_CUDA=ON`: the `.cu`
+kernels are compiled by `nvcc` independently into a static archive and reached
+over a plain C ABI (`src/gpu/gpu_bridge.h`), so the clang/libc++ canonical flags
+never touch `nvcc` and only POD crosses the boundary. The module itself holds no
+CUDA types, mapping CUDA failures onto `MathError` like every other layer. A
+portable Triton kernel under `python/triton` JIT-compiles the same computation
+across GPU architectures without a rebuild.
+
 ## See also
 
 - [Parallel tree computation](parallel-tree-computation.md) — the parallel design in depth.
-- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [vectorcalc](../reference/vectorcalc.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md)
+- Module reference: [core](../reference/core.md) · [symbolic](../reference/symbolic.md) · [simplify](../reference/simplify.md) · [cache](../reference/cache.md) · [diff](../reference/diff.md) · [vectorcalc](../reference/vectorcalc.md) · [parallel](../reference/parallel.md) · [simd](../reference/simd.md) · [polynomial](../reference/polynomial.md) · [ratpoly](../reference/ratpoly.md) · [polyexpr](../reference/polyexpr.md) · [pfd](../reference/pfd.md) · [ratint](../reference/ratint.md) · [resultant](../reference/resultant.md) · [rothstein](../reference/rothstein.md) · [integrate](../reference/integrate.md) · [gpu](../reference/gpu.md)
 - [Documentation hub](../Index.md)
