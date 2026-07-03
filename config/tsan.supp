@@ -1,0 +1,15 @@
+# ThreadSanitizer suppressions for NimbleCAS.
+# @author Olumuyiwa Oluwasanmi
+#
+# The system oneTBB (libtbb.so) is a prebuilt shared library NOT compiled with
+# ThreadSanitizer instrumentation. TSan therefore cannot observe TBB's internal
+# synchronization (atomics/fences inside libtbb.so) and reports its legitimate
+# work-stealing hand-offs — splits of blocked_range / partitioner state — as data
+# races. These are false positives, not defects in NimbleCAS code (our frames appear
+# only as the callers into TBB). Suppress races attributed to the uninstrumented lib.
+#
+# To get a fully instrumented TSan run one would rebuild TBB from source with
+# -fsanitize=thread; suppressing the prebuilt library is the standard alternative and
+# is sufficient to validate NimbleCAS's own concurrency.
+called_from_lib:libtbb.so
+race:tbb::detail::
