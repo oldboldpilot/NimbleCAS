@@ -569,6 +569,93 @@ For highly non-linear differential equations where classical perturbation method
      $$\frac{A(x)}{B(x)} = P(x) + \sum_{i} \sum_{j=1}^{d_i} \frac{C_{i,j}(x)}{b_i(x)^j}$$
      with $\deg(C_{i,j}) < \deg(b_i)$.
 
+### 7.18. Combinatorics and Integer Sequences
+Combinatorial functions grow super-exponentially, so evaluation avoids the naive factorial route entirely and relies on recurrences, table generation, and arbitrary-precision integers. All sequences are exposed both as *symbolic AST nodes* (kept unevaluated inside larger expressions, e.g. $\binom{n}{k} x^k$) and as *closed evaluators* returning exact `BigInt` values.
+
+#### AST Representation
+Combinatorial terms extend the `FunctionNode` family with a dedicated tagged node so that automatic simplification can apply identities before any numeric expansion is forced.
+```cpp
+export module nimblecas.symbolic;
+import std;
+
+export namespace nimblecas {
+
+    // Arbitrary-precision signed integer (limb vector) — combinatorial values
+    // routinely exceed 64 bits (e.g. 50! ≈ 3.0e64), so std::int64_t is unsafe.
+    class BigInt;
+
+    struct CombinatoricNode {
+        enum class Kind : std::uint8_t {
+            Binomial,        // C(n, k)
+            Factorial,       // n!
+            Subfactorial,    // !n  (derangements)
+            Multinomial,     // multinomial(n; k1, k2, ...)
+            StirlingFirst,   // [n, k]  (unsigned, cycle count)
+            StirlingSecond,  // {n, k}  (set partitions)
+            Bell,            // B_n
+            Catalan,         // C_n
+            Bernoulli,       // B_n  (rational)
+            Euler,           // E_n
+            Eulerian,        // <n, k>
+            Partition,       // p(n)
+            Fibonacci,       // F_n
+            Lucas,           // L_n
+            Harmonic,        // H_n or H_{n,r}
+            FallingFactorial,// x^{\underline{n}}
+            RisingFactorial, // x^{\overline{n}}  (Pochhammer)
+            Pochhammer       // (x)_n
+        };
+        Kind kind;
+        std::vector<Expr> params;   // e.g. {n, k}; args carry symbolic sub-trees
+    };
+}
+```
+The variant `ExprNode` gains `std::unique_ptr<CombinatoricNode>`, and `free_of`/`substitute`/`differentiate` are extended with `constexpr if` arms that recurse into `params` exactly like `FunctionNode`.
+
+#### Recurrence-Based Evaluation (no factorial overflow)
+Following the guidance of *Concrete Mathematics* (Graham, Knuth, Patashnik), each closed evaluator uses the numerically stable recurrence rather than ratios of factorials:
+- **Binomial**: multiplicative form $\binom{n}{k} = \prod_{i=1}^{k} \frac{n-i+1}{i}$, taking $k \leftarrow \min(k, n-k)$ first; every partial product is an exact integer, so no rational reduction is needed.
+- **Stirling (first / second kind)**: computed by dynamic-programming triangles built row-by-row into an aligned `std::vector<BigInt>`:
+  $$\left[ {n \atop k} \right] = \left[ {n-1 \atop k-1} \right] + (n-1)\left[ {n-1 \atop k} \right], \qquad \left\{ {n \atop k} \right\} = \left\{ {n-1 \atop k-1} \right\} + k\left\{ {n-1 \atop k} \right\}$$
+- **Bell numbers**: generated via the **Bell triangle** (Aitken's array), where each row's first entry is the previous row's last, and $B_n$ is the leading entry of row $n$; equivalently $B_{n+1} = \sum_{k=0}^{n} \binom{n}{k} B_k$.
+- **Catalan**: the integer recurrence $C_{n+1} = \frac{2(2n+1)}{n+2} C_n$ with $C_0 = 1$, which stays exact because the ratio is always integral.
+- **Bernoulli numbers** (rational): computed with the Akiyama–Tanigawa algorithm over exact `Rational` values, avoiding the cancellation of the zeta-based formula; $B_n$ feeds Euler–Maclaurin summation and Faulhaber's formula for $\sum k^m$.
+- **Euler numbers / Eulerian numbers**: the boustrophedon (zig-zag) transform for $E_n$, and $\left\langle {n \atop k} \right\rangle = (k+1)\left\langle {n-1 \atop k} \right\rangle + (n-k)\left\langle {n-1 \atop k-1} \right\rangle$ for Eulerian numbers.
+- **Integer partitions** $p(n)$: Euler's **pentagonal number theorem** recurrence
+  $$p(n) = \sum_{k \ge 1} (-1)^{k-1}\left[ p\!\left(n - \tfrac{k(3k-1)}{2}\right) + p\!\left(n - \tfrac{k(3k+1)}{2}\right) \right]$$
+  filled bottom-up into a memo table — $O(n^{3/2})$ terms rather than the exponential enumeration.
+- **Fibonacci / Lucas**: the **fast-doubling** identities give $O(\log n)$ evaluation without a lookup table:
+  $$F_{2k} = F_k\,(2F_{k+1} - F_k), \qquad F_{2k+1} = F_{k+1}^2 + F_k^2, \qquad L_n = 2F_{n+1} - F_n.$$
+- **Falling / rising factorials & Pochhammer**: expanded symbolically as products $x^{\underline{n}} = \prod_{k=0}^{n-1}(x-k)$ and $(x)_n = \prod_{k=0}^{n-1}(x+k)$, with conversions to/from ordinary powers using the Stirling-number transforms $x^{\underline{n}} = \sum_k s(n,k)\, x^k$ and $x^n = \sum_k \left\{ {n \atop k} \right\} x^{\underline{k}}$.
+- **Harmonic numbers**: generalized $H_{n,r} = \sum_{i=1}^{n} i^{-r}$ accumulated as an exact `Rational` (common-denominator reduction via `BigInt` GCD), with an FP32/BF16 fast path for large $n$ where only a numeric value is required.
+
+#### Automatic Simplification Identities
+Before forcing evaluation, the simplifier rewrites combinatorial expressions using closed identities, which both shrinks the tree and preserves exactness for symbolic $n$:
+- Pascal's rule $\binom{n}{k} = \binom{n-1}{k-1} + \binom{n-1}{k}$ and symmetry $\binom{n}{k} \to \binom{n}{n-k}$ (canonicalize to the smaller $k$).
+- Absorption $k\binom{n}{k} = n\binom{n-1}{k-1}$ and the hockey-stick identity for sums of binomials.
+- Boundary reductions: $\binom{n}{0} \to 1$, $\binom{n}{n} \to 1$, $n! \to n\cdot(n-1)!$ only when it enables further cancellation (guarded to avoid runaway expansion), $!0 \to 1$, $C_0 \to 1$.
+- Vandermonde's convolution $\sum_k \binom{m}{k}\binom{n}{p-k} \to \binom{m+n}{p}$ recognized during sum simplification.
+
+#### Performance & Parallelism
+- **Aligned `BigInt` limbs**: limb vectors use the project's aligned allocator (Code Policy Rule 5/42); multi-limb add/multiply hot loops are dispatched through the `nimblecas.simd` waterfall (AVX-512 → AVX2 → SSE2 → scalar) for schoolbook and Karatsuba multiplication.
+- **Membership fast path**: the parser's Binary Fuse Filter (§9) recognizes reserved combinatorial function names (`binomial`, `stirling1`, `catalan`, …) before any map lookup.
+- **Parallel table fills**: Stirling/Eulerian triangles and partition tables are filled with `nimblecas.parallel` (`parallel_for` over independent anti-diagonals), and large batched evaluations (e.g. an entire row of $\binom{n}{k}$ for GPU polynomial coefficient generation) are offloaded through the modular-arithmetic GPU path (§5.3), reconstructing exact coefficients via CRT.
+
+#### Fluent API
+```cpp
+auto probability = Combinatorics::binomial(52, 5)      // C(52,5) = 2,598,960
+                       .as_rational()
+                       .reciprocal()
+                       .to_double();
+
+auto expansion = Expr::symbol("x")
+                     .falling_factorial(4)              // x·(x-1)·(x-2)·(x-3)
+                     .expand()                          // to ordinary powers via Stirling s(4,k)
+                     .to_latex();
+
+auto bell = Combinatorics::bell(20).to_string();        // exact BigInt
+```
+
 ---
 
 ## 8. Railway-Oriented Error Handling
