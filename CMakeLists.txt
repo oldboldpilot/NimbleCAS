@@ -190,6 +190,34 @@ target_sources(nimblecas_pade PUBLIC
 target_link_libraries(nimblecas_pade
   PUBLIC nimblecas_powerseries nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.matexp : exact-rational matrix exponentials (§7.2/7.19) ----
+add_library(nimblecas_matexp STATIC)
+target_sources(nimblecas_matexp PUBLIC
+  FILE_SET CXX_MODULES FILES src/matexp/matexp.cppm)
+target_link_libraries(nimblecas_matexp
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.mcmc : Metropolis-Hastings MCMC on the parallel RNG (§7.8) ----
+add_library(nimblecas_mcmc STATIC)
+target_sources(nimblecas_mcmc PUBLIC
+  FILE_SET CXX_MODULES FILES src/mcmc/mcmc.cppm)
+target_link_libraries(nimblecas_mcmc
+  PUBLIC nimblecas_rng nimblecas_core std_module)
+
+# ---- nimblecas.matdecomp : exact LU decomposition + structure predicates (§7.2) ----
+add_library(nimblecas_matdecomp STATIC)
+target_sources(nimblecas_matdecomp PUBLIC
+  FILE_SET CXX_MODULES FILES src/matdecomp/matdecomp.cppm)
+target_link_libraries(nimblecas_matdecomp
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.cmatrix : complex (Gaussian-rational) matrices (§7.2, §7.15 dep) ----
+add_library(nimblecas_cmatrix STATIC)
+target_sources(nimblecas_cmatrix PUBLIC
+  FILE_SET CXX_MODULES FILES src/cmatrix/cmatrix.cppm)
+target_link_libraries(nimblecas_cmatrix
+  PUBLIC nimblecas_complex nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -360,6 +388,29 @@ target_link_libraries(pade_tests
   PRIVATE nimblecas_pade nimblecas_powerseries nimblecas_matrix nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME pade_tests COMMAND pade_tests)
+
+add_executable(matexp_tests tests/matexp_tests.cpp)
+target_link_libraries(matexp_tests
+  PRIVATE nimblecas_matexp nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME matexp_tests COMMAND matexp_tests)
+
+add_executable(mcmc_tests tests/mcmc_tests.cpp)
+target_link_libraries(mcmc_tests
+  PRIVATE nimblecas_mcmc nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME mcmc_tests COMMAND mcmc_tests)
+
+add_executable(matdecomp_tests tests/matdecomp_tests.cpp)
+target_link_libraries(matdecomp_tests
+  PRIVATE nimblecas_matdecomp nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME matdecomp_tests COMMAND matdecomp_tests)
+
+add_executable(cmatrix_tests tests/cmatrix_tests.cpp)
+target_link_libraries(cmatrix_tests
+  PRIVATE nimblecas_cmatrix nimblecas_complex nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
