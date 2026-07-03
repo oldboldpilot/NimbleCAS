@@ -14,6 +14,7 @@
 // across the module boundary.
 
 module;
+#include <cassert>  // assert (unavailable via `import std`)
 // Backend selection (Code Policy: PPL on Windows, TBB elsewhere):
 //   Windows      -> Microsoft PPL (Concurrency Runtime, part of the MSVC STL runtime)
 //   Linux/macOS  -> Intel oneTBB   (when its headers are available)
@@ -67,6 +68,10 @@ template <typename Fn>
     // optional slots so R need not be default-constructible (Expr is not); each index
     // writes its own disjoint slot, so concurrent fills never race.
     std::vector<std::optional<R>> slots(n);
+    // for_ranges is BLOCKING and its ranges cover exactly [0, n): once it returns
+    // normally every slot is filled. If any fn(i) throws, the backend rethrows and
+    // this frame unwinds (slots destroyed via RAII) before the move-out loop below —
+    // so a partially-filled slots vector is never observed here.
     for_ranges(n, grain, [&](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
             slots[i].emplace(fn(i));
@@ -75,6 +80,7 @@ template <typename Fn>
     std::vector<R> out;
     out.reserve(n);
     for (auto& slot : slots) {
+        assert(slot.has_value() && "transform_index: slot left unfilled by for_ranges");
         out.push_back(std::move(*slot));
     }
     return out;
