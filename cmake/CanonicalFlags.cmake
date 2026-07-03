@@ -21,6 +21,20 @@ if(WIN32)
     -DNDEBUG
     -Wno-reserved-module-identifier
     -Wno-include-angled-in-module-purview)
+  # __builtin_cpu_supports (SIMD dynamic dispatch) needs __cpu_model from clang's
+  # compiler-rt builtins, which the MSVC-style link does not pull in by default.
+  # Link the builtins archive explicitly (located relative to the clang compiler).
+  get_filename_component(_ncas_clang_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  file(GLOB _ncas_builtins
+    "${_ncas_clang_bin}/../lib/clang/*/lib/windows/clang_rt.builtins-x86_64.lib")
+  if(_ncas_builtins)
+    list(SORT _ncas_builtins)
+    list(GET _ncas_builtins -1 _ncas_builtins_lib)  # newest clang toolset
+    add_link_options("${_ncas_builtins_lib}")
+  else()
+    message(WARNING "clang_rt.builtins-x86_64.lib not found; SIMD __builtin_cpu_supports "
+                    "may fail to link. Set it via add_link_options manually.")
+  endif()
 else()
   # clang + vendored/system libc++ on Linux/macOS.
   add_compile_options(
