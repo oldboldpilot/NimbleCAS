@@ -2,12 +2,23 @@
 
 ## Prerequisites
 
-- **clang++-22** with **libc++** (provides `share/libc++/v1/std.cppm` for `import std`)
-- **CMake ≥ 3.30** and **Ninja**
+NimbleCAS is cross-platform C++23 and builds under two clang toolchains:
 
-The reference build host is `oluwasanmi-multigpu-server`, which has clang-22, libc++,
-TBB, CMake 4.3, and Ninja installed. Windows dev boxes edit sources; builds run on the
-clang-22 host.
+- **Linux/macOS:** `clang++-22` with **libc++** (provides `share/libc++/v1/std.cppm`
+  for `import std`), CMake ≥ 3.30, Ninja. Reference host `oluwasanmi-multigpu-server`.
+- **Windows:** the **clang + MSVC-STL** toolchain bundled with Visual Studio
+  (`clang++.exe` targeting `x86_64-pc-windows-msvc`), using `import std` from the MSVC
+  toolset's `std.ixx`. CMake + Ninja are also bundled with Visual Studio.
+
+## Windows build
+
+```bash
+scripts/build_win.sh      # run in Git Bash — configures build-win/, builds, runs ctest
+```
+
+This finds the Visual Studio-bundled clang++/CMake/Ninja/llvm-rc automatically. The
+whole engine and test suite build and run identically to the Linux build. (Python
+bindings are Linux-only for now; the C++ engine is fully cross-platform.)
 
 ## Python environment (uv)
 

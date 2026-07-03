@@ -724,6 +724,14 @@ auto area = Expr::parse("x^2")
                 .to_double();
 ```
 
+#### Planned Extensions: Differentiation Under the Integral Sign & Integral Recurrences
+Beyond the pointwise differentiation/integration above, the engine will support:
+- **Leibniz integral rule (differentiation under the integral sign)**: for
+  $I(t) = \int_{a(t)}^{b(t)} f(x, t)\,dx$,
+  $$\frac{d}{dt} I(t) = f\!\big(b(t), t\big)\,b'(t) - f\!\big(a(t), t\big)\,a'(t) + \int_{a(t)}^{b(t)} \frac{\partial f}{\partial t}(x, t)\,dx,$$
+  including the parameter-differentiation ("Feynman") technique for evaluating otherwise-intractable definite integrals by introducing an auxiliary parameter, differentiating under the sign, solving the simpler integral/ODE, and integrating back in the parameter.
+- **Integral recurrences (reduction formulae)**: derive and apply recurrence relations that reduce an integral's order/degree to a base case — e.g. $I_n = \int \sin^n x\,dx = -\frac{\sin^{n-1}x\cos x}{n} + \frac{n-1}{n} I_{n-2}$, and analogous reductions for $\int x^n e^{x}\,dx$, $\int \sec^n x\,dx$, and $\int x^n (\ln x)^m\,dx$ — represented symbolically (with the recurrence carried as a difference equation, §7.9) and unrolled to the base case for concrete $n$.
+
 ### 7.20. Polynomial Expansion and Division
 Expansion and division are the algebraic substrate the higher polynomial features assume already exists: the GCD / square-free / PFD routines (§7.17) and the Hermite reduction in the integration engine (§7.19) all call polynomial division and degree/coefficient extraction. This section specifies them explicitly.
 
