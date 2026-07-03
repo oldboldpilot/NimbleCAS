@@ -134,6 +134,20 @@ target_sources(nimblecas_recurrence PUBLIC
 target_link_libraries(nimblecas_recurrence
   PUBLIC nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.numeric : numeric root-finders (Newton/bisection/secant) (§7.14) ----
+add_library(nimblecas_numeric STATIC)
+target_sources(nimblecas_numeric PUBLIC
+  FILE_SET CXX_MODULES FILES src/numeric/numeric.cppm)
+target_link_libraries(nimblecas_numeric
+  PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.lp : exact-rational linear programming (Simplex) (§7.22) ----
+add_library(nimblecas_lp STATIC)
+target_sources(nimblecas_lp PUBLIC
+  FILE_SET CXX_MODULES FILES src/lp/lp.cppm)
+target_link_libraries(nimblecas_lp
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -259,6 +273,17 @@ target_link_libraries(recurrence_tests
   PRIVATE nimblecas_recurrence nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME recurrence_tests COMMAND recurrence_tests)
+
+add_executable(numeric_tests tests/numeric_tests.cpp)
+target_link_libraries(numeric_tests
+  PRIVATE nimblecas_numeric nimblecas_core nimblecas_testing std_module)
+add_test(NAME numeric_tests COMMAND numeric_tests)
+
+add_executable(lp_tests tests/lp_tests.cpp)
+target_link_libraries(lp_tests
+  PRIVATE nimblecas_lp nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME lp_tests COMMAND lp_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
