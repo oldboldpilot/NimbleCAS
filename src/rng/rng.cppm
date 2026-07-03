@@ -51,13 +51,17 @@ export namespace nimblecas {
 // reachable and the result is never exactly 1.0.
 [[nodiscard]] auto uniform_unit(std::uint64_t bits) noexcept -> double;
 
-// Maps a 64-bit draw to a double in [lo, hi). Returns domain_error if hi < lo.
+// Maps a 64-bit draw to a double in [lo, hi). Returns domain_error if hi < lo, and
+// overflow if the width hi - lo is not finite (e.g. lo = -1e308, hi = 1e308) — that guard
+// keeps a non-finite width from producing a silent NaN outside the railway.
 [[nodiscard]] auto uniform_double(std::uint64_t bits, double lo, double hi) -> Result<double>;
 
 // Maps a 64-bit draw to an integer in the inclusive range [lo, hi] via modulo reduction.
-// Returns domain_error if hi < lo. The modulo introduces a negligible bias (bounded by
-// range_size / 2^64, i.e. at most ~2^-64 relative for any range that fits in int64), which
-// is immaterial for the Monte Carlo workloads this substrate targets.
+// Returns domain_error if hi < lo. The modulo introduces the classic small bias of
+// bits % width: the worst-case relative bias is range_size / 2^64, which is negligible for
+// the small ranges typical of Monte Carlo work but grows for very wide ranges (a width near
+// 2^63 can make some outcomes ~2x as likely). For unbiased draws over a huge range, reject
+// sampling on top of counter_u64 is the intended pattern.
 [[nodiscard]] auto uniform_int(std::uint64_t bits, std::int64_t lo, std::int64_t hi)
     -> Result<std::int64_t>;
 
@@ -132,8 +136,10 @@ auto counter_u64(std::uint64_t key, std::uint64_t counter) noexcept -> std::uint
     // Threefry-2x64-20: a keyed bijection over a 128-bit block. We only expose a single
     // 64-bit key, so the second key word is derived by splitmix64 (decorrelating the two
     // words), and the second input word is fixed at 0 — the counter alone indexes the
-    // stream. Being a bijection, distinct counters map to distinct outputs; the 20-round
-    // schedule gives strong avalanche so adjacent counters look independent.
+    // stream. Threefry is a bijection on the full 128-bit block; we return the 64-bit fold
+    // x0 ^ x1, which is NOT injective (outputs collide at the birthday rate, ~2^32 draws) —
+    // fine for a Monte Carlo substrate, but do not rely on it for collision-free unique IDs.
+    // The 20-round schedule gives strong avalanche so adjacent counters look independent.
     constexpr std::uint64_t parity = 0x1BD11BDAA9FC1A22ULL;
     const std::uint64_t k0 = key;
     const std::uint64_t k1 = splitmix64(key);
@@ -167,7 +173,13 @@ auto uniform_double(std::uint64_t bits, double lo, double hi) -> Result<double> 
     if (hi < lo) {
         return make_error<double>(MathError::domain_error);
     }
-    return lo + uniform_unit(bits) * (hi - lo);
+    const double width = hi - lo;
+    if (!std::isfinite(width)) {
+        // An infinite/NaN width (e.g. lo = -1e308, hi = 1e308) would make 0 * inf = NaN and
+        // leak a bad value through has_value(). Reject it on the railway instead.
+        return make_error<double>(MathError::overflow);
+    }
+    return lo + uniform_unit(bits) * width;
 }
 
 auto uniform_int(std::uint64_t bits, std::int64_t lo, std::int64_t hi) -> Result<std::int64_t> {

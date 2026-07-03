@@ -173,6 +173,13 @@ auto main() -> int {
                       t.expect(*ok_d >= -2.0 && *ok_d < 2.0,
                                "uniform_double result lies in [lo, hi)");
                   }
+
+                  // A width that overflows to +inf must fail on the railway, not return a
+                  // silent NaN (bits==0 would otherwise give 0 * inf = NaN with has_value()).
+                  auto wide = uniform_double(0, -1e308, 1e308);
+                  t.expect(!wide.has_value(), "uniform_double(over-wide range) fails");
+                  t.expect(!wide.has_value() && wide.error() == nimblecas::MathError::overflow,
+                           "over-wide uniform_double yields overflow, not a NaN success");
               })
         .test("uniform_unit_mean_is_smoke_ok",
               [](TestContext& t) {
