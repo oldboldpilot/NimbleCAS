@@ -44,13 +44,14 @@ endif()
 add_library(nimblecas_symbolic STATIC)
 target_sources(nimblecas_symbolic PUBLIC
   FILE_SET CXX_MODULES FILES src/symbolic/symbolic.cppm)
-target_link_libraries(nimblecas_symbolic PUBLIC nimblecas_core std_module)
+target_link_libraries(nimblecas_symbolic PUBLIC nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.simplify : Cohen automatic simplification ----
 add_library(nimblecas_simplify STATIC)
 target_sources(nimblecas_simplify PUBLIC
   FILE_SET CXX_MODULES FILES src/simplify/simplify.cppm)
-target_link_libraries(nimblecas_simplify PUBLIC nimblecas_symbolic nimblecas_core std_module)
+target_link_libraries(nimblecas_simplify
+  PUBLIC nimblecas_symbolic nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.simd : multi-register SIMD engine with dynamic dispatch ----
 add_library(nimblecas_simd STATIC)

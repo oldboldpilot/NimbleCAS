@@ -18,6 +18,7 @@ export module nimblecas.simplify;
 import std;
 import nimblecas.core;
 import nimblecas.symbolic;
+import nimblecas.parallel;
 
 export namespace nimblecas {
 
@@ -447,23 +448,32 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
                 }
                 return simplify_power(*base, *exponent);
             } else if constexpr (std::is_same_v<T, AddNode>) {
+                // Simplify terms concurrently for large subtrees; independent because
+                // the tree is immutable (COW). Errors resolved in index order after.
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto results = parallel::transform_index_if(
+                    par, n.terms.size(), [&](std::size_t i) { return simplify_impl(n.terms[i]); });
                 std::vector<Expr> terms;
-                for (const Expr& t : n.terms) {
-                    auto s = simplify_impl(t);
+                terms.reserve(results.size());
+                for (auto& s : results) {
                     if (!s) {
                         return s;
                     }
                     if (const auto* inner = std::get_if<AddNode>(&s->node().value)) {
                         terms.insert(terms.end(), inner->terms.begin(), inner->terms.end());
                     } else {
-                        terms.push_back(*s);
+                        terms.push_back(std::move(*s));
                     }
                 }
                 return simplify_sum(std::move(terms));
             } else if constexpr (std::is_same_v<T, MulNode>) {
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto results = parallel::transform_index_if(
+                    par, n.factors.size(),
+                    [&](std::size_t i) { return simplify_impl(n.factors[i]); });
                 std::vector<Expr> factors;
-                for (const Expr& f : n.factors) {
-                    auto s = simplify_impl(f);
+                factors.reserve(results.size());
+                for (auto& s : results) {
                     if (!s) {
                         return s;
                     }
@@ -471,19 +481,21 @@ auto simplify_impl(const Expr& u) -> Result<Expr> {
                         factors.insert(factors.end(), inner->factors.begin(),
                                        inner->factors.end());
                     } else {
-                        factors.push_back(*s);
+                        factors.push_back(std::move(*s));
                     }
                 }
                 return simplify_product(std::move(factors));
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto results = parallel::transform_index_if(
+                    par, n.args.size(), [&](std::size_t i) { return simplify_impl(n.args[i]); });
                 std::vector<Expr> args;
-                args.reserve(n.args.size());
-                for (const Expr& a : n.args) {
-                    auto s = simplify_impl(a);
+                args.reserve(results.size());
+                for (auto& s : results) {
                     if (!s) {
                         return s;
                     }
-                    args.push_back(*s);
+                    args.push_back(std::move(*s));
                 }
                 return Expr::apply(n.name, std::move(args));
             } else {

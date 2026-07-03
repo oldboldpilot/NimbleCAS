@@ -88,6 +88,21 @@ template <typename T, typename Fn>
         in.size(), [&](std::size_t i) { return fn(in[i]); }, grain);
 }
 
+// Subtree cost (node count) at/above which recursing into a node's children in
+// parallel is worthwhile. Below it, the serial path is faster. Tunable via perf.
+inline constexpr std::size_t parallel_cost_threshold = 512;
+
+// Cost-gated order-preserving map: when `parallel` is true, each index becomes an
+// independent task (grain 1; the backend auto-chunks) so BOTH wide and deep trees
+// fan out; when false, it runs serially. Deterministic either way.
+template <typename Fn>
+[[nodiscard]] auto transform_index_if(bool parallel, std::size_t n, Fn fn)
+    -> std::vector<std::invoke_result_t<Fn&, std::size_t>> {
+    return transform_index(n, std::move(fn),
+                           parallel ? std::size_t{1}
+                                    : std::numeric_limits<std::size_t>::max());
+}
+
 }  // namespace nimblecas::parallel
 
 // ===========================================================================

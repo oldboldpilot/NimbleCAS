@@ -11,6 +11,7 @@ export module nimblecas.symbolic;
 
 import std;
 import nimblecas.core;
+import nimblecas.parallel;
 
 export namespace nimblecas {
 
@@ -53,9 +54,14 @@ public:
 
     [[nodiscard]] auto to_string() const -> std::string;
 
+    // Number of nodes in this subtree, memoised at construction (O(1) query). Drives
+    // the cost gate for parallel tree recursion (large subtree -> fork children).
+    [[nodiscard]] auto size() const noexcept -> std::size_t { return size_; }
+
 private:
     explicit Expr(ExprNode value);
     CowPtr<ExprNode> node_;
+    std::size_t size_{1};
 };
 
 [[nodiscard]] auto operator==(const Expr& lhs, const Expr& rhs) -> bool {
@@ -180,7 +186,40 @@ inline constexpr bool always_false = false;
 
 }  // namespace
 
-Expr::Expr(ExprNode value) : node_(CowPtr<ExprNode>::make(std::move(value))) {}
+namespace {
+
+// Subtree node count = 1 + sum of children's (already-memoised) sizes.
+[[nodiscard]] auto compute_size(const ExprNode& node) -> std::size_t {
+    return std::visit(
+        []<typename T>(const T& n) -> std::size_t {
+            if constexpr (std::is_same_v<T, SymbolNode> || std::is_same_v<T, ConstantNode>) {
+                return 1;
+            } else if constexpr (std::is_same_v<T, AddNode>) {
+                std::size_t s = 1;
+                for (const Expr& e : n.terms) s += e.size();
+                return s;
+            } else if constexpr (std::is_same_v<T, MulNode>) {
+                std::size_t s = 1;
+                for (const Expr& e : n.factors) s += e.size();
+                return s;
+            } else if constexpr (std::is_same_v<T, PowerNode>) {
+                return 1 + n.base.size() + n.exponent.size();
+            } else if constexpr (std::is_same_v<T, FunctionNode>) {
+                std::size_t s = 1;
+                for (const Expr& e : n.args) s += e.size();
+                return s;
+            } else {
+                static_assert(always_false<T>, "compute_size: unhandled ExprNode kind");
+            }
+        },
+        node.value);
+}
+
+}  // namespace
+
+Expr::Expr(ExprNode value) : node_(CowPtr<ExprNode>::make(std::move(value))) {
+    size_ = compute_size(node_.read());
+}
 
 auto Expr::symbol(std::string name) -> Expr {
     return Expr(ExprNode{.value = SymbolNode{.name = std::move(name)}});
@@ -350,27 +389,25 @@ auto substitute(const Expr& u, const Expr& t, const Expr& r) -> Expr {
             if constexpr (std::is_same_v<T, SymbolNode> || std::is_same_v<T, ConstantNode>) {
                 return u;  // leaf that is not t itself: unchanged
             } else if constexpr (std::is_same_v<T, AddNode>) {
-                std::vector<Expr> out;
-                out.reserve(n.terms.size());
-                for (const Expr& e : n.terms) {
-                    out.push_back(substitute(e, t, r));
-                }
+                // Children are independent -> cost-gated parallel map (immutable tree).
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto out = parallel::transform_index_if(
+                    par, n.terms.size(),
+                    [&](std::size_t i) { return substitute(n.terms[i], t, r); });
                 return Expr::sum(std::move(out));
             } else if constexpr (std::is_same_v<T, MulNode>) {
-                std::vector<Expr> out;
-                out.reserve(n.factors.size());
-                for (const Expr& e : n.factors) {
-                    out.push_back(substitute(e, t, r));
-                }
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto out = parallel::transform_index_if(
+                    par, n.factors.size(),
+                    [&](std::size_t i) { return substitute(n.factors[i], t, r); });
                 return Expr::product(std::move(out));
             } else if constexpr (std::is_same_v<T, PowerNode>) {
                 return Expr::power(substitute(n.base, t, r), substitute(n.exponent, t, r));
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
-                std::vector<Expr> out;
-                out.reserve(n.args.size());
-                for (const Expr& e : n.args) {
-                    out.push_back(substitute(e, t, r));
-                }
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto out = parallel::transform_index_if(
+                    par, n.args.size(),
+                    [&](std::size_t i) { return substitute(n.args[i], t, r); });
                 return Expr::apply(n.name, std::move(out));
             } else {
                 static_assert(always_false<T>, "substitute: unhandled ExprNode kind");

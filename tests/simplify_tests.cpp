@@ -101,6 +101,17 @@ auto main() -> int {
                   simplifies_to(t, lhs, Expr::product({Expr::integer(5), x, y}),
                                 "2xy + 3xy -> 5xy (flat)");
               })
+        .test("large_tree_simplifies_via_parallel_path",
+              [&](TestContext& t) {
+                  // 600 terms exceeds the parallel cost threshold, so simplify fans the
+                  // per-term work across cores; the result must still be the canonical
+                  // serial answer: x + x + ... (600 times) -> 600*x.
+                  std::vector<Expr> terms(600, x);
+                  auto s = simplify(Expr::sum(std::move(terms)));
+                  t.expect(s.has_value() &&
+                               s->is_equivalent_to(Expr::integer(600).mul(x)),
+                           "sum of 600 x -> 600*x (parallel)");
+              })
         .test("overflow_is_reported",
               [&](TestContext& t) {
                   // 2^63 overflows int64 exact folding

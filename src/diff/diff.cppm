@@ -154,15 +154,17 @@ auto derivative_raw(const Expr& u, std::string_view var) -> Expr {
             } else if constexpr (std::is_same_v<T, SymbolNode>) {
                 return Expr::integer(n.name == var ? 1 : 0);
             } else if constexpr (std::is_same_v<T, AddNode>) {
-                // Sum rule: terms are independent -> order-preserving parallel map.
-                auto terms = parallel::transform_index(
-                    n.terms.size(),
+                // Sum rule: terms are independent -> cost-gated order-preserving map.
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto terms = parallel::transform_index_if(
+                    par, n.terms.size(),
                     [&](std::size_t i) { return derivative_raw(n.terms[i], var); });
                 return Expr::sum(std::move(terms));
             } else if constexpr (std::is_same_v<T, MulNode>) {
                 // Leibniz: d(prod f_i) = sum_i ( f_i' * prod_{j!=i} f_j ). The summand
-                // for each i is independent -> parallel map over i.
-                auto terms = parallel::transform_index(n.factors.size(), [&](std::size_t i) {
+                // for each i is independent -> cost-gated parallel map over i.
+                const bool par = u.size() >= parallel::parallel_cost_threshold;
+                auto terms = parallel::transform_index_if(par, n.factors.size(), [&](std::size_t i) {
                     std::vector<Expr> parts;
                     parts.reserve(n.factors.size());
                     parts.push_back(derivative_raw(n.factors[i], var));
