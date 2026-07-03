@@ -32,6 +32,14 @@ auto fn(std::string name, const Expr& arg) -> Expr {
     return Expr::apply(std::move(name), {arg});
 }
 
+// small builders mirroring the derivative table, for expected values
+auto sq(const Expr& a) -> Expr { return Expr::power(a, Expr::integer(2)); }
+auto isqrt(const Expr& a) -> Expr { return Expr::power(a, Expr::rational(-1, 2).value()); }
+auto rc(const Expr& a) -> Expr { return Expr::power(a, Expr::integer(-1)); }
+auto ng(const Expr& a) -> Expr { return Expr::product({Expr::integer(-1), a}); }
+auto omin(const Expr& a) -> Expr { return Expr::sum({Expr::integer(1), ng(a)}); }
+auto opl(const Expr& a) -> Expr { return Expr::sum({Expr::integer(1), a}); }
+
 }  // namespace
 
 auto main() -> int {
@@ -77,6 +85,35 @@ auto main() -> int {
                   auto u = fn("sin", x.pow(two));
                   auto expected = Expr::product({two, x, fn("cos", x.pow(two))});
                   diffs_to(t, u, "x", expected, "d/dx sin(x^2) = 2x cos(x^2)");
+              })
+        .test("inverse_trig_and_hyperbolic",
+              [&](TestContext& t) {
+                  diffs_to(t, fn("asin", x), "x", isqrt(omin(sq(x))),
+                           "d/dx asin x = (1-x^2)^(-1/2)");
+                  diffs_to(t, fn("atan", x), "x", rc(opl(sq(x))), "d/dx atan x = 1/(1+x^2)");
+                  diffs_to(t, fn("sinh", x), "x", fn("cosh", x), "d/dx sinh x = cosh x");
+                  diffs_to(t, fn("cosh", x), "x", fn("sinh", x), "d/dx cosh x = sinh x");
+                  diffs_to(t, fn("tanh", x), "x", omin(sq(fn("tanh", x))),
+                           "d/dx tanh x = 1 - tanh^2 x");
+              })
+        .test("special_functions",
+              [&](TestContext& t) {
+                  // d/dx erf(x) = (2/sqrt(pi)) exp(-x^2)
+                  auto erf_d = Expr::product(
+                      {Expr::integer(2), rc(fn("sqrt", Expr::symbol("pi"))), fn("exp", ng(sq(x)))});
+                  diffs_to(t, fn("erf", x), "x", erf_d, "d/dx erf x = (2/sqrt(pi)) exp(-x^2)");
+                  // d/dx gamma(x) = gamma(x) digamma(x)
+                  diffs_to(t, fn("gamma", x), "x", Expr::product({fn("gamma", x), fn("digamma", x)}),
+                           "d/dx gamma x = gamma(x) digamma(x)");
+                  // d/dx W(x) = W(x) / (x (1 + W(x)))
+                  auto w = fn("lambertW", x);
+                  diffs_to(t, w, "x", Expr::product({w, rc(Expr::product({x, opl(w)}))}),
+                           "d/dx lambertW x = W/(x(1+W))");
+                  // chain rule through a special function: d/dx erf(x^2) = erf'(x^2) * 2x
+                  auto chained = Expr::product(
+                      {Expr::integer(2), rc(fn("sqrt", Expr::symbol("pi"))),
+                       fn("exp", ng(sq(sq(x)))), Expr::integer(2), x});
+                  diffs_to(t, fn("erf", sq(x)), "x", chained, "d/dx erf(x^2) chain rule");
               })
         .test("unknown_function_is_left_unevaluated",
               [&](TestContext& t) {

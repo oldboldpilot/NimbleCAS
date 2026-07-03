@@ -31,31 +31,117 @@ inline constexpr bool always_false = false;
 
 [[nodiscard]] auto derivative_raw(const Expr& u, std::string_view var) -> Expr;
 
-// Outer derivative f'(arg) for a known unary function f, else nullopt.
-[[nodiscard]] auto known_function_derivative(std::string_view name, const Expr& arg)
+// Small construction helpers for the derivative table.
+[[nodiscard]] auto call(std::string name, const Expr& a) -> Expr {
+    return Expr::apply(std::move(name), {a});
+}
+[[nodiscard]] auto neg(const Expr& a) -> Expr {
+    return Expr::product({Expr::integer(-1), a});
+}
+[[nodiscard]] auto square(const Expr& a) -> Expr {
+    return Expr::power(a, Expr::integer(2));
+}
+// (a)^(-1) — reciprocal.
+[[nodiscard]] auto recip(const Expr& a) -> Expr {
+    return Expr::power(a, Expr::integer(-1));
+}
+// (a)^(-1/2) — inverse square root.
+[[nodiscard]] auto inv_sqrt(const Expr& a) -> Expr {
+    return Expr::power(a, Expr::rational(-1, 2).value());
+}
+[[nodiscard]] auto one_plus(const Expr& a) -> Expr {
+    return Expr::sum({Expr::integer(1), a});
+}
+[[nodiscard]] auto one_minus(const Expr& a) -> Expr {
+    return Expr::sum({Expr::integer(1), neg(a)});
+}
+
+// Outer derivative f'(arg) for a known unary function f, else nullopt. Covers
+// elementary, inverse-trig, hyperbolic, and special functions (ROADMAP 7.1/7.19).
+[[nodiscard]] auto known_function_derivative(std::string_view name, const Expr& u)
     -> std::optional<Expr> {
-    if (name == "sin") {
-        return Expr::apply("cos", {arg});
-    }
-    if (name == "cos") {
-        return Expr::product({Expr::integer(-1), Expr::apply("sin", {arg})});
-    }
+    // --- exponential / logarithm / roots ---
     if (name == "exp") {
-        return Expr::apply("exp", {arg});
+        return call("exp", u);
     }
     if (name == "ln") {
-        return Expr::power(arg, Expr::integer(-1));  // 1/arg
-    }
-    if (name == "tan") {
-        // 1 + tan(arg)^2
-        return Expr::sum({Expr::power(Expr::apply("tan", {arg}), Expr::integer(2)),
-                          Expr::integer(1)});
+        return recip(u);  // 1/u
     }
     if (name == "sqrt") {
-        // (1/2) * arg^(-1/2)
-        return Expr::product({Expr::rational(1, 2).value(),
-                              Expr::power(arg, Expr::rational(-1, 2).value())});
+        return Expr::product({Expr::rational(1, 2).value(), inv_sqrt(u)});  // (1/2) u^(-1/2)
     }
+
+    // --- trigonometric ---
+    if (name == "sin") {
+        return call("cos", u);
+    }
+    if (name == "cos") {
+        return neg(call("sin", u));
+    }
+    if (name == "tan") {
+        return one_plus(square(call("tan", u)));  // 1 + tan^2
+    }
+    if (name == "cot") {
+        return neg(one_plus(square(call("cot", u))));  // -(1 + cot^2)
+    }
+    if (name == "sec") {
+        return Expr::product({call("sec", u), call("tan", u)});  // sec*tan
+    }
+    if (name == "csc") {
+        return neg(Expr::product({call("csc", u), call("cot", u)}));  // -csc*cot
+    }
+
+    // --- inverse trigonometric ---
+    if (name == "asin") {
+        return inv_sqrt(one_minus(square(u)));  // (1 - u^2)^(-1/2)
+    }
+    if (name == "acos") {
+        return neg(inv_sqrt(one_minus(square(u))));
+    }
+    if (name == "atan") {
+        return recip(one_plus(square(u)));  // 1/(1 + u^2)
+    }
+
+    // --- hyperbolic ---
+    if (name == "sinh") {
+        return call("cosh", u);
+    }
+    if (name == "cosh") {
+        return call("sinh", u);
+    }
+    if (name == "tanh") {
+        return one_minus(square(call("tanh", u)));  // 1 - tanh^2
+    }
+    if (name == "asinh") {
+        return inv_sqrt(one_plus(square(u)));  // (1 + u^2)^(-1/2)
+    }
+    if (name == "acosh") {
+        return inv_sqrt(Expr::sum({square(u), Expr::integer(-1)}));  // (u^2 - 1)^(-1/2)
+    }
+    if (name == "atanh") {
+        return recip(one_minus(square(u)));  // 1/(1 - u^2)
+    }
+
+    // --- special functions (ROADMAP 7.1) ---
+    if (name == "erf") {
+        // (2/sqrt(pi)) * exp(-u^2)
+        return Expr::product({Expr::integer(2), recip(call("sqrt", Expr::symbol("pi"))),
+                              call("exp", neg(square(u)))});
+    }
+    if (name == "erfc") {
+        return neg(Expr::product({Expr::integer(2), recip(call("sqrt", Expr::symbol("pi"))),
+                                  call("exp", neg(square(u)))}));
+    }
+    if (name == "gamma") {
+        // gamma'(u) = gamma(u) * digamma(u)
+        return Expr::product({call("gamma", u), call("digamma", u)});
+    }
+    if (name == "lambertW") {
+        // W'(u) = W(u) / (u * (1 + W(u)))
+        Expr w = call("lambertW", u);
+        return Expr::product({w, recip(Expr::product({u, one_plus(w)}))});
+    }
+
     return std::nullopt;
 }
 
