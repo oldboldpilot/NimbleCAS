@@ -684,6 +684,7 @@ The symbolic Laplace/integral-transform engine (§7.6) is the natural tool for t
 
 #### 7.8.6. Monte Carlo
 - **Sampling**: draws from the distribution catalog (§7.7.3) via inverse-CDF and specialized samplers, seeding SDE-path, expectation, and integral estimators.
+- **Rejection sampling**: the general-purpose sampler for a target density $f$ with no tractable inverse CDF — draw a proposal $x\sim g$ from an easy envelope with $f(x)\le M\,g(x)$ and accept it with probability $\frac{f(x)}{M\,g(x)}$, so accepted draws are exactly distributed as $f$; the acceptance rate $1/M$ drives the choice of envelope. Includes **adaptive rejection sampling** for log-concave densities, and the accept/reject step reused inside the MCMC samplers below (Metropolis–Hastings acceptance and Gibbs conditional draws).
 - **Variance reduction**: **antithetic variates** (pair $U$ with $1-U$), **control variates** (subtract a correlated known-mean statistic), and **importance sampling** (reweight by a likelihood ratio), each estimating the achieved variance-reduction factor.
 - **MCMC**: **Metropolis–Hastings** and **Gibbs** samplers for posteriors (§7.7.5) and Boltzmann-type targets, with convergence diagnostics.
 - **Quasi-Monte Carlo**: low-discrepancy sequences (Sobol/Halton) for faster $O((\log N)^d/N)$ convergence on smooth integrands.
