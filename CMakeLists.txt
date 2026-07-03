@@ -218,6 +218,13 @@ target_sources(nimblecas_cmatrix PUBLIC
 target_link_libraries(nimblecas_cmatrix
   PUBLIC nimblecas_complex nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
+add_library(nimblecas_bandsolve STATIC)
+target_sources(nimblecas_bandsolve PUBLIC
+  FILE_SET CXX_MODULES FILES src/bandsolve/bandsolve.cppm)
+target_link_libraries(nimblecas_bandsolve
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_parallel nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -411,6 +418,12 @@ target_link_libraries(cmatrix_tests
   PRIVATE nimblecas_cmatrix nimblecas_complex nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
+
+add_executable(bandsolve_tests tests/bandsolve_tests.cpp)
+target_link_libraries(bandsolve_tests
+  PRIVATE nimblecas_bandsolve nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME bandsolve_tests COMMAND bandsolve_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
