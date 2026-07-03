@@ -239,6 +239,13 @@ target_sources(nimblecas_sat PUBLIC
 target_link_libraries(nimblecas_sat
   PUBLIC nimblecas_rng nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.logic : logic programming — unification + SLD resolution (OR-parallel) ----
+add_library(nimblecas_logic STATIC)
+target_sources(nimblecas_logic PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic/logic.cppm)
+target_link_libraries(nimblecas_logic
+  PUBLIC nimblecas_parallel nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -440,6 +447,11 @@ target_link_libraries(cmatrix_tests
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
 
+add_executable(logic_tests tests/logic_tests.cpp)
+target_link_libraries(logic_tests
+  PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_tests COMMAND logic_tests)
+
 add_executable(sat_tests tests/sat_tests.cpp)
 target_link_libraries(sat_tests
   PRIVATE nimblecas_sat nimblecas_rng nimblecas_parallel nimblecas_core nimblecas_testing
@@ -556,6 +568,13 @@ target_link_libraries(integrate_tests
           nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME integrate_tests COMMAND integrate_tests)
+
+# ---- cross-module feature / integration tests ----
+add_executable(feature_algebra_tests tests/feature_algebra_tests.cpp)
+target_link_libraries(feature_algebra_tests
+  PRIVATE nimblecas_complex nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME feature_algebra_tests COMMAND feature_algebra_tests)
 
 # CPU profiling harness (perf / VTune) — a plain executable, not a ctest target.
 add_executable(cpu_bench tools/cpu_bench.cpp)
