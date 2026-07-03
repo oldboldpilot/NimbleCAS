@@ -40,6 +40,9 @@ reviewed):
   Euclidean gcd (the field the integer `Polynomial` is not).
 - `nimblecas.polyexpr` — bridge between symbolic `Expr` and dense `Polynomial`
   (`to_polynomial` / `from_polynomial`, polynomial gcd and square-free factoring).
+- `nimblecas.pfd` — square-free partial-fraction decomposition over `Q[x]` (Yun
+  factorization, Bézout distinct-factor split, base-`b` power expansion) — the
+  substrate for Hermite reduction / rational-function integration.
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -66,8 +69,9 @@ polynomial              cache   simplify    │
    │    │                 │        │        │
    ▼    ▼                 └────┬───┴────► diff
 polyexpr ratpoly               │
-                               ▼
-                      bindings (nanobind: symbolic, simplify, diff, polyexpr)
+            │                  │
+            ▼                  ▼
+           pfd          bindings (nanobind: symbolic, simplify, diff, polyexpr)
 
 testing  (stands alone)
 ```

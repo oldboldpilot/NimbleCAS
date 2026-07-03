@@ -43,7 +43,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff`):
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
 
-The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly}`; `parallel`):
+The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → pfd}`; `parallel`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
@@ -52,6 +52,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.polynomial` | [polynomial.md](reference/polynomial.md) | Dense univariate `int64` polynomials: ring ops, gcd, square-free factorization, SIMD batch eval. |
 | `nimblecas.ratpoly` | [ratpoly.md](reference/ratpoly.md) | Exact `Rational` and dense polynomials over `Q[x]`: division-with-remainder, monic Euclidean gcd. |
 | `nimblecas.polyexpr` | [polyexpr.md](reference/polyexpr.md) | Bridge between `Expr` and `Polynomial`; polynomial gcd / square-free factor at the `Expr` level. |
+| `nimblecas.pfd` | [pfd.md](reference/pfd.md) | Square-free partial-fraction decomposition over `Q[x]`: Yun factorization, Bezout split, base-`b` power expansion. |
 
 Tooling and integration:
 
@@ -81,8 +82,10 @@ nimblecas.polynomial           ▼          ▼        ▼
       │      │          nimblecas.cache  nimblecas.simplify
       ▼      ▼                 │                   │
 nimblecas.  nimblecas.ratpoly  └────────┬──────────┤
- polyexpr                               ▼          ▼
-                                 nimblecas.diff ◄──┘
+ polyexpr                │              ▼          ▼
+                         │       nimblecas.diff ◄──┘
+                         ▼
+                   nimblecas.pfd
 
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)
