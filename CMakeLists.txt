@@ -106,6 +106,13 @@ target_sources(nimblecas_orthopoly PUBLIC
 target_link_libraries(nimblecas_orthopoly
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.roots : rational-root finding over Q[x] (§7.21) ----
+add_library(nimblecas_roots STATIC)
+target_sources(nimblecas_roots PUBLIC
+  FILE_SET CXX_MODULES FILES src/roots/roots.cppm)
+target_link_libraries(nimblecas_roots
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -193,6 +200,12 @@ target_link_libraries(orthopoly_tests
   PRIVATE nimblecas_orthopoly nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME orthopoly_tests COMMAND orthopoly_tests)
+
+add_executable(roots_tests tests/roots_tests.cpp)
+target_link_libraries(roots_tests
+  PRIVATE nimblecas_roots nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME roots_tests COMMAND roots_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
