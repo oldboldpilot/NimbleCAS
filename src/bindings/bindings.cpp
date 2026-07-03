@@ -16,6 +16,7 @@
 
 import nimblecas.core;
 import nimblecas.symbolic;
+import nimblecas.simplify;
 
 namespace nb = nanobind;
 using nimblecas::Expr;
@@ -81,4 +82,8 @@ NB_MODULE(nimblecas_ext, m) {
           "True if u does not contain the sub-expression t.");
     m.def("substitute", &nimblecas::substitute, nb::arg("u"), nb::arg("t"), nb::arg("r"),
           "Replace every occurrence of t in u with r.");
+    m.def(
+        "simplify", [](const Expr& u) { return unwrap(nimblecas::simplify(u)); }, nb::arg("u"),
+        "Automatically simplify an expression (constant folding, identities, "
+        "canonical ordering, like-term combination).");
 }

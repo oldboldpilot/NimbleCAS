@@ -30,6 +30,12 @@ target_sources(nimblecas_symbolic PUBLIC
   FILE_SET CXX_MODULES FILES src/symbolic/symbolic.cppm)
 target_link_libraries(nimblecas_symbolic PUBLIC nimblecas_core std_module)
 
+# ---- nimblecas.simplify : Cohen automatic simplification ----
+add_library(nimblecas_simplify STATIC)
+target_sources(nimblecas_simplify PUBLIC
+  FILE_SET CXX_MODULES FILES src/simplify/simplify.cppm)
+target_link_libraries(nimblecas_simplify PUBLIC nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
 target_sources(nimblecas_testing PUBLIC
@@ -48,6 +54,11 @@ target_link_libraries(symbolic_tests
   PRIVATE nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
 add_test(NAME symbolic_tests COMMAND symbolic_tests)
 
+add_executable(simplify_tests tests/simplify_tests.cpp)
+target_link_libraries(simplify_tests
+  PRIVATE nimblecas_simplify nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
+add_test(NAME simplify_tests COMMAND simplify_tests)
+
 # ---- Python bindings (nanobind, ROADMAP 10) — opt-in via -DNIMBLECAS_PYTHON=ON ----
 option(NIMBLECAS_PYTHON "Build the nanobind Python bindings" OFF)
 if(NIMBLECAS_PYTHON)
@@ -56,7 +67,7 @@ if(NIMBLECAS_PYTHON)
 
   nanobind_add_module(nimblecas_ext src/bindings/bindings.cpp)
   target_link_libraries(nimblecas_ext
-    PRIVATE nimblecas_symbolic nimblecas_core std_module)
+    PRIVATE nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
 
   add_test(NAME python_bindings
            COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_bindings.py)

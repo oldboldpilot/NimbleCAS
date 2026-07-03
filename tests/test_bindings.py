@@ -36,6 +36,10 @@ def main() -> int:
     assert hash(x) == hash(ncas.Expr.symbol("x"))
     assert len({x, ncas.Expr.symbol("x"), y}) == 2
 
+    # automatic simplification: x + x -> 2*x, and x + 0 -> x
+    assert ncas.simplify(x + x).is_equivalent_to(ncas.Expr.integer(2).mul(x))
+    assert ncas.simplify(x + ncas.Expr.integer(0)).is_equivalent_to(x)
+
     # rational: canonicalisation and zero-denominator error
     assert ncas.Expr.rational(2, 4).is_equivalent_to(ncas.Expr.rational(1, 2))
     try:
