@@ -22,11 +22,12 @@ import std;
 
 export namespace nimblecas::simd {
 
-enum class Isa : std::uint8_t { scalar, avx2, avx512 };
+enum class Isa : std::uint8_t { scalar, avx, avx2, avx512 };
 
 [[nodiscard]] constexpr auto to_string_view(Isa isa) noexcept -> std::string_view {
     switch (isa) {
         case Isa::scalar: return "scalar";
+        case Isa::avx:    return "avx";
         case Isa::avx2:   return "avx2";
         case Isa::avx512: return "avx512";
     }
@@ -76,8 +77,8 @@ auto axpy_scalar(float s, const float* a, const float* b, float* out, std::size_
     }
 }
 
-// --- AVX2 paths (baseline of the canonical x86-64-v3 build) ---
-auto add_avx2(const float* a, const float* b, float* out, std::size_t n) noexcept -> void {
+// --- 256-bit AVX paths (add/mul need only AVX, shared by the AVX and AVX2 tiers) ---
+auto add_avx256(const float* a, const float* b, float* out, std::size_t n) noexcept -> void {
     std::size_t i = 0;
     for (; i + 8 <= n; i += 8) {
         _mm256_storeu_ps(out + i,
@@ -85,7 +86,7 @@ auto add_avx2(const float* a, const float* b, float* out, std::size_t n) noexcep
     }
     add_scalar(a + i, b + i, out + i, n - i);
 }
-auto mul_avx2(const float* a, const float* b, float* out, std::size_t n) noexcept -> void {
+auto mul_avx256(const float* a, const float* b, float* out, std::size_t n) noexcept -> void {
     std::size_t i = 0;
     for (; i + 8 <= n; i += 8) {
         _mm256_storeu_ps(out + i,
@@ -93,6 +94,13 @@ auto mul_avx2(const float* a, const float* b, float* out, std::size_t n) noexcep
     }
     mul_scalar(a + i, b + i, out + i, n - i);
 }
+// AVX tier (no FMA): keep axpy on std::fma so it stays bit-identical to the fused
+// vector tiers (Rule 55). add/mul above are already 256-bit-vectorised here.
+auto axpy_avx(float s, const float* a, const float* b, float* out, std::size_t n) noexcept
+    -> void {
+    axpy_scalar(s, a, b, out, n);
+}
+// AVX2 tier: FMA is available, so axpy vectorises with a single-rounding fmadd.
 auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t n) noexcept
     -> void {
     const __m256 vs = _mm256_set1_ps(s);
@@ -112,7 +120,7 @@ auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t 
         _mm512_storeu_ps(out + i,
                          _mm512_add_ps(_mm512_loadu_ps(a + i), _mm512_loadu_ps(b + i)));
     }
-    add_avx2(a + i, b + i, out + i, n - i);
+    add_avx256(a + i, b + i, out + i, n - i);
 }
 [[gnu::target("avx512f")]] auto mul_avx512(const float* a, const float* b, float* out,
                                            std::size_t n) noexcept -> void {
@@ -121,7 +129,7 @@ auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t 
         _mm512_storeu_ps(out + i,
                          _mm512_mul_ps(_mm512_loadu_ps(a + i), _mm512_loadu_ps(b + i)));
     }
-    mul_avx2(a + i, b + i, out + i, n - i);
+    mul_avx256(a + i, b + i, out + i, n - i);
 }
 [[gnu::target("avx512f")]] auto axpy_avx512(float s, const float* a, const float* b, float* out,
                                             std::size_t n) noexcept -> void {
@@ -134,13 +142,17 @@ auto axpy_avx2(float s, const float* a, const float* b, float* out, std::size_t 
     axpy_avx2(s, a + i, b + i, out + i, n - i);
 }
 
-// Runtime CPU capability query, evaluated once.
+// Runtime CPU capability query, evaluated once. Waterfalls
+// AVX-512 -> AVX2(+FMA) -> AVX -> scalar.
 [[nodiscard]] auto detect_isa() noexcept -> Isa {
     if (__builtin_cpu_supports("avx512f") != 0) {
         return Isa::avx512;
     }
-    if (__builtin_cpu_supports("avx2") != 0) {
+    if (__builtin_cpu_supports("avx2") != 0 && __builtin_cpu_supports("fma") != 0) {
         return Isa::avx2;
+    }
+    if (__builtin_cpu_supports("avx") != 0) {
+        return Isa::avx;
     }
     return Isa::scalar;
 }
@@ -158,7 +170,9 @@ struct Dispatch {
         case Isa::avx512:
             return {Isa::avx512, &add_avx512, &mul_avx512, &axpy_avx512};
         case Isa::avx2:
-            return {Isa::avx2, &add_avx2, &mul_avx2, &axpy_avx2};
+            return {Isa::avx2, &add_avx256, &mul_avx256, &axpy_avx2};
+        case Isa::avx:
+            return {Isa::avx, &add_avx256, &mul_avx256, &axpy_avx};
         case Isa::scalar:
             break;
     }
