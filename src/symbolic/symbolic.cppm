@@ -106,6 +106,11 @@ struct ExprNode {
 // Substitute(u, t, r): replace every occurrence of the sub-expression t in u with r.
 [[nodiscard]] auto substitute(const Expr& u, const Expr& t, const Expr& r) -> Expr;
 
+// Structural hash consistent with is_equivalent_to: a == b implies
+// hash_value(a) == hash_value(b). Used for the Python __hash__ and, later, for
+// hash-consing (ROADMAP 6.2).
+[[nodiscard]] auto hash_value(const Expr& u) -> std::size_t;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -148,6 +153,28 @@ inline constexpr bool always_false = false;
         a.value);
 }
 
+[[nodiscard]] auto hash_combine(std::size_t seed, std::size_t value) -> std::size_t {
+    return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+}
+
+// Hash of a constant, consistent with constant_equal (doubles hashed bitwise).
+[[nodiscard]] auto hash_constant(const ConstantNode& c) -> std::size_t {
+    const std::size_t kind = std::hash<std::size_t>{}(c.value.index());
+    const std::size_t payload = std::visit(
+        []<typename V>(const V& v) -> std::size_t {
+            if constexpr (std::is_same_v<V, double>) {
+                return std::hash<std::uint64_t>{}(std::bit_cast<std::uint64_t>(v));
+            } else if constexpr (std::is_same_v<V, std::int64_t>) {
+                return std::hash<std::int64_t>{}(v);
+            } else {  // std::pair<int64,int64>
+                return hash_combine(std::hash<std::int64_t>{}(v.first),
+                                    std::hash<std::int64_t>{}(v.second));
+            }
+        },
+        c.value);
+    return hash_combine(kind, payload);
+}
+
 [[nodiscard]] auto join(const std::vector<Expr>& items, std::string_view separator)
     -> std::string;  // forward decl; needs Expr::to_string
 
@@ -170,6 +197,12 @@ auto Expr::real(double value) -> Expr {
 auto Expr::rational(std::int64_t numerator, std::int64_t denominator) -> Result<Expr> {
     if (denominator == 0) {
         return make_error<Expr>(MathError::division_by_zero);
+    }
+    // Negating INT64_MIN is signed-overflow UB, and std::gcd takes absolute values
+    // so INT64_MIN would overflow inside it too. Reject both up front (Rule 32).
+    constexpr std::int64_t int64_min = std::numeric_limits<std::int64_t>::min();
+    if (numerator == int64_min || denominator == int64_min) {
+        return make_error<Expr>(MathError::overflow);
     }
     if (denominator < 0) {  // keep the sign on the numerator
         numerator = -numerator;
@@ -344,6 +377,39 @@ auto substitute(const Expr& u, const Expr& t, const Expr& r) -> Expr {
             }
         },
         u.node().value);
+}
+
+auto hash_value(const Expr& u) -> std::size_t {
+    const ExprNode& n = u.node();
+    std::size_t seed = std::hash<std::size_t>{}(n.value.index());  // node kind
+    std::visit(
+        [&seed]<typename T>(const T& node) {
+            if constexpr (std::is_same_v<T, SymbolNode>) {
+                seed = hash_combine(seed, std::hash<std::string>{}(node.name));
+            } else if constexpr (std::is_same_v<T, ConstantNode>) {
+                seed = hash_combine(seed, hash_constant(node));
+            } else if constexpr (std::is_same_v<T, AddNode>) {
+                for (const Expr& e : node.terms) {
+                    seed = hash_combine(seed, hash_value(e));
+                }
+            } else if constexpr (std::is_same_v<T, MulNode>) {
+                for (const Expr& e : node.factors) {
+                    seed = hash_combine(seed, hash_value(e));
+                }
+            } else if constexpr (std::is_same_v<T, PowerNode>) {
+                seed = hash_combine(seed, hash_value(node.base));
+                seed = hash_combine(seed, hash_value(node.exponent));
+            } else if constexpr (std::is_same_v<T, FunctionNode>) {
+                seed = hash_combine(seed, std::hash<std::string>{}(node.name));
+                for (const Expr& e : node.args) {
+                    seed = hash_combine(seed, hash_value(e));
+                }
+            } else {
+                static_assert(always_false<T>, "hash_value: unhandled ExprNode kind");
+            }
+        },
+        n.value);
+    return seed;
 }
 
 }  // namespace nimblecas

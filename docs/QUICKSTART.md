@@ -9,15 +9,26 @@ The reference build host is `oluwasanmi-multigpu-server`, which has clang-22, li
 TBB, CMake 4.3, and Ninja installed. Windows dev boxes edit sources; builds run on the
 clang-22 host.
 
+## Python environment (uv)
+
+All Python dependencies are managed with **uv** from `pyproject.toml`:
+
+```bash
+scripts/setup_python.sh      # uv sync -> creates .venv, installs nanobind, writes uv.lock
+```
+
+`scripts/build.sh` provisions this automatically on first use when building the bindings.
+
 ## Build & test
 
 ```bash
 scripts/build.sh
 ```
 
-This configures a Ninja build under `build/`, compiles the modules, and runs the test
-suite via `ctest`. It sources `scripts/build_common.sh`, which defines the authoritative
-`CANONICAL_FLAGS` (Code Policy Rule 50) and resolves the repo root via git.
+This configures a Ninja build under `build/`, compiles the modules, builds the nanobind
+Python extension (when the uv `.venv` is present), and runs the test suites via `ctest`.
+It sources `scripts/build_common.sh`, which defines the authoritative `CANONICAL_FLAGS`
+(Code Policy Rule 50) and resolves the repo root via git.
 
 ### Sanitizer build
 

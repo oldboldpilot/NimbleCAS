@@ -1,0 +1,16 @@
+[project]
+name = "nimblecas"
+version = "0.1.0"
+description = "NimbleCAS — C++23 Computer Algebra System (Python bindings via nanobind)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Python dependencies are installed and managed with uv (see scripts/setup_python.sh).
+# The nanobind extension module itself is compiled by CMake (CMakeLists.txt /
+# scripts/build.sh), not built by uv/pip — hence tool.uv.package = false below.
+dependencies = [
+    "nanobind>=2.13",
+]
+
+[tool.uv]
+package = false

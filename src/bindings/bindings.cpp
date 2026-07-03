@@ -56,10 +56,24 @@ NB_MODULE(nimblecas_ext, m) {
         .def("is_equivalent_to", &Expr::is_equivalent_to, nb::arg("other"))
         .def("to_string", &Expr::to_string)
         .def("__repr__", &Expr::to_string)
-        .def(
-            "__eq__",
-            [](const Expr& a, const Expr& b) { return a.is_equivalent_to(b); },
-            nb::arg("other"))
+        // Return NotImplemented (not a TypeError) for non-Expr comparands, so
+        // `expr == 5` yields False per Python convention instead of raising.
+        .def("__eq__",
+             [](const Expr& a, nb::handle other) -> nb::object {
+                 if (nb::isinstance<Expr>(other)) {
+                     return nb::cast(a.is_equivalent_to(nb::cast<Expr>(other)));
+                 }
+                 return nb::borrow(Py_NotImplemented);
+             })
+        .def("__ne__",
+             [](const Expr& a, nb::handle other) -> nb::object {
+                 if (nb::isinstance<Expr>(other)) {
+                     return nb::cast(!a.is_equivalent_to(nb::cast<Expr>(other)));
+                 }
+                 return nb::borrow(Py_NotImplemented);
+             })
+        // Structural hash, consistent with __eq__ (a == b => hash(a) == hash(b)).
+        .def("__hash__", [](const Expr& a) { return nimblecas::hash_value(a); })
         .def("__add__", &Expr::add, nb::arg("other"))
         .def("__mul__", &Expr::mul, nb::arg("other"));
 

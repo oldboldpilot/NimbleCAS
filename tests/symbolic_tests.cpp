@@ -46,6 +46,19 @@ auto main() -> int {
                   t.expect(!bad.has_value(), "zero denominator is rejected");
                   t.expect(bad.error() == nimblecas::MathError::division_by_zero,
                            "zero denominator yields division_by_zero");
+                  // INT64_MIN would overflow on negation / inside gcd
+                  auto overflow = Expr::rational(std::numeric_limits<std::int64_t>::min(), -1);
+                  t.expect(!overflow.has_value(), "INT64_MIN/-1 is rejected");
+                  t.expect(overflow.error() == nimblecas::MathError::overflow,
+                           "INT64_MIN yields overflow");
+              })
+        .test("hash_matches_equality",
+              [](TestContext& t) {
+                  auto a = Expr::symbol("x").add(Expr::integer(1));
+                  auto b = Expr::symbol("x").add(Expr::integer(1));
+                  t.expect(a.is_equivalent_to(b), "a == b structurally");
+                  t.expect_eq(nimblecas::hash_value(a), nimblecas::hash_value(b),
+                              "equal expressions hash equal");
               })
         .test("nan_leaf_is_equivalent_to_itself",
               [](TestContext& t) {
