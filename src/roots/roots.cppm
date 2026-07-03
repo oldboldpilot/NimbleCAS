@@ -97,7 +97,9 @@ constexpr std::int64_t int64_min = std::numeric_limits<std::int64_t>::min();
 [[nodiscard]] auto divisors(std::int64_t n) -> std::vector<std::int64_t> {
     assert(n > 0 && "divisors requires a positive argument");
     std::vector<std::int64_t> ds;
-    for (std::int64_t i = 1; i * i <= n; ++i) {
+    // Division-based bound (i <= n/i) instead of i*i <= n, which would overflow int64
+    // (UB) once i passes sqrt(INT64_MAX) for a near-INT64_MAX coefficient.
+    for (std::int64_t i = 1; i <= n / i; ++i) {
         if (n % i == 0) {
             ds.push_back(i);
             if (i != n / i) {
