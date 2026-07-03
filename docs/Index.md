@@ -43,6 +43,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff → vector
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
 | `nimblecas.vectorcalc` | [vectorcalc.md](reference/vectorcalc.md) | Vector calculus over `diff`: gradient, divergence, curl, Laplacian, Jacobian, Hessian, directional / total derivatives. |
+| `nimblecas.latex` | [latex.md](reference/latex.md) | Precedence-aware LaTeX math export: `to_latex(Expr)` rendering `\frac`/`\sqrt`, Greek letters, and function control words. |
 
 The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein} → integrate}}`; `parallel`):
 

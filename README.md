@@ -34,6 +34,9 @@ reviewed):
   Laplacian, Jacobian, Hessian, and directional / total derivatives as exact,
   automatically-simplified compositions of partial derivatives (so `curl(grad f)`
   and `div(curl F)` collapse to zero by Clairaut cancellation).
+- `nimblecas.latex` — LaTeX math export: a precedence-aware `to_latex(Expr)` that
+  renders rationals and reciprocals as `\frac`, the `1/2` power as `\sqrt`, Greek-named
+  symbols as their commands, and functions as control words (`\sin`, `\operatorname{…}`).
 - `nimblecas.simd` — multi-register SIMD engine with runtime dynamic dispatch
   (AVX-512 → AVX2 → scalar) for bit-identical elementwise `float32` kernels.
 - `nimblecas.gpu` — optional CUDA GPU acceleration (opt-in via `-DNIMBLECAS_CUDA=ON`):
