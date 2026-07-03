@@ -1,0 +1,7 @@
+# Keep shell scripts LF so they run on the Linux build server after a Windows checkout.
+*.sh      text eol=lf
+*.cppm    text
+*.cpp     text
+*.cmake   text
+*.md      text
+CMakeLists.txt text
