@@ -65,6 +65,12 @@ target_sources(nimblecas_simd PUBLIC
   FILE_SET CXX_MODULES FILES src/simd/simd.cppm)
 target_link_libraries(nimblecas_simd PUBLIC std_module)
 
+# ---- nimblecas.polynomial : dense univariate polynomial arithmetic (SIMD eval) ----
+add_library(nimblecas_polynomial STATIC)
+target_sources(nimblecas_polynomial PUBLIC
+  FILE_SET CXX_MODULES FILES src/polynomial/polynomial.cppm)
+target_link_libraries(nimblecas_polynomial PUBLIC nimblecas_simd nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -110,6 +116,11 @@ add_test(NAME diff_tests COMMAND diff_tests)
 add_executable(simd_tests tests/simd_tests.cpp)
 target_link_libraries(simd_tests PRIVATE nimblecas_simd nimblecas_testing std_module)
 add_test(NAME simd_tests COMMAND simd_tests)
+
+add_executable(polynomial_tests tests/polynomial_tests.cpp)
+target_link_libraries(polynomial_tests
+  PRIVATE nimblecas_polynomial nimblecas_simd nimblecas_core nimblecas_testing std_module)
+add_test(NAME polynomial_tests COMMAND polynomial_tests)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
