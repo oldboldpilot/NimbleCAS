@@ -113,10 +113,14 @@ auto binomial(std::int64_t n, std::int64_t k) -> Result<std::int64_t> {
     // is exact and the value never exceeds the final C(n, k).
     std::int64_t result = 1;
     for (std::int64_t i = 1; i <= k; ++i) {
-        if (mul_ov(result, n - k + i, result)) {
+        // The running value C(n-k+i, i) fits int64 whenever the final answer does, but the
+        // pre-division product result*(n-k+i) can exceed int64 first (e.g. C(62,31)), so
+        // form it in __int128 and divide exactly (divisible by i) before the range check.
+        const __int128 wide = static_cast<__int128>(result) * (n - k + i) / i;
+        if (wide > static_cast<__int128>(std::numeric_limits<std::int64_t>::max())) {
             return make_error<std::int64_t>(MathError::overflow);
         }
-        result /= i;  // exact: P_{i-1} * (n-k+i) is divisible by i
+        result = static_cast<std::int64_t>(wide);
     }
     return result;
 }
@@ -147,11 +151,13 @@ auto catalan(std::int64_t n) -> Result<std::int64_t> {
     // rather than the much larger central binomial coefficient C(2n, n).
     std::int64_t result = 1;  // C_0
     for (std::int64_t i = 1; i <= n; ++i) {
-        std::int64_t prod = 0;
-        if (mul_ov(result, 2, prod) || mul_ov(prod, 2 * i - 1, prod)) {
+        // C_{i-1} * 2 * (2i-1) can exceed int64 before the exact division by (i+1) even
+        // when C_i fits, so form the product in __int128 and range-check the quotient.
+        const __int128 wide = static_cast<__int128>(result) * 2 * (2 * i - 1) / (i + 1);
+        if (wide > static_cast<__int128>(std::numeric_limits<std::int64_t>::max())) {
             return make_error<std::int64_t>(MathError::overflow);
         }
-        result = prod / (i + 1);  // exact: C_{i-1} * 2 * (2i-1) is divisible by i+1
+        result = static_cast<std::int64_t>(wide);
     }
     return result;
 }
