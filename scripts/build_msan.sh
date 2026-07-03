@@ -40,7 +40,10 @@ pcm() {  # pcm <module-name> <src> [module-file flags...]
 mf() { printf -- "-fmodule-file=%s=%s.pcm" "$1" "$2"; }
 
 echo "== building std + module chain under MSan =="
-pcm std "${STDCPPM}"
+# The generated std.cppm #includes "std/<hdr>.inc"; those live in the libc++ module
+# source dir. Add it so the includes resolve.
+STD_INC_DIR="${STD_INC_DIR:-/scratch/llvm-project/libcxx/modules}"
+pcm std "${STDCPPM}" -I"${STD_INC_DIR}"
 STD=$(mf std std)
 pcm nimblecas.core     "${SRC}/core/core.cppm"        "${STD}"
 pcm nimblecas.testing  "${SRC}/testing/testing.cppm"  "${STD}"
