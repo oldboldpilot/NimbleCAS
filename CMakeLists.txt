@@ -148,6 +148,20 @@ target_sources(nimblecas_lp PUBLIC
 target_link_libraries(nimblecas_lp
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.rng : parallelisable counter-based RNG (Threefry-2x64) (§7.8 dependency) ----
+add_library(nimblecas_rng STATIC)
+target_sources(nimblecas_rng PUBLIC
+  FILE_SET CXX_MODULES FILES src/rng/rng.cppm)
+target_link_libraries(nimblecas_rng
+  PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.eigen : exact spectral primitives (Faddeev-LeVerrier) (§7.10 dependency) ----
+add_library(nimblecas_eigen STATIC)
+target_sources(nimblecas_eigen PUBLIC
+  FILE_SET CXX_MODULES FILES src/eigen/eigen.cppm)
+target_link_libraries(nimblecas_eigen
+  PUBLIC nimblecas_matrix nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -284,6 +298,17 @@ target_link_libraries(lp_tests
   PRIVATE nimblecas_lp nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME lp_tests COMMAND lp_tests)
+
+add_executable(rng_tests tests/rng_tests.cpp)
+target_link_libraries(rng_tests
+  PRIVATE nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME rng_tests COMMAND rng_tests)
+
+add_executable(eigen_tests tests/eigen_tests.cpp)
+target_link_libraries(eigen_tests
+  PRIVATE nimblecas_eigen nimblecas_matrix nimblecas_roots nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME eigen_tests COMMAND eigen_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
