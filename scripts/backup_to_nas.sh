@@ -15,6 +15,7 @@ mkdir -p "$BACKUP_DIR"
 # Sync files using rsync (excludes build artifacts, cache, logs, symlinks)
 rsync -rv --delete --no-g --no-o --no-p --no-t --no-links --ignore-errors --inplace \
     --exclude='build/' \
+    --exclude='build-win/' \
     --exclude='.git/' \
     --exclude='*.log' \
     --exclude='*.pcm' \
