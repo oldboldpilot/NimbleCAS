@@ -787,6 +787,39 @@ auto c = Expr::parse("3x^2 y + 5x^2 - 7")
              .coeff("x", 2);                        // 3y + 5
 ```
 
+### 7.21. Analytical Equation Solving (Exact Roots)
+Building directly on the polynomial machinery of §7.20, the analytical solver returns *closed-form exact* roots (radicals, symbolic coefficients, complex values) for polynomial equations up to quartic, and degrades gracefully to numerics beyond the solvable-by-radicals boundary.
+
+#### Solve Pipeline
+`solve(equation, x)` normalizes $\text{lhs} = \text{rhs}$ to $P(x) = 0$, projects to a `Polynomial` in $x$ (§7.20), and drives a degree-directed dispatch. Each stage returns `Result<std::vector<Expr>>` so the railway style (§8) propagates the reason a closed form could not be produced.
+1. **Pre-factoring** — before applying any radical formula the solver reduces work and recovers exact roots of high-degree polynomials that happen to factor:
+   - **Content / primitive-part** split and **square-free factorization** (§7.17): $P = \prod a_i^i$, so each distinct root is solved once and its *multiplicity* $i$ is recorded (multiplicity is exactly the power in the square-free decomposition, equivalently $\deg\gcd(P, P')$ using the §7.19 derivative).
+   - **Rational Root Theorem**: candidate roots $\pm p/q$ with $p \mid a_0$, $q \mid a_n$ are tested by exact evaluation, deflating the polynomial by synthetic division (§7.20) on each hit — this can collapse a quintic to a solvable quadratic.
+2. **Degree-directed closed forms** on each remaining square-free factor:
+   - **Linear** $ax + b = 0 \to x = -b/a$.
+   - **Quadratic** $ax^2 + bx + c = 0$: $x = \dfrac{-b \pm \sqrt{b^2 - 4ac}}{2a}$, with the discriminant $\Delta = b^2 - 4ac$ kept symbolic; $\Delta < 0$ yields conjugate `ComplexNode` roots (§7.1).
+   - **Cubic (Cardano)**: depress via $x = t - \frac{b}{3a}$ to $t^3 + pt + q = 0$, then
+     $$t = \sqrt[3]{-\tfrac{q}{2} + \sqrt{\tfrac{q^2}{4} + \tfrac{p^3}{27}}} + \sqrt[3]{-\tfrac{q}{2} - \sqrt{\tfrac{q^2}{4} + \tfrac{p^3}{27}}},$$
+     selecting cube-root branches by the constraint $uv = -p/3$. In the **casus irreducibilis** (three real roots, negative cube-root discriminant) the solver switches to the trigonometric form $t_k = 2\sqrt{-p/3}\,\cos\!\big(\tfrac13\arccos(\tfrac{3q}{2p}\sqrt{-3/p}) - \tfrac{2\pi k}{3}\big)$ to keep roots real instead of nested complex radicals.
+   - **Quartic (Ferrari)**: depress to $t^4 + pt^2 + qt + r = 0$, solve the **resolvent cubic** $y^3 - p y^2 - 4r y + (4pr - q^2) = 0$ with the cubic solver above, then factor into two quadratics and solve each.
+3. **Quintic and higher** — by **Abel–Ruffini** there is no general radical solution. The solver returns the roots it *can* extract exactly (rational + factored quadratics/cubics from step 1) and represents the irreducible remainder either as an unevaluated `RootOfNode { Polynomial p; std::uint32_t index; }` (a symbolic placeholder usable in later manipulation) or, when a numeric answer is requested, hands the factor to the vectorized numeric root finder (Durand–Kerner / Aberth for all complex roots simultaneously, or the Newton path of §7.14), flagging `MathError::NoClosedForm`.
+
+#### Symbolic Coefficients & Complex Roots
+Coefficients may themselves be symbolic (`solve` of $ax^2+bx+c$ returns roots in terms of $a,b,c$); all radical results run back through automatic simplification and `ComplexNode` normalization so e.g. perfect-square discriminants collapse and complex conjugate pairs are recognized. Every returned root is verified by back-substitution (`substitute`, §2.2) at construction, and exact roots carry their multiplicity.
+
+#### Fluent API
+```cpp
+auto roots = Expr::parse("x^2 - 5*x + 6 = 0")
+                 .solve("x");                      // {2, 3}
+
+auto cubic = Expr::parse("x^3 - 6*x^2 + 11*x - 6 = 0")
+                 .solve("x");                      // {1, 2, 3} via rational-root deflation
+
+auto quad = Expr::parse("a*x^2 + b*x + c = 0")
+                .solve("x")                        // {(-b + sqrt(b^2-4ac))/(2a), ...}
+                .transform([](auto rs){ return rs.front().to_latex(); });
+```
+
 ---
 
 ## 8. Railway-Oriented Error Handling
