@@ -112,6 +112,41 @@ auto main() -> int {
                       }
                   }
               })
+        .test("tridiagonal_asymmetric_orientation",
+              [](TestContext& t) {
+                  // A DELIBERATELY ASYMMETRIC operator (sub != super) so the sub/super
+                  // orientation is actually exercised: a solver that swapped the subdiagonal
+                  // and superdiagonal would be solving A^T, not A, and the A*x == b check below
+                  // would then fail. (The symmetric Laplacian fixtures cannot catch this.)
+                  //   A = [ 2  3  0 ]     sub   = [-1, -2]  (A(1,0), A(2,1))
+                  //       [-1  3  1 ]     diag  = [ 2, 3, 2]
+                  //       [ 0 -2  2 ]     super = [ 3,  1]  (A(0,1), A(1,2))
+                  // x = [1, 2, 3] gives b = [8, 8, 2]:  2+6=8, -1+6+3=8, -4+6=2.
+                  const std::vector<Rational> sub = vec({-1, -2});
+                  const std::vector<Rational> diag = vec({2, 3, 2});
+                  const std::vector<Rational> super = vec({3, 1});
+                  auto x = solve_tridiagonal(sub, diag, super, vec({8, 8, 2}));
+                  t.expect(x.has_value(), "asymmetric Thomas solve succeeds");
+                  if (x) {
+                      t.expect(x->size() == 3 && (*x)[0] == ri(1) && (*x)[1] == ri(2) &&
+                                   (*x)[2] == ri(3),
+                               "x = [1, 2, 3]");
+                      // Independent A*x == b against the ORIGINAL (non-transposed) dense A.
+                      std::vector<std::vector<Rational>> rows;
+                      for (const Rational& xi : *x) {
+                          rows.push_back({xi});
+                      }
+                      auto xm = Matrix::from_rows(std::move(rows));
+                      const Matrix a = mat({{2, 3, 0}, {-1, 3, 1}, {0, -2, 2}});
+                      t.expect(xm.has_value(), "solution packs into a column");
+                      if (xm) {
+                          auto ax = a.multiply(*xm);
+                          t.expect(ax.has_value(), "A*x forms");
+                          t.expect(ax && ax->is_equal(col({8, 8, 2})),
+                                   "A*x == b for the asymmetric A (a sub/super swap fails here)");
+                      }
+                  }
+              })
         .test("tridiagonal_size_mismatches",
               [](TestContext& t) {
                   // sub must have n-1 entries (here n = 3, so 2).
