@@ -52,5 +52,28 @@ auto main() -> int {
                   t.expect(from_polynomial(Polynomial{}, "x").is_equivalent_to(Expr::integer(0)),
                            "zero polynomial -> 0");
               })
+        .test("symbolic_polynomial_gcd",
+              [&](TestContext& t) {
+                  auto x2m1 = x.pow(i(2)).add(i(-1));  // x^2 - 1
+                  auto xm1 = x.add(i(-1));             // x - 1
+                  auto g = nimblecas::polynomial_gcd(x2m1, xm1, "x");
+                  t.expect(g.has_value(), "gcd computed");
+                  // verify via round-trip to Polynomial: gcd == x - 1
+                  auto gp = to_polynomial(g.value(), "x");
+                  t.expect(gp.has_value() && gp->is_equal(Polynomial{{-1, 1}}),
+                           "gcd(x^2-1, x-1) = x-1");
+              })
+        .test("symbolic_square_free_factor",
+              [&](TestContext& t) {
+                  auto sq = x.add(i(1)).pow(i(2));  // (x+1)^2
+                  auto fs = nimblecas::square_free_factor(sq, "x");
+                  t.expect(fs.has_value() && fs->size() == 1, "one square-free factor");
+                  if (fs.has_value() && fs->size() == 1) {
+                      auto& [factor, mult] = fs->front();
+                      auto fp = to_polynomial(factor, "x");
+                      t.expect(mult == 2 && fp.has_value() && fp->is_equal(Polynomial{{1, 1}}),
+                               "(x+1)^2 -> factor (x+1), multiplicity 2");
+                  }
+              })
         .run();
 }

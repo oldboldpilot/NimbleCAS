@@ -18,6 +18,14 @@ export namespace nimblecas {
 [[nodiscard]] auto to_polynomial(const Expr& u, std::string_view var) -> Result<Polynomial>;
 [[nodiscard]] auto from_polynomial(const Polynomial& p, std::string_view var) -> Expr;
 
+// GCD of two univariate polynomial expressions in `var`, returned as an Expr.
+[[nodiscard]] auto polynomial_gcd(const Expr& a, const Expr& b, std::string_view var)
+    -> Result<Expr>;
+
+// Square-free factorization of a polynomial expression: (factor Expr, multiplicity).
+[[nodiscard]] auto square_free_factor(const Expr& u, std::string_view var)
+    -> Result<std::vector<std::pair<Expr, std::int64_t>>>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -139,6 +147,41 @@ auto from_polynomial(const Polynomial& p, std::string_view var) -> Expr {
         return terms.front();
     }
     return Expr::sum(std::move(terms));
+}
+
+auto polynomial_gcd(const Expr& a, const Expr& b, std::string_view var) -> Result<Expr> {
+    auto pa = to_polynomial(a, var);
+    if (!pa) {
+        return make_error<Expr>(pa.error());
+    }
+    auto pb = to_polynomial(b, var);
+    if (!pb) {
+        return make_error<Expr>(pb.error());
+    }
+    auto g = pa->gcd(*pb);
+    if (!g) {
+        return make_error<Expr>(g.error());
+    }
+    return from_polynomial(*g, var);
+}
+
+auto square_free_factor(const Expr& u, std::string_view var)
+    -> Result<std::vector<std::pair<Expr, std::int64_t>>> {
+    using Factors = std::vector<std::pair<Expr, std::int64_t>>;
+    auto p = to_polynomial(u, var);
+    if (!p) {
+        return make_error<Factors>(p.error());
+    }
+    auto factors = p->square_free_factorization();
+    if (!factors) {
+        return make_error<Factors>(factors.error());
+    }
+    Factors out;
+    out.reserve(factors->size());
+    for (const auto& [poly, multiplicity] : *factors) {
+        out.emplace_back(from_polynomial(poly, var), multiplicity);
+    }
+    return out;
 }
 
 }  // namespace nimblecas

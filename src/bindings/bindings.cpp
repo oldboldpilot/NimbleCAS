@@ -13,11 +13,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/pair.h>
 
 import nimblecas.core;
 import nimblecas.symbolic;
 import nimblecas.simplify;
 import nimblecas.diff;
+import nimblecas.polyexpr;
 
 namespace nb = nanobind;
 using nimblecas::Expr;
@@ -94,4 +96,23 @@ NB_MODULE(nimblecas_ext, m) {
         },
         nb::arg("u"), nb::arg("var"),
         "Differentiate u with respect to the symbol named var (result simplified).");
+    m.def(
+        "polynomial_gcd",
+        [](const Expr& a, const Expr& b, const std::string& var) {
+            return unwrap(nimblecas::polynomial_gcd(a, b, var));
+        },
+        nb::arg("a"), nb::arg("b"), nb::arg("var"),
+        "GCD of two univariate polynomial expressions in var.");
+    m.def(
+        "square_free_factor",
+        [](const Expr& u, const std::string& var)
+            -> std::vector<std::pair<Expr, std::int64_t>> {
+            auto factors = nimblecas::square_free_factor(u, var);
+            if (!factors.has_value()) {
+                throw nb::value_error(nimblecas::to_string_view(factors.error()).data());
+            }
+            return std::move(factors).value();
+        },
+        nb::arg("u"), nb::arg("var"),
+        "Square-free factorization: list of (factor, multiplicity) for a polynomial in var.");
 }

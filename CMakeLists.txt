@@ -148,7 +148,8 @@ if(NIMBLECAS_PYTHON)
 
   nanobind_add_module(nimblecas_ext src/bindings/bindings.cpp)
   target_link_libraries(nimblecas_ext
-    PRIVATE nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+    PRIVATE nimblecas_diff nimblecas_simplify nimblecas_polyexpr nimblecas_polynomial
+            nimblecas_symbolic nimblecas_simd nimblecas_core std_module)
 
   add_test(NAME python_bindings
            COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_bindings.py)

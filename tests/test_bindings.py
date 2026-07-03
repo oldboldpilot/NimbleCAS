@@ -44,6 +44,16 @@ def main() -> int:
     d = ncas.differentiate(x.pow(ncas.Expr.integer(2)), "x")
     assert d.is_equivalent_to(ncas.Expr.integer(2).mul(x)), d.to_string()
 
+    # polynomial gcd: gcd(x^2 - 1, x - 1) is x - 1 (verify by simplifying the difference)
+    x2m1 = x.pow(ncas.Expr.integer(2)).add(ncas.Expr.integer(-1))
+    xm1 = x.add(ncas.Expr.integer(-1))
+    g = ncas.polynomial_gcd(x2m1, xm1, "x")
+    assert ncas.simplify(g.add(ncas.Expr.integer(1))).is_equivalent_to(x), g.to_string()
+
+    # square-free factorization: (x+1)^2 -> one factor with multiplicity 2
+    factors = ncas.square_free_factor(x.add(ncas.Expr.integer(1)).pow(ncas.Expr.integer(2)), "x")
+    assert len(factors) == 1 and factors[0][1] == 2, str(factors)
+
     # rational: canonicalisation and zero-denominator error
     assert ncas.Expr.rational(2, 4).is_equivalent_to(ncas.Expr.rational(1, 2))
     try:
