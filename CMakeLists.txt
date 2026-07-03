@@ -71,6 +71,13 @@ target_sources(nimblecas_polynomial PUBLIC
   FILE_SET CXX_MODULES FILES src/polynomial/polynomial.cppm)
 target_link_libraries(nimblecas_polynomial PUBLIC nimblecas_simd nimblecas_core std_module)
 
+# ---- nimblecas.polyexpr : Expr <-> Polynomial bridge ----
+add_library(nimblecas_polyexpr STATIC)
+target_sources(nimblecas_polyexpr PUBLIC
+  FILE_SET CXX_MODULES FILES src/polyexpr/polyexpr.cppm)
+target_link_libraries(nimblecas_polyexpr
+  PUBLIC nimblecas_polynomial nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -121,6 +128,12 @@ add_executable(polynomial_tests tests/polynomial_tests.cpp)
 target_link_libraries(polynomial_tests
   PRIVATE nimblecas_polynomial nimblecas_simd nimblecas_core nimblecas_testing std_module)
 add_test(NAME polynomial_tests COMMAND polynomial_tests)
+
+add_executable(polyexpr_tests tests/polyexpr_tests.cpp)
+target_link_libraries(polyexpr_tests
+  PRIVATE nimblecas_polyexpr nimblecas_polynomial nimblecas_symbolic nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME polyexpr_tests COMMAND polyexpr_tests)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
