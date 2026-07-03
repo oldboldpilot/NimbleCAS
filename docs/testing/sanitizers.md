@@ -24,7 +24,7 @@ under sanitizers. valgrind runs against the ordinary release `build/`.
 | UndefinedBehaviorSanitizer (UBSan) | clean |
 | ThreadSanitizer (TSan) | **0 races in NimbleCAS code** (see TBB note) |
 | valgrind memcheck (`--leak-check=full`) | no leaks, no errors |
-| MemorySanitizer (MSan) | not runnable with system libc++ (see note) |
+| MemorySanitizer (MSan) | **clean** against an MSan-instrumented libc++ (see note) |
 
 ## ThreadSanitizer + oneTBB
 
@@ -39,12 +39,35 @@ simplify, diff, symbolic), confirming the parallel tree engine is race-free.
 A fully-instrumented TSan run would require rebuilding oneTBB from source with
 `-fsanitize=thread`; suppressing the prebuilt library is the standard alternative.
 
-## MemorySanitizer caveat
+## MemorySanitizer
 
 MSan requires that **all** code — including the C++ standard library — be instrumented.
-The system libc++ (and TBB) are not, so MSan reports false "use-of-uninitialized-value"
-inside ordinary `std::string`/`std::vector` operations (e.g. a `SymbolNode::name`
-comparison whose bytes came from uninstrumented libc++). Running MSan meaningfully
-requires an MSan-instrumented libc++ build; that is tracked as a follow-up. The
-combination of ASan + LSan + UBSan + TSan + valgrind already covers memory-safety,
-leaks, undefined behaviour, and data races.
+The *system* libc++ is not, so against it MSan reports false "use-of-uninitialized-value"
+inside ordinary `std::string`/`std::vector` operations. Building an MSan-instrumented
+libc++ resolves this, and against it NimbleCAS is **MSan-clean**.
+
+Build the MSan libc++ once (from the matching llvm-project source):
+
+```bash
+git clone --depth 1 --branch llvmorg-22.1.8 --filter=blob:none --sparse \
+    https://github.com/llvm/llvm-project /scratch/llvm-project
+cd /scratch/llvm-project && git sparse-checkout set runtimes libcxx libcxxabi libunwind cmake libc
+cmake -S /scratch/llvm-project/runtimes -B /scratch/msan-libcxx -G Ninja \
+  -DCMAKE_C_COMPILER=clang-22 -DCMAKE_CXX_COMPILER=clang++-22 \
+  -DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
+  -DLLVM_USE_SANITIZER=MemoryWithOrigins -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXXABI_INCLUDE_TESTS=OFF \
+  -DLIBUNWIND_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF -DLIBCXX_ENABLE_STD_MODULES=ON
+ninja -C /scratch/msan-libcxx cxx cxxabi unwind
+```
+
+Then run MSan over the core symbolic/SIMD code:
+
+```bash
+MSAN_LIBCXX=/scratch/msan-libcxx scripts/build_msan.sh
+```
+
+Result: `core_tests`, `simd_tests`, and `symbolic_tests` all pass with **no MSan
+reports**. Tests that exercise oneTBB (the large-tree `simplify`/`diff`/`parallel`
+cases) are excluded because the prebuilt TBB is not MSan-instrumented; MSan-checking
+those would additionally require an MSan-instrumented oneTBB.
