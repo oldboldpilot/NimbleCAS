@@ -14,12 +14,20 @@
 // across the module boundary.
 
 module;
-#ifdef _WIN32
-#include <ppl.h>
+// Backend selection (Code Policy: PPL on Windows, TBB elsewhere):
+//   Windows      -> Microsoft PPL (Concurrency Runtime, part of the MSVC STL runtime)
+//   Linux/macOS  -> Intel oneTBB   (when its headers are available)
+//   otherwise    -> serial fallback (identical results, no parallelism)
+#if defined(_WIN32)
+#  include <ppl.h>
+#  define NIMBLECAS_PARALLEL_BACKEND_PPL 1
+#elif __has_include(<tbb/parallel_for.h>)
+#  include <tbb/blocked_range.h>
+#  include <tbb/parallel_for.h>
+#  include <tbb/parallel_invoke.h>
+#  define NIMBLECAS_PARALLEL_BACKEND_TBB 1
 #else
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
-#include <tbb/parallel_invoke.h>
+#  define NIMBLECAS_PARALLEL_BACKEND_SERIAL 1
 #endif
 
 export module nimblecas.parallel;
@@ -43,6 +51,9 @@ auto invoke2(const std::function<void()>& f, const std::function<void()>& g) -> 
 
 // Worker threads available to the runtime (informational; >= 1).
 [[nodiscard]] auto max_concurrency() noexcept -> unsigned;
+
+// Name of the active backend: "ppl" (Windows), "tbb" (Linux/macOS), or "serial".
+[[nodiscard]] auto backend() noexcept -> std::string_view;
 
 // Order-preserving parallel map by index: result[i] = fn(i) for i in [0, n).
 // Deterministic (result depends only on fn, not on scheduling). Serial below grain.
@@ -93,23 +104,38 @@ auto for_ranges(std::size_t n, std::size_t grain,
         body(0, n);
         return;
     }
-#ifdef _WIN32
+#if defined(NIMBLECAS_PARALLEL_BACKEND_PPL)
     const std::size_t block_count = (n + grain - 1) / grain;
     concurrency::parallel_for(std::size_t{0}, block_count, [&](std::size_t block) {
         const std::size_t begin = block * grain;
         body(begin, std::min(n, begin + grain));
     });
-#else
+#elif defined(NIMBLECAS_PARALLEL_BACKEND_TBB)
     tbb::parallel_for(tbb::blocked_range<std::size_t>(0, n, grain),
                       [&](const tbb::blocked_range<std::size_t>& r) { body(r.begin(), r.end()); });
+#else
+    body(0, n);  // serial fallback
 #endif
 }
 
 auto invoke2(const std::function<void()>& f, const std::function<void()>& g) -> void {
-#ifdef _WIN32
+#if defined(NIMBLECAS_PARALLEL_BACKEND_PPL)
     concurrency::parallel_invoke(f, g);
-#else
+#elif defined(NIMBLECAS_PARALLEL_BACKEND_TBB)
     tbb::parallel_invoke(f, g);
+#else
+    f();
+    g();
+#endif
+}
+
+auto backend() noexcept -> std::string_view {
+#if defined(NIMBLECAS_PARALLEL_BACKEND_PPL)
+    return "ppl";
+#elif defined(NIMBLECAS_PARALLEL_BACKEND_TBB)
+    return "tbb";
+#else
+    return "serial";
 #endif
 }
 

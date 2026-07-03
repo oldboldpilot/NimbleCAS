@@ -11,10 +11,14 @@ using nimblecas::testing::TestSuite;
 
 auto main() -> int {
     return TestSuite("nimblecas.parallel")
-        .test("max_concurrency_is_positive",
+        .test("reports_backend_and_concurrency",
               [](TestContext& t) {
-                  std::println("  worker threads: {}", np::max_concurrency());
+                  std::println("  parallel backend: {}, worker threads: {}", np::backend(),
+                               np::max_concurrency());
                   t.expect(np::max_concurrency() >= 1, "at least one worker");
+                  t.expect(np::backend() == "tbb" || np::backend() == "ppl" ||
+                               np::backend() == "serial",
+                           "backend is one of tbb/ppl/serial");
               })
         .test("transform_index_is_order_preserving_and_correct",
               [](TestContext& t) {

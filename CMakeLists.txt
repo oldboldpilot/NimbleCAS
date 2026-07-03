@@ -31,7 +31,13 @@ target_sources(nimblecas_parallel PUBLIC
 target_link_libraries(nimblecas_parallel PUBLIC std_module)
 if(NOT WIN32)
   # Intel oneTBB backend on Linux/macOS (PPL is header/CRT-provided on Windows).
-  target_link_libraries(nimblecas_parallel PUBLIC tbb)
+  # Linked when present; if absent the module compiles to its serial fallback.
+  find_library(NIMBLECAS_TBB_LIB NAMES tbb)
+  if(NIMBLECAS_TBB_LIB)
+    target_link_libraries(nimblecas_parallel PUBLIC "${NIMBLECAS_TBB_LIB}")
+  else()
+    message(WARNING "oneTBB not found; nimblecas.parallel will use the serial fallback.")
+  endif()
 endif()
 
 # ---- nimblecas.symbolic : expression trees, FreeOf, Substitute (Cohen) ----
