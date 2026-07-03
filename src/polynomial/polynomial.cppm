@@ -78,6 +78,15 @@ public:
     // (vectorised Horner). Coefficients are taken as float — the numeric path (NFR-1).
     [[nodiscard]] auto evaluate_batch(std::span<const float> xs) const -> std::vector<float>;
 
+    // Allocation-free batch evaluation: writes p(xs[i]) into out[i] for each i < xs.size(),
+    // returning false (a no-op) when out is smaller than xs. This is the fast path —
+    // evaluate_batch() is a thin wrapper that allocates the result. Profiling (perf) shows
+    // the returning form is dominated by the per-call output allocation on large sweeps;
+    // reusing one caller buffer across calls removes that cost, leaving only the SIMD Horner
+    // and DRAM bandwidth.
+    [[nodiscard]] auto evaluate_batch_into(std::span<const float> xs, std::span<float> out) const
+        -> bool;
+
     [[nodiscard]] auto is_equal(const Polynomial& other) const noexcept -> bool {
         return coeffs_ == other.coeffs_;
     }
@@ -439,17 +448,28 @@ auto Polynomial::evaluate(std::int64_t x) const -> Result<std::int64_t> {
     return acc;
 }
 
-auto Polynomial::evaluate_batch(std::span<const float> xs) const -> std::vector<float> {
-    std::vector<float> acc(xs.size(), 0.0f);
+auto Polynomial::evaluate_batch_into(std::span<const float> xs, std::span<float> out) const
+    -> bool {
+    if (out.size() < xs.size()) {
+        return false;
+    }
+    const std::span<float> acc = out.subspan(0, xs.size());
     if (coeffs_.empty()) {
-        return acc;  // zero polynomial
+        std::ranges::fill(acc, 0.0f);  // zero polynomial
+        return true;
     }
     // Horner: seed with the leading coefficient, then fold in the rest high -> low.
     std::ranges::fill(acc, static_cast<float>(coeffs_.back()));
     for (std::size_t k = coeffs_.size() - 1; k-- > 0;) {
         simd::horner_step(acc, xs, static_cast<float>(coeffs_[k]));  // acc = acc*x + c_k
     }
-    return acc;
+    return true;
+}
+
+auto Polynomial::evaluate_batch(std::span<const float> xs) const -> std::vector<float> {
+    std::vector<float> out(xs.size());
+    static_cast<void>(evaluate_batch_into(xs, out));  // size always sufficient here
+    return out;
 }
 
 auto Polynomial::to_string(std::string_view var) const -> std::string {

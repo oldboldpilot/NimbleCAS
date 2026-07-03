@@ -151,5 +151,24 @@ auto main() -> int {
                   }
                   t.expect(ok, "SIMD batch Horner is bit-identical to the scalar reference");
               })
+        .test("evaluate_batch_into_matches_and_guards",
+              [](TestContext& t) {
+                  auto p = poly({2, -3, 1});  // 2 - 3x + x^2
+                  std::vector<float> xs(500);
+                  for (std::size_t i = 0; i < xs.size(); ++i) {
+                      xs[i] = static_cast<float>(i) * 0.02f - 4.0f;
+                  }
+                  const auto expected = p.evaluate_batch(xs);
+                  std::vector<float> out(xs.size());
+                  t.expect(p.evaluate_batch_into(xs, out), "in-place eval succeeds when out fits");
+                  bool same = out.size() == expected.size();
+                  for (std::size_t i = 0; same && i < out.size(); ++i) {
+                      same = std::bit_cast<std::uint32_t>(out[i]) ==
+                             std::bit_cast<std::uint32_t>(expected[i]);
+                  }
+                  t.expect(same, "in-place result is bit-identical to evaluate_batch");
+                  std::vector<float> tiny(xs.size() - 1);
+                  t.expect(!p.evaluate_batch_into(xs, tiny), "undersized out buffer is rejected");
+              })
         .run();
 }
