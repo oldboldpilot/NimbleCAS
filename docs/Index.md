@@ -43,7 +43,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff`):
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
 
-The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → pfd}`; `parallel`):
+The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → pfd → ratint}`; `parallel`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
@@ -53,6 +53,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.ratpoly` | [ratpoly.md](reference/ratpoly.md) | Exact `Rational` and dense polynomials over `Q[x]`: division-with-remainder, monic Euclidean gcd. |
 | `nimblecas.polyexpr` | [polyexpr.md](reference/polyexpr.md) | Bridge between `Expr` and `Polynomial`; polynomial gcd / square-free factor at the `Expr` level. |
 | `nimblecas.pfd` | [pfd.md](reference/pfd.md) | Square-free partial-fraction decomposition over `Q[x]`: Yun factorization, Bezout split, base-`b` power expansion. |
+| `nimblecas.ratint` | [ratint.md](reference/ratint.md) | Hermite reduction of `int A/B dx` over `Q`: exact rational part plus a square-free-denominator logarithmic integrand. |
 
 Tooling and integration:
 
@@ -86,6 +87,9 @@ nimblecas.  nimblecas.ratpoly  └────────┬──────�
                          │       nimblecas.diff ◄──┘
                          ▼
                    nimblecas.pfd
+                         │
+                         ▼
+                  nimblecas.ratint
 
 nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)

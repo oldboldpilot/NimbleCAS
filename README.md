@@ -43,6 +43,9 @@ reviewed):
 - `nimblecas.pfd` — square-free partial-fraction decomposition over `Q[x]` (Yun
   factorization, Bézout distinct-factor split, base-`b` power expansion) — the
   substrate for Hermite reduction / rational-function integration.
+- `nimblecas.ratint` — Hermite reduction of `int A/B dx` over `Q`: an exact rational
+  part plus a square-free-denominator logarithmic integrand, without fully factoring
+  `B` — the rational-part half of rational-function integration (Rothstein–Trager next).
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
@@ -72,6 +75,9 @@ polyexpr ratpoly               │
             │                  │
             ▼                  ▼
            pfd          bindings (nanobind: symbolic, simplify, diff, polyexpr)
+            │
+            ▼
+          ratint
 
 testing  (stands alone)
 ```
