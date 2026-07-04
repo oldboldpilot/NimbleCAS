@@ -385,6 +385,12 @@ target_sources(nimblecas_vectorcalc PUBLIC
 target_link_libraries(nimblecas_vectorcalc
   PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.svgplot : in-core standalone SVG-string plotter (visualization) ----
+add_library(nimblecas_svgplot STATIC)
+target_sources(nimblecas_svgplot PUBLIC
+  FILE_SET CXX_MODULES FILES src/svgplot/svgplot.cppm)
+target_link_libraries(nimblecas_svgplot PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.latex : Expr -> LaTeX exporter (§7.12) ----
 add_library(nimblecas_latex STATIC)
 target_sources(nimblecas_latex PUBLIC
@@ -622,6 +628,11 @@ target_link_libraries(perturbation_tests
   PRIVATE nimblecas_perturbation nimblecas_powerseries nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME perturbation_tests COMMAND perturbation_tests)
+
+add_executable(svgplot_tests tests/svgplot_tests.cpp)
+target_link_libraries(svgplot_tests
+  PRIVATE nimblecas_svgplot nimblecas_core nimblecas_testing std_module)
+add_test(NAME svgplot_tests COMMAND svgplot_tests)
 
 add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
