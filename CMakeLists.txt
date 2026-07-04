@@ -342,6 +342,14 @@ target_sources(nimblecas_interpolation PUBLIC
 target_link_libraries(nimblecas_interpolation
   PUBLIC nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
+# ---- nimblecas.splines : exact splines / Bezier / B-spline / NURBS over Q (§7) ----
+add_library(nimblecas_splines STATIC)
+target_sources(nimblecas_splines PUBLIC
+  FILE_SET CXX_MODULES FILES src/splines/splines.cppm)
+target_link_libraries(nimblecas_splines
+  PUBLIC nimblecas_bandsolve nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+         nimblecas_core std_module)
+
 # ---- nimblecas.cmatrix : complex (Gaussian-rational) matrices (§7.2, §7.15 dep) ----
 add_library(nimblecas_cmatrix STATIC)
 target_sources(nimblecas_cmatrix PUBLIC
@@ -827,6 +835,12 @@ target_link_libraries(interpolation_tests
   PRIVATE nimblecas_interpolation nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME interpolation_tests COMMAND interpolation_tests)
+
+add_executable(splines_tests tests/splines_tests.cpp)
+target_link_libraries(splines_tests
+  PRIVATE nimblecas_splines nimblecas_bandsolve nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME splines_tests COMMAND splines_tests)
 
 add_executable(mcmc_tests tests/mcmc_tests.cpp)
 target_link_libraries(mcmc_tests

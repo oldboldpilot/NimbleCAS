@@ -150,6 +150,7 @@ Numerical methods & solvers:
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
 | `nimblecas.interpolation` | [interpolation.md](reference/interpolation.md) | Exact polynomial interpolation over `Q`: Lagrange, Newton divided differences, barycentric, Neville, Hermite. |
+| `nimblecas.splines` | [splines.md](reference/splines.md) | Exact piecewise-polynomial geometry over `Q`: natural/clamped/periodic cubic splines, Hermite/PCHIP, Bézier (de Casteljau/Bernstein), B-splines (Cox–de Boor), rational-weight NURBS. |
 | `nimblecas.optimize` | [optimize.md](reference/optimize.md) | Numerical unconstrained optimization: gradient descent, Newton, BFGS/L-BFGS, CG, Nelder–Mead, Kelley implicit filtering. |
 | `nimblecas.nlsolve` | [nlsolve.md](reference/nlsolve.md) | Kelley iterative solvers for `F(x)=0`: Newton/Broyden/Newton–Krylov(JFNK)/Anderson/Levenberg–Marquardt (numerical). |
 | `nimblecas.extrapolation` | [extrapolation.md](reference/extrapolation.md) | Sequence acceleration: Richardson, Romberg, Aitken Δ², Wynn ε — exact over `Q` for rational data, else numerical. |

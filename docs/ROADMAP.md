@@ -20,7 +20,7 @@ This section tracks what is **built, tested, and adversarially reviewed** agains
 - **Runtime / tooling** — `parallel`, `simd`, `gpu` (opt-in CUDA), `testing`, `svgplot`, and the nanobind Python bindings.
 - **Applied linear algebra & operators** — `matstruct` (LDL^T/Cholesky/Hessenberg), `lie` (Lie algebras + transforms), `krylov` (exact CG + numerical GMRES/etc.), `semigroup` (functional analysis + C₀-semigroups); `quantum` (§7.15 non-commutative operator algebra).
 - **Variational & analytical mechanics** — `calcvar` (Euler–Lagrange, constraints, Lagrange multipliers), `mechanics` (Hamiltonian/Legendre/Poisson/action-angle).
-- **Numerical methods & solvers** — `interpolation`, `optimize` (+ Kelley implicit filtering), `nlsolve` (Kelley Newton/Broyden/JFNK/Anderson/LM), `extrapolation` (Richardson/Romberg/Aitken/Wynn), `pdenum` (FDM/FEM/FVM), `spectral` (Galerkin/collocation/Fourier/DG).
+- **Numerical methods & solvers** — `interpolation`, `splines` (exact cubic/Hermite/PCHIP/Bézier/B-spline/NURBS over Q), `optimize` (+ Kelley implicit filtering), `nlsolve` (Kelley Newton/Broyden/JFNK/Anderson/LM), `extrapolation` (Richardson/Romberg/Aitken/Wynn), `pdenum` (FDM/FEM/FVM), `spectral` (Galerkin/collocation/Fourier/DG).
 - **Signals & uncertainty** — `wavelets` (Haar exact + modern families), `qmc` (low-discrepancy + RQMC), `compsense` (exact basis pursuit via LP dual + OMP).
 - **Analysis, control & stochastics** — `analysis` (conditioning/convergence/Lyapunov), `control` (TF/SS + Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability + Bode), `inteq` (Fredholm/Volterra + ADM/HPM/HAM), `stochastic` (Markov chains, WSS, Yule–Walker, PSD), `hmm` (Forward/Backward/Viterbi/Baum–Welch, exact over Q).
 
