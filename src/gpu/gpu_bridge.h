@@ -22,6 +22,27 @@ int nimblecas_gpu_device_count(void);
 int nimblecas_gpu_poly_eval(const double* coeffs, int n_coeffs,
                             const double* x, double* out, int n);
 
+// Batched Levenshtein edit distance, one thread per (a_i, b_i) pair. The sequences are stored
+// flattened as integer code points in a_flat / b_flat; a_off / b_off are prefix-offset arrays
+// of length pairs+1 so that pair i spans [a_off[i], a_off[i+1]) and [b_off[i], b_off[i+1]).
+// Writes the distance of pair i to out[i]. Returns 0 on success, or a non-zero CUDA error
+// code on failure.
+int nimblecas_gpu_edit_distance_batch(const int* a_flat, const int* a_off, const int* b_flat,
+                                      const int* b_off, int pairs, int* out);
+
+// Level-synchronous single-source BFS over a CSR graph (row_offsets length num_vertices+1,
+// col_indices length num_edges). Fills dist[0..num_vertices-1] with the hop distance from
+// source (unreachable vertices remain -1). Returns 0 on success, or a non-zero CUDA error
+// code on failure.
+int nimblecas_gpu_bfs(const int* row_offsets, const int* col_indices, int num_vertices,
+                      int num_edges, int source, int* dist);
+
+// Count the solutions to the n-queens problem on the GPU, one thread per partial placement of
+// the first row(s), each thread completing its subtree with the classic three-bitmask method.
+// Writes the total solution count to *out_count. Returns 0 on success, or a non-zero CUDA
+// error code on failure.
+int nimblecas_gpu_nqueens_count(int n, unsigned long long* out_count);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

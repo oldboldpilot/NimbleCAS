@@ -30,6 +30,37 @@ namespace {
     return diff <= 1e-9 * (1.0 + std::abs(b));
 }
 
+// Tiny CPU Levenshtein reference over integer code points, matching the kernel's recurrence.
+[[nodiscard]] auto cpu_levenshtein(std::span<const int> a, std::span<const int> b) -> int {
+    std::vector<int> prev(b.size() + 1);
+    std::vector<int> curr(b.size() + 1);
+    for (std::size_t j = 0; j <= b.size(); ++j) {
+        prev[j] = static_cast<int>(j);
+    }
+    for (std::size_t i = 1; i <= a.size(); ++i) {
+        curr[0] = static_cast<int>(i);
+        for (std::size_t j = 1; j <= b.size(); ++j) {
+            const int cost = a[i - 1] != b[j - 1] ? 1 : 0;
+            const int del = prev[j] + 1;
+            const int ins = curr[j - 1] + 1;
+            const int sub = prev[j - 1] + cost;
+            curr[j] = std::min(std::min(del, ins), sub);
+        }
+        std::swap(prev, curr);
+    }
+    return prev[b.size()];
+}
+
+// Convert a string to a vector of int code points, matching how the batch test flattens input.
+[[nodiscard]] auto code_points(std::string_view s) -> std::vector<int> {
+    std::vector<int> out;
+    out.reserve(s.size());
+    for (char c : s) {
+        out.push_back(static_cast<int>(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -81,6 +112,67 @@ auto main() -> int {
                   auto got = gpu::poly_eval(c, x).value();
                   t.expect(got.size() == 3 && approx(got[0], 7.0) && approx(got[2], 7.0),
                            "constant polynomial evaluates to 7 everywhere");
+              })
+        .test("edit_distance_batch_matches_cpu",
+              [](TestContext& t) {
+                  struct Pair {
+                      std::string_view a;
+                      std::string_view b;
+                  };
+                  const std::vector<Pair> pairs = {{"kitten", "sitting"}, {"", "abc"},
+                                                   {"abc", "abc"},        {"flaw", "lawn"},
+                                                   {"gumbo", "gambol"},   {"sitting", ""}};
+                  // Flatten the pairs into code-point arrays with prefix-offset boundaries.
+                  std::vector<int> a_flat;
+                  std::vector<int> b_flat;
+                  std::vector<int> a_off = {0};
+                  std::vector<int> b_off = {0};
+                  for (const auto& p : pairs) {
+                      for (char c : p.a) {
+                          a_flat.push_back(static_cast<int>(static_cast<unsigned char>(c)));
+                      }
+                      for (char c : p.b) {
+                          b_flat.push_back(static_cast<int>(static_cast<unsigned char>(c)));
+                      }
+                      a_off.push_back(static_cast<int>(a_flat.size()));
+                      b_off.push_back(static_cast<int>(b_flat.size()));
+                  }
+                  auto got = gpu::edit_distance_batch(a_flat, a_off, b_flat, b_off).value();
+                  t.expect(got.size() == pairs.size(), "one distance per pair");
+                  bool all = got.size() == pairs.size();
+                  for (std::size_t i = 0; i < pairs.size() && all; ++i) {
+                      const auto ai = code_points(pairs[i].a);
+                      const auto bi = code_points(pairs[i].b);
+                      if (got[i] != cpu_levenshtein(ai, bi)) {
+                          all = false;
+                      }
+                  }
+                  t.expect(all, "GPU batch edit distance matches the CPU reference");
+                  t.expect(!got.empty() && got[0] == 3, "kitten -> sitting is 3");
+              })
+        .test("bfs_csr_distances",
+              [](TestContext& t) {
+                  // Undirected graph: 0-1, 0-2, 1-3, 2-3, 3-4, and an isolated vertex 5.
+                  const std::vector<int> row_offsets = {0, 2, 4, 6, 9, 10, 10};
+                  const std::vector<int> col_indices = {1, 2, 0, 3, 0, 3, 1, 2, 4, 3};
+                  auto dist = gpu::bfs(row_offsets, col_indices, 0).value();
+                  const std::vector<int> expected = {0, 1, 1, 2, 3, -1};
+                  t.expect(dist.size() == expected.size(), "one distance per vertex");
+                  bool ok = dist.size() == expected.size();
+                  for (std::size_t i = 0; i < expected.size() && ok; ++i) {
+                      if (dist[i] != expected[i]) {
+                          ok = false;
+                      }
+                  }
+                  t.expect(ok, "BFS distances match the hand-computed graph");
+              })
+        .test("nqueens_count_known",
+              [](TestContext& t) {
+                  t.expect(gpu::nqueens_count(4).value() == 2ull, "4-queens has 2 solutions");
+                  t.expect(gpu::nqueens_count(6).value() == 4ull, "6-queens has 4 solutions");
+                  t.expect(gpu::nqueens_count(8).value() == 92ull, "8-queens has 92 solutions");
+                  t.expect(gpu::nqueens_count(10).value() == 724ull,
+                           "10-queens has 724 solutions");
               })
         .run();
 }
