@@ -237,9 +237,12 @@ auto main() -> int {
                   if (!op) {
                       return;
                   }
+                  // Unlike nimblecas.perturbation/pde (order == # of coefficients, 0 invalid),
+                  // inteq's order is the highest INDEX summed (Sigma_{m=0}^{order}), so order ==
+                  // 0 is valid and degenerates to phi_0 = f alone.
                   auto zero_order = adm_solve(*op, f, Nonlinearity::identity(), 0);
-                  t.expect(!zero_order.has_value() && zero_order.error() == MathError::domain_error,
-                           "order == 0 is domain_error");
+                  t.expect(zero_order.has_value() && zero_order->is_equal(f),
+                           "order == 0 degenerates to phi_0 == f");
               })
         .run();
 }
