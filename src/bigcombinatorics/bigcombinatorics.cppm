@@ -103,15 +103,18 @@ export namespace nimblecas {
 namespace nimblecas {
 namespace {
 
-// Divide a by b when the quotient is known a priori to be exact (zero remainder). The
-// only failure BigInt::divmod can report is division by zero, which is propagated; the
-// exactness is asserted (and holds by construction at every call site here).
+// Divide a by b when the quotient is known a priori to be exact (zero remainder). Division
+// by zero is propagated. Exactness holds by construction at every call site here, but the
+// remainder is checked on the RAILWAY (not merely asserted) so that a would-be inexact
+// division surfaces as undefined_value instead of silently truncating under -DNDEBUG.
 [[nodiscard]] auto exact_div(const BigInt& a, const BigInt& b) -> Result<BigInt> {
     auto dm = a.divmod(b);
     if (!dm) {
         return make_error<BigInt>(dm.error());
     }
-    assert(dm->second.is_zero() && "exact_div: non-zero remainder (division was not exact)");
+    if (!dm->second.is_zero()) {
+        return make_error<BigInt>(MathError::undefined_value);  // exactness invariant violated
+    }
     return std::move(dm->first);
 }
 
@@ -159,6 +162,9 @@ auto multinomial(std::span<const std::int64_t> ks) -> Result<BigInt> {
         if (k < 0) {
             return make_error<BigInt>(MathError::domain_error);
         }
+        if (total > std::numeric_limits<std::int64_t>::max() - k) {
+            return make_error<BigInt>(MathError::domain_error);  // sum of k_i overflows int64
+        }
         total += k;
     }
     // (sum k_i)! / prod(k_i!). Every partial quotient S!/(k_1! ... k_j!) is an integer, so
@@ -183,8 +189,8 @@ auto multinomial(std::span<const std::int64_t> ks) -> Result<BigInt> {
 }
 
 auto catalan(std::int64_t n) -> Result<BigInt> {
-    if (n < 0) {
-        return make_error<BigInt>(MathError::domain_error);
+    if (n < 0 || n > std::numeric_limits<std::int64_t>::max() / 2 - 1) {
+        return make_error<BigInt>(MathError::domain_error);  // n<0, or 2*n / n+1 overflows int64
     }
     // C_n = C(2n, n) / (n + 1), exact.
     auto central = binomial(2 * n, n);
