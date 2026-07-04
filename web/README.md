@@ -23,6 +23,30 @@ Canvas2D fallback). **No build toolchain, no network, no external files.**
 `index.html` is authoritative and always works on its own; the split files are a
 convenience for a modular setup.
 
+## In-browser CAS engine (WebAssembly)
+
+Beyond the viewer, the **real exact symbolic engine** runs in the browser via
+WebAssembly — not just the freestanding numeric kernel. `nimblecas.js` +
+`nimblecas.wasm` (~390 KB) are the `core → parallel → symbolic → cache → simplify →
+diff → latex → reader` slice compiled with Emscripten (see
+[`docs/architecture/wasm-build.md`](../docs/architecture/wasm-build.md); rebuild with
+[`scripts/build-wasm-slice.sh`](../scripts/build-wasm-slice.sh)).
+
+- **`cas-repl.html`** is a minimal in-browser REPL over the engine: type an
+  expression → it is parsed, simplified, and rendered as LaTeX (MathJax). Because it
+  fetches `nimblecas.wasm`, serve it over `http(s)://` (e.g. `python -m http.server`),
+  not `file://`.
+- **API:** one C export, `nimblecas_eval_latex(const char*) -> const char*`
+  (text → parse → simplify → LaTeX, exact over ℚ). Call it as
+  `Module.ccall('nimblecas_eval_latex', 'string', ['string'], [expr])`. Everything
+  stays exact — `2/4 + 1/4` yields `\frac{3}{4}`, not a float — and a parse/eval
+  failure returns a LaTeX `\text{…}` marker rather than throwing.
+
+This is the substrate a future WebGPU document front-end will call to evaluate live
+`nimblecas` cells (the [`execdoc`](../docs/reference/execdoc.md) engine's browser
+counterpart); wiring it into `app.js` alongside the plot renderer is the remaining
+front-end step.
+
 ## Browser requirements
 
 - **WebGPU path:** Chrome/Edge 113+ (desktop) with WebGPU enabled (default on

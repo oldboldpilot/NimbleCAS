@@ -177,6 +177,7 @@ Analysis, control & stochastic processes:
 | `nimblecas.control` | [control.md](reference/control.md) | Control systems: transfer-function/state-space, controllability/observability, Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability, Bode. |
 | `nimblecas.inteq` | [inteq.md](reference/inteq.md) | Integral equations: Fredholm/Volterra (linear + nonlinear), separable-kernel exact reduction, Neumann/Picard, ADM/HPM/HAM. |
 | `nimblecas.stochastic` | [stochastic.md](reference/stochastic.md) | Stochastic processes: Markov-chain stationary distribution + hitting times (exact), WSS autocovariance, Yule–Walker, PSD. |
+| `nimblecas.hmm` | [hmm.md](reference/hmm.md) | Discrete hidden Markov models exact over `Q`: Forward/Backward, posteriors (smoothing), Viterbi, Baum–Welch; `forward_scaled` numerical alternative; honest `overflow` at the int64 ceiling. |
 | `nimblecas.smc` | [smc.md](reference/smc.md) | Sequential Monte Carlo (numerical): bootstrap particle filters, multinomial/systematic/stratified/residual resampling, ESS, variance reduction — deterministic via counter-based RNG, honest statistical estimates. |
 
 Tooling, front-end & integration:

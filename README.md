@@ -108,6 +108,31 @@ reviewed):
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
+The list above is the **foundational layer**. The engine has since grown to ~97
+modules; the complete, current catalog with a one-line summary and a reference doc
+per module is **[docs/Index.md](docs/Index.md)** (authoritative). The major
+capability areas built on top of the foundation:
+
+- **Symbolic calculus & geometry** — `limits` (L'Hôpital), `tensor` (differential
+  geometry: Christoffel / Riemann / Ricci / Einstein / geodesics / Laplace–Beltrami,
+  the 2-sphere reducing to `R = 2/a²`), `forms` (exterior calculus: wedge / `d` /
+  Hodge), `symconst`.
+- **Differential equations** — `ode`, `dde`, `dae`, `pde`, `sde`, `perturbation`
+  (ADM / HPM / HAM) over the exact power-series substrate.
+- **Reasoning & algorithmics** — `search`, `sat`, `csp`, `logic`, and branchless
+  `bitset` / `bitcsp` on the parallel runtime.
+- **Applied numerics** — `interpolation`, `splines` (Bézier / B-spline / NURBS),
+  `optimize`, `nlsolve`, `extrapolation`, `pdenum` (FDM / FEM / FVM), `spectral`,
+  `krylov`, `matstruct`.
+- **Signals, control, stochastics** — `wavelets`, `qmc`, `compsense`, `control`,
+  `analysis`, `stochastic`, `hmm`, and `smc` (numerical particle filters).
+- **Quantum & operators** — `quantum` (non-commutative operator algebra), `lie`,
+  `semigroup`.
+- **Front-end & tooling** — `reader` (text → `Expr` eval surface), `execdoc`
+  (executable-document engine / live notebooks), `svgplot` / `webexport` (data
+  bridges), and a **[WebAssembly build of the symbolic core](docs/architecture/wasm-build.md)**
+  — the real exact-over-ℚ engine running in the browser (`web/cas-repl.html`).
+
 ## Architecture
 
 Expressions are **immutable trees** shared through a copy-on-write pointer
