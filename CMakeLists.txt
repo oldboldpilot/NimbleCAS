@@ -162,6 +162,13 @@ target_sources(nimblecas_eigen PUBLIC
 target_link_libraries(nimblecas_eigen
   PUBLIC nimblecas_matrix nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.sde : stochastic ODE integrators (Euler-Maruyama, Milstein) on the RNG ----
+add_library(nimblecas_sde STATIC)
+target_sources(nimblecas_sde PUBLIC
+  FILE_SET CXX_MODULES FILES src/sde/sde.cppm)
+target_link_libraries(nimblecas_sde
+  PUBLIC nimblecas_rng nimblecas_core std_module)
+
 # ---- nimblecas.montecarlo : Monte Carlo integration & rejection sampling (§7.8) ----
 add_library(nimblecas_montecarlo STATIC)
 target_sources(nimblecas_montecarlo PUBLIC
@@ -297,6 +304,13 @@ add_library(nimblecas_perturbation STATIC)
 target_sources(nimblecas_perturbation PUBLIC
   FILE_SET CXX_MODULES FILES src/perturbation/perturbation.cppm)
 target_link_libraries(nimblecas_perturbation
+  PUBLIC nimblecas_powerseries nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.ode : exact power-series ODE systems & higher-order solver ----
+add_library(nimblecas_ode STATIC)
+target_sources(nimblecas_ode PUBLIC
+  FILE_SET CXX_MODULES FILES src/ode/ode.cppm)
+target_link_libraries(nimblecas_ode
   PUBLIC nimblecas_powerseries nimblecas_ratpoly nimblecas_core std_module)
 
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
@@ -551,6 +565,17 @@ target_link_libraries(bandsolve_tests
   PRIVATE nimblecas_bandsolve nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
           nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME bandsolve_tests COMMAND bandsolve_tests)
+
+add_executable(sde_tests tests/sde_tests.cpp)
+target_link_libraries(sde_tests
+  PRIVATE nimblecas_sde nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME sde_tests COMMAND sde_tests)
+
+add_executable(ode_tests tests/ode_tests.cpp)
+target_link_libraries(ode_tests
+  PRIVATE nimblecas_ode nimblecas_perturbation nimblecas_powerseries nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME ode_tests COMMAND ode_tests)
 
 add_executable(perturbation_tests tests/perturbation_tests.cpp)
 target_link_libraries(perturbation_tests
