@@ -127,6 +127,14 @@ target_sources(nimblecas_orthopoly PUBLIC
 target_link_libraries(nimblecas_orthopoly
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.spectral : spectral methods (Galerkin/collocation/Fourier/SEM/DG) ----
+add_library(nimblecas_spectral STATIC)
+target_sources(nimblecas_spectral PUBLIC
+  FILE_SET CXX_MODULES FILES src/spectral/spectral.cppm)
+target_link_libraries(nimblecas_spectral
+  PUBLIC nimblecas_orthopoly nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+         nimblecas_core std_module)
+
 # ---- nimblecas.roots : rational-root finding over Q[x] (§7.21) ----
 add_library(nimblecas_roots STATIC)
 target_sources(nimblecas_roots PUBLIC
@@ -246,6 +254,14 @@ target_sources(nimblecas_analysis PUBLIC
 target_link_libraries(nimblecas_analysis
   PUBLIC nimblecas_dynamics nimblecas_eigen nimblecas_matrix nimblecas_ratpoly
          nimblecas_polynomial nimblecas_core std_module)
+
+# ---- nimblecas.semigroup : operator theory & C0-semigroups (finite-dim realization) ----
+add_library(nimblecas_semigroup STATIC)
+target_sources(nimblecas_semigroup PUBLIC
+  FILE_SET CXX_MODULES FILES src/semigroup/semigroup.cppm)
+target_link_libraries(nimblecas_semigroup
+  PUBLIC nimblecas_matexp nimblecas_dynamics nimblecas_eigen nimblecas_matrix
+         nimblecas_roots nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
 # ---- nimblecas.control : linear control systems (TF/SS, stability criteria, Bode) ----
 add_library(nimblecas_control STATIC)
@@ -628,6 +644,19 @@ target_link_libraries(orthopoly_tests
   PRIVATE nimblecas_orthopoly nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME orthopoly_tests COMMAND orthopoly_tests)
+
+add_executable(spectral_tests tests/spectral_tests.cpp)
+target_link_libraries(spectral_tests
+  PRIVATE nimblecas_spectral nimblecas_orthopoly nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME spectral_tests COMMAND spectral_tests)
+
+add_executable(semigroup_tests tests/semigroup_tests.cpp)
+target_link_libraries(semigroup_tests
+  PRIVATE nimblecas_semigroup nimblecas_matexp nimblecas_dynamics nimblecas_eigen
+          nimblecas_matrix nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME semigroup_tests COMMAND semigroup_tests)
 
 add_executable(roots_tests tests/roots_tests.cpp)
 target_link_libraries(roots_tests

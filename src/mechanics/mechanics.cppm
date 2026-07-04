@@ -442,8 +442,16 @@ namespace {
     }
 
     // Quadratic: p = (−b + sqrt(b² − 4a(c − E))) / (2a), the outgoing (p >= 0) branch.
-    Expr disc = sub(square(b), Expr::product({Expr::integer(4), *a, sub(c, energy)}));
-    Expr root = Expr::apply("sqrt", {disc});
+    // Build the discriminant DISTRIBUTED as b² − 4ac + 4aE and simplify it before wrapping
+    // in sqrt — the simplifier (Cohen ASAE) does not expand a product-of-sum, so keeping the
+    // energy term separate yields the clean canonical form (e.g. 2E − ω²q²) inside the root.
+    auto disc = simplify(Expr::sum({square(b),
+                                    Expr::product({Expr::integer(-4), *a, c}),
+                                    Expr::product({Expr::integer(4), *a, energy})}));
+    if (!disc) {
+        return disc;
+    }
+    Expr root = Expr::apply("sqrt", {*disc});
     Expr twice_a = Expr::product({Expr::integer(2), *a});
     return simplify(Expr::product({sub(root, b), recip(twice_a)}));
 }
