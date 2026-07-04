@@ -232,6 +232,12 @@ target_sources(nimblecas_csp PUBLIC
 target_link_libraries(nimblecas_csp
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.bigint : arbitrary-precision signed integer (Knuth Algorithm D, modpow) ----
+add_library(nimblecas_bigint STATIC)
+target_sources(nimblecas_bigint PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigint/bigint.cppm)
+target_link_libraries(nimblecas_bigint PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
 add_library(nimblecas_int128 STATIC)
 target_sources(nimblecas_int128 PUBLIC
@@ -477,6 +483,11 @@ add_executable(logic_tests tests/logic_tests.cpp)
 target_link_libraries(logic_tests
   PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_tests COMMAND logic_tests)
+
+add_executable(bigint_tests tests/bigint_tests.cpp)
+target_link_libraries(bigint_tests
+  PRIVATE nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigint_tests COMMAND bigint_tests)
 
 add_executable(int128_tests tests/int128_tests.cpp)
 target_link_libraries(int128_tests
