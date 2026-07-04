@@ -175,7 +175,11 @@ struct BaumWelchResult {
 // iteration count is a numerical/threshold decision even though each step is exact. Fails
 // with domain_error on an empty sequence set or an impossible observation (P(O) = 0), and
 // with division_by_zero when a state accrues zero expected visits (its row is
-// unidentifiable from the data). Propagates overflow.
+// unidentifiable from the data). INT64 CEILING: the exact per-iteration re-estimation and
+// its per-iteration likelihood are rational, and their denominators blow up quickly, so at
+// this precision Baum-Welch is practical only for small models / short sequences — a case
+// that exceeds the int64 range surfaces honestly as MathError::overflow (a BigRational-backed
+// re-estimation would lift the ceiling).
 [[nodiscard]] auto baum_welch(const HiddenMarkovModel& model,
                               std::span<const std::vector<std::size_t>> sequences,
                               std::size_t max_iterations) -> Result<BaumWelchResult>;
