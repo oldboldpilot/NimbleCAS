@@ -59,7 +59,7 @@ export namespace nimblecas {
 
 // Evaluate a RationalPoly p at a rational point x by Horner's scheme; exact over Q.
 // The zero polynomial evaluates to 0. Fails only on Rational overflow.
-[[nodiscard]] auto evaluate(const RationalPoly& p, const Rational& x) -> Result<Rational>;
+[[nodiscard]] auto evaluate_poly(const RationalPoly& p, const Rational& x) -> Result<Rational>;
 
 // ===========================================================================
 //  EXACT spectral-Galerkin over Q.
@@ -450,7 +450,7 @@ namespace {
 
 // --- exact utility ----------------------------------------------------------
 
-auto evaluate(const RationalPoly& p, const Rational& x) -> Result<Rational> {
+auto evaluate_poly(const RationalPoly& p, const Rational& x) -> Result<Rational> {
     const std::int64_t d = p.degree();
     if (d < 0) {
         return Rational{};  // zero polynomial

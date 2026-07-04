@@ -46,12 +46,12 @@ the input (grid size, matrix conformance, mesh validity), not conditioning.
 ## Exact utility
 
 ```cpp
-[[nodiscard]] auto evaluate(const RationalPoly& p, const Rational& x) -> Result<Rational>;
+[[nodiscard]] auto evaluate_poly(const RationalPoly& p, const Rational& x) -> Result<Rational>;
 ```
 
 | Function | Behavior |
 | :--- | :--- |
-| `evaluate` | Evaluate a `RationalPoly` at a rational point by Horner's scheme; exact over `Q`. The zero polynomial evaluates to `0`. Fails only on `Rational` overflow. |
+| `evaluate_poly` | Evaluate a `RationalPoly` at a rational point by Horner's scheme; exact over `Q`. The zero polynomial evaluates to `0`. Fails only on `Rational` overflow. |
 
 ## Exact spectral-Galerkin over `Q`
 

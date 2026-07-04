@@ -365,7 +365,7 @@ auto main() -> int {
 
                   // The companion matrix A of p(s): its Lyapunov and Routh verdicts must match.
                   const Matrix a = ratmat({{ri(0), ri(1)}, {ri(-2), ri(-2)}});
-                  auto lyap = nimblecas::is_stable_lyapunov(a);
+                  auto lyap = nimblecas::is_lyapunov_stable(a);
                   auto dyn = nimblecas::is_asymptotically_stable(a);
                   t.expect(lyap.has_value() && *lyap == true,
                            "Lyapunov: companion A is asymptotically stable");

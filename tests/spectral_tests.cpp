@@ -196,8 +196,8 @@ auto main() -> int {
                   t.expect(recon[0].is_equal(f), "element 0 reconstructs f exactly");
                   t.expect(recon[1].is_equal(f), "element 1 reconstructs f exactly");
                   // C^0 at the shared interior node x = 0.
-                  const auto v0 = nimblecas::evaluate(recon[0], rat(0, 1)).value();
-                  const auto v1 = nimblecas::evaluate(recon[1], rat(0, 1)).value();
+                  const auto v0 = nimblecas::evaluate_poly(recon[0], rat(0, 1)).value();
+                  const auto v1 = nimblecas::evaluate_poly(recon[1], rat(0, 1)).value();
                   t.expect(v0 == v1, "C^0 continuity at interior node");
               })
         // --- ANALOGUES: discontinuous Galerkin ----------------------------
