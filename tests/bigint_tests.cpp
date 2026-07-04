@@ -46,6 +46,17 @@ auto check_divmod(TestContext& t, const BigInt& a, const BigInt& b, std::string_
     }
 }
 
+// Build a BigInt from base-2^32 limbs (least-significant first) via exact arithmetic, so
+// tests can express the canonical Knuth/Warren division vectors limb-for-limb.
+[[nodiscard]] auto from_limbs(std::span<const std::uint32_t> limbs) -> BigInt {
+    const BigInt base = BigInt::from_u64(4294967296ULL);  // 2^32
+    BigInt acc{};
+    for (std::size_t i = limbs.size(); i-- > 0;) {
+        acc = acc.multiply(base).add(BigInt::from_u64(limbs[i]));
+    }
+    return acc;
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -144,6 +155,40 @@ auto main() -> int {
                   t.expect(a.add(b) == b.add(a), "add commutes");
                   t.expect_eq(a.add(b).to_string(), std::string("1000000000000000000000000000000"),
                               "9...9 + 1 rolls over");
+              })
+        .test("division_knuth_add_back_vectors",
+              [](TestContext& t) {
+                  // The canonical Knuth Algorithm D / Warren divmnu vectors that force qhat
+                  // over-estimation and the rare D6 ADD-BACK correction (base 2^32). The ring
+                  // law recombination in check_divmod is a complete correctness check, so any
+                  // add-back defect surfaces here regardless of which internal path each hits.
+                  struct Vec {
+                      std::vector<std::uint32_t> u;
+                      std::vector<std::uint32_t> v;
+                      std::string_view label;
+                  };
+                  const std::vector<Vec> vectors = {
+                      // Classic add-back: dividend just below a divisor multiple.
+                      {{0x00000000u, 0xFFFFFFFEu, 0xFFFFFFFFu}, {0xFFFFFFFFu, 0xFFFFFFFFu},
+                       "u=2^96-2^32 / v=2^64-1 (add-back)"},
+                      {{0x00000000u, 0x00000000u, 0x00000001u}, {0x00000001u, 0x00000000u, 0x00000001u},
+                       "u=2^64 / v=2^64+1"},
+                      {{0x00000000u, 0xFFFFFFFEu, 0x00000000u, 0x00000001u},
+                       {0xFFFFFFFFu, 0x00000000u, 0x00000001u}, "4-limb / 3-limb add-back"},
+                      // Tight qhat: top divisor limb 0x80000000 (normalisation shift 0).
+                      {{0xFFFFFFFFu, 0xFFFFFFFFu, 0x7FFFFFFFu}, {0x00000001u, 0x80000000u},
+                       "top limb 0x80000000, shift 0"},
+                      {{0x0000FFFFu, 0x0000FFFFu, 0x0000FFFFu}, {0xFFFFFFFFu, 0x00008000u},
+                       "sparse-limb correction"},
+                  };
+                  for (const auto& vec : vectors) {
+                      const BigInt u = from_limbs(vec.u);
+                      const BigInt v = from_limbs(vec.v);
+                      check_divmod(t, u, v, vec.label);
+                      check_divmod(t, u.negate(), v, vec.label);       // negative dividend
+                      check_divmod(t, u, v.negate(), vec.label);       // negative divisor
+                      check_divmod(t, u.negate(), v.negate(), vec.label);
+                  }
               })
         .test("multiplication",
               [](TestContext& t) {
