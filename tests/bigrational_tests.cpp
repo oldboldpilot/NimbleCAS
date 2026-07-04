@@ -222,8 +222,15 @@ auto main() -> int {
                   t.expect(big.denominator() == BigInt::from_u64(3).pow(100),
                            "(2/3)^100 denominator");
                   // pow then reciprocal-power round-trips to the original.
-                  t.expect(br("4/9").pow(5).value().pow(-1).value().pow(-5).value() == br("4/9"),
-                           "((x^5)^-1)^-5 == x");
+                  // ((x^5)^-1)^-5 = x^(5 * -1 * -5) = x^25 (NOT x): exercises the negative-power
+                  // path, cross-checked against the direct positive power x^25.
+                  t.expect(br("4/9").pow(5).value().pow(-1).value().pow(-5).value() ==
+                               br("4/9").pow(25).value(),
+                           "((x^5)^-1)^-5 == x^25");
+                  // A genuine round-trip: reciprocating twice is the identity.
+                  t.expect(br("4/9").pow(3).value().reciprocal().value().reciprocal().value() ==
+                               br("4/9").pow(3).value(),
+                           "reciprocal twice of x^3 == x^3");
               })
         .test("from_string_roundtrip",
               [](TestContext& t) {
@@ -240,9 +247,11 @@ auto main() -> int {
                   t.expect_eq(br("+3/+4").to_string(), std::string("3/4"), "leading + accepted");
                   // A denominator that divides out to 1 renders as a bare integer.
                   t.expect_eq(br("100/25").to_string(), std::string("4"), "100/25 -> 4");
-                  // A very large fraction survives the parse -> render round-trip verbatim.
+                  // A very large fraction ALREADY IN LOWEST TERMS round-trips verbatim.
+                  // Consecutive integers are always coprime, so numerator/(numerator+1) needs no
+                  // reduction (the earlier ".../...998" pair are both even and would reduce).
                   const std::string bigfrac =
-                      "123456789012345678901234567890/999999999999999999999999999998";
+                      "123456789012345678901234567890/123456789012345678901234567891";
                   t.expect_eq(br(bigfrac).to_string(), bigfrac, "30-digit fraction round-trips");
 
                   const auto is_syntax = [&](std::string_view s, std::string_view what) {

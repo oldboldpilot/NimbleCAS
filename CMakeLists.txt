@@ -280,6 +280,13 @@ target_sources(nimblecas_bigrational PUBLIC
 target_link_libraries(nimblecas_bigrational
   PUBLIC nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigcombinatorics : unbounded exact integer combinatorics (BigInt-backed) ----
+add_library(nimblecas_bigcombinatorics STATIC)
+target_sources(nimblecas_bigcombinatorics PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigcombinatorics/bigcombinatorics.cppm)
+target_link_libraries(nimblecas_bigcombinatorics
+  PUBLIC nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
 add_library(nimblecas_int128 STATIC)
 target_sources(nimblecas_int128 PUBLIC
@@ -570,6 +577,12 @@ add_executable(bigint_tests tests/bigint_tests.cpp)
 target_link_libraries(bigint_tests
   PRIVATE nimblecas_bigint nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigint_tests COMMAND bigint_tests)
+
+add_executable(bigcombinatorics_tests tests/bigcombinatorics_tests.cpp)
+target_link_libraries(bigcombinatorics_tests
+  PRIVATE nimblecas_bigcombinatorics nimblecas_combinatorics nimblecas_bigint nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigcombinatorics_tests COMMAND bigcombinatorics_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests
