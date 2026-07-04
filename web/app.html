@@ -1,0 +1,74 @@
+<!doctype html>
+<!--
+  NimbleCAS Viewer — full WebGPU app (ES-module version) with the live in-browser CAS.
+  @author Olumuyiwa Oluwasanmi
+
+  This is the module-shell counterpart to the standalone index.html: it loads the split
+  ES modules (app.js + renderer.js) and, alongside the WebGPU plot renderer, wires in the
+  REAL exact symbolic engine compiled to WebAssembly (nimblecas.js + nimblecas.wasm — see
+  docs/architecture/wasm-build.md). Executable `nimblecas` document cells and the live CAS
+  box are evaluated by that engine, exact over Q.
+
+  Serve over http(s):// (the ES modules and the .wasm are fetched):  python -m http.server
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NimbleCAS Viewer — live CAS</title>
+  <style>
+    :root {
+      --ink: #1a1a1e; --ink-soft: #6b7280; --bg: #ffffff; --panel: #f7f7f9;
+      --line: #e3e3e8; --accent: #2563eb; --accent-soft: #eef2ff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --ink: #e7e7ea; --ink-soft: #9aa0aa; --bg: #16171a; --panel: #1e1f24;
+              --line: #2c2e35; --accent: #6ea8fe; --accent-soft: #23293a; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+    header.app { display: flex; align-items: center; gap: 0.9rem; padding: 0.8rem 1.2rem;
+      border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+    header.app h1 { font-size: 1.1rem; margin: 0; }
+    .badge { font-size: 0.78rem; padding: 0.15rem 0.55rem; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--ink-soft); }
+    .badge.gpu { color: #0a7d33; border-color: #0a7d3355; } .badge.cpu { color: #a15c00; border-color: #a15c0055; }
+    header.app .spacer { flex: 1; }
+    header.app label { font-size: 0.85rem; color: var(--ink-soft); }
+    main#app { max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.2rem 4rem; }
+    .doc-title { font-size: 1.5rem; font-weight: 700; margin: 0.4rem 0 1.2rem; }
+    .prose h1 { font-size: 1.35rem; } .prose h2 { font-size: 1.15rem; }
+    .prose code, .math-fallback { font-family: ui-monospace, monospace; background: var(--panel);
+      padding: 0.05rem 0.3rem; border-radius: 4px; }
+    .mathblock { margin: 0.8rem 0; overflow-x: auto; font-size: 1.15rem; }
+    figure.plot { margin: 1.2rem 0; } figcaption { color: var(--ink-soft); font-size: 0.85rem; text-align: center; }
+    .notice { padding: 0.8rem 1rem; background: var(--panel); border: 1px solid var(--line);
+      border-radius: 6px; color: var(--ink-soft); margin: 1rem 0; }
+    .controls { margin: 1.4rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--panel); display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+    .btn { font: inherit; padding: 0.45rem 0.9rem; border-radius: 6px; border: 1px solid var(--accent);
+      background: var(--accent); color: #fff; cursor: pointer; }
+    .live-tag, .hint { font-size: 0.82rem; color: var(--ink-soft); }
+    .hint { width: 100%; }
+    /* live CAS */
+    .cas-cell { margin: 0.6rem 0; padding: 0.5rem 0.8rem; border-left: 3px solid var(--accent);
+      background: var(--accent-soft); border-radius: 0 6px 6px 0; }
+    .cas-src { font-family: ui-monospace, monospace; color: var(--ink-soft); font-size: 0.9rem; }
+    .cas-note { color: #a15c00; font-size: 0.82rem; margin-top: 0.3rem; }
+    .cas-repl { flex-direction: column; align-items: stretch; }
+    .cas-input { font: inherit; font-family: ui-monospace, monospace; padding: 0.55rem 0.7rem;
+      border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); width: 100%; }
+    .cas-out { min-height: 2rem; }
+  </style>
+</head>
+<body>
+  <header class="app">
+    <h1>NimbleCAS <span style="color:var(--ink-soft);font-weight:500">Viewer + live CAS</span></h1>
+    <span id="backendBadge" class="badge">detecting…</span>
+    <span class="spacer"></span>
+    <label>Open document: <input id="fileInput" type="file" accept="application/json,.json" /></label>
+  </header>
+  <main id="app"></main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

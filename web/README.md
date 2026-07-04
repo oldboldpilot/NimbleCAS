@@ -12,16 +12,16 @@ Canvas2D fallback). **No build toolchain, no network, no external files.**
   sample document, so it renders immediately.
 - **As a claude.ai Artifact:** paste the contents of `index.html`. Everything is
   inline, so it satisfies the strict Artifact CSP (no external hosts).
-- **Split-out module version (optional):** `renderer.js` + `app.js` +
-  `shaders.wgsl` + `sample-document.json` are the same code factored into ES
-  modules. To use them, add a tiny HTML shell with
-  `<script type="module" src="app.js"></script>` and the same `<header>`/`<main>`
-  markup and `<style>` block as `index.html`. Because they use `fetch()` for the
-  WGSL/WASM, the module version should be served over `http(s)://` (e.g.
-  `python -m http.server`); `index.html` needs no server.
+- **Module version with the live CAS:** open **`app.html`** — the ready-made shell
+  that loads the split ES modules (`app.js` + `renderer.js`) **and** the real
+  in-browser CAS engine (see below). It renders the WebGPU/Canvas2D plots *and*
+  evaluates executable `nimblecas` cells and the live CAS box. Because the ES
+  modules and the `.wasm` are fetched, serve it over `http(s)://` (e.g.
+  `python -m http.server`); `index.html`, by contrast, needs no server.
 
-`index.html` is authoritative and always works on its own; the split files are a
-convenience for a modular setup.
+`index.html` is the authoritative zero-dependency viewer and always works on its
+own (no CAS engine, to keep it `file://`-openable). `app.html` is the fuller
+served build that adds the live WASM CAS.
 
 ## In-browser CAS engine (WebAssembly)
 

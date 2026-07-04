@@ -45,10 +45,18 @@ echo "[wasm] entry wasm_entry.cpp"
 em++ "${F[@]}" "${MF[@]}" -c "$REPO/src/wasm/wasm_entry.cpp" -o wasm_entry.o
 OBJS+=(wasm_entry.o)
 
-# 4. Link to nimblecas.js + nimblecas.wasm with the eval ABI exported.
+# 4. Link to an ES6 module nimblecas.js + nimblecas.wasm with the eval ABI exported.
+#    EXPORT_ES6 makes it a real browser-importable module (`import NimbleCAS from
+#    './nimblecas.js'`), which the ES-module web front-end (web/app.js) needs; it also
+#    locates the .wasm via import.meta.url when served.
 echo "[wasm] link nimblecas.js / nimblecas.wasm"
+# A FIXED heap (no ALLOW_MEMORY_GROWTH) is deliberate: with growth the WebAssembly.Memory
+# buffer is reallocated mid-call, detaching the JS-side view that ccall's string marshaling
+# reads ("TextDecoder ... ArrayBuffer detached"). A generous fixed 256 MB never reallocates,
+# so the string ABI is robust; it is plenty for REPL-scale symbolic expressions.
 em++ "${F[@]}" "${OBJS[@]}" -o nimblecas.js \
-  -sMODULARIZE=1 -sEXPORT_NAME=NimbleCAS -sALLOW_MEMORY_GROWTH=1 \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=NimbleCAS \
+  -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=0 \
   -sEXPORTED_FUNCTIONS=_nimblecas_eval_latex,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
 

@@ -185,6 +185,64 @@ function buildLiveControls() {
   return box;
 }
 
+// --- full symbolic engine (WASM) --------------------------------------------
+// The REAL exact-over-Q CAS (the core..reader slice) compiled to WebAssembly, loaded lazily
+// as an ES module. Unlike the freestanding kernel.wasm above (raw poly_eval), this is the
+// whole symbolic engine behind a C ABI: text -> parse -> simplify -> LaTeX. It degrades
+// gracefully to "engine unavailable" if nimblecas.js / nimblecas.wasm are not served.
+const CAS = { ready: false, evalLatex: null };
+async function initCAS() {
+  try {
+    const { default: NimbleCAS } = await import('./nimblecas.js');
+    const mod = await NimbleCAS();
+    CAS.evalLatex = (src) => mod.ccall('nimblecas_eval_latex', 'string', ['string'], [src]);
+    CAS.ready = true;
+  } catch (e) {
+    CAS.ready = false;  // no engine served -> CAS cells/REPL show an inline hint
+  }
+  return CAS.ready;
+}
+
+// Render one executable CAS cell: the input expression, then its evaluated result as math
+// (parse -> simplify -> LaTeX -> MathML through the same renderer as static math blocks).
+function renderCasCell(host, source) {
+  const cell = document.createElement('div'); cell.className = 'cas-cell';
+  const src = document.createElement('div'); src.className = 'cas-src';
+  src.textContent = '› ' + source;  // '› expr'
+  cell.appendChild(src);
+  if (CAS.ready) {
+    try { renderMath(cell, CAS.evalLatex(source)); }
+    catch (e) { const n = document.createElement('div'); n.className = 'cas-note'; n.textContent = 'eval failed: ' + e.message; cell.appendChild(n); }
+  } else {
+    const n = document.createElement('div'); n.className = 'cas-note';
+    n.textContent = 'CAS engine not loaded (serve nimblecas.js + nimblecas.wasm).';
+    cell.appendChild(n);
+  }
+  host.appendChild(cell);
+}
+
+// A live CAS REPL: type an expression, see the real engine parse + simplify + render it.
+function buildCasRepl() {
+  const box = document.createElement('div'); box.className = 'controls cas-repl';
+  const hint = document.createElement('span'); hint.className = 'hint';
+  hint.textContent = CAS.ready
+    ? 'Live CAS (exact over ℚ) — type an expression:'
+    : 'Live CAS unavailable — serve nimblecas.js + nimblecas.wasm next to this page.';
+  const input = document.createElement('input'); input.className = 'cas-input'; input.type = 'text';
+  input.placeholder = 'e.g.  2/4 + 1/4    or    (x + 1)^2    or    sin(x) + sin(x)';
+  input.disabled = !CAS.ready;
+  const out = document.createElement('div'); out.className = 'cas-out';
+  const run = () => {
+    const s = input.value.trim(); out.innerHTML = '';
+    if (!s || !CAS.ready) return;
+    try { renderMath(out, CAS.evalLatex(s)); }
+    catch (e) { const n = document.createElement('div'); n.className = 'cas-note'; n.textContent = 'eval failed: ' + e.message; out.appendChild(n); }
+  };
+  input.addEventListener('input', run);
+  box.append(hint, input, out);
+  return box;
+}
+
 // --- document renderer ------------------------------------------------------
 let CURRENT_DOC = null;
 function renderDocument(doc) {
@@ -202,6 +260,7 @@ function renderDocument(doc) {
     try {
       if (block.kind === 'prose') { const d = document.createElement('div'); d.className = 'prose'; d.innerHTML = renderProse(block.text || ''); app.appendChild(d); }
       else if (block.kind === 'math') renderMath(app, block.latex || '');
+      else if (block.kind === 'nimblecas') renderCasCell(app, block.source || '');
       else if (block.kind === 'plot' && block.plot) {
         const fig = document.createElement('figure'); fig.className = 'plot'; app.appendChild(fig);
         renderPlot(fig, block.plot, { onBackendChange: () => setBadge('cpu') });
@@ -212,6 +271,7 @@ function renderDocument(doc) {
     }
   }
   app.appendChild(buildLiveControls());
+  app.appendChild(buildCasRepl());
 }
 function rerender() { if (CURRENT_DOC) renderDocument(CURRENT_DOC); }
 
@@ -265,7 +325,12 @@ function buildSampleDocument() {
         series: [ { kind: 'line', label: 'sin(x)', color: '#2563eb', points: sinPts }, { kind: 'line', label: 'cos(x)', color: '#e0533d', points: cosPts } ] } },
       { kind: 'plot', plot: { type: 'plot', title: 'Noisy samples with linear trend', xLabel: 'x', yLabel: 'y', xRange: null, yRange: null,
         series: [ { kind: 'scatter', label: 'samples', color: '#12a150', points: scatter }, { kind: 'line', label: 'y = 0.5x + 1', color: '#a855f7', points: fit } ] } },
-      { kind: 'prose', text: '## Live compute\n\nUse the control below; it runs `kernel.wasm` if present, else JavaScript.' },
+      { kind: 'prose', text: '## Executable CAS cells\n\nThese `nimblecas` cells are evaluated **in the browser** by the real exact engine (compiled to WebAssembly) — parsed, simplified, and rendered. Everything stays exact over ℚ:' },
+      { kind: 'nimblecas', source: '2/4 + 1/4' },
+      { kind: 'nimblecas', source: '(a + b)*(a - b)' },
+      { kind: 'nimblecas', source: 'x^2 + 3*x^2' },
+      { kind: 'nimblecas', source: 'sin(x) + sin(x)' },
+      { kind: 'prose', text: '## Live compute\n\nType your own expression in the CAS box below, or sample a polynomial through the plot renderer. The CAS runs `nimblecas.wasm` (the whole symbolic engine); the polynomial control runs the freestanding `kernel.wasm` if present, else JavaScript.' },
     ],
   };
 }
@@ -276,6 +341,7 @@ function buildSampleDocument() {
   const gpuOk = await initWebGPU(null, () => { setBadge('cpu'); rerender(); });
   setBadge(gpuOk ? 'gpu' : 'cpu');
   await initWasm();
+  await initCAS();
   CURRENT_DOC = buildSampleDocument();
   renderDocument(CURRENT_DOC);
   let t = null;
