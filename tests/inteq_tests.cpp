@@ -12,6 +12,7 @@ import nimblecas.polynomial;
 import nimblecas.ratpoly;
 import nimblecas.inteq;
 import nimblecas.symbolic;
+import nimblecas.simplify;
 import nimblecas.laplace;
 import nimblecas.testing;
 
