@@ -204,3 +204,5 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for details.
 All code adheres to [config/cpp_details.txt](config/cpp_details.txt) (the authoritative
 code policy) and [config/update_policy.txt](config/update_policy.txt) (commit / update
 policy). Every major change is adversarially code-reviewed before it lands.
+
+AI coding agents contributing to this repo should read **[AGENTS.md](AGENTS.md)** first.

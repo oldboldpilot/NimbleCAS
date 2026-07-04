@@ -388,4 +388,7 @@ series for the linear case (`ADM(identity) == Neumann`).
   convolution-kernel Volterra solver.
 - [`nimblecas.symbolic`](symbolic.md) and [`nimblecas.simplify`](simplify.md) — the
   `Expr` layer and canonical simplifier used by the transform-domain solution.
+- `tests/inteq_crossmethod_tests.cpp` and `docs/examples/inteq-multimethod.md` —
+  Fredholm-exact / Neumann / Picard / ADM / HPM / HAM cross-validated on a linear and a
+  nonlinear Volterra equation, the latter run through [`execdoc`](execdoc.md).
 - [Documentation hub](../Index.md)

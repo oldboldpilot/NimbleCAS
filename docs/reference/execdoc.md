@@ -83,8 +83,21 @@ while a changed cell **and its downstream dependents** re-execute and independen
 cells stay cached; a malformed middle cell is captured without aborting neighbours;
 prose `<`/`&`/`<b>` is escaped.
 
+Two full worked documents, `docs/examples/pde-multimethod.md` and
+`docs/examples/inteq-multimethod.md`, are run end-to-end (and their rendered `\( … \)`
+LaTeX fragments asserted verbatim) by `tests/execdoc_multimethod_tests.cpp` — a fuller,
+multi-statement, multi-cell exercise of the same session/cache/render pipeline against
+manufactured [`pde`](pde.md) and [`inteq`](inteq.md) identities. They double as a live
+demonstration of the **builtin-dispatch-at-outermost-call-only** rule above: each
+document differentiates a spatial derivative in two separate statements
+(`ux = diff(u, x)` then `uxx = diff(ux, x)`) rather than nesting
+`diff(diff(u, x), x)`, which would leave the inner call an unevaluated `apply` node.
+
 ## See also
 
 - [`reader.md`](reader.md) — the parser that is the cell eval surface.
 - [`latex.md`](latex.md) — the `Expr → LaTeX` renderer used for results.
 - [`webexport.md`](webexport.md) · [`svgplot.md`](svgplot.md) — sibling data bridges to the web front-end.
+- `docs/examples/pde-multimethod.md` · `docs/examples/inteq-multimethod.md` — worked
+  executable documents cross-validating [`pde`](pde.md)/[`pdenum`](pdenum.md) and
+  [`inteq`](inteq.md) methods through this engine.

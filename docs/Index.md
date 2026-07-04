@@ -17,6 +17,7 @@ in the repository.
 | [Product Requirement Document](PRD.md) | Product scope, vision, and mathematical/algorithmic goals. |
 | [Roadmap](ROADMAP.md) | Technical architecture, module structures, and the implementation plan. |
 | [README](../README.md) | Project summary, current status, and build entry points. |
+| [Agent guide](../AGENTS.md) | Conventions, policy pointers, and workflow for AI coding agents contributing to this repo. |
 
 ## Getting started
 
@@ -189,6 +190,16 @@ Tooling, front-end & integration:
 | `nimblecas.execdoc` | [execdoc.md](reference/execdoc.md) | Executable document engine (§7.13): runs ` ```nimblecas ` cells over `reader`+`simplify`+`diff`, incremental cache, HTML/MathJax render — a data bridge, honest exact results with captured cell errors. |
 | `nimblecas.webkernel` | [webkernel.md](reference/webkernel.md) | Freestanding `wasm32` compute kernel (clang, no Emscripten) the browser front-end loads for live in-page sampling. See also [WASM build](architecture/wasm-build.md). |
 | `nimblecas_ext` (Python) | [python-bindings.md](reference/python-bindings.md) | nanobind bindings: the `Expr` API, module functions, and `MathError`→exception translation. |
+
+## Worked examples
+
+Standalone executable documents (Markdown + ` ```nimblecas ` cells) that double as
+integration tests — each is run and its rendered LaTeX asserted verbatim by a test file:
+
+| Document | What it covers | Verified by |
+| :--- | :--- | :--- |
+| [PDE cross-method](examples/pde-multimethod.md) | `u_t = u_xx + u²`: exact closed form, FEM/FDM spatial cross-check, ADM == HPM. | `tests/execdoc_multimethod_tests.cpp`, `tests/pde_crossmethod_tests.cpp` |
+| [Integral-equation cross-method](examples/inteq-multimethod.md) | Linear Volterra (Neumann == ADM == HPM == HAM) and a nonlinear Volterra ADM/HPM/HAM convergence check. | `tests/execdoc_multimethod_tests.cpp`, `tests/inteq_crossmethod_tests.cpp` |
 
 ## Testing
 

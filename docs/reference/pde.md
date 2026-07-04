@@ -206,6 +206,33 @@ is `MathError::overflow`. Any error raised by `L` or `N` is propagated verbatim.
 Both return `c_0 … c_order` — the **exact truncated time series, local in `t`**
 — and forward to `solve_nonlinear_evolution_pde`, so they share its error model.
 
+### `solve_nonlinear_evolution_pde_hpm` — HPM (ADM == HPM)
+
+```cpp
+[[nodiscard]] auto solve_nonlinear_evolution_pde_hpm(SpatialOperator linear,
+                                                     TimeSeriesOperator nonlinear,
+                                                     const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+```
+
+Homotopy Perturbation Method for the same equation `u_t = L[u] + N[u]`. The homotopy
+`(1-p)(u_t − phi_t) + p(u_t − L[u] − N[u]) = 0` (`phi_t = 0`: the datum does not depend
+on `t`) collapses, order by order in `p`, to the **identical** Cauchy–Kovalevskaya
+recurrence `(k+1) c_{k+1} = L[c_k] + A_k` that `solve_nonlinear_evolution_pde` already
+implements — the same ADM == HPM equivalence [`nimblecas.perturbation`](perturbation.md)
+and [`nimblecas.inteq`](inteq.md) establish for the ODE and integral-equation cases,
+transported here to the `(Q[x])[[t]]` series ring. It is a thin forward: it returns the
+**bit-identical** series to `solve_nonlinear_evolution_pde` for the same arguments and
+shares its error model exactly.
+
+**Honest gap.** Unlike `nimblecas.perturbation` and `nimblecas.inteq`, this module does
+**not** (yet) offer a HAM variant (the `ħ` convergence-control deformation) for genuine
+PDEs — only the ADM/HPM pair. Cross-validated in `tests/pde_crossmethod_tests.cpp`
+(ADM == HPM bit-identical on `u_t = u_xx + u²`, cross-checked against FEM/FDM at `t = 0`
+where the Dirichlet boundary condition coincides with the whole-line initial datum, and
+against the exact linear-diffusion closed form) and exercised through the
+executable-document engine in `docs/examples/pde-multimethod.md`.
+
 ## Boundary-value / steady-state: 1-D Poisson
 
 ```cpp
@@ -356,7 +383,7 @@ polynomial `φ` the exact series terminates (closed form).
 | Condition | Error |
 | :--- | :--- |
 | `solve_evolution_pde` with `order == 0` or an empty `SpatialOperator` | `MathError::domain_error` |
-| `solve_nonlinear_evolution_pde` (or `burgers` / `reaction_diffusion_quadratic`) with `order == 0` | `MathError::domain_error` |
+| `solve_nonlinear_evolution_pde` (or `burgers` / `reaction_diffusion_quadratic` / `solve_nonlinear_evolution_pde_hpm`) with `order == 0` | `MathError::domain_error` |
 | `solve_nonlinear_evolution_pde` with a null `TimeSeriesOperator` (`nonlinear`) | `MathError::domain_error` |
 | The nonlinear term `N` returns a vector whose length differs from `order+1` | `MathError::domain_error` |
 | `series_product` operands of differing length | `MathError::domain_error` |
@@ -503,4 +530,7 @@ schrodinger_free_particle(ipoly({0, 0, 1}), 0).error();            // domain_err
   differential-equation siblings in the exact-solver family.
 - [`nimblecas.ratpoly`](ratpoly.md) — the exact `Rational` field and
   `RationalPoly` ring every coefficient, datum, and evaluation point lives in.
+- `tests/pde_crossmethod_tests.cpp` and `docs/examples/pde-multimethod.md` — FEM
+  ([`pdenum`](pdenum.md))/FDM/exact-series/ADM/HPM cross-validated on one manufactured
+  reaction–diffusion problem, the latter run through [`execdoc`](execdoc.md).
 - [Documentation hub](../Index.md)
