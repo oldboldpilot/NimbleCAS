@@ -150,6 +150,29 @@ auto main() -> int {
                   t.expect(all, "GPU batch edit distance matches the CPU reference");
                   t.expect(!got.empty() && got[0] == 3, "kitten -> sitting is 3");
               })
+        .test("edit_distance_long_sequence_symmetric_and_bounded",
+              [](TestContext& t) {
+                  // Regression: a SHORT a against a LONG b (400 code points). The kernel rolls
+                  // over the shorter side, so this computes correctly (min side <= 256) rather
+                  // than silently truncating the long side. Empty a vs a length-400 b => 400.
+                  std::vector<int> a_flat;                 // a is empty
+                  std::vector<int> b_flat(400, 7);         // 400-long b
+                  std::vector<int> a_off = {0, 0};
+                  std::vector<int> b_off = {0, 400};
+                  auto got = gpu::edit_distance_batch(a_flat, a_off, b_flat, b_off);
+                  t.expect(got.has_value(), "short-vs-long pair is accepted (rolled over short)");
+                  t.expect(got && got->size() == 1 && (*got)[0] == 400,
+                           "distance from empty to a 400-long string is 400, not truncated");
+
+                  // Both sides longer than the 256 short-side bound => overflow, never a wrong
+                  // silently-truncated number.
+                  std::vector<int> big_a(300, 1);
+                  std::vector<int> big_b(300, 2);
+                  std::vector<int> off = {0, 300};
+                  auto ov = gpu::edit_distance_batch(big_a, off, big_b, off);
+                  t.expect(!ov.has_value() && ov.error() == MathError::overflow,
+                           "both sides > 256 short-side limit => overflow");
+              })
         .test("bfs_csr_distances",
               [](TestContext& t) {
                   // Undirected graph: 0-1, 0-2, 1-3, 2-3, 3-4, and an isolated vertex 5.

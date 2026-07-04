@@ -49,9 +49,13 @@ export namespace nimblecas::gpu {
 
 // Batched Levenshtein edit distance. The sequences are supplied as flattened code-point arrays
 // with prefix-offset arrays of length pairs+1: pair i is a_flat[a_off[i]..a_off[i+1]) against
-// b_flat[b_off[i]..b_off[i+1]). Returns one distance per pair. Fails with MathError::gpu_error
-// when no device is present, the offset arrays are malformed, or a CUDA call fails, and
-// MathError::overflow when a span exceeds the int kernel bound.
+// b_flat[b_off[i]..b_off[i+1]). Returns one distance per pair. The kernel rolls its DP over
+// the SHORTER sequence of each pair (Levenshtein is symmetric), so the SHORTER side of every
+// pair must not exceed 256 code points; a pair violating that is rejected with
+// MathError::overflow (never silently truncated — the longer side is unbounded). Fails with
+// MathError::gpu_error when no device is present, the offset arrays are malformed (empty,
+// unequal length, non-monotone, or out of the flat-buffer bounds), or a CUDA call fails, and
+// MathError::overflow when a span exceeds the int kernel bound or the 256 short-side limit.
 [[nodiscard]] auto edit_distance_batch(std::span<const int> a_flat, std::span<const int> a_off,
                                        std::span<const int> b_flat, std::span<const int> b_off)
     -> Result<std::vector<int>> {
@@ -71,6 +75,26 @@ export namespace nimblecas::gpu {
     std::vector<int> out(pairs);
     if (pairs == 0) {
         return out;  // no pairs to compare
+    }
+    // The kernel holds its rolling DP rows in bounded per-thread local memory, sized for the
+    // SHORTER sequence of each pair (Levenshtein is symmetric). Reject — never silently
+    // truncate — any pair whose shorter side exceeds this width, and validate that the offset
+    // arrays are non-decreasing and stay within the flattened buffers.
+    constexpr int kEditMaxShortLen = 256;  // must match kMaxEditLen in gpu_kernels.cu
+    if (a_off.front() < 0 || b_off.front() < 0 ||
+        a_off.back() > static_cast<int>(a_flat.size()) ||
+        b_off.back() > static_cast<int>(b_flat.size())) {
+        return make_error<std::vector<int>>(MathError::gpu_error);
+    }
+    for (std::size_t i = 0; i < pairs; ++i) {
+        const int a_len = a_off[i + 1] - a_off[i];
+        const int b_len = b_off[i + 1] - b_off[i];
+        if (a_len < 0 || b_len < 0) {  // non-monotone offsets
+            return make_error<std::vector<int>>(MathError::gpu_error);
+        }
+        if (std::min(a_len, b_len) > kEditMaxShortLen) {
+            return make_error<std::vector<int>>(MathError::overflow);
+        }
     }
     const int rc = nimblecas_gpu_edit_distance_batch(a_flat.data(), a_off.data(), b_flat.data(),
                                                      b_off.data(), static_cast<int>(pairs),

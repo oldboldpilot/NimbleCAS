@@ -109,21 +109,27 @@ __global__ void edit_distance_batch_kernel(const int* __restrict__ a_flat,
                  static_cast<int>(threadIdx.x);
          p < pairs; p += stride) {
         const int a_begin = a_off[p];
-        const int a_len = a_off[p + 1] - a_begin;
+        const int a_raw = a_off[p + 1] - a_begin;
         const int b_begin = b_off[p];
-        // Clamp the column span to the local-memory width; the row span needs no clamp because
-        // only the b dimension sizes the arrays.
-        const int b_len = min(b_off[p + 1] - b_begin, kMaxEditLen);
+        const int b_raw = b_off[p + 1] - b_begin;
+        // Levenshtein is symmetric, so roll the DP over the SHORTER sequence: only that
+        // (column) dimension sizes the bounded local arrays, so the array width need only
+        // hold min(a,b)+1 cells. The host wrapper guarantees min(a,b) <= kMaxEditLen, so no
+        // silent truncation of the longer side can occur. `row` walks the longer sequence.
+        const int* row_seq = (a_raw >= b_raw) ? (a_flat + a_begin) : (b_flat + b_begin);
+        const int* col_seq = (a_raw >= b_raw) ? (b_flat + b_begin) : (a_flat + a_begin);
+        const int row_len = (a_raw >= b_raw) ? a_raw : b_raw;
+        const int col_len = (a_raw >= b_raw) ? b_raw : a_raw;
         int* prev = row0;
         int* curr = row1;
-        for (int j = 0; j <= b_len; ++j) {
-            prev[j] = j;  // distance from the empty a-prefix to each b-prefix
+        for (int j = 0; j <= col_len; ++j) {
+            prev[j] = j;  // distance from the empty row-prefix to each col-prefix
         }
-        for (int i = 1; i <= a_len; ++i) {
-            curr[0] = i;  // distance from the i-prefix of a to the empty b-prefix
-            const int ai = a_flat[a_begin + i - 1];
-            for (int j = 1; j <= b_len; ++j) {
-                const int cost = (ai != b_flat[b_begin + j - 1]);  // branchless 0/1 substitution
+        for (int i = 1; i <= row_len; ++i) {
+            curr[0] = i;  // distance from the i-prefix of the long seq to the empty col-prefix
+            const int ri = row_seq[i - 1];
+            for (int j = 1; j <= col_len; ++j) {
+                const int cost = (ri != col_seq[j - 1]);  // branchless 0/1 substitution
                 const int del = prev[j] + 1;
                 const int ins = curr[j - 1] + 1;
                 const int sub = prev[j - 1] + cost;
@@ -133,7 +139,7 @@ __global__ void edit_distance_batch_kernel(const int* __restrict__ a_flat,
             prev = curr;
             curr = tmp;
         }
-        out[p] = prev[b_len];  // final cell after a_len iterations of the roll
+        out[p] = prev[col_len];  // final cell after row_len iterations of the roll
     }
 }
 

@@ -232,6 +232,12 @@ target_sources(nimblecas_csp PUBLIC
 target_link_libraries(nimblecas_csp
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
+add_library(nimblecas_int128 STATIC)
+target_sources(nimblecas_int128 PUBLIC
+  FILE_SET CXX_MODULES FILES src/int128/int128.cppm)
+target_link_libraries(nimblecas_int128 PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.bitset : branchless / bit-parallel fixed-capacity bit set ----
 add_library(nimblecas_bitset STATIC)
 target_sources(nimblecas_bitset PUBLIC
@@ -464,6 +470,12 @@ add_executable(logic_tests tests/logic_tests.cpp)
 target_link_libraries(logic_tests
   PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_tests COMMAND logic_tests)
+
+add_executable(int128_tests tests/int128_tests.cpp)
+target_link_libraries(int128_tests
+  PRIVATE nimblecas_int128 nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME int128_tests COMMAND int128_tests)
 
 add_executable(bitset_tests tests/bitset_tests.cpp)
 target_link_libraries(bitset_tests
