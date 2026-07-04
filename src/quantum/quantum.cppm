@@ -37,7 +37,13 @@
 //     [A,A] = 0, plus faithful bookkeeping of whatever relation the caller layers on top.
 //   * Overflow: scalar coefficients are the overflow-checked Gaussian rationals of
 //     nimblecas.complex, so a coefficient that would overflow an int64 numerator/denominator
-//     yields MathError::overflow through the Result railway rather than wrapping.
+//     in add/multiply/scale yields MathError::overflow through the Result railway rather than
+//     wrapping. The one exception is the total `dagger` (declared `-> Op`, not `Result`): its
+//     only fallible step is conjugating a scalar's imaginary part, which is unrepresentable
+//     ONLY when that part is exactly INT64_MIN (whose negation overflows). That is a documented
+//     PRECONDITION — callers must not build scalar coefficients with an INT64_MIN part (the
+//     same int64 boundary the whole Rational layer carries) — and dagger leaves such a
+//     degenerate part unchanged rather than fabricating an unrepresentable value.
 
 export module nimblecas.quantum;
 
@@ -151,6 +157,9 @@ struct OpNode {
 // ---------------------------------------------------------------------------
 // Free-function builders (the public algebra surface, ROADMAP-7.15 named API).
 // ---------------------------------------------------------------------------
+// NOTE: a symbol's identity includes its self-adjoint flag, so op_symbol("H") and
+// self_adjoint("H") are DISTINCT generators that never collapse — pick one spelling per
+// physical operator and use it consistently, or the two will not be treated as equal.
 [[nodiscard]] auto op_symbol(std::string name) -> Op;        // A
 [[nodiscard]] auto self_adjoint(std::string name) -> Op;     // Hermitian A (dagger fixes it)
 [[nodiscard]] auto op_scalar(Complex value) -> Op;           // c·I
@@ -220,9 +229,13 @@ inline constexpr bool always_false = false;
                               [](const Op& x, const Op& y) { return x.is_equivalent_to(y); });
 }
 
-// Conjugate a scalar without a Result channel. conjugate() only negates the imaginary part,
-// which cannot overflow for a canonical Rational (numerator/denominator are never INT64_MIN),
-// so the error branch is unreachable and value_or's fallback is never taken.
+// Conjugate a scalar for the total `dagger`. conjugate() only negates the imaginary part,
+// which overflows ONLY when that part is exactly INT64_MIN (its negation is unrepresentable).
+// Rational::from_int can construct such a value (it bypasses Rational::make's INT64_MIN
+// rejection), so this IS reachable for a caller that violates the documented precondition
+// against INT64_MIN scalar parts (see the module header). There is no representable conjugate
+// in that case, so the fallback returns the part unchanged (a saturating no-op on a degenerate
+// input) rather than fabricating a wrong value; every non-degenerate scalar conjugates exactly.
 [[nodiscard]] auto conj(const Complex& c) -> Complex { return c.conjugate().value_or(c); }
 
 [[nodiscard]] auto one_scalar() -> Complex { return Complex::from_int(1); }
