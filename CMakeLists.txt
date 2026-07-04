@@ -266,6 +266,13 @@ target_sources(nimblecas_numbertheory PUBLIC
 target_link_libraries(nimblecas_numbertheory
   PUBLIC nimblecas_bigint nimblecas_rng nimblecas_core std_module)
 
+# ---- nimblecas.constants : arbitrary-precision math constants (pi, e, gamma, ...) on BigFloat ----
+add_library(nimblecas_constants STATIC)
+target_sources(nimblecas_constants PUBLIC
+  FILE_SET CXX_MODULES FILES src/constants/constants.cppm)
+target_link_libraries(nimblecas_constants
+  PUBLIC nimblecas_bigfloat nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
 add_library(nimblecas_int128 STATIC)
 target_sources(nimblecas_int128 PUBLIC
@@ -567,6 +574,12 @@ add_executable(bigfloat_tests tests/bigfloat_tests.cpp)
 target_link_libraries(bigfloat_tests
   PRIVATE nimblecas_bigfloat nimblecas_bigint nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigfloat_tests COMMAND bigfloat_tests)
+
+add_executable(constants_tests tests/constants_tests.cpp)
+target_link_libraries(constants_tests
+  PRIVATE nimblecas_constants nimblecas_bigfloat nimblecas_bigint nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME constants_tests COMMAND constants_tests)
 
 add_executable(int128_tests tests/int128_tests.cpp)
 target_link_libraries(int128_tests
