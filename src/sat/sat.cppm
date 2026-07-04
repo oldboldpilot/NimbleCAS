@@ -802,6 +802,12 @@ auto gsat(const Cnf& cnf, std::uint64_t max_flips, std::uint64_t max_restarts, s
             }
             model[best_var - 1] = !model[best_var - 1];
         }
+        // The flip loop tests satisfaction at the TOP of each iteration, so a model reached by
+        // the very last flip of this attempt is only visible here — re-check before restarting,
+        // exactly as walksat does, so GSAT never discards a model it actually found.
+        if (unsatisfied_clauses(cnf, model).empty()) {
+            return satisfiable_from(cnf, std::move(model));  // never returns UNSAT
+        }
     }
 
     return SatResult{SatVerdict::unknown, {}};

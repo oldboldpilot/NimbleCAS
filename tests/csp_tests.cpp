@@ -169,6 +169,34 @@ auto main() -> int {
                   t.expect(!r.value_or(std::nullopt).has_value(),
                            "arc-inconsistent CSP yields nullopt");
               })
+        .test("ac3_two_constraints_same_pair_stays_consistent",
+              [](TestContext& t) {
+                  // Regression: two binary constraints on the SAME ordered pair (0, 1). AC-3's
+                  // "skip the reverse arc" re-queue optimisation is sound only PER CONSTRAINT; a
+                  // per-variable exclusion wrongly suppresses the reverse arc of the OTHER
+                  // constraint and can leave a non-arc-consistent domain.
+                  //   X, Y in {0,1,2};  C0: X == Y ;  C1: X != 2.
+                  // C1 removes 2 from D[X]; that then removes support for value 2 in D[Y] under
+                  // C0 (nothing in {0,1} equals 2). The arc-consistent fixpoint is
+                  //   D[X] = {0,1},  D[Y] = {0,1}.
+                  // The old per-variable exclusion instead left D[Y] = {0,1,2} (value 2 with no
+                  // C0 support) -- arc-inconsistent.
+                  Csp csp;
+                  csp.domains = {{0, 1, 2}, {0, 1, 2}};
+                  csp.binary.push_back(BinaryConstraint{
+                      0, 1, [](std::int64_t a, std::int64_t b) { return a == b; }});
+                  csp.binary.push_back(BinaryConstraint{
+                      0, 1, [](std::int64_t a, std::int64_t /*b*/) { return a != 2; }});
+                  auto r = ac3(csp);
+                  t.expect(r.has_value() && r.value_or(std::nullopt).has_value(),
+                           "ac3 succeeds with non-empty domains");
+                  if (r && *r) {
+                      const auto& d = **r;
+                      t.expect(d[0] == std::vector<std::int64_t>({0, 1}), "D[X] pruned to {0,1}");
+                      t.expect(d[1] == std::vector<std::int64_t>({0, 1}),
+                               "D[Y] pruned to {0,1} (value 2 has no support -> arc consistent)");
+                  }
+              })
         .test("unsatisfiable_returns_nullopt",
               [](TestContext& t) {
                   // Three mutually-distinct variables over a two-value domain: no solution.

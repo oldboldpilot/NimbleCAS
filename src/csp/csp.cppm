@@ -415,9 +415,18 @@ auto ac3(const Csp& csp) -> Result<std::optional<std::vector<std::vector<std::in
                 return Ret{std::nullopt};  // arc-inconsistent: a valid empty (not an error)
             }
             // Re-queue every arc that reads INTO `from` (its neighbours may lose support),
-            // except the arc back to the variable we just checked against.
+            // except the reverse arc of THIS SAME constraint. The classic "skip Xj"
+            // optimisation is sound only per-constraint: a value was dropped from D[from]
+            // because it had no support under constraint `arc.ci`, so it cannot have been the
+            // support for any value under that same constraint's reverse arc. It CAN, however,
+            // have supported a value under a *different* constraint on the same ordered pair,
+            // so we must exclude only the same-constraint reverse (arc.ci, from<->to), not
+            // every arc coming from `arc.to` — otherwise AC-3 can return non-arc-consistent
+            // domains when two binary constraints share a variable pair.
             for (std::size_t k = 0; k < arcs.size(); ++k) {
-                if (arcs[k].to == arc.from && arcs[k].from != arc.to && queued[k] == 0) {
+                const bool same_constraint_reverse =
+                    arcs[k].ci == arc.ci && arcs[k].from == arc.to;
+                if (arcs[k].to == arc.from && !same_constraint_reverse && queued[k] == 0) {
                     work.push_back(k);
                     queued[k] = 1;
                 }

@@ -584,6 +584,14 @@ target_link_libraries(feature_symbolic_tests
           nimblecas_testing std_module)
 add_test(NAME feature_symbolic_tests COMMAND feature_symbolic_tests)
 
+add_executable(feature_linalg_tests tests/feature_linalg_tests.cpp)
+target_link_libraries(feature_linalg_tests
+  PRIVATE nimblecas_eigen nimblecas_matexp nimblecas_matdecomp nimblecas_bandsolve
+          nimblecas_cmatrix nimblecas_lp nimblecas_stats nimblecas_matrix nimblecas_complex
+          nimblecas_roots nimblecas_ratpoly nimblecas_polynomial nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME feature_linalg_tests COMMAND feature_linalg_tests)
+
 # CPU profiling harness (perf / VTune) — a plain executable, not a ctest target.
 add_executable(cpu_bench tools/cpu_bench.cpp)
 target_link_libraries(cpu_bench

@@ -29,9 +29,13 @@
 // OR-parallelism — the independent clause branches for a goal. `solve_or_parallel` maps the
 // first goal's candidate clauses across workers with `parallel::transform_index`; each
 // branch is a stateless continuation carrying its OWN copy of the substitution and rename
-// counter (no shared mutable state), and the branch results are concatenated in clause order
-// so the output is identical to the serial `solve` (within the shared budgets). "One branch
-// per clause" is exactly the "one shard per clause" shape a distributed engine would use.
+// counter (no shared mutable state), and the branch results are concatenated in clause order.
+// The output is identical to the serial `solve` WHENEVER the enumeration completes within the
+// budgets — the normal terminating case. Note the honest caveat: the step/depth budgets are a
+// PER-BRANCH safety cap here, not a single shared quota, so a query that actually EXHAUSTS its
+// step budget mid-search may return additional solutions in parallel that serial `solve`'s one
+// global budget would have cut off. "One branch per clause" is exactly the "one shard per
+// clause" shape a distributed engine would use.
 // SLD's AND-side backtracking, by contrast, is irregular and data-dependent — a poor fit for
 // SIMT/GPU execution — so this solver targets CPU/distributed parallelism only and
 // deliberately ships no CUDA path.
@@ -199,7 +203,9 @@ inline constexpr std::uint64_t max_derivation_depth = 1'000;
 // OR-parallel SLD resolution: the first goal's candidate clauses are explored as independent
 // branches via parallel::transform_index (one branch per clause, each a stateless continuation
 // with its own substitution and rename counter), and the branch results are concatenated in
-// clause order. Byte-for-byte identical to solve() within the shared budgets.
+// clause order. Byte-for-byte identical to solve() whenever the search completes within budget;
+// because each branch carries its own (not a shared) step/depth budget, a query that exhausts
+// the step budget mid-search may enumerate further here than serial solve() would.
 [[nodiscard]] auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
                                      std::uint64_t max_solutions)
     -> Result<std::vector<Substitution>>;
