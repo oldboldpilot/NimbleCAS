@@ -197,6 +197,18 @@ auto main() -> int {
                   t.expect(!empty_fn.has_value() &&
                                empty_fn.error() == nimblecas::MathError::domain_error,
                            "euler_maruyama(empty drift) yields domain_error");
+
+                  // A non-finite T or x0 must be rejected, not silently produce an all-NaN
+                  // "success" path (T <= 0 alone is false for NaN).
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  auto nan_t = euler_maruyama(a, b, 1.0, nan, 10, 1);
+                  t.expect(!nan_t.has_value() &&
+                               nan_t.error() == nimblecas::MathError::domain_error,
+                           "euler_maruyama(T==NaN) yields domain_error");
+                  auto nan_x0 = milstein(a, b, bp, nan, 1.0, 10, 1);
+                  t.expect(!nan_x0.has_value() &&
+                               nan_x0.error() == nimblecas::MathError::domain_error,
+                           "milstein(x0==NaN) yields domain_error");
               })
         .run();
 }

@@ -69,11 +69,37 @@ auto f_delayed_squared() -> DdeOperator {  // u' = u(t-1)^2
         return ud.multiply(ud);
     };
 }
+auto f_current_plus_delayed() -> DdeOperator {  // u' = u(t) + u(t-1) -- reads u_local, so the
+    return [](const PowerSeries& u, const PowerSeries& ud,  // per-interval Picard MUST iterate
+              const PowerSeries&) { return u.add(ud); };
+}
 
 }  // namespace
 
 auto main() -> int {
     return TestSuite("nimblecas.dde")
+        .test("operator_reading_current_state_needs_picard_iteration",
+              [](TestContext& t) {
+                  // u'(t) = u(t) + u(t-1), history u = 1 on [-1,0], tau = 1. On interval 0 the
+                  // delayed term is the constant 1, so u'(s) = u(s) + 1, u(0) = 1, i.e.
+                  // u = 2 e^s - 1, whose Taylor coefficients are u^(n)(0) = 2 for n >= 1:
+                  //   [1, 2, 1, 1/3, 1/12, 1/60].
+                  // Because f reads u_local (the CURRENT state), the per-interval graded Picard
+                  // must iterate to resolve each successive coefficient -- a single sweep would
+                  // be wrong. This locks the multi-sweep loop that the delayed-only operators
+                  // (which collapse to one integration) never exercise.
+                  const std::size_t order = 6;
+                  auto sol = solve_method_of_steps(f_current_plus_delayed(),
+                                                   const_history(t, ri(1), order, "hist"), ri(1),
+                                                   1, order);
+                  t.expect(sol.has_value(), "solve(u'=u(t)+u(t-1)) succeeds");
+                  if (!sol) {
+                      return;
+                  }
+                  expect_series(t, sol->pieces[0],
+                                {ri(1), ri(2), ri(1), rat(1, 3), rat(1, 12), rat(1, 60)},
+                                "I0 of u'=u(t)+u(t-1) is 2e^s - 1");
+              })
         .test("negated_delay_pieces",
               [](TestContext& t) {
                   // u'(t) = -u(t-1), history u = 1 on [-1,0], tau = 1.

@@ -160,8 +160,8 @@ namespace {
 
 auto euler_maruyama(std::function<double(double)> a, std::function<double(double)> b, double x0,
                     double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
-    if (steps == 0 || T <= 0.0 || !a || !b) {
-        return make_error<SdePath>(MathError::domain_error);
+    if (steps == 0 || !std::isfinite(T) || T <= 0.0 || !std::isfinite(x0) || !a || !b) {
+        return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
     return simulate_path(a, b, /*b_prime=*/{}, x0, T, steps, seed, /*use_milstein=*/false);
 }
@@ -169,8 +169,9 @@ auto euler_maruyama(std::function<double(double)> a, std::function<double(double
 auto milstein(std::function<double(double)> a, std::function<double(double)> b,
               std::function<double(double)> b_prime, double x0, double T, std::uint64_t steps,
               std::uint64_t seed) -> Result<SdePath> {
-    if (steps == 0 || T <= 0.0 || !a || !b || !b_prime) {
-        return make_error<SdePath>(MathError::domain_error);
+    if (steps == 0 || !std::isfinite(T) || T <= 0.0 || !std::isfinite(x0) || !a || !b ||
+        !b_prime) {
+        return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
     return simulate_path(a, b, b_prime, x0, T, steps, seed, /*use_milstein=*/true);
 }
@@ -179,8 +180,9 @@ auto simulate_terminal(std::function<double(double)> a, std::function<double(dou
                        std::function<double(double)> b_prime, double x0, double T,
                        std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
                        bool use_milstein) -> Result<std::vector<double>> {
-    if (steps == 0 || T <= 0.0 || paths == 0 || !a || !b || (use_milstein && !b_prime)) {
-        return make_error<std::vector<double>>(MathError::domain_error);
+    if (steps == 0 || !std::isfinite(T) || T <= 0.0 || !std::isfinite(x0) || paths == 0 || !a ||
+        !b || (use_milstein && !b_prime)) {
+        return make_error<std::vector<double>>(MathError::domain_error);  // NaN/inf also rejected
     }
 
     std::vector<double> terminals;
