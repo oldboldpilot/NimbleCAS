@@ -197,33 +197,51 @@ namespace {
 // Shared graded Picard/Taylor recursion underlying both ADM and HPM: u_0 = u0 and
 // u_{n+1} = L^{-1}[A_n]. Each component is homogeneous of degree n, so Σ u_n is the exact
 // Taylor polynomial of the solution to `order` coefficients.
+//
+// EFFICIENCY. The partial sum P = u_0 + ... + u_k is maintained INCREMENTALLY, and each
+// step extracts only the single coefficient A_k = ([x^k] f(P)) it needs. This is the
+// difference between O(n) and O(n^2) bookkeeping: calling adomian_polynomials in the loop
+// would re-sum all components AND build every A_0..A_k monomial only to discard all but the
+// last, on every step. It is exact to do so because u_{k+1} is homogeneous of degree k+1,
+// so folding it into P cannot change [x^m] f(P) for any m <= k already consumed. One
+// evaluation of f per order (the irreducible cost) is retained.
 auto graded_series_solve(const SeriesOperator& f, const Rational& u0, std::size_t order)
     -> Result<PowerSeries> {
     if (order == 0 || !f) {
         return make_error<PowerSeries>(MathError::domain_error);
     }
     const std::size_t n = order;
-    std::vector<PowerSeries> comps;
-    comps.reserve(n);
-    auto u0_series = PowerSeries::constant(u0, n);
-    if (!u0_series) {
-        return make_error<PowerSeries>(u0_series.error());
+    auto p0 = PowerSeries::constant(u0, n);  // running partial sum P = u_0
+    if (!p0) {
+        return make_error<PowerSeries>(p0.error());
     }
-    comps.push_back(std::move(*u0_series));
+    PowerSeries partial = std::move(*p0);
 
-    // Build u_1..u_{n-1}; the top component u_{n-1} supplies the x^{n-1} coefficient.
+    // Build u_1..u_{n-1}, folding each into P; the step at k supplies the x^{k+1} coefficient.
     for (std::size_t k = 0; k + 1 < n; ++k) {
-        auto polys = adomian_polynomials(f, comps);
-        if (!polys) {
-            return make_error<PowerSeries>(polys.error());
+        auto image = f(partial);  // single f-evaluation on the sum so far
+        if (!image) {
+            return make_error<PowerSeries>(image.error());
         }
-        auto u_next = polys->back().integrate();  // L^{-1}[A_k]
+        if (image->order() != n) {
+            return make_error<PowerSeries>(MathError::domain_error);  // f must preserve order
+        }
+        // A_k = ([x^k] f(P)) x^k, then u_{k+1} = L^{-1}[A_k] = integrate(A_k).
+        auto a_k = homogeneous_monomial(image->coefficient(k), k, n);
+        if (!a_k) {
+            return make_error<PowerSeries>(a_k.error());
+        }
+        auto u_next = a_k->integrate();
         if (!u_next) {
             return make_error<PowerSeries>(u_next.error());
         }
-        comps.push_back(std::move(*u_next));
+        auto grown = partial.add(*u_next);  // fold u_{k+1} into the running sum P
+        if (!grown) {
+            return make_error<PowerSeries>(grown.error());
+        }
+        partial = std::move(*grown);
     }
-    return sum_components(comps, n);
+    return partial;
 }
 
 }  // namespace
@@ -244,21 +262,19 @@ auto ham_solve(SeriesOperator f, Rational u0, Rational hbar, std::size_t order)
         return make_error<PowerSeries>(MathError::domain_error);
     }
     const std::size_t n = order;
-    std::vector<PowerSeries> comps;
-    comps.reserve(n);
     auto u0_series = PowerSeries::constant(u0, n);
     if (!u0_series) {
         return make_error<PowerSeries>(u0_series.error());
     }
-    comps.push_back(std::move(*u0_series));
+    // As in graded_series_solve, keep the running partial sum P incrementally (avoiding the
+    // O(n^2) re-summation) and keep only the previous component u_{m-1} (needed for the
+    // deformation's u_{m-1}' term and the χ_m u_{m-1} term). One f-evaluation per order.
+    PowerSeries partial = *u0_series;  // P = Σ_{j<m} u_j, starts at u_0
+    PowerSeries prev = *u0_series;     // u_{m-1}, starts at u_0
 
     for (std::size_t m = 1; m < n; ++m) {
         // A_{m-1} = Π_{m-1} f(Σ_{j<m} u_j): the grade-(m-1) projection of f on the sum so far.
-        auto partial = sum_components(comps, n);
-        if (!partial) {
-            return make_error<PowerSeries>(partial.error());
-        }
-        auto image = f(*partial);
+        auto image = f(partial);
         if (!image) {
             return make_error<PowerSeries>(image.error());
         }
@@ -271,7 +287,7 @@ auto ham_solve(SeriesOperator f, Rational u0, Rational hbar, std::size_t order)
         }
 
         // R_m = u_{m-1}' - A_{m-1}, then L^{-1}[R_m] and its ħ-scaling.
-        auto u_deriv = comps[m - 1].derivative();
+        auto u_deriv = prev.derivative();
         if (!u_deriv) {
             return make_error<PowerSeries>(u_deriv.error());
         }
@@ -289,17 +305,22 @@ auto ham_solve(SeriesOperator f, Rational u0, Rational hbar, std::size_t order)
         }
 
         // u_m = χ_m u_{m-1} + ħ L^{-1}[R_m]; χ_m = 0 for m == 1, else 1.
+        PowerSeries u_m = *scaled;
         if (m >= 2) {
-            auto u_m = comps[m - 1].add(*scaled);
-            if (!u_m) {
-                return make_error<PowerSeries>(u_m.error());
+            auto sum = prev.add(*scaled);
+            if (!sum) {
+                return make_error<PowerSeries>(sum.error());
             }
-            comps.push_back(std::move(*u_m));
-        } else {
-            comps.push_back(std::move(*scaled));
+            u_m = std::move(*sum);
         }
+        auto grown = partial.add(u_m);  // fold u_m into the running sum P
+        if (!grown) {
+            return make_error<PowerSeries>(grown.error());
+        }
+        partial = std::move(*grown);
+        prev = std::move(u_m);
     }
-    return sum_components(comps, n);
+    return partial;
 }
 
 }  // namespace nimblecas
