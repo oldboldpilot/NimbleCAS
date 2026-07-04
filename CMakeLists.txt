@@ -127,6 +127,13 @@ target_sources(nimblecas_complex PUBLIC
 target_link_libraries(nimblecas_complex
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.quantum : exact non-commutative operator algebra (§7.15) ----
+add_library(nimblecas_quantum STATIC)
+target_sources(nimblecas_quantum PUBLIC
+  FILE_SET CXX_MODULES FILES src/quantum/quantum.cppm)
+target_link_libraries(nimblecas_quantum
+  PUBLIC nimblecas_complex nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.recurrence : linear constant-coefficient recurrences (§7.9) ----
 add_library(nimblecas_recurrence STATIC)
 target_sources(nimblecas_recurrence PUBLIC
@@ -526,6 +533,12 @@ target_link_libraries(complex_tests
           nimblecas_testing std_module)
 add_test(NAME complex_tests COMMAND complex_tests)
 
+add_executable(quantum_tests tests/quantum_tests.cpp)
+target_link_libraries(quantum_tests
+  PRIVATE nimblecas_quantum nimblecas_complex nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME quantum_tests COMMAND quantum_tests)
+
 add_executable(recurrence_tests tests/recurrence_tests.cpp)
 target_link_libraries(recurrence_tests
   PRIVATE nimblecas_recurrence nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
@@ -888,6 +901,29 @@ target_link_libraries(feature_numprob_tests
           nimblecas_ratpoly nimblecas_polynomial nimblecas_parallel nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME feature_numprob_tests COMMAND feature_numprob_tests)
+
+add_executable(feature_reasoning_tests tests/feature_reasoning_tests.cpp)
+target_link_libraries(feature_reasoning_tests
+  PRIVATE nimblecas_search nimblecas_sat nimblecas_csp nimblecas_logic
+          nimblecas_bitcsp nimblecas_bitset nimblecas_rng nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME feature_reasoning_tests COMMAND feature_reasoning_tests)
+
+add_executable(feature_diffeq_tests tests/feature_diffeq_tests.cpp)
+target_link_libraries(feature_diffeq_tests
+  PRIVATE nimblecas_ode nimblecas_dde nimblecas_dae nimblecas_perturbation nimblecas_sde
+          nimblecas_powerseries nimblecas_matrix nimblecas_rng nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME feature_diffeq_tests COMMAND feature_diffeq_tests)
+
+add_executable(feature_arithmetic_tests tests/feature_arithmetic_tests.cpp)
+target_link_libraries(feature_arithmetic_tests
+  PRIVATE nimblecas_bigeigen nimblecas_bigmatrix nimblecas_bigpowerseries
+          nimblecas_bigcombinatorics nimblecas_bigrational nimblecas_bigfloat
+          nimblecas_bigint nimblecas_int128 nimblecas_numbertheory nimblecas_constants
+          nimblecas_doubledouble nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_simd nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME feature_arithmetic_tests COMMAND feature_arithmetic_tests)
 
 # CPU profiling harness (perf / VTune) — a plain executable, not a ctest target.
 add_executable(cpu_bench tools/cpu_bench.cpp)
