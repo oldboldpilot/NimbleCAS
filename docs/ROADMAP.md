@@ -4,6 +4,29 @@ This document defines the C++23 technical architecture, class interfaces, module
 
 ---
 
+## 0. Implemented status
+
+This section tracks what is **built, tested, and adversarially reviewed** against the plan below. Every module named here has a page under [Module reference](Index.md#module-reference); the boundaries stated there (exact-over-`Q` vs numerical, decidability, overflow) are authoritative. The plan (sections 1–13) is retained as the design record and forward-looking scope.
+
+**Done (built on the `clang++-22` + libc++ server, `ctest` green, ASan/UBSan clean, per-module review):**
+
+- **Symbolic core & calculus** — `core`, `symbolic`, `simplify`, `cache`, `diff`, `series`, `laplace`, `vectorcalc`, `latex`; plus **`symconst`** (π/e/γ/φ as symbolic `Expr` leaves + numeric bridge to `constants`).
+- **Polynomial / rational-function chain** — `polynomial`, `ratpoly`, `polyexpr`, `pfd`, `ratint`, `resultant`, `rothstein`, `integrate`, `roots`, `recurrence`, `pade`.
+- **Linear algebra** — `matrix`, `cmatrix`, `matdecomp`, `bandsolve` (tridiagonal/banded direct solvers), `matexp`, `eigen`; big-backed `bigmatrix` (Bareiss det) and `bigeigen` (Faddeev–LeVerrier char-poly + rational eigenvalues).
+- **Wide-arithmetic tower** — `int128`, `bigint`, `bigrational`, `bigfloat`, `doubledouble`, `bigcombinatorics`, `bigpowerseries`; `constants`; `numbertheory` (crypto primitives).
+- **Differential equations** — `ode`, `dde`, `dae` (index-1 + arbitrary-index reduction), `pde` (linear + nonlinear Adomian + Poisson BVP), `sde` (Euler–Maruyama/Milstein/Heun/SRK/tamed); `perturbation` (ADM/HPM/HAM). §7.4/§7.5/§7.8 substantially realised over the exact power-series substrate.
+- **Reasoning & algorithmics** — `search`, `sat`, `csp`, `logic`, and the branchless `bitset`/`bitcsp`, on the `parallel` fork–join runtime; stateless-shard design for SGE/Ray/NCCL.
+- **Simulation & numerics** — `rng` (counter-based, partition-independent), `mcmc`, `montecarlo`, `numeric`, `stats`, `lp`, `combinatorics`, `orthopoly`, `complex`, `dynamics` (Routh–Hurwitz stability).
+- **Runtime / tooling** — `parallel`, `simd`, `gpu` (opt-in CUDA), `testing`, `svgplot`, and the nanobind Python bindings.
+
+**Open / not yet built** (see the module reference and section 7 for scope):
+
+- A **WebGPU/WASM interactive** plotting + document front-end (§7.11/§7.13). `svgplot` is the static substrate it would render.
+- Breadth items: SDE schemes beyond the current set, nonlinear/variable-coefficient higher-index DAEs, boundary/nonlinear PDEs beyond the current builders, and the quantum/functional-analysis engine (§7.15).
+- The full JIT/multi-GPU (§5) and `StochasticGraphExecutionEngine` distributed DAG (§6) scaling paths.
+
+---
+
 ## 1. System Architecture & C++23 Modules
 
 NimbleCAS is designed from the ground up using **C++23 Modules** to enforce clean boundaries, maximize compilation speed, and prevent macro leakage.

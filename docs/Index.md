@@ -72,6 +72,62 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.lp` | [lp.md](reference/lp.md) | Exact-rational linear programming via single-phase Simplex: `maximize(A, b, c)` for `max c·x s.t. A x <= b, x >= 0` (`b >= 0`), Bland's rule anti-cycling, exact optimum / unbounded detection. |
 | `nimblecas.numeric` | [numeric.md](reference/numeric.md) | Floating-point polynomial root-finders (Newton, bisection, secant) with Horner `eval` / `eval_derivative`; standalone numeric solver depending only on `core`. |
 
+The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Rational → int128 → bigint → bigrational`; `bigfloat`/`doubledouble`; big-backed consumers):
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.int128` | [int128.md](reference/int128.md) | Native `__int128` `Int128` + `Rational128` (~1.7·10³⁸), overflow-checked via `__builtin_*_overflow` — the tier between `int64` `Rational` and `BigInt`. |
+| `nimblecas.bigint` | [bigint.md](reference/bigint.md) | Arbitrary-precision `BigInt` (sign-magnitude base-2³² limbs, Knuth Algorithm-D division) with `gcd`/`pow`/`modpow` for cryptography. |
+| `nimblecas.bigrational` | [bigrational.md](reference/bigrational.md) | Exact unbounded rational `num`/`den` over `BigInt`, gcd-reduced with `den > 0`; infallible add/sub/mul, guarded divide/reciprocal/pow. |
+| `nimblecas.bigfloat` | [bigfloat.md](reference/bigfloat.md) | Arbitrary-precision software binary float on a `BigInt` mantissa; correctly-rounded add/mul/div/sqrt with guard/round/sticky ties-to-even. |
+| `nimblecas.doubledouble` | [doubledouble.md](reference/doubledouble.md) | ~106-bit extended-precision float via error-free transforms; SIMD-batched `dd_sum`/`dd_dot`/`dd_poly` with bit-identical scalar == SIMD. |
+| `nimblecas.bigcombinatorics` | [bigcombinatorics.md](reference/bigcombinatorics.md) | `BigInt`-backed factorial/binomial/multinomial/Catalan/Fibonacci/Stirling/Bell — the overflow-free counterpart to `combinatorics`. |
+| `nimblecas.bigpowerseries` | [bigpowerseries.md](reference/bigpowerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `BigRational` — the exact/unbounded mirror of `powerseries`. |
+| `nimblecas.bigmatrix` | [bigmatrix.md](reference/bigmatrix.md) | Dense matrix over `BigRational` with exact fraction-free **Bareiss** determinant + `from_matrix` promotion of an `int64` `Matrix`. |
+| `nimblecas.bigeigen` | [bigeigen.md](reference/bigeigen.md) | Exact characteristic polynomial (Faddeev–LeVerrier) + rational eigenvalues over `BigRational` on `bigmatrix`; irrational/complex eigenvalues honestly omitted. |
+
+Reasoning & algorithmics (search / logic / constraints on the `parallel` runtime; regular workloads GPU-offloadable, irregular ones CPU/distributed):
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.search` | [search.md](reference/search.md) | Graph/tree search (BFS, DFS, IDDFS, Dijkstra, A*, tabu) + dynamic programming (edit-distance/LCS/knapsack) in recursive, iterative, and parallel forms. |
+| `nimblecas.sat` | [sat.md](reference/sat.md) | Boolean SAT: DPLL, CDCL (1-UIP learning), WalkSAT, GSAT, `solve_portfolio`, and distributed `solve_shard`. Complete solvers are worst-case exponential. |
+| `nimblecas.csp` | [csp.md](reference/csp.md) | Constraint satisfaction: AC-3 arc consistency, backtracking, forward checking, parallel. |
+| `nimblecas.logic` | [logic.md](reference/logic.md) | Logic programming: unification + SLD resolution + OR-parallel search under a depth/step budget (semi-decidable). |
+| `nimblecas.bitset` | [bitset.md](reference/bitset.md) | Word-parallel branchless fixed-capacity bitset — the CPU substrate for branchless/GPU-style regular workloads. |
+| `nimblecas.bitcsp` | [bitcsp.md](reference/bitcsp.md) | Branchless bitset-domain AC-3 + three-bitmask N-queens (parallel result == serial). |
+
+Differential equations (exact power-series over `Q`, except `sde` which is numerical):
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.ode` | [ode.md](reference/ode.md) | Exact power-series solution of first-order ODE **systems** + higher-order via companion-system reduction. |
+| `nimblecas.dde` | [dde.md](reference/dde.md) | Delay differential equations via the exact method of steps (piecewise polynomial per delay interval). |
+| `nimblecas.sde` | [sde.md](reference/sde.md) | Stochastic DEs (Euler–Maruyama, Milstein, Heun, SRK, tamed Euler) on the counter-based RNG — **numerical**, per-path seeded for determinism. |
+| `nimblecas.dae` | [dae.md](reference/dae.md) | Linear DAEs: index-1 semi-explicit + arbitrary-index via shuffle-algorithm index reduction, reduced onto `ode`. Exact over `Q`. |
+| `nimblecas.pde` | [pde.md](reference/pde.md) | Linear (Cauchy–Kovalevskaya) + nonlinear (Adomian time-series) evolution PDEs + an exact 1-D Poisson/Dirichlet BVP. |
+| `nimblecas.perturbation` | [perturbation.md](reference/perturbation.md) | ADM / HPM / HAM perturbation methods, exact in `Q[[x]]/(xᴺ)` on the `powerseries` substrate. |
+
+Additional linear algebra, numerics & simulation:
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.cmatrix` | [cmatrix.md](reference/cmatrix.md) | Dense matrices over the exact Gaussian rationals (`Complex` entries). |
+| `nimblecas.matdecomp` | [matdecomp.md](reference/matdecomp.md) | LU decomposition + matrix structure predicates. |
+| `nimblecas.bandsolve` | [bandsolve.md](reference/bandsolve.md) | Thomas + banded-LU direct solvers for tridiagonal/banded systems + parallel multi-RHS batch. |
+| `nimblecas.matexp` | [matexp.md](reference/matexp.md) | Matrix exponential via Taylor / Padé / scaling-and-squaring. |
+| `nimblecas.eigen` | [eigen.md](reference/eigen.md) | Characteristic polynomial + rational eigenvalues/eigenvectors over `Q` (the `int64` tier `bigeigen` big-backs). |
+| `nimblecas.dynamics` | [dynamics.md](reference/dynamics.md) | Equilibria, exact Routh–Hurwitz asymptotic stability, and rational equilibrium classification. |
+| `nimblecas.powerseries` | [powerseries.md](reference/powerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `int64` `Rational`. |
+| `nimblecas.pade` | [pade.md](reference/pade.md) | Padé `[m/n]` rational approximant of a power series (exact-rational Toeplitz solve). |
+| `nimblecas.constants` | [constants.md](reference/constants.md) | Arbitrary-precision π/e/γ/ln2/ln10/√2/golden/Catalan as `BigFloat`. |
+| `nimblecas.symconst` | [symconst.md](reference/symconst.md) | Named mathematical-constant `Expr` **leaves** (π, e, γ, φ) + a numeric-evaluation bridge to `constants`. |
+| `nimblecas.numbertheory` | [numbertheory.md](reference/numbertheory.md) | Extended GCD, `mod_inverse`, Miller–Rabin, `next_prime`, CRT, Jacobi — crypto number-theory over `BigInt`. |
+| `nimblecas.rng` | [rng.md](reference/rng.md) | Counter-based parallel RNG (Threefry) + splitmix64 seeding — partition-independent / thread-count-independent draws. |
+| `nimblecas.mcmc` | [mcmc.md](reference/mcmc.md) | Metropolis–Hastings MCMC on the parallel RNG; per-chain seed `splitmix64(seed ^ chain)`. |
+| `nimblecas.montecarlo` | [montecarlo.md](reference/montecarlo.md) | Monte Carlo integration / estimation + sample statistics — numerical. |
+| `nimblecas.svgplot` | [svgplot.md](reference/svgplot.md) | In-core standalone SVG-string plotter (line/scatter/function; exact data → pixel mapping). |
+
 Tooling and integration:
 
 | Module | Reference | Summary |
@@ -122,6 +178,23 @@ nimblecas.testing   (stands alone)
 nimblecas_ext       (nanobind: imports symbolic, simplify, diff, polyexpr)
 nimblecas.gpu       (optional CUDA; depends on core — opt-in via -DNIMBLECAS_CUDA=ON)
 ```
+
+The diagram above shows the original symbolic + numeric core. The later
+subsystems layer on top of it along these roots:
+
+- **Wide-arithmetic tower** — `int128 → bigint → bigrational → {bigfloat,
+  bigcombinatorics, bigpowerseries, bigmatrix → bigeigen}`, each tier lifting the
+  `int64` overflow ceiling of its `core`/`ratpoly`-based counterpart; `doubledouble`
+  and `constants` sit alongside on `core`/`bigfloat`.
+- **Differential equations** — `ode` builds on `powerseries`; `dde`/`dae`/`pde`/
+  `perturbation` build on `ode`/`powerseries`/`ratpoly`; `sde`/`mcmc`/`montecarlo`
+  build on the counter-based `rng`.
+- **Reasoning & algorithmics** — `search`/`sat`/`csp`/`logic` and the branchless
+  `bitset`/`bitcsp` build on `core` + the `parallel` fork–join runtime; each unit of
+  work is a stateless pure function of `(problem, shard, seed)` for SGE/Ray/NCCL
+  distribution.
+- **Symbolic constants** — `symconst` bridges the `symbolic` `Expr` layer to the
+  numeric `constants`.
 
 See the [architecture overview](architecture/overview.md) for the exact `import`
 edges and the rationale.
