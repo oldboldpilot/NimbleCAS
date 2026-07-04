@@ -508,10 +508,28 @@ auto BigFloat::to_double() const -> double {
     const bool neg = mant_.is_negative();
     const BigInt mag = mant_.abs();
     const std::int64_t b = bit_length(mag);
-    const std::int64_t s = b > 53 ? b - 53 : 0;  // keep the top <= 53 bits (double's field)
-    auto dm = mag.divmod(pow2(static_cast<std::uint64_t>(s)));
-    const BigInt top = dm ? dm->first : bi_zero();
-    const auto ti = bigint_to_i64(top);           // <= 53 bits -> always fits
+    const std::int64_t s = b > 53 ? b - 53 : 0;  // shift off all but the top <= 53 bits
+    BigInt top;
+    if (s == 0) {
+        top = mag;  // already <= 53 bits: exact, nothing to round
+    } else {
+        // Round the discarded low s bits to NEAREST, ties to even (the "nearest double"
+        // contract) rather than truncating toward zero.
+        auto dm = mag.divmod(pow2(static_cast<std::uint64_t>(s)));
+        top = dm ? dm->first : bi_zero();
+        const BigInt rem = dm ? dm->second : bi_zero();
+        const BigInt half = pow2(static_cast<std::uint64_t>(s - 1));
+        const auto cmp = rem <=> half;
+        bool round_up = cmp > 0;
+        if (cmp == 0) {  // exact halfway: round to even (up iff the kept value is odd)
+            auto parity = top.divmod(BigInt::from_i64(2));
+            round_up = parity && !parity->second.is_zero();
+        }
+        if (round_up) {
+            top = top.add(BigInt::from_i64(1));  // may carry to 2^53, still an exact double
+        }
+    }
+    const auto ti = bigint_to_i64(top);           // <= 2^53 -> always fits i64 and double
     double value = ti ? static_cast<double>(*ti) : 0.0;
 
     std::int64_t expo = 0;

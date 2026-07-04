@@ -48,6 +48,27 @@ auto main() -> int {
                   t.expect(bf(0, 64).is_zero(), "integer 0 is the canonical zero");
                   t.expect(bf(0, 64).sign() == 0 && bf(-7, 64).sign() == -1, "sign() is correct");
               })
+        .test("rounding_is_correct_ties_to_even",
+              [](TestContext& t) {
+                  // Round-to-nearest, ties to EVEN at 4 significant bits.
+                  // 19 = 10011_2 is exactly halfway between 18 (1001_2*2) and 20 (1010_2*2);
+                  // the even 4-bit mantissa is 1010, so 19 rounds UP to 20.
+                  t.expect(bf(19, 4) == bf(20, 4), "19 @4 bits ties up to even 20");
+                  // 21 = 10101_2 is halfway between 20 (even) and 22 (1011_2*2); rounds to 20.
+                  t.expect(bf(21, 4) == bf(20, 4), "21 @4 bits ties down to even 20");
+                  // 23 = 10111_2 is halfway between 22 (1011_2*2, odd) and 24 (1100_2*2); ->24.
+                  t.expect(bf(23, 4) == bf(24, 4), "23 @4 bits ties up to even 24");
+                  // At 5 bits 19 is exact (no tie), so it stays distinct from 20.
+                  t.expect(!(bf(19, 5) == bf(20, 5)), "19 is exact at 5 bits");
+
+                  // to_double() rounds to the NEAREST double (ties to even), not truncation.
+                  // 2^53+3 is exactly halfway between representable 2^53+2 and 2^53+4; even -> +4.
+                  t.expect(bfs("9007199254740995", 60).to_double() == 9007199254740996.0,
+                           "to_double(2^53+3) -> nearest-even 2^53+4");
+                  // 2^53+1 rounds down to 2^53.
+                  t.expect(bfs("9007199254740993", 60).to_double() == 9007199254740992.0,
+                           "to_double(2^53+1) -> 2^53");
+              })
         .test("double_round_trips",
               [](TestContext& t) {
                   // Exact doubles survive from_double -> to_double unchanged.
