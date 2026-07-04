@@ -25,10 +25,11 @@ served build that adds the live WASM CAS.
 
 ## In-browser CAS engine (WebAssembly)
 
-Beyond the viewer, the **real exact symbolic engine** runs in the browser via
-WebAssembly — not just the freestanding numeric kernel. `nimblecas.js` +
-`nimblecas.wasm` (~390 KB) are the `core → parallel → symbolic → cache → simplify →
-diff → latex → reader` slice compiled with Emscripten (see
+Beyond the viewer, the **real exact engine** runs in the browser via WebAssembly — not
+just the freestanding numeric kernel. `nimblecas.js` + `nimblecas.wasm` (~397 KB) are the
+symbolic core **plus** the numeric/linear-algebra chain — `core, parallel, simd,
+polynomial, ratpoly, matrix, roots, numeric, matdecomp, bandsolve, eigen, symbolic,
+cache, simplify, diff, latex, reader` — compiled with Emscripten (see
 [`docs/architecture/wasm-build.md`](../docs/architecture/wasm-build.md); rebuild with
 [`scripts/build-wasm-slice.sh`](../scripts/build-wasm-slice.sh)).
 
@@ -36,11 +37,17 @@ diff → latex → reader` slice compiled with Emscripten (see
   expression → it is parsed, simplified, and rendered as LaTeX (MathJax). Because it
   fetches `nimblecas.wasm`, serve it over `http(s)://` (e.g. `python -m http.server`),
   not `file://`.
-- **API:** one C export, `nimblecas_eval_latex(const char*) -> const char*`
-  (text → parse → simplify → LaTeX, exact over ℚ). Call it as
-  `Module.ccall('nimblecas_eval_latex', 'string', ['string'], [expr])`. Everything
-  stays exact — `2/4 + 1/4` yields `\frac{3}{4}`, not a float — and a parse/eval
-  failure returns a LaTeX `\text{…}` marker rather than throwing.
+- **API:** two C exports:
+  - `nimblecas_eval_latex(const char*) -> const char*` — text → parse → simplify →
+    LaTeX, exact over ℚ. `2/4 + 1/4` yields `\frac{3}{4}`, not a float.
+  - `nimblecas_matrix_det_latex(const char*) -> const char*` — `"a,b;c,d"` (semicolon
+    rows, comma cells) → the exact determinant → LaTeX, exercising the linear-algebra
+    chain (`matrix → ratpoly → polynomial → simd`). `1,2;3,4` yields `-2`;
+    `1/2,1;1,1` yields `-\frac{1}{2}`.
+
+  Call either as `Module.ccall('<name>', 'string', ['string'], [arg])`. Both are total —
+  a parse/eval failure or a non-square/non-numeric matrix returns a LaTeX `\text{…}`
+  marker rather than throwing or guessing.
 
 This is the substrate a future WebGPU document front-end will call to evaluate live
 `nimblecas` cells (the [`execdoc`](../docs/reference/execdoc.md) engine's browser

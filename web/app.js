@@ -185,17 +185,22 @@ function buildLiveControls() {
   return box;
 }
 
-// --- full symbolic engine (WASM) --------------------------------------------
-// The REAL exact-over-Q CAS (the core..reader slice) compiled to WebAssembly, loaded lazily
-// as an ES module. Unlike the freestanding kernel.wasm above (raw poly_eval), this is the
-// whole symbolic engine behind a C ABI: text -> parse -> simplify -> LaTeX. It degrades
-// gracefully to "engine unavailable" if nimblecas.js / nimblecas.wasm are not served.
-const CAS = { ready: false, evalLatex: null };
+// --- full symbolic + linear-algebra engine (WASM) ---------------------------
+// The REAL exact-over-Q CAS — the symbolic core PLUS the numeric/linear-algebra chain
+// (simd, polynomial, ratpoly, matrix, roots, numeric, matdecomp, bandsolve, eigen) — compiled
+// to WebAssembly, loaded lazily as an ES module. Unlike the freestanding kernel.wasm above
+// (raw poly_eval), this is the whole engine behind two C ABI entry points:
+//   nimblecas_eval_latex(expr)     text -> parse -> simplify -> LaTeX
+//   nimblecas_matrix_det_latex(m)  "a,b;c,d" (semicolon rows, comma cells) -> exact
+//                                  determinant -> LaTeX (exercises the linalg chain)
+// Degrades gracefully to "engine unavailable" if nimblecas.js / nimblecas.wasm are not served.
+const CAS = { ready: false, evalLatex: null, det: null };
 async function initCAS() {
   try {
     const { default: NimbleCAS } = await import('./nimblecas.js');
     const mod = await NimbleCAS();
     CAS.evalLatex = (src) => mod.ccall('nimblecas_eval_latex', 'string', ['string'], [src]);
+    CAS.det = (src) => mod.ccall('nimblecas_matrix_det_latex', 'string', ['string'], [src]);
     CAS.ready = true;
   } catch (e) {
     CAS.ready = false;  // no engine served -> CAS cells/REPL show an inline hint
@@ -212,6 +217,24 @@ function renderCasCell(host, source) {
   cell.appendChild(src);
   if (CAS.ready) {
     try { renderMath(cell, CAS.evalLatex(source)); }
+    catch (e) { const n = document.createElement('div'); n.className = 'cas-note'; n.textContent = 'eval failed: ' + e.message; cell.appendChild(n); }
+  } else {
+    const n = document.createElement('div'); n.className = 'cas-note';
+    n.textContent = 'CAS engine not loaded (serve nimblecas.js + nimblecas.wasm).';
+    cell.appendChild(n);
+  }
+  host.appendChild(cell);
+}
+
+// Render one executable matrix-determinant cell: "a,b;c,d" -> det(...) rendered as math,
+// exercising the linear-algebra chain (matrix -> ratpoly -> polynomial -> simd) end to end.
+function renderDetCell(host, source) {
+  const cell = document.createElement('div'); cell.className = 'cas-cell';
+  const src = document.createElement('div'); src.className = 'cas-src';
+  src.textContent = '› det(' + source + ')';
+  cell.appendChild(src);
+  if (CAS.ready) {
+    try { renderMath(cell, CAS.det(source)); }
     catch (e) { const n = document.createElement('div'); n.className = 'cas-note'; n.textContent = 'eval failed: ' + e.message; cell.appendChild(n); }
   } else {
     const n = document.createElement('div'); n.className = 'cas-note';
@@ -261,6 +284,7 @@ function renderDocument(doc) {
       if (block.kind === 'prose') { const d = document.createElement('div'); d.className = 'prose'; d.innerHTML = renderProse(block.text || ''); app.appendChild(d); }
       else if (block.kind === 'math') renderMath(app, block.latex || '');
       else if (block.kind === 'nimblecas') renderCasCell(app, block.source || '');
+      else if (block.kind === 'nimblecas-det') renderDetCell(app, block.source || '');
       else if (block.kind === 'plot' && block.plot) {
         const fig = document.createElement('figure'); fig.className = 'plot'; app.appendChild(fig);
         renderPlot(fig, block.plot, { onBackendChange: () => setBadge('cpu') });
@@ -330,6 +354,10 @@ function buildSampleDocument() {
       { kind: 'nimblecas', source: '(a + b)*(a - b)' },
       { kind: 'nimblecas', source: 'x^2 + 3*x^2' },
       { kind: 'nimblecas', source: 'sin(x) + sin(x)' },
+      { kind: 'prose', text: '## Linear algebra, in the browser\n\nThe symbolic engine\'s numeric/linear-algebra chain (`matrix` → `ratpoly` → `polynomial` → `simd`) is compiled into the same WASM module. Determinants are computed exactly over ℚ:' },
+      { kind: 'nimblecas-det', source: '1,2;3,4' },
+      { kind: 'nimblecas-det', source: '2,0,0;0,3,0;0,0,4' },
+      { kind: 'nimblecas-det', source: '1/2,1;1,1' },
       { kind: 'prose', text: '## Live compute\n\nType your own expression in the CAS box below, or sample a polynomial through the plot renderer. The CAS runs `nimblecas.wasm` (the whole symbolic engine); the polynomial control runs the freestanding `kernel.wasm` if present, else JavaScript.' },
     ],
   };

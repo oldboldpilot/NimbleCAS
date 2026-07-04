@@ -5,9 +5,11 @@
 
   This is the module-shell counterpart to the standalone index.html: it loads the split
   ES modules (app.js + renderer.js) and, alongside the WebGPU plot renderer, wires in the
-  REAL exact symbolic engine compiled to WebAssembly (nimblecas.js + nimblecas.wasm — see
-  docs/architecture/wasm-build.md). Executable `nimblecas` document cells and the live CAS
-  box are evaluated by that engine, exact over Q.
+  REAL engine compiled to WebAssembly (nimblecas.js + nimblecas.wasm — see
+  docs/architecture/wasm-build.md): the symbolic core AND the numeric/linear-algebra chain
+  (matrix/ratpoly/polynomial/simd/eigen/...). Executable `nimblecas` document cells,
+  `nimblecas-det` matrix-determinant cells, and the live CAS box are all evaluated by that
+  engine, exact over Q.
 
   Serve over http(s):// (the ES modules and the .wasm are fetched):  python -m http.server
 -->

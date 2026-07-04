@@ -12,9 +12,21 @@
 // All kernels are strictly elementwise (out[i] = f(a[i], b[i], ...)), so every ISA
 // path produces bit-identical results regardless of vector width (Rule 55). Reductions
 // whose result depends on summation order are deliberately excluded here.
+//
+// PORTABILITY (e.g. wasm32 under Emscripten): <immintrin.h> and __builtin_cpu_supports
+// are x86-specific. Emscripten's <immintrin.h> is a compiling-but-empty stub (it declares
+// none of the __m256/__m512 types or _mm*_ intrinsics), so unconditionally including it and
+// calling into it, as this file used to, silently made every non-x86 build of this module
+// fail. The AVX/AVX2/AVX-512 code paths and the cpu-supports probe are therefore compiled
+// only on __x86_64__/__i386__; every other target (wasm32, ARM, ...) uses ONLY the scalar
+// path, which is both exact and already the documented "portable correctness fallback" --
+// there is no hardware SIMD ISA to waterfall to there, so scalar-only is the honest answer,
+// not a degraded one.
 
 module;
+#if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
+#endif
 
 export module nimblecas.simd;
 
@@ -86,6 +98,7 @@ auto horner_scalar(float* acc, const float* x, float c, std::size_t n) noexcept 
     }
 }
 
+#if defined(__x86_64__) || defined(__i386__)
 // --- 256-bit AVX paths (add/mul need only AVX, shared by the AVX and AVX2 tiers) ---
 auto add_avx256(const float* a, const float* b, float* out, std::size_t n) noexcept -> void {
     std::size_t i = 0;
@@ -172,10 +185,13 @@ auto horner_avx2(float* acc, const float* x, float c, std::size_t n) noexcept ->
     }
     horner_avx2(acc + i, x + i, c, n - i);
 }
+#endif  // __x86_64__ || __i386__
 
 // Runtime CPU capability query, evaluated once. Waterfalls
-// AVX-512 -> AVX2(+FMA) -> AVX -> scalar.
+// AVX-512 -> AVX2(+FMA) -> AVX -> scalar. Off x86 there is no such ISA to waterfall
+// through, so this always reports scalar (see the portability note at the top of file).
 [[nodiscard]] auto detect_isa() noexcept -> Isa {
+#if defined(__x86_64__) || defined(__i386__)
     if (__builtin_cpu_supports("avx512f") != 0) {
         return Isa::avx512;
     }
@@ -185,6 +201,7 @@ auto horner_avx2(float* acc, const float* x, float c, std::size_t n) noexcept ->
     if (__builtin_cpu_supports("avx") != 0) {
         return Isa::avx;
     }
+#endif
     return Isa::scalar;
 }
 
@@ -198,14 +215,22 @@ struct Dispatch {
 };
 
 [[nodiscard]] auto make_dispatch() noexcept -> Dispatch {
+    // detect_isa() is called UNCONDITIONALLY (even though it always returns Isa::scalar
+    // off x86) so it is never an unused function there; only the AVX/AVX2/AVX-512 case
+    // labels -- the ones referencing intrinsic-backed functions -- are guarded. The
+    // `default:` covers the enumerators the non-x86 build leaves unhandled, so neither
+    // platform trips -Wswitch.
     switch (detect_isa()) {
+#if defined(__x86_64__) || defined(__i386__)
         case Isa::avx512:
             return {Isa::avx512, &add_avx512, &mul_avx512, &axpy_avx512, &horner_avx512};
         case Isa::avx2:
             return {Isa::avx2, &add_avx256, &mul_avx256, &axpy_avx2, &horner_avx2};
         case Isa::avx:
             return {Isa::avx, &add_avx256, &mul_avx256, &axpy_avx, &horner_avx};
+#endif
         case Isa::scalar:
+        default:
             break;
     }
     return {Isa::scalar, &add_scalar, &mul_scalar, &axpy_scalar, &horner_scalar};
