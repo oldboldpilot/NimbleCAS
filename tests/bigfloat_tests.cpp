@@ -79,7 +79,7 @@ auto main() -> int {
                   // 1.41421356237309504880168872420969807...  (printing 45 keeps these exact).
                   t.expect(s.substr(0, 32) == "1.414213562373095048801688724209",
                            "sqrt(2) matches its first 30 digits");
-                  t.expect(root2.multiply(root2, 200).with_precision(190).value() ==
+                  t.expect(root2.multiply(root2, 200).value().with_precision(190).value() ==
                                bf(2, 200).with_precision(190).value(),
                            "sqrt(2)^2 rounds back to 2");
               })
