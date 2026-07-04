@@ -136,6 +136,25 @@ using TimeSeriesOperator =
                                                  const RationalPoly& phi, std::size_t order)
     -> Result<std::vector<RationalPoly>>;
 
+// HPM solution of the same nonlinear evolution PDE u_t = L[u] + N[u], u(x,0) = phi. The
+// homotopy (1-p)(u_t - phi_t) + p(u_t - L[u] - N[u]) = 0 (phi_t = 0: the datum does not
+// depend on t) collapses, order by order in p, to the identical Cauchy-Kovalevskaya
+// recurrence (k+1) c_{k+1} = L[c_k] + A_k that solve_nonlinear_evolution_pde already
+// implements — the same ADM == HPM equivalence nimblecas.perturbation and nimblecas.inteq
+// establish for the ODE and integral-equation cases, transported here to the (Q[x])[[t]]
+// series ring. Returns the IDENTICAL series (same preconditions/errors as
+// solve_nonlinear_evolution_pde).
+//
+// HONEST GAP: unlike nimblecas.perturbation and nimblecas.inteq, this module does NOT (yet)
+// offer a HAM variant (the ħ convergence-control deformation) for genuine PDEs. Generalising
+// the ħ-parameterised deformation from a single Q[[x]] series to the two-index (Q[x])[[t]]
+// ring used here needs care that has not been done and verified; rather than guess at it,
+// this gap is left open and documented, matching Rule 32's honesty discipline.
+[[nodiscard]] auto solve_nonlinear_evolution_pde_hpm(SpatialOperator linear,
+                                                     TimeSeriesOperator nonlinear,
+                                                     const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+
 // --- Concrete nonlinear builders --------------------------------------------
 // Burgers' equation u_t + u u_x = viscosity * u_xx, i.e. u_t = viscosity u_xx - u u_x.
 // L = heat_operator(viscosity), N[u] = -(u * u_x). viscosity == 0 gives the inviscid
@@ -516,6 +535,12 @@ auto solve_nonlinear_evolution_pde(SpatialOperator linear, TimeSeriesOperator no
         partial[k + 1] = std::move(*c_next);
     }
     return partial;
+}
+
+auto solve_nonlinear_evolution_pde_hpm(SpatialOperator linear, TimeSeriesOperator nonlinear,
+                                       const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<RationalPoly>> {
+    return solve_nonlinear_evolution_pde(std::move(linear), std::move(nonlinear), phi, order);
 }
 
 auto burgers(Rational viscosity, const RationalPoly& phi, std::size_t order)

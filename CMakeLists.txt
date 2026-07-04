@@ -1136,6 +1136,13 @@ target_link_libraries(execdoc_tests
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME execdoc_tests COMMAND execdoc_tests)
 
+add_executable(execdoc_multimethod_tests tests/execdoc_multimethod_tests.cpp)
+target_link_libraries(execdoc_multimethod_tests
+  PRIVATE nimblecas_execdoc nimblecas_reader nimblecas_latex nimblecas_diff
+          nimblecas_simplify nimblecas_symbolic nimblecas_cache nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME execdoc_multimethod_tests COMMAND execdoc_multimethod_tests)
+
 add_executable(mechanics_tests tests/mechanics_tests.cpp)
 target_link_libraries(mechanics_tests
   PRIVATE nimblecas_mechanics nimblecas_diff nimblecas_simplify nimblecas_symbolic
@@ -1228,6 +1235,22 @@ target_link_libraries(inteq_tests
 add_test(NAME inteq_tests COMMAND inteq_tests)
 
 # ---- cross-module feature / integration tests ----
+add_executable(pde_crossmethod_tests tests/pde_crossmethod_tests.cpp)
+target_link_libraries(pde_crossmethod_tests
+  PRIVATE nimblecas_pde nimblecas_pdenum nimblecas_bandsolve nimblecas_matrix
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME pde_crossmethod_tests COMMAND pde_crossmethod_tests)
+
+add_executable(inteq_crossmethod_tests tests/inteq_crossmethod_tests.cpp)
+target_link_libraries(inteq_crossmethod_tests
+  PRIVATE nimblecas_inteq nimblecas_integrate nimblecas_ratint nimblecas_rothstein
+          nimblecas_pfd nimblecas_resultant nimblecas_laplace nimblecas_simplify
+          nimblecas_cache nimblecas_matrix nimblecas_symbolic nimblecas_parallel
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_simd nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME inteq_crossmethod_tests COMMAND inteq_crossmethod_tests)
+
 add_executable(feature_algebra_tests tests/feature_algebra_tests.cpp)
 target_link_libraries(feature_algebra_tests
   PRIVATE nimblecas_complex nimblecas_ratpoly nimblecas_polynomial nimblecas_core
