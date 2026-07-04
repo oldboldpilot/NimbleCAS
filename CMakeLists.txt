@@ -320,6 +320,21 @@ target_sources(nimblecas_dde PUBLIC
 target_link_libraries(nimblecas_dde
   PUBLIC nimblecas_powerseries nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.dae : exact linear index-1 differential-algebraic equations ----
+add_library(nimblecas_dae STATIC)
+target_sources(nimblecas_dae PUBLIC
+  FILE_SET CXX_MODULES FILES src/dae/dae.cppm)
+target_link_libraries(nimblecas_dae
+  PUBLIC nimblecas_ode nimblecas_matrix nimblecas_powerseries nimblecas_ratpoly
+         nimblecas_core std_module)
+
+# ---- nimblecas.pde : exact linear evolution PDEs via power series in time ----
+add_library(nimblecas_pde STATIC)
+target_sources(nimblecas_pde PUBLIC
+  FILE_SET CXX_MODULES FILES src/pde/pde.cppm)
+target_link_libraries(nimblecas_pde
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -577,6 +592,18 @@ add_executable(sde_tests tests/sde_tests.cpp)
 target_link_libraries(sde_tests
   PRIVATE nimblecas_sde nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME sde_tests COMMAND sde_tests)
+
+add_executable(dae_tests tests/dae_tests.cpp)
+target_link_libraries(dae_tests
+  PRIVATE nimblecas_dae nimblecas_ode nimblecas_matrix nimblecas_powerseries nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME dae_tests COMMAND dae_tests)
+
+add_executable(pde_tests tests/pde_tests.cpp)
+target_link_libraries(pde_tests
+  PRIVATE nimblecas_pde nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME pde_tests COMMAND pde_tests)
 
 add_executable(dde_tests tests/dde_tests.cpp)
 target_link_libraries(dde_tests
