@@ -34,6 +34,7 @@ import std;
 import nimblecas.core;
 import nimblecas.ratpoly;   // Rational — exact reduced int64 fraction
 import nimblecas.rng;       // counter-based RNG for RQMC randomization
+import nimblecas.parallel;  // deterministic, order-preserving fork-join runtime (TBB/PPL/serial)
 
 export namespace nimblecas {
 
@@ -139,6 +140,91 @@ struct RqmcResult {
 [[nodiscard]] auto rqmc_integrate(const ScalarField& f, std::size_t dimension, std::uint64_t N,
                                   std::uint64_t replications, std::uint64_t seed)
     -> Result<RqmcResult>;
+
+// ===========================================================================
+// PARALLEL + DISTRIBUTED ACCELERATION (additive; reuses nimblecas.parallel).
+// ===========================================================================
+//
+// ── DETERMINISM / HONESTY BOUNDARY ───────────────────────────────────────────────────────
+//   QMC/RQMC integration remains NUMERICAL. The functions below are purely a WALL-CLOCK
+//   acceleration of the serial estimators — they do NOT change the answer, its accuracy, or
+//   its statistical meaning. Concretely:
+//     * parallel_rqmc_integrate returns a result that is BIT-IDENTICAL to rqmc_integrate for
+//       the same (f, dimension, N, replications, seed), for ANY thread count. This holds
+//       because (a) replication r's estimate is a pure function of the child stream
+//       base.split(r) (base = Rng::seeded(seed)) and of the fixed Halton points 1..N — it
+//       does not depend on which thread runs it or on how the range was partitioned; and
+//       (b) the mean/variance reduction over replications is performed in a FIXED index order
+//       0..replications-1 (never in thread-completion order). nimblecas.parallel's
+//       transform_index is order-preserving: slot i is written only by the task owning index
+//       i, so the returned vector is always in index order regardless of scheduling.
+//     * parallel_qmc_integrate evaluates the N Halton points (indices 1..N) concurrently but
+//       ACCUMULATES them sequentially in index order, so it is bit-identical to qmc_integrate.
+//   PRECONDITION (thread-safety): `f` is invoked concurrently for distinct point indices, so
+//   the caller's integrand MUST be safe to call concurrently — i.e. stateless / reentrant, or
+//   internally synchronised. The low-discrepancy point routines and the RNG are already pure.
+//
+// PARALLEL point-batch integration: same value as qmc_integrate, computed with the N point
+// evaluations spread across nimblecas.parallel workers. Same domain errors as qmc_integrate.
+[[nodiscard]] auto parallel_qmc_integrate(const ScalarField& f, std::size_t dimension,
+                                          std::uint64_t N) -> Result<double>;
+
+// PARALLEL RQMC: same {estimate, error_estimate, points_used, replications} as rqmc_integrate,
+// with the `replications` independent randomized copies evaluated in parallel and reduced in
+// fixed index order. Bit-identical to rqmc_integrate. Same domain errors (dimension/N zero,
+// replications < 2).
+[[nodiscard]] auto parallel_rqmc_integrate(const ScalarField& f, std::size_t dimension,
+                                           std::uint64_t N, std::uint64_t replications,
+                                           std::uint64_t seed) -> Result<RqmcResult>;
+
+// ── DISTRIBUTED SHARDING ─────────────────────────────────────────────────────────────────
+// The building block a SGE array task / Ray task / MPI rank computes: the per-replication
+// estimates for the subset of replications this shard owns, as a STATELESS PURE function of
+// (shard_index, num_shards, seed) with NO shared state between shards. A driver collects the
+// shards and calls rqmc_reduce_shards to obtain the global RqmcResult.
+//
+// PARTITION: shard s of num_shards owns the global replication indices
+//   { i in [0, total_replications) : i % num_shards == s }   (a STRIDED / round-robin split).
+// Round-robin is chosen over a contiguous block so that any num_shards evenly balances the
+// (identical-cost) replications; a shard may legitimately own 0 replications (e.g. total=2,
+// num_shards=4, shard 3). Replication i's estimate is seeded from base.split(i) with
+// base = Rng::seeded(seed) — INDEPENDENT of shard_index/num_shards — so it is bit-identical to
+// the serial rqmc_integrate replication i regardless of how the work is partitioned.
+struct RqmcShardResult {
+    std::uint64_t              shard_index;         // this shard's id in [0, num_shards)
+    std::uint64_t              num_shards;          // total number of shards in the partition
+    std::uint64_t              total_replications;  // GLOBAL replication count (for the reduce)
+    std::uint64_t              n_per_replication;   // N points per replication (for the reduce)
+    std::vector<std::uint64_t> replication_indices; // GLOBAL indices this shard computed
+    std::vector<double>        estimates;           // estimates[k] is for replication_indices[k]
+    std::uint64_t              points_used;         // N * (number of replications this shard did)
+};
+
+// Compute this shard's replication estimates. The per-replication estimate is identical to the
+// serial rqmc_integrate's, so the union over all shards reproduces the full estimate set exactly.
+// Fails with domain_error if dimension == 0, N == 0, num_shards == 0, shard_index >= num_shards,
+// or total_replications == 0, and propagates any Halton-generation error. (total_replications < 2
+// is permitted here — a single shard need not hold two replications; the >= 2 requirement for a
+// variance is enforced by rqmc_reduce_shards over the assembled global set.)
+[[nodiscard]] auto rqmc_shard(const ScalarField& f, std::size_t dimension, std::uint64_t N,
+                              std::uint64_t total_replications, std::uint64_t shard_index,
+                              std::uint64_t num_shards, std::uint64_t seed)
+    -> Result<RqmcShardResult>;
+
+// DRIVER reduction: assemble the shards' per-replication estimates back into GLOBAL index order
+// 0..total_replications-1 and reduce them into the global RqmcResult. Because the reassembly is
+// in a fixed canonical index order (independent of how the replications were sharded), the result
+// is bit-identical to rqmc_integrate / parallel_rqmc_integrate for the same (seed, N, total) —
+// i.e. the global answer is PARTITION-INDEPENDENT: any num_shards gives the same estimate.
+//
+// ASSOCIATIVE REDUCTION: the global estimate is the equal-weight mean (1/M) Σ_{i<M} estimate_i
+// and the variance is Σ (estimate_i - mean)^2 / (M-1); each is an associative sum over the M
+// replications. The shards partition [0, M) disjointly and cover it exactly, so their estimate
+// lists concatenate (in canonical order) to the full set — a shard contributes a disjoint slice
+// of the sum. Fails with domain_error on an empty shard span, total_replications < 2, mismatched
+// total/N across shards, an out-of-range or duplicated global index, or an incompletely covered
+// index range (a gap left by a missing shard).
+[[nodiscard]] auto rqmc_reduce_shards(std::span<const RqmcShardResult> shards) -> Result<RqmcResult>;
 
 // ===========================================================================
 // ITERATIVE / ADAPTIVE QMC.
@@ -587,40 +673,47 @@ auto qmc_integrate_exact(const RationalField& f, std::size_t dimension, std::uin
 
 // --- RQMC -------------------------------------------------------------------
 
-auto rqmc_integrate(const ScalarField& f, std::size_t dimension, std::uint64_t N,
-                    std::uint64_t replications, std::uint64_t seed) -> Result<RqmcResult> {
-    if (dimension == 0 || N == 0 || replications < 2) {
-        return make_error<RqmcResult>(MathError::domain_error);
+namespace {
+
+// Estimate of a SINGLE RQMC replication `r`: the Cranley–Patterson-rotated Halton average.
+// PURE and PARTITION-INDEPENDENT — it is a function only of (f, dimension, N, base, r): the
+// shift is drawn from the child stream base.split(r) and the point set is the fixed Halton
+// indices 1..N. It reads no shared mutable state, so it is safe to invoke concurrently for
+// distinct r (given a caller-supplied thread-safe `f`) and gives bit-identical output to the
+// serial loop. This single definition is shared by rqmc_integrate, parallel_rqmc_integrate and
+// rqmc_shard, so all three are bit-identical BY CONSTRUCTION.
+[[nodiscard]] auto rqmc_replication_estimate(const ScalarField& f, std::size_t dimension,
+                                             std::uint64_t N, const Rng& base, std::uint64_t r)
+    -> Result<double> {
+    // Independent Cranley–Patterson shift for this replication, from a child RNG stream.
+    Rng sub = base.split(r);
+    std::vector<double> shift(dimension);
+    for (std::size_t j = 0; j < dimension; ++j) {
+        shift[j] = sub.next_unit();
     }
 
-    const Rng base = Rng::seeded(seed);
-    std::vector<double> estimates;
-    estimates.reserve(replications);
-
-    for (std::uint64_t r = 0; r < replications; ++r) {
-        // Independent Cranley–Patterson shift for this replication, from a child RNG stream.
-        Rng sub = base.split(r);
-        std::vector<double> shift(dimension);
+    double sum = 0.0;
+    std::vector<double> x(dimension);
+    for (std::uint64_t n = 1; n <= N; ++n) {
+        auto pt = halton_point(n, dimension);
+        if (!pt) {
+            return make_error<double>(pt.error());
+        }
         for (std::size_t j = 0; j < dimension; ++j) {
-            shift[j] = sub.next_unit();
+            const double v = (*pt)[j] + shift[j];   // in [0, 2)
+            x[j] = v >= 1.0 ? v - 1.0 : v;          // wrap mod 1 into [0, 1)
         }
-
-        double sum = 0.0;
-        std::vector<double> x(dimension);
-        for (std::uint64_t n = 1; n <= N; ++n) {
-            auto pt = halton_point(n, dimension);
-            if (!pt) {
-                return make_error<RqmcResult>(pt.error());
-            }
-            for (std::size_t j = 0; j < dimension; ++j) {
-                const double v = (*pt)[j] + shift[j];   // in [0, 2)
-                x[j] = v >= 1.0 ? v - 1.0 : v;          // wrap mod 1 into [0, 1)
-            }
-            sum += f(std::span<const double>{x});
-        }
-        estimates.push_back(sum / static_cast<double>(N));
+        sum += f(std::span<const double>{x});
     }
+    return sum / static_cast<double>(N);
+}
 
+// Reduce per-replication estimates (given in GLOBAL index order) into an RqmcResult. The sums
+// run over the vector in its stored order, so callers that supply the estimates in index order
+// 0..replications-1 get a result independent of thread/shard partitioning. PRECONDITION:
+// estimates.size() == replications and replications >= 2 (checked by callers).
+[[nodiscard]] auto rqmc_reduce_estimates(std::span<const double> estimates, std::uint64_t N,
+                                         std::uint64_t replications) -> RqmcResult {
     // Mean and standard error of the independent per-replication estimates.
     double mean = 0.0;
     for (const double e : estimates) {
@@ -637,6 +730,177 @@ auto rqmc_integrate(const ScalarField& f, std::size_t dimension, std::uint64_t N
     const double std_error = std::sqrt(variance / static_cast<double>(replications));
 
     return RqmcResult{mean, std_error, N * replications, replications};
+}
+
+}  // namespace
+
+auto rqmc_integrate(const ScalarField& f, std::size_t dimension, std::uint64_t N,
+                    std::uint64_t replications, std::uint64_t seed) -> Result<RqmcResult> {
+    if (dimension == 0 || N == 0 || replications < 2) {
+        return make_error<RqmcResult>(MathError::domain_error);
+    }
+
+    const Rng base = Rng::seeded(seed);
+    std::vector<double> estimates;
+    estimates.reserve(replications);
+
+    for (std::uint64_t r = 0; r < replications; ++r) {
+        auto e = rqmc_replication_estimate(f, dimension, N, base, r);
+        if (!e) {
+            return make_error<RqmcResult>(e.error());
+        }
+        estimates.push_back(*e);
+    }
+
+    return rqmc_reduce_estimates(estimates, N, replications);
+}
+
+// --- Parallel point-batch integration ---------------------------------------
+
+auto parallel_qmc_integrate(const ScalarField& f, std::size_t dimension, std::uint64_t N)
+    -> Result<double> {
+    if (dimension == 0 || N == 0) {
+        return make_error<double>(MathError::domain_error);
+    }
+
+    // Evaluate the N Halton points (indices 1..N; index 0 = origin is skipped) in parallel.
+    // transform_index is order-preserving: values[i] corresponds to Halton index i+1.
+    const std::vector<Result<double>> values = parallel::transform_index(
+        static_cast<std::size_t>(N), [&](std::size_t i) -> Result<double> {
+            const std::uint64_t n = static_cast<std::uint64_t>(i) + 1;  // 1..N
+            auto pt = halton_point(n, dimension);
+            if (!pt) {
+                return make_error<double>(pt.error());
+            }
+            return f(std::span<const double>{*pt});
+        });
+
+    // Accumulate in FIXED index order 1..N — bit-identical to the serial qmc_integrate sum.
+    double sum = 0.0;
+    for (const Result<double>& v : values) {
+        if (!v) {
+            return make_error<double>(v.error());
+        }
+        sum += *v;
+    }
+    return sum / static_cast<double>(N);
+}
+
+// --- Parallel RQMC ----------------------------------------------------------
+
+auto parallel_rqmc_integrate(const ScalarField& f, std::size_t dimension, std::uint64_t N,
+                             std::uint64_t replications, std::uint64_t seed)
+    -> Result<RqmcResult> {
+    if (dimension == 0 || N == 0 || replications < 2) {
+        return make_error<RqmcResult>(MathError::domain_error);
+    }
+
+    const Rng base = Rng::seeded(seed);
+
+    // Each replication is an independent, pure task; transform_index preserves index order so
+    // results[r] is replication r regardless of how the runtime scheduled the work. grain 1 makes
+    // every (individually heavy: N point evaluations) replication its own fan-out task.
+    const std::vector<Result<double>> results = parallel::transform_index(
+        static_cast<std::size_t>(replications),
+        [&](std::size_t r) -> Result<double> {
+            return rqmc_replication_estimate(f, dimension, N, base, static_cast<std::uint64_t>(r));
+        },
+        std::size_t{1});
+
+    // Propagate the FIRST error in index order (deterministic choice of error), else reduce.
+    std::vector<double> estimates;
+    estimates.reserve(replications);
+    for (const Result<double>& res : results) {
+        if (!res) {
+            return make_error<RqmcResult>(res.error());
+        }
+        estimates.push_back(*res);
+    }
+
+    return rqmc_reduce_estimates(estimates, N, replications);
+}
+
+// --- Distributed sharding ---------------------------------------------------
+
+auto rqmc_shard(const ScalarField& f, std::size_t dimension, std::uint64_t N,
+                std::uint64_t total_replications, std::uint64_t shard_index,
+                std::uint64_t num_shards, std::uint64_t seed) -> Result<RqmcShardResult> {
+    if (dimension == 0 || N == 0 || num_shards == 0 || shard_index >= num_shards ||
+        total_replications == 0) {
+        return make_error<RqmcShardResult>(MathError::domain_error);
+    }
+
+    const Rng base = Rng::seeded(seed);
+
+    // Global replication indices this shard owns: strided (round-robin) i % num_shards == shard.
+    std::vector<std::uint64_t> indices;
+    for (std::uint64_t i = shard_index; i < total_replications; i += num_shards) {
+        indices.push_back(i);
+    }
+    const std::uint64_t local_count = static_cast<std::uint64_t>(indices.size());
+
+    // Compute each owned replication in parallel; transform_index preserves order so
+    // results[k] is the estimate for the global index indices[k]. grain 1 = one task per
+    // (heavy) replication.
+    const std::vector<Result<double>> results = parallel::transform_index(
+        indices.size(),
+        [&](std::size_t k) -> Result<double> {
+            return rqmc_replication_estimate(f, dimension, N, base, indices[k]);
+        },
+        std::size_t{1});
+
+    std::vector<double> estimates;
+    estimates.reserve(indices.size());
+    for (const Result<double>& res : results) {
+        if (!res) {
+            return make_error<RqmcShardResult>(res.error());
+        }
+        estimates.push_back(*res);
+    }
+
+    return RqmcShardResult{shard_index,          num_shards,        total_replications,
+                           N,                    std::move(indices), std::move(estimates),
+                           N * local_count};
+}
+
+auto rqmc_reduce_shards(std::span<const RqmcShardResult> shards) -> Result<RqmcResult> {
+    if (shards.empty()) {
+        return make_error<RqmcResult>(MathError::domain_error);
+    }
+
+    const std::uint64_t total = shards.front().total_replications;
+    const std::uint64_t N = shards.front().n_per_replication;
+    if (total < 2 || N == 0) {  // < 2 replications cannot form a variance
+        return make_error<RqmcResult>(MathError::domain_error);
+    }
+
+    // Scatter every shard's estimates into their canonical global slots, then read them back in
+    // index order 0..total-1 — making the reduction independent of the partition.
+    std::vector<std::optional<double>> slots(static_cast<std::size_t>(total));
+    for (const RqmcShardResult& sh : shards) {
+        if (sh.total_replications != total || sh.n_per_replication != N ||
+            sh.replication_indices.size() != sh.estimates.size()) {
+            return make_error<RqmcResult>(MathError::domain_error);
+        }
+        for (std::size_t k = 0; k < sh.replication_indices.size(); ++k) {
+            const std::uint64_t idx = sh.replication_indices[k];
+            if (idx >= total || slots[static_cast<std::size_t>(idx)].has_value()) {
+                return make_error<RqmcResult>(MathError::domain_error);  // out of range / duplicate
+            }
+            slots[static_cast<std::size_t>(idx)] = sh.estimates[k];
+        }
+    }
+
+    std::vector<double> estimates;
+    estimates.reserve(static_cast<std::size_t>(total));
+    for (const std::optional<double>& s : slots) {
+        if (!s) {
+            return make_error<RqmcResult>(MathError::domain_error);  // gap: incomplete coverage
+        }
+        estimates.push_back(*s);
+    }
+
+    return rqmc_reduce_estimates(estimates, N, total);
 }
 
 // --- Adaptive / iterative ---------------------------------------------------

@@ -90,7 +90,7 @@ add_library(nimblecas_wavelets STATIC)
 target_sources(nimblecas_wavelets PUBLIC
   FILE_SET CXX_MODULES FILES src/wavelets/wavelets.cppm)
 target_link_libraries(nimblecas_wavelets
-  PUBLIC nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
+  PUBLIC nimblecas_ratpoly nimblecas_polynomial nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.matrix : dense exact-rational matrices (§7.2) ----
 add_library(nimblecas_matrix STATIC)
@@ -120,6 +120,13 @@ target_sources(nimblecas_stochastic PUBLIC
 target_link_libraries(nimblecas_stochastic
   PUBLIC nimblecas_stats nimblecas_matrix nimblecas_roots nimblecas_ratpoly
          nimblecas_polynomial nimblecas_core std_module)
+
+# ---- nimblecas.hmm : discrete hidden Markov models, exact over Q ----
+add_library(nimblecas_hmm STATIC)
+target_sources(nimblecas_hmm PUBLIC
+  FILE_SET CXX_MODULES FILES src/hmm/hmm.cppm)
+target_link_libraries(nimblecas_hmm
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
 # ---- nimblecas.combinatorics : factorial/binomial/Bernoulli/Stirling (§7.18) ----
 add_library(nimblecas_combinatorics STATIC)
@@ -183,14 +190,14 @@ add_library(nimblecas_optimize STATIC)
 target_sources(nimblecas_optimize PUBLIC
   FILE_SET CXX_MODULES FILES src/optimize/optimize.cppm)
 target_link_libraries(nimblecas_optimize
-  PUBLIC nimblecas_core std_module)
+  PUBLIC nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.nlsolve : iterative solvers for F(x)=0 in R^n (Kelley) (§7.14) ----
 add_library(nimblecas_nlsolve STATIC)
 target_sources(nimblecas_nlsolve PUBLIC
   FILE_SET CXX_MODULES FILES src/nlsolve/nlsolve.cppm)
 target_link_libraries(nimblecas_nlsolve
-  PUBLIC nimblecas_core std_module)
+  PUBLIC nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.extrapolation : sequence acceleration (Richardson/Romberg/Aitken/Wynn) ----
 add_library(nimblecas_extrapolation STATIC)
@@ -211,7 +218,7 @@ add_library(nimblecas_compsense STATIC)
 target_sources(nimblecas_compsense PUBLIC
   FILE_SET CXX_MODULES FILES src/compsense/compsense.cppm)
 target_link_libraries(nimblecas_compsense
-  PUBLIC nimblecas_lp nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+  PUBLIC nimblecas_lp nimblecas_matrix nimblecas_ratpoly nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.rng : parallelisable counter-based RNG (Threefry-2x64) (§7.8 dependency) ----
 add_library(nimblecas_rng STATIC)
@@ -246,7 +253,7 @@ add_library(nimblecas_qmc STATIC)
 target_sources(nimblecas_qmc PUBLIC
   FILE_SET CXX_MODULES FILES src/qmc/qmc.cppm)
 target_link_libraries(nimblecas_qmc
-  PUBLIC nimblecas_rng nimblecas_ratpoly nimblecas_core std_module)
+  PUBLIC nimblecas_rng nimblecas_ratpoly nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.powerseries : truncated formal power series over Q (§7.4/7.5 dependency) ----
 add_library(nimblecas_powerseries STATIC)
@@ -284,7 +291,7 @@ target_sources(nimblecas_control PUBLIC
   FILE_SET CXX_MODULES FILES src/control/control.cppm)
 target_link_libraries(nimblecas_control
   PUBLIC nimblecas_dynamics nimblecas_roots nimblecas_complex nimblecas_matrix
-         nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
+         nimblecas_ratpoly nimblecas_polynomial nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.pade : [m/n] Pade approximants for resummation (§7.4/7.5) ----
 add_library(nimblecas_pade STATIC)
@@ -661,6 +668,12 @@ target_link_libraries(stochastic_tests
   PRIVATE nimblecas_stochastic nimblecas_stats nimblecas_matrix nimblecas_roots
           nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME stochastic_tests COMMAND stochastic_tests)
+
+add_executable(hmm_tests tests/hmm_tests.cpp)
+target_link_libraries(hmm_tests
+  PRIVATE nimblecas_hmm nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME hmm_tests COMMAND hmm_tests)
 
 add_executable(combinatorics_tests tests/combinatorics_tests.cpp)
 target_link_libraries(combinatorics_tests
@@ -1183,6 +1196,25 @@ target_link_libraries(feature_arithmetic_tests
           nimblecas_doubledouble nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
           nimblecas_simd nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME feature_arithmetic_tests COMMAND feature_arithmetic_tests)
+
+add_executable(feature_applied_numerics_tests tests/feature_applied_numerics_tests.cpp)
+target_link_libraries(feature_applied_numerics_tests
+  PRIVATE nimblecas_interpolation nimblecas_spectral nimblecas_pdenum nimblecas_qmc
+          nimblecas_extrapolation nimblecas_optimize nimblecas_nlsolve nimblecas_control
+          nimblecas_stochastic nimblecas_dynamics nimblecas_eigen nimblecas_orthopoly
+          nimblecas_bandsolve nimblecas_roots nimblecas_complex nimblecas_stats
+          nimblecas_matrix nimblecas_rng nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_parallel nimblecas_simd nimblecas_core nimblecas_testing std_module)
+add_test(NAME feature_applied_numerics_tests COMMAND feature_applied_numerics_tests)
+
+add_executable(feature_applied_linalg_tests tests/feature_applied_linalg_tests.cpp)
+target_link_libraries(feature_applied_linalg_tests
+  PRIVATE nimblecas_matstruct nimblecas_lie nimblecas_krylov nimblecas_semigroup
+          nimblecas_control nimblecas_analysis nimblecas_matexp nimblecas_matdecomp
+          nimblecas_dynamics nimblecas_eigen nimblecas_roots nimblecas_matrix
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_complex nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME feature_applied_linalg_tests COMMAND feature_applied_linalg_tests)
 
 # CPU profiling harness (perf / VTune) — a plain executable, not a ctest target.
 add_executable(cpu_bench tools/cpu_bench.cpp)

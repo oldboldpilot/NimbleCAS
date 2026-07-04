@@ -71,6 +71,41 @@ auto quad_heavy_noise(std::span<const double> x) -> double {
     return quad_f(x) + 0.1 * std::sin(1000.0 * x[0]);
 }
 
+// Tilted 1-D quartic double well: f(t) = 0.1 t^4 - t^2 + 0.2 t. Two local minima (a
+// DEEPER left well near t ~ -2.285, a shallower right well near t ~ +2.19) separated by a
+// local maximum near t ~ 0.1 — a clean multimodal test bed for multistart. The global
+// minimizer is the left well; a start's basin decides which well its local run reaches.
+auto multiwell_f(std::span<const double> x) -> double {
+    const double t = x[0];
+    return 0.1 * t * t * t * t - t * t + 0.2 * t;
+}
+auto multiwell_grad(std::span<const double> x) -> std::vector<double> {
+    const double t = x[0];
+    return {0.4 * t * t * t - 2.0 * t + 0.2};
+}
+
+// Deterministic serial reference: argmin over per-start bfgs runs using the SAME order as
+// multistart (strictly-lower fx wins; exact ties keep the earliest start index). Returns
+// (best fx, winning start index) over the starts that produced a value.
+auto serial_multistart_reference(std::span<const std::vector<double>> starts)
+    -> std::pair<double, std::size_t> {
+    double best_fx = std::numeric_limits<double>::infinity();
+    std::size_t best_idx = 0;
+    bool have = false;
+    for (std::size_t i = 0; i < starts.size(); ++i) {
+        auto r = opt::bfgs(multiwell_f, starts[i], multiwell_grad, opt::Options{});
+        if (!r.has_value()) {
+            continue;
+        }
+        if (!have || r->fx < best_fx) {  // strict '<' => earliest index wins exact ties.
+            best_fx = r->fx;
+            best_idx = i;
+            have = true;
+        }
+    }
+    return {best_fx, best_idx};
+}
+
 // Checks a quadratic minimizer result reached x* to a generous tolerance.
 auto check_quad(TestContext& t, const nimblecas::Result<opt::OptimizeResult>& r,
                 std::string_view name) -> void {
@@ -332,6 +367,154 @@ auto main() -> int {
                   auto ri = opt::newton_method(quad_f, inf, quad_grad, {}, opt::Options{});
                   t.expect(!ri.has_value() && ri.error() == MathError::domain_error,
                            "Inf in x0 -> domain_error");
+              })
+        // --- PARALLEL multistart: deterministic best == serial argmin ----------
+        .test("parallel_multistart_matches_serial_best",
+              [&](TestContext& t) {
+                  // Starts straddling both wells of the tilted quartic: some fall into the
+                  // deeper LEFT (global) well, some into the shallower right well.
+                  const std::vector<std::vector<double>> starts{
+                      {2.5}, {1.8}, {-0.5}, {-2.5}, {0.5}, {3.0}, {-1.0}};
+                  auto local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
+                                                         multiwell_grad);
+
+                  auto par = opt::parallel_multistart(local, starts, /*parallel=*/true);
+                  t.expect(par.has_value(), "parallel_multistart: returns a value");
+
+                  const auto [ref_fx, ref_idx] = serial_multistart_reference(starts);
+                  // Every start is deterministic, so the parallel winner is bit-identical
+                  // to the serial in-order argmin: same fx, same start index.
+                  t.expect(par.has_value() && par->best.fx == ref_fx,
+                           "parallel best fx == serial single-start argmin fx (exact)");
+                  t.expect(par.has_value() && par->best_start == ref_idx,
+                           "parallel best_start == serial argmin start index");
+                  t.expect(par.has_value() && par->succeeded == starts.size(),
+                           "all starts produced a value");
+                  // The global minimizer is the left well ~ -2.285.
+                  t.expect(par.has_value() && close(par->best.x[0], -2.285, 5e-2),
+                           "parallel multistart located the deeper (global) left well");
+
+                  // parallel == false must reproduce the identical winner.
+                  auto ser = opt::parallel_multistart(local, starts, /*parallel=*/false);
+                  t.expect(ser.has_value() && par.has_value() &&
+                               ser->best.fx == par->best.fx && ser->best_start == par->best_start,
+                           "serial execution reproduces the parallel winner exactly");
+
+                  // The multistart(Method,...) convenience overload agrees.
+                  auto via_enum = opt::multistart(opt::Method::bfgs, multiwell_f, starts,
+                                                  multiwell_grad);
+                  t.expect(via_enum.has_value() && par.has_value() &&
+                               via_enum->best_start == par->best_start &&
+                               via_enum->best.fx == par->best.fx,
+                           "multistart(Method,...) overload matches parallel_multistart");
+              })
+        // --- DISTRIBUTED shards: partition independence (num_shards = 1 vs 2) ---
+        .test("multistart_shard_partition_independence",
+              [&](TestContext& t) {
+                  const std::vector<std::vector<double>> starts{
+                      {2.5}, {1.8}, {-0.5}, {-2.5}, {0.5}, {3.0}, {-1.0}};
+                  auto local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
+                                                         multiwell_grad);
+
+                  // num_shards = 1: a single shard covers every start.
+                  auto s1 = opt::multistart_shard(local, starts, /*shard_index=*/0,
+                                                  /*num_shards=*/1);
+                  t.expect(s1.has_value(), "shard(0/1): returns a value");
+                  std::array<opt::MultistartResult, 1> one{};
+                  if (s1.has_value()) {
+                      one = {*s1};
+                  }
+                  auto whole = opt::reduce_shards(one);
+                  t.expect(whole.has_value(), "reduce over 1 shard: returns a value");
+
+                  // num_shards = 2: shard 0 gets even indices, shard 1 the odd ones.
+                  auto a = opt::multistart_shard(local, starts, 0, 2);
+                  auto b = opt::multistart_shard(local, starts, 1, 2);
+                  t.expect(a.has_value() && b.has_value(), "both 2-way shards return values");
+                  std::array<opt::MultistartResult, 2> parts{};
+                  if (a.has_value() && b.has_value()) {
+                      parts = {*a, *b};
+                  }
+                  auto two = opt::reduce_shards(parts);
+                  t.expect(two.has_value(), "reduce over 2 shards: returns a value");
+
+                  // Partition independence: 1-shard and 2-shard reductions agree exactly,
+                  // and both equal a plain single-process parallel_multistart.
+                  auto full = opt::parallel_multistart(local, starts);
+                  const bool all = whole.has_value() && two.has_value() && full.has_value();
+                  t.expect(all && whole->best_start == two->best_start &&
+                               whole->best.fx == two->best.fx,
+                           "num_shards = 1 and num_shards = 2 select the identical best");
+                  t.expect(all && two->best_start == full->best_start &&
+                               two->best.fx == full->best.fx,
+                           "sharded reduction == single-process parallel_multistart");
+                  t.expect(all && whole->succeeded == starts.size() &&
+                               two->succeeded == starts.size(),
+                           "aggregated `succeeded` is partition-independent");
+              })
+        // --- deterministic tie-break: exact fx tie -> lowest start index -------
+        .test("multistart_tie_break_lowest_start_index",
+              [&](TestContext& t) {
+                  // A synthetic local optimizer with EXACT fx ties: fx = x0^2, x = start.
+                  // Starts {3, -1, 1, -3} -> fx {9, 1, 1, 9}: the minimum fx = 1 is hit by
+                  // BOTH index 1 and index 2, so the canonical tie-break must pick index 1.
+                  opt::LocalOptimizer square_opt =
+                      [](std::span<const double> x0) -> nimblecas::Result<opt::OptimizeResult> {
+                      opt::OptimizeResult r;
+                      r.x.assign(x0.begin(), x0.end());
+                      r.fx = x0[0] * x0[0];
+                      r.iterations = 0;
+                      r.converged = true;
+                      r.grad_norm = 0.0;
+                      return r;
+                  };
+                  const std::vector<std::vector<double>> starts{{3.0}, {-1.0}, {1.0}, {-3.0}};
+
+                  auto par = opt::parallel_multistart(square_opt, starts, /*parallel=*/true);
+                  t.expect(par.has_value() && par->best.fx == 1.0 && par->best_start == 1,
+                           "exact fx tie resolves to the LOWEST start index (parallel)");
+                  auto ser = opt::parallel_multistart(square_opt, starts, /*parallel=*/false);
+                  t.expect(ser.has_value() && ser->best_start == 1,
+                           "tie-break is thread-count independent (serial matches)");
+
+                  // Same tie-break holds through the distributed path: with num_shards = 2,
+                  // indices 1 and 2 land on different shards, yet the global reduction still
+                  // selects index 1.
+                  auto a = opt::multistart_shard(square_opt, starts, 0, 2);
+                  auto b = opt::multistart_shard(square_opt, starts, 1, 2);
+                  t.expect(a.has_value() && b.has_value(), "tie-break shards return values");
+                  if (a.has_value() && b.has_value()) {
+                      std::array<opt::MultistartResult, 2> parts{*a, *b};
+                      auto red = opt::reduce_shards(parts);
+                      t.expect(red.has_value() && red->best_start == 1,
+                               "sharded reduction preserves the lowest-index tie-break");
+                  }
+              })
+        // --- empty starts -> domain_error; all-invalid starts -> error ---------
+        .test("multistart_domain_errors",
+              [&](TestContext& t) {
+                  auto local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
+                                                         multiwell_grad);
+                  const std::span<const std::vector<double>> no_starts{};
+                  auto e = opt::parallel_multistart(local, no_starts);
+                  t.expect(!e.has_value() && e.error() == MathError::domain_error,
+                           "empty starts -> domain_error");
+
+                  // Every start invalid (empty x0) -> the per-start domain_error propagates.
+                  const std::vector<std::vector<double>> bad_starts{{}, {}};
+                  auto eb = opt::parallel_multistart(local, bad_starts);
+                  t.expect(!eb.has_value() && eb.error() == MathError::domain_error,
+                           "all starts invalid -> domain_error propagated");
+
+                  // Shard indexing guards.
+                  auto s = opt::multistart_shard(local, bad_starts, /*shard_index=*/2,
+                                                 /*num_shards=*/2);
+                  t.expect(!s.has_value() && s.error() == MathError::domain_error,
+                           "shard_index >= num_shards -> domain_error");
+                  const std::span<const opt::MultistartResult> none{};
+                  auto rr = opt::reduce_shards(none);
+                  t.expect(!rr.has_value() && rr.error() == MathError::domain_error,
+                           "reduce over zero shards -> domain_error");
               })
         .run();
 }

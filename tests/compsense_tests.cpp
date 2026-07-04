@@ -8,14 +8,20 @@ import nimblecas.compsense;
 import nimblecas.testing;
 
 using nimblecas::basis_pursuit;
+using nimblecas::basis_pursuit_batch_shard;
 using nimblecas::coherence_guarantees_recovery;
+using nimblecas::concat_shards;
 using nimblecas::cosamp;
 using nimblecas::iterative_hard_thresholding;
 using nimblecas::MathError;
 using nimblecas::mutual_coherence;
 using nimblecas::mutual_coherence_squared;
 using nimblecas::orthogonal_matching_pursuit;
+using nimblecas::parallel_basis_pursuit_batch;
+using nimblecas::parallel_omp_batch;
 using nimblecas::Rational;
+using nimblecas::recover_batch_shard;
+using nimblecas::Result;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 
@@ -29,6 +35,38 @@ namespace {
 }
 [[nodiscard]] auto close(double got, double expected) -> bool {
     return std::abs(got - expected) < 1e-6;
+}
+
+// Exact (bit-identical) comparison of two per-signal recovery Results: same success/
+// failure, same error, and — crucially for the determinism claim — the SAME bits, so
+// we use == on the doubles, not a tolerance.
+[[nodiscard]] auto same(const Result<std::vector<double>>& a,
+                        const Result<std::vector<double>>& b) -> bool {
+    if (a.has_value() != b.has_value()) {
+        return false;
+    }
+    if (!a.has_value()) {
+        return a.error() == b.error();
+    }
+    return std::ranges::equal(*a, *b);
+}
+[[nodiscard]] auto same(const Result<std::vector<Rational>>& a,
+                        const Result<std::vector<Rational>>& b) -> bool {
+    if (a.has_value() != b.has_value()) {
+        return false;
+    }
+    if (!a.has_value()) {
+        return a.error() == b.error();
+    }
+    return std::ranges::equal(*a, *b);
+}
+
+// The shared 4x5 test dictionary (columns e0..e3 and a4 = (1/2,1/2,1/2,1/2)).
+[[nodiscard]] auto dict_4x5() -> std::vector<double> {
+    return std::vector<double>{1, 0, 0, 0, 0.5,   //
+                               0, 1, 0, 0, 0.5,    //
+                               0, 0, 1, 0, 0.5,    //
+                               0, 0, 0, 1, 0.5};   //
 }
 
 }  // namespace
@@ -173,6 +211,128 @@ auto main() -> int {
                   auto r4 = orthogonal_matching_pursuit(bad, 4, 5, bvec, 2, 1e-9);
                   t.expect(!r4.has_value() && r4.error() == MathError::domain_error,
                            "OMP shape mismatch -> domain_error");
+              })
+        .test("parallel_omp_batch_equals_serial",
+              [](TestContext& t) {
+                  // One dictionary A, several signals recovered together. The parallel
+                  // batch must be BIT-IDENTICAL to recovering each vector serially, and
+                  // must preserve input order.
+                  const std::vector<double> A = dict_4x5();
+                  const std::vector<std::vector<double>> measurements{
+                      {0.0, 3.0, 0.0, -2.0},        // 3 e1 - 2 e3
+                      {5.0, 0.0, 0.0, 0.0},         // 5 e0
+                      {0.0, 0.0, 0.0, 0.0},         // zero signal
+                      {0.5, 0.5, 0.5, 0.5}};        // the shared atom a4
+                  auto batch = parallel_omp_batch(A, 4, 5, measurements, 2, 1e-9);
+                  t.expect(batch.size() == measurements.size(),
+                           "batch has one result per measurement, in order");
+                  bool all_match = batch.size() == measurements.size();
+                  for (std::size_t k = 0; k < measurements.size(); ++k) {
+                      auto serial = orthogonal_matching_pursuit(A, 4, 5, measurements[k], 2, 1e-9);
+                      all_match = all_match && same(batch[k], serial);
+                  }
+                  t.expect(all_match, "each parallel result == serial result (bit-identical)");
+                  // And it genuinely recovers: first signal is 3 e1 - 2 e3.
+                  t.expect(batch[0].has_value() && close((*batch[0])[1], 3.0) &&
+                               close((*batch[0])[3], -2.0),
+                           "batch[0] recovers 3 e1 - 2 e3");
+              })
+        .test("parallel_basis_pursuit_batch_equals_serial",
+              [](TestContext& t) {
+                  // Exact-over-Q batch: columns (1,0),(1,1),(0,1); three RHS vectors.
+                  const std::vector<std::vector<Rational>> A{{ri(1), ri(1), ri(0)},
+                                                             {ri(0), ri(1), ri(1)}};
+                  const std::vector<std::vector<Rational>> measurements{
+                      {ri(2), ri(3)},               // -> (0, 2, 1)
+                      {rat(1, 2), rat(5, 2)},       // -> (0, 1/2, 2)
+                      {ri(0), ri(0)}};              // -> (0, 0, 0)
+                  auto batch = parallel_basis_pursuit_batch(A, measurements);
+                  t.expect(batch.size() == 3, "batch has one exact result per RHS, in order");
+                  bool all_match = batch.size() == 3;
+                  for (std::size_t k = 0; k < measurements.size(); ++k) {
+                      auto serial = basis_pursuit(A, measurements[k]);
+                      all_match = all_match && same(batch[k], serial);
+                  }
+                  t.expect(all_match, "each parallel exact result == serial (exact over Q)");
+                  t.expect(batch[1].has_value() && (*batch[1])[1] == rat(1, 2) &&
+                               (*batch[1])[2] == ri(2),
+                           "batch[1] recovers (0, 1/2, 2) exactly");
+              })
+        .test("omp_shard_reduction_reconstructs_full_batch",
+              [](TestContext& t) {
+                  const std::vector<double> A = dict_4x5();
+                  const std::vector<std::vector<double>> measurements{
+                      {0.0, 3.0, 0.0, -2.0}, {5.0, 0.0, 0.0, 0.0},
+                      {0.0, 0.0, 0.0, 0.0},  {0.5, 0.5, 0.5, 0.5},
+                      {1.0, 0.0, 0.0, 0.0}};  // 5 signals -> uneven 2-way split (3 + 2)
+                  const std::size_t total = measurements.size();
+                  auto full = parallel_omp_batch(A, 4, 5, measurements, 2, 1e-9);
+
+                  // num_shards = 1: the single shard is the whole batch.
+                  auto s0 = recover_batch_shard(A, 4, 5, measurements, 0, 1, 2, 1e-9);
+                  t.expect(s0.has_value() && s0->size() == total, "shard 0/1 covers all signals");
+                  std::vector<std::vector<Result<std::vector<double>>>> one;
+                  one.push_back(std::move(*s0));
+                  auto joined1 = concat_shards<double>(total, 1, std::move(one));
+                  bool ok1 = joined1.has_value() && joined1->size() == total;
+                  for (std::size_t i = 0; ok1 && i < total; ++i) {
+                      ok1 = ok1 && same((*joined1)[i], full[i]);
+                  }
+                  t.expect(ok1, "num_shards=1 reconstruction == full batch, in order");
+
+                  // num_shards = 2: shard 0 owns {0,2,4}, shard 1 owns {1,3}.
+                  auto sh0 = recover_batch_shard(A, 4, 5, measurements, 0, 2, 2, 1e-9);
+                  auto sh1 = recover_batch_shard(A, 4, 5, measurements, 1, 2, 2, 1e-9);
+                  t.expect(sh0.has_value() && sh0->size() == 3, "shard 0/2 owns indices 0,2,4");
+                  t.expect(sh1.has_value() && sh1->size() == 2, "shard 1/2 owns indices 1,3");
+                  std::vector<std::vector<Result<std::vector<double>>>> two;
+                  two.push_back(std::move(*sh0));
+                  two.push_back(std::move(*sh1));
+                  auto joined2 = concat_shards<double>(total, 2, std::move(two));
+                  bool ok2 = joined2.has_value() && joined2->size() == total;
+                  for (std::size_t i = 0; ok2 && i < total; ++i) {
+                      ok2 = ok2 && same((*joined2)[i], full[i]);
+                  }
+                  t.expect(ok2, "num_shards=2 reconstruction == full batch, in order");
+              })
+        .test("basis_pursuit_shard_reduction_reconstructs_full_batch",
+              [](TestContext& t) {
+                  const std::vector<std::vector<Rational>> A{{ri(1), ri(1), ri(0)},
+                                                             {ri(0), ri(1), ri(1)}};
+                  const std::vector<std::vector<Rational>> measurements{
+                      {ri(2), ri(3)}, {rat(1, 2), rat(5, 2)}, {ri(0), ri(0)}, {ri(1), ri(1)}};
+                  const std::size_t total = measurements.size();
+                  auto full = parallel_basis_pursuit_batch(A, measurements);
+
+                  auto sh0 = basis_pursuit_batch_shard(A, measurements, 0, 2);
+                  auto sh1 = basis_pursuit_batch_shard(A, measurements, 1, 2);
+                  t.expect(sh0.has_value() && sh0->size() == 2, "exact shard 0/2 owns 0,2");
+                  t.expect(sh1.has_value() && sh1->size() == 2, "exact shard 1/2 owns 1,3");
+                  std::vector<std::vector<Result<std::vector<Rational>>>> two;
+                  two.push_back(std::move(*sh0));
+                  two.push_back(std::move(*sh1));
+                  auto joined = concat_shards<Rational>(total, 2, std::move(two));
+                  bool ok = joined.has_value() && joined->size() == total;
+                  for (std::size_t i = 0; ok && i < total; ++i) {
+                      ok = ok && same((*joined)[i], full[i]);
+                  }
+                  t.expect(ok, "exact sharded reconstruction == full batch, in order");
+              })
+        .test("shard_and_concat_domain_errors",
+              [](TestContext& t) {
+                  const std::vector<double> A = dict_4x5();
+                  const std::vector<std::vector<double>> measurements{{0.0, 3.0, 0.0, -2.0}};
+                  auto e0 = recover_batch_shard(A, 4, 5, measurements, 0, 0, 2, 1e-9);
+                  t.expect(!e0.has_value() && e0.error() == MathError::domain_error,
+                           "num_shards=0 -> domain_error");
+                  auto e1 = recover_batch_shard(A, 4, 5, measurements, 3, 2, 2, 1e-9);
+                  t.expect(!e1.has_value() && e1.error() == MathError::domain_error,
+                           "shard_index >= num_shards -> domain_error");
+                  // concat with the wrong number of shards.
+                  std::vector<std::vector<Result<std::vector<double>>>> empty;
+                  auto e2 = concat_shards<double>(1, 2, std::move(empty));
+                  t.expect(!e2.has_value() && e2.error() == MathError::domain_error,
+                           "shards.size() != num_shards -> domain_error");
               })
         .run();
 }

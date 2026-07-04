@@ -51,6 +51,21 @@ namespace {
     return prev[b.size()];
 }
 
+// CPU reference for one Haar DWT level over a single block, matching the kernel's normalization
+// and its approximation-then-detail packing.
+[[nodiscard]] auto cpu_haar_level(std::span<const double> block) -> std::vector<double> {
+    const std::size_t half = block.size() / 2;
+    const double inv_sqrt2 = 1.0 / std::numbers::sqrt2;
+    std::vector<double> out(block.size());
+    for (std::size_t k = 0; k < half; ++k) {
+        const double e = block[2 * k];
+        const double o = block[2 * k + 1];
+        out[k] = (e + o) * inv_sqrt2;
+        out[half + k] = (e - o) * inv_sqrt2;
+    }
+    return out;
+}
+
 // Convert a string to a vector of int code points, matching how the batch test flattens input.
 [[nodiscard]] auto code_points(std::string_view s) -> std::vector<int> {
     std::vector<int> out;
@@ -196,6 +211,80 @@ auto main() -> int {
                   t.expect(gpu::nqueens_count(8).value() == 92ull, "8-queens has 92 solutions");
                   t.expect(gpu::nqueens_count(10).value() == 724ull,
                            "10-queens has 724 solutions");
+              })
+        .test("qmc_poly_integrate_matches_cpu_mean",
+              [](TestContext& t) {
+                  // Integrand p(x) = 1 + 2x + 3x^2, whose exact integral over [0,1] is 3. Sample
+                  // it at midpoints of a fine grid (a stand-in for a low-discrepancy point set).
+                  const std::vector<double> coeffs = {1.0, 2.0, 3.0};
+                  std::vector<double> points(4096);
+                  for (std::size_t i = 0; i < points.size(); ++i) {
+                      points[i] = (static_cast<double>(i) + 0.5) / static_cast<double>(points.size());
+                  }
+                  if (gpu::available()) {
+                      auto got = gpu::qmc_poly_integrate(coeffs, points);
+                      t.expect(got.has_value(), "estimate computed on the device");
+                      // CPU reference: equal-weight average summed in index order.
+                      double sum = 0.0;
+                      for (const double xi : points) {
+                          sum += cpu_poly_eval(coeffs, xi);
+                      }
+                      const double cpu_mean = sum / static_cast<double>(points.size());
+                      t.expect(got && approx(*got, cpu_mean),
+                               "GPU QMC mean matches the CPU reference (up to reduction-order bits)");
+                      t.expect(got && std::abs(*got - 3.0) < 1e-3,
+                               "estimate approximates the true integral 3");
+                      // Empty point set has no defined average -> documented gpu_error.
+                      const std::vector<double> none;
+                      auto empty = gpu::qmc_poly_integrate(coeffs, none);
+                      t.expect(!empty.has_value() && empty.error() == MathError::gpu_error,
+                               "empty point set yields gpu_error");
+                  } else {
+                      // CUDA-disabled path: the wrapper returns the documented error so the
+                      // default CI build passes without a device.
+                      auto got = gpu::qmc_poly_integrate(coeffs, points);
+                      t.expect(!got.has_value() && got.error() == MathError::gpu_error,
+                               "CUDA-disabled path returns the documented gpu_error");
+                  }
+              })
+        .test("haar_dwt_batch_matches_cpu",
+              [](TestContext& t) {
+                  // Two length-8 signal blocks laid out row-major.
+                  const int batch = 2;
+                  const int len = 8;
+                  const std::vector<double> data = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0,
+                                                    8.0, 8.0, 0.0, 0.0, 4.0, 4.0, 2.0, 6.0};
+                  if (gpu::available()) {
+                      auto got = gpu::haar_dwt_batch(data, batch, len);
+                      t.expect(got.has_value(), "batch transform computed on the device");
+                      bool all = got.has_value() && got->size() == data.size();
+                      for (int b = 0; b < batch && all; ++b) {
+                          const std::span<const double> block{data.data() + b * len,
+                                                              static_cast<std::size_t>(len)};
+                          const auto ref = cpu_haar_level(block);
+                          for (int i = 0; i < len; ++i) {
+                              if (!approx((*got)[b * len + i], ref[i])) {
+                                  all = false;
+                              }
+                          }
+                      }
+                      t.expect(all, "GPU Haar DWT matches the CPU reference block by block");
+                      // Odd len is rejected up front, independent of the device.
+                      const std::vector<double> odd(6, 1.0);
+                      auto bad = gpu::haar_dwt_batch(odd, 2, 3);
+                      t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
+                               "odd block length yields domain_error");
+                      // Mismatched size (data.size() != batch*len) also fails on the railway.
+                      auto mism = gpu::haar_dwt_batch(data, batch, 4);
+                      t.expect(!mism.has_value() && mism.error() == MathError::domain_error,
+                               "size mismatch yields domain_error");
+                  } else {
+                      // CUDA-disabled path returns the documented error (checked first, before the
+                      // device-independent argument validation), so the default build passes.
+                      auto got = gpu::haar_dwt_batch(data, batch, len);
+                      t.expect(!got.has_value() && got.error() == MathError::gpu_error,
+                               "CUDA-disabled path returns the documented gpu_error");
+                  }
               })
         .run();
 }

@@ -186,7 +186,7 @@ struct SpectralRadius {
 // The Lyapunov special case B = A^T: solve A X + X A^T = C EXACTLY over Q. Requires A square
 // (n x n) and C of shape n x n (else domain_error). Singular iff A and -A^T share an
 // eigenvalue (i.e. lambda_i + lambda_j = 0 for some eigenvalues), propagated as domain_error.
-[[nodiscard]] auto lyapunov_solve(const Matrix& a, const Matrix& c) -> Result<Matrix>;
+[[nodiscard]] auto lyapunov_equation(const Matrix& a, const Matrix& c) -> Result<Matrix>;
 
 // VARIATION OF CONSTANTS for u' = A u + f(s), u(0) = u0, with a polynomial forcing
 // f(s) = sum_j forcing[j] * s^j (each forcing[j] an n x 1 vector; an empty list means the
@@ -569,7 +569,7 @@ auto sylvester_solve(const Matrix& a, const Matrix& b, const Matrix& c) -> Resul
     return Matrix::from_rows(std::move(x_rows));
 }
 
-auto lyapunov_solve(const Matrix& a, const Matrix& c) -> Result<Matrix> {
+auto lyapunov_equation(const Matrix& a, const Matrix& c) -> Result<Matrix> {
     if (!a.is_square()) {
         return make_error<Matrix>(MathError::domain_error);
     }

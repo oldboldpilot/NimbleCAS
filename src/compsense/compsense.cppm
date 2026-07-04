@@ -48,6 +48,37 @@
 //   companion recovery bound  k < (1 + 1/mu)/2  is only a SUFFICIENT condition:
 //   satisfying it guarantees OMP / basis-pursuit recovery of every k-sparse signal;
 //   violating it does NOT imply failure. Recovery is never universal.
+//
+// ---------------------------------------------------------------------------
+// PARALLEL + DISTRIBUTED batch recovery (acceleration only; see below)
+// ---------------------------------------------------------------------------
+// A single measurement matrix (dictionary) A is frequently reused to recover MANY
+// signals from MANY measurement vectors b_1..b_K. Each recovery x_k = f(A, b_k) is
+// INDEPENDENT of the others (it reads only the shared, immutable A and its own b_k
+// and writes only its own output slot), so the batch is an EMBARRASSINGLY PARALLEL,
+// order-preserving map k -> f(A, b_k). We express it over nimblecas.parallel's
+// deterministic fork-join runtime (TBB on Linux/macOS, PPL on Windows, serial
+// fallback otherwise).
+//
+// HONESTY (documented and true):
+//   * The parallel/distributed batch is DETERMINISTIC and BIT-IDENTICAL to recovering
+//     each signal serially, REGARDLESS of thread count, backend, or shard split. This
+//     is guaranteed structurally: recoveries share no mutable state, results are
+//     written to per-index slots (never reduced with a non-associative combine), and
+//     the map is order-preserving (result[k] depends only on f and b_k, never on
+//     scheduling). Running on 1 thread, 64 threads, or 8 machines yields the same
+//     vectors in the same order.
+//   * Consequently the acceleration is WALL-CLOCK ONLY. It changes NOTHING about the
+//     numerics or the guarantees: basis_pursuit stays EXACT over Q for every column;
+//     OMP stays NUMERICAL (double, greedy) for every column. Recovery of any given
+//     b_k still holds only under that method's sparsity / coherence / RIP regime —
+//     parallelism neither strengthens nor weakens per-signal recovery.
+//   * The DISTRIBUTED entrypoints (recover_batch_shard / basis_pursuit_batch_shard)
+//     are STATELESS PURE functions: shard s independently recovers exactly the columns
+//     i with i % num_shards == s, in ascending index order, touching no other shard's
+//     data. concat_shards deterministically reassembles the shards back into original
+//     input order, so the sharded result equals the whole-batch result equals the
+//     serial result. A driver (SGE / Ray / MPI) may run shards on separate machines.
 
 export module nimblecas.compsense;
 
@@ -56,6 +87,7 @@ import nimblecas.core;
 import nimblecas.ratpoly;
 import nimblecas.matrix;
 import nimblecas.lp;
+import nimblecas.parallel;
 
 export namespace nimblecas {
 
@@ -134,6 +166,96 @@ export namespace nimblecas {
 // shape, fewer than two atoms, or a zero-norm atom.
 [[nodiscard]] auto mutual_coherence(std::span<const double> A, std::size_t rows,
                                     std::size_t cols) -> Result<double>;
+
+// ===========================================================================
+// PARALLEL batch recovery (acceleration only; DETERMINISTIC == serial).
+// ===========================================================================
+// A batch is a range of measurement vectors b_0..b_{K-1} sharing ONE dictionary A.
+// Each returns its own independent recovery, so the batch return type is a per-signal
+// vector of Results (one signal's failure never poisons the others) in INPUT ORDER.
+// `grain` is the nimblecas.parallel cutoff: below `grain` measurements the map runs
+// serially. It defaults to 1 because each recovery is coarse-grained work, so one task
+// per signal (with the backend auto-chunking) is the right granularity — but ANY grain
+// yields identical results, differing only in wall-clock time.
+
+// NUMERICAL OMP over a whole batch. Recovers measurements[k] with
+// orthogonal_matching_pursuit(A, rows, cols, measurements[k], sparsity, tol) for every
+// k, in parallel, returning the recoveries in input order. Deterministic: element k is
+// bit-identical to calling orthogonal_matching_pursuit serially on measurements[k].
+[[nodiscard]] auto parallel_omp_batch(std::span<const double> A, std::size_t rows,
+                                      std::size_t cols,
+                                      std::span<const std::vector<double>> measurements,
+                                      std::size_t sparsity, double tol = 1e-9,
+                                      std::size_t grain = 1)
+    -> std::vector<Result<std::vector<double>>>;
+
+// EXACT (over Q) basis pursuit over a whole batch. Recovers measurements[k] with
+// basis_pursuit(A, measurements[k]) for every k, in parallel, in input order.
+// Deterministic: element k equals basis_pursuit(A, measurements[k]) run serially.
+[[nodiscard]] auto parallel_basis_pursuit_batch(
+    const std::vector<std::vector<Rational>>& A,
+    std::span<const std::vector<Rational>> measurements, std::size_t grain = 1)
+    -> std::vector<Result<std::vector<Rational>>>;
+
+// ===========================================================================
+// DISTRIBUTED shard entrypoints (stateless pure; a driver concatenates by index).
+// ===========================================================================
+// Shard `shard_index` (of `num_shards`) recovers EXACTLY the measurement vectors whose
+// original index i satisfies  i % num_shards == shard_index, returned in ASCENDING
+// original-index order. Pure and stateless: it reads only A and its assigned columns,
+// so shards may run on different threads, processes, or machines. domain_error if
+// num_shards == 0 or shard_index >= num_shards. Inside the shard the assigned
+// recoveries themselves run in parallel (deterministically).
+
+[[nodiscard]] auto recover_batch_shard(std::span<const double> A, std::size_t rows,
+                                       std::size_t cols,
+                                       std::span<const std::vector<double>> measurements,
+                                       std::size_t shard_index, std::size_t num_shards,
+                                       std::size_t sparsity, double tol = 1e-9,
+                                       std::size_t grain = 1)
+    -> Result<std::vector<Result<std::vector<double>>>>;
+
+[[nodiscard]] auto basis_pursuit_batch_shard(
+    const std::vector<std::vector<Rational>>& A,
+    std::span<const std::vector<Rational>> measurements, std::size_t shard_index,
+    std::size_t num_shards, std::size_t grain = 1)
+    -> Result<std::vector<Result<std::vector<Rational>>>>;
+
+// Reassemble `num_shards` shard outputs (as produced by *_batch_shard, i.e. shard s is
+// the ascending subsequence of indices i with i % num_shards == s) back into the full
+// `total`-length batch in ORIGINAL input order: out[i] = shards[i % num_shards] at its
+// (i / num_shards)-th position. This is the DRIVER-side reduction; it is a pure,
+// deterministic gather with NO recomputation, so out == the whole-batch result ==
+// the serial result. domain_error if num_shards == 0, shards.size() != num_shards, or
+// any shard's length disagrees with the count of indices assigned to it.
+template <typename T>
+[[nodiscard]] auto concat_shards(std::size_t total, std::size_t num_shards,
+                                 std::vector<std::vector<Result<std::vector<T>>>> shards)
+    -> Result<std::vector<Result<std::vector<T>>>> {
+    using Batch = std::vector<Result<std::vector<T>>>;
+    if (num_shards == 0 || shards.size() != num_shards) {
+        return make_error<Batch>(MathError::domain_error);
+    }
+    // Each shard must hold exactly its assigned count: |{ i < total : i % num_shards == s }|.
+    for (std::size_t s = 0; s < num_shards; ++s) {
+        std::size_t assigned = 0;
+        for (std::size_t i = s; i < total; i += num_shards) {
+            ++assigned;
+        }
+        if (shards[s].size() != assigned) {
+            return make_error<Batch>(MathError::domain_error);
+        }
+    }
+    Batch out;
+    out.reserve(total);
+    std::vector<std::size_t> cursor(num_shards, 0);  // next unread position per shard
+    for (std::size_t i = 0; i < total; ++i) {
+        const std::size_t s = i % num_shards;
+        out.push_back(std::move(shards[s][cursor[s]]));
+        ++cursor[s];
+    }
+    return out;
+}
 
 }  // namespace nimblecas
 
@@ -745,6 +867,93 @@ auto mutual_coherence(std::span<const double> A, std::size_t rows, std::size_t c
         }
     }
     return best;
+}
+
+// --- parallel batch recovery (deterministic; identical to serial) ----------------
+
+auto parallel_omp_batch(std::span<const double> A, std::size_t rows, std::size_t cols,
+                        std::span<const std::vector<double>> measurements, std::size_t sparsity,
+                        double tol, std::size_t grain)
+    -> std::vector<Result<std::vector<double>>> {
+    // transform_index is an order-preserving parallel map writing per-index slots; the
+    // closure reads only shared const state (A, and its own measurements[i]) and calls
+    // the pure orthogonal_matching_pursuit — no data race, no scheduling dependence.
+    return parallel::transform_index(
+        measurements.size(),
+        [A, rows, cols, sparsity, tol, measurements](std::size_t i) -> Result<std::vector<double>> {
+            return orthogonal_matching_pursuit(A, rows, cols, measurements[i], sparsity, tol);
+        },
+        grain);
+}
+
+auto parallel_basis_pursuit_batch(const std::vector<std::vector<Rational>>& A,
+                                  std::span<const std::vector<Rational>> measurements,
+                                  std::size_t grain) -> std::vector<Result<std::vector<Rational>>> {
+    // basis_pursuit reads only A and its own b, building purely local LP/matrix state, so
+    // distinct columns recover concurrently with no interference. Exact over Q per column.
+    return parallel::transform_index(
+        measurements.size(),
+        [&A, measurements](std::size_t i) -> Result<std::vector<Rational>> {
+            return basis_pursuit(A, measurements[i]);
+        },
+        grain);
+}
+
+// --- distributed shard entrypoints (stateless, pure) -----------------------------
+
+namespace {
+
+// The ascending original indices assigned to shard `shard_index`: i with
+// i % num_shards == shard_index. Empty when the shard has no work.
+[[nodiscard]] auto shard_indices(std::size_t total, std::size_t shard_index,
+                                 std::size_t num_shards) -> std::vector<std::size_t> {
+    std::vector<std::size_t> idx;
+    for (std::size_t i = shard_index; i < total; i += num_shards) {
+        idx.push_back(i);
+    }
+    return idx;
+}
+
+}  // namespace
+
+auto recover_batch_shard(std::span<const double> A, std::size_t rows, std::size_t cols,
+                         std::span<const std::vector<double>> measurements,
+                         std::size_t shard_index, std::size_t num_shards, std::size_t sparsity,
+                         double tol, std::size_t grain)
+    -> Result<std::vector<Result<std::vector<double>>>> {
+    using Batch = std::vector<Result<std::vector<double>>>;
+    if (num_shards == 0 || shard_index >= num_shards) {
+        return make_error<Batch>(MathError::domain_error);
+    }
+    const std::vector<std::size_t> assigned =
+        shard_indices(measurements.size(), shard_index, num_shards);
+    // Recover only this shard's columns, in ascending assigned-index order, in parallel.
+    return parallel::transform_index(
+        assigned.size(),
+        [A, rows, cols, sparsity, tol, measurements, &assigned](std::size_t t)
+            -> Result<std::vector<double>> {
+            return orthogonal_matching_pursuit(A, rows, cols, measurements[assigned[t]], sparsity,
+                                               tol);
+        },
+        grain);
+}
+
+auto basis_pursuit_batch_shard(const std::vector<std::vector<Rational>>& A,
+                               std::span<const std::vector<Rational>> measurements,
+                               std::size_t shard_index, std::size_t num_shards, std::size_t grain)
+    -> Result<std::vector<Result<std::vector<Rational>>>> {
+    using Batch = std::vector<Result<std::vector<Rational>>>;
+    if (num_shards == 0 || shard_index >= num_shards) {
+        return make_error<Batch>(MathError::domain_error);
+    }
+    const std::vector<std::size_t> assigned =
+        shard_indices(measurements.size(), shard_index, num_shards);
+    return parallel::transform_index(
+        assigned.size(),
+        [&A, measurements, &assigned](std::size_t t) -> Result<std::vector<Rational>> {
+            return basis_pursuit(A, measurements[assigned[t]]);
+        },
+        grain);
 }
 
 }  // namespace nimblecas

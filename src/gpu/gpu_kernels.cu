@@ -230,6 +230,94 @@ __global__ void nqueens_kernel(const unsigned int* __restrict__ part_cols,
     }
 }
 
+// QMC integration reduction. Each thread Horner-evaluates the polynomial integrand at its
+// grid-stride slice of the sample points, accumulating a private partial sum; a shared-memory
+// tree reduction then folds the block's partials and thread 0 writes the block total to
+// partials[blockIdx.x]. blockDim.x is a power of two by construction (the host launches 256
+// threads), so the halving tree is exact. The final sum over the (few) block partials is done by
+// reduce_partials_kernel below — a two-stage reduction that keeps everything on the device and
+// avoids a double atomicAdd (portable to pre-sm_60 parts).
+//
+// DETERMINISM: the device sums in this block/tree order rather than the CPU's strict
+// left-to-right order, so the last bits of the estimate can differ from a CPU average. Each is a
+// valid equal-weight estimate; neither is "more correct".
+__global__ void qmc_poly_integrate_kernel(const double* __restrict__ coeffs, int n_coeffs,
+                                          const double* __restrict__ x, int n,
+                                          double* __restrict__ partials) {
+    extern __shared__ double sdata[];
+    const int tid = static_cast<int>(threadIdx.x);
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    double local = 0.0;
+    for (int i = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) + tid; i < n;
+         i += stride) {
+        const double xi = x[i];
+        double acc = 0.0;
+        for (int k = n_coeffs - 1; k >= 0; --k) {
+            acc = acc * xi + coeffs[k];
+        }
+        local += acc;
+    }
+    sdata[tid] = local;
+    __syncthreads();
+    for (int s = static_cast<int>(blockDim.x) / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        partials[blockIdx.x] = sdata[0];
+    }
+}
+
+// Final single-block reduction: one block strides over the `count` block-partials, accumulates
+// into shared memory, tree-reduces, and thread 0 stores the total to *out. blockDim.x is a power
+// of two (256) so the halving tree is exact.
+__global__ void reduce_partials_kernel(const double* __restrict__ partials, int count,
+                                       double* __restrict__ out) {
+    extern __shared__ double sdata[];
+    const int tid = static_cast<int>(threadIdx.x);
+    double local = 0.0;
+    for (int i = tid; i < count; i += static_cast<int>(blockDim.x)) {
+        local += partials[i];
+    }
+    sdata[tid] = local;
+    __syncthreads();
+    for (int s = static_cast<int>(blockDim.x) / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        *out = sdata[0];
+    }
+}
+
+// One-level batch Haar DWT (orthonormal 1/sqrt(2) lifting). `in` holds `batch` contiguous signal
+// blocks of `len` samples (len even); `half` = len/2. Each thread owns one output pair
+// (block, k): it reads the even/odd sample pair in[2k], in[2k+1] of its block and writes the
+// approximation coefficient (e + o)/sqrt(2) to out[k] and the detail coefficient (e - o)/sqrt(2)
+// to out[half + k], packing all approximations before all details within each block. Grid-stride
+// over the batch*half independent pairs; a regular, divergence-free data-parallel transform.
+__global__ void haar_dwt_batch_kernel(const double* __restrict__ in, int batch, int len, int half,
+                                      double* __restrict__ out) {
+    const int total = batch * half;  // <= batch*len <= INT_MAX (guarded by the host wrapper)
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    const double inv_sqrt2 = 0.70710678118654752440;  // 1/sqrt(2)
+    for (int idx = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                   static_cast<int>(threadIdx.x);
+         idx < total; idx += stride) {
+        const int blk = idx / half;
+        const int k = idx - blk * half;
+        const int base = blk * len;
+        const double e = in[base + 2 * k];
+        const double o = in[base + 2 * k + 1];
+        out[base + k] = (e + o) * inv_sqrt2;         // approximation (low-pass)
+        out[base + half + k] = (e - o) * inv_sqrt2;  // detail (high-pass)
+    }
+}
+
 }  // namespace
 
 extern "C" int nimblecas_gpu_device_count(void) {
@@ -594,5 +682,133 @@ extern "C" int nimblecas_gpu_nqueens_count(int n, unsigned long long* out_count)
     if (dev_count != nullptr) {
         cudaFree(dev_count);
     }
+    return rc;
+}
+
+extern "C" int nimblecas_gpu_qmc_poly_integrate(const double* coeffs, int n_coeffs,
+                                                const double* x, int n, double* out_mean) {
+    *out_mean = 0.0;
+    if (n <= 0) {
+        return 0;  // no sample points: nothing to average (the wrapper rejects the empty case)
+    }
+    if (n_coeffs <= 0) {
+        return 0;  // the zero integrand averages to 0 everywhere
+    }
+    const int threads = 256;  // power of two: required by the shared-memory tree reductions
+    const int blocks = choose_blocks(n, threads);
+    const size_t coeff_bytes = static_cast<size_t>(n_coeffs) * sizeof(double);
+    const size_t point_bytes = static_cast<size_t>(n) * sizeof(double);
+    const size_t part_bytes = static_cast<size_t>(blocks) * sizeof(double);
+    const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
+    double* dev_coeffs = nullptr;
+    double* dev_x = nullptr;
+    double* dev_partials = nullptr;
+    double* dev_sum = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    // Pin the caller's pageable inputs so the H2D copies use DMA; best-effort and size-gated.
+    PinnedScope pin_coeffs = host_register(coeffs, coeff_bytes);
+    PinnedScope pin_x = host_register(x, point_bytes);
+    if ((err = cudaMalloc(&dev_coeffs, coeff_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_x, point_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_partials, part_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_sum, sizeof(double))) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_coeffs, coeffs, coeff_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_x, x, point_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        qmc_poly_integrate_kernel<<<blocks, threads, shmem>>>(dev_coeffs, n_coeffs, dev_x, n,
+                                                              dev_partials);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else {
+            // Fold the block partials into a single device value, then bring back one double.
+            reduce_partials_kernel<<<1, threads, shmem>>>(dev_partials, blocks, dev_sum);
+            if ((err = cudaGetLastError()) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else {
+                double total = 0.0;
+                if ((err = cudaMemcpy(&total, dev_sum, sizeof(double),
+                                      cudaMemcpyDeviceToHost)) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                } else {
+                    *out_mean = total / static_cast<double>(n);  // equal-weight average
+                }
+            }
+        }
+    }
+    if (dev_coeffs != nullptr) {
+        cudaFree(dev_coeffs);
+    }
+    if (dev_x != nullptr) {
+        cudaFree(dev_x);
+    }
+    if (dev_partials != nullptr) {
+        cudaFree(dev_partials);
+    }
+    if (dev_sum != nullptr) {
+        cudaFree(dev_sum);
+    }
+    host_unregister(pin_x);
+    host_unregister(pin_coeffs);
+    return rc;
+}
+
+extern "C" int nimblecas_gpu_haar_dwt_batch(const double* data, int batch, int len, double* out) {
+    if (batch <= 0 || len <= 0) {
+        return 0;  // nothing to transform
+    }
+    // A single Haar level pairs adjacent samples, so len must be even. The C++ wrapper already
+    // rejects an odd len; guard here too so half = len/2 pairs the block exactly.
+    if ((len & 1) != 0) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const int half = len / 2;
+    const size_t total_bytes =
+        static_cast<size_t>(batch) * static_cast<size_t>(len) * sizeof(double);
+    double* dev_in = nullptr;
+    double* dev_out = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    PinnedScope pin_in = host_register(data, total_bytes);
+    PinnedScope pin_out = host_register(out, total_bytes);
+    if ((err = cudaMalloc(&dev_in, total_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_out, total_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_in, data, total_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        const int threads = 256;
+        const int blocks = choose_blocks(batch * half, threads);
+        haar_dwt_batch_kernel<<<blocks, threads>>>(dev_in, batch, len, half, dev_out);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(out, dev_out, total_bytes, cudaMemcpyDeviceToHost)) !=
+                   cudaSuccess) {
+            rc = static_cast<int>(err);
+        }
+    }
+    if (dev_in != nullptr) {
+        cudaFree(dev_in);
+    }
+    if (dev_out != nullptr) {
+        cudaFree(dev_out);
+    }
+    host_unregister(pin_out);
+    host_unregister(pin_in);
     return rc;
 }

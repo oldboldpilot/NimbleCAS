@@ -43,6 +43,24 @@ int nimblecas_gpu_bfs(const int* row_offsets, const int* col_indices, int num_ve
 // error code on failure.
 int nimblecas_gpu_nqueens_count(int n, unsigned long long* out_count);
 
+// QMC integration reduction. Horner-evaluate the polynomial integrand coeffs[0..n_coeffs-1]
+// (low degree first) at each of the n sample points x[0..n-1] on the device and reduce (sum),
+// writing the equal-weight average (1/n) * sum p(x_i) to *out_mean. This is the device analogue
+// of the numerical qmc_integrate: the caller supplies the (low-discrepancy) sample points. The
+// device sums in block/tree order, which differs from a strict left-to-right CPU sum, so the
+// last bits of *out_mean may differ from a CPU average (each is a valid estimate). Returns 0 on
+// success, or a non-zero CUDA error code on failure.
+int nimblecas_gpu_qmc_poly_integrate(const double* coeffs, int n_coeffs, const double* x, int n,
+                                     double* out_mean);
+
+// One-level batch Haar discrete wavelet transform (orthonormal 1/sqrt(2) normalization), one
+// thread per output coefficient pair, grid-stride over the batch. `data` holds `batch` contiguous
+// signal blocks of `len` samples each (len must be even), row-major. For each block, writes its
+// len/2 approximation coefficients followed by its len/2 detail coefficients to the matching
+// block of `out` (same size and layout as the input). Returns 0 on success, or a non-zero CUDA
+// error code on failure.
+int nimblecas_gpu_haar_dwt_batch(const double* data, int batch, int len, double* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -127,7 +127,7 @@ each decided **exactly**.
 | Function | Signature | Behavior |
 | :--- | :--- | :--- |
 | `sylvester_solve` | `auto sylvester_solve(const Matrix& a, const Matrix& b, const Matrix& c) -> Result<Matrix>` | Solves the Sylvester equation `A X + X B = C` exactly over `Q` by vectorization: with column-stacking `vec`, `(Iₙ ⊗ A + Bᵀ ⊗ Iₘ) vec(X) = vec(C)`, an `(mn)×(mn)` exact rational linear system. Requires `A` square (`m×m`), `B` square (`n×n`), and `C` of shape `m×n` (else `domain_error`). The system is singular — propagated as `domain_error` from the solve — **iff** `A` and `−B` share an eigenvalue (no unique solution). Overflow propagated. |
-| `lyapunov_solve` | `auto lyapunov_solve(const Matrix& a, const Matrix& c) -> Result<Matrix>` | The Lyapunov special case `B = Aᵀ`: solves `A X + X Aᵀ = C` exactly over `Q`. Requires `A` square (`n×n`) and `C` of shape `n×n` (else `domain_error`). Singular iff `A` and `−Aᵀ` share an eigenvalue (i.e. `λᵢ + λⱼ = 0` for some eigenvalues), propagated as `domain_error`. |
+| `lyapunov_equation` | `auto lyapunov_equation(const Matrix& a, const Matrix& c) -> Result<Matrix>` | The Lyapunov special case `B = Aᵀ`: solves `A X + X Aᵀ = C` exactly over `Q`. Requires `A` square (`n×n`) and `C` of shape `n×n` (else `domain_error`). Singular iff `A` and `−Aᵀ` share an eigenvalue (i.e. `λᵢ + λⱼ = 0` for some eigenvalues), propagated as `domain_error`. |
 | `variation_of_constants` | `auto variation_of_constants(const Matrix& a, const Matrix& u0, const std::vector<Matrix>& forcing, const Rational& t, std::int64_t terms) -> Result<Matrix>` | Variation of constants for `u' = A u + f(s), u(0) = u0` with polynomial forcing `f(s) = Σⱼ forcing[j] · sʲ` (each `forcing[j]` an `n×1` vector; an empty list means the homogeneous problem `f = 0`). Returns the closed form `u(t) = T(t) u0 + ∫₀^t T(t−s) f(s) ds`, every operator series truncated at `terms` terms. Exact **iff** `A` is nilpotent and `terms ≥` its index (then every series is finite and the integral is closed-form over `Q`); otherwise the honest exact-rational truncation. Requires `A` square (`n×n`), `u0` and each `forcing[j]` of shape `n×1`, and `terms ≥ 1` (else `domain_error`). Overflow propagated. (Exponential and other non-polynomial forcing are out of scope here — pass a polynomial or use the unevaluated form.) |
 
 ## Error model
@@ -139,7 +139,7 @@ each decided **exactly**.
 | `semigroup` / `cauchy_solution` / `verify_semigroup_property` / `pde_semigroup_solution` / `variation_of_constants` with `terms < 1` | `MathError::domain_error` |
 | `cauchy_solution` / `pde_semigroup_solution` / `variation_of_constants` with `u0` (or a forcing term) not an `n×1` column | `MathError::domain_error` |
 | `sylvester_solve` with `A` or `B` non-square, or `C` not `m×n` | `MathError::domain_error` |
-| `sylvester_solve` / `lyapunov_solve` singular system (`A` and `−B` share an eigenvalue) | `MathError::domain_error` (from the solve) |
+| `sylvester_solve` / `lyapunov_equation` singular system (`A` and `−B` share an eigenvalue) | `MathError::domain_error` (from the solve) |
 | An `int64` numerator or denominator computation wraps | `MathError::overflow` |
 
 The exactness contracts are **not** error conditions: an inexact result on a
@@ -235,7 +235,7 @@ auto xsol = sylvester_solve(mat({{1, 0}, {0, 2}}), mat({{3, 0}, {0, 4}}),
 xsol.is_equal(mat({{1, 2}, {3, 4}}));      // true
 
 // A X + X A^T = C, A = diag(-1,-2), X = [[2,1],[1,3]] -> C = [[-4,-3],[-3,-12]].
-lyapunov_solve(mat({{-1, 0}, {0, -2}}), mat({{-4, -3}, {-3, -12}}))
+lyapunov_equation(mat({{-1, 0}, {0, -2}}), mat({{-4, -3}, {-3, -12}}))
     .value().is_equal(mat({{2, 1}, {1, 3}}));  // true
 
 // --- Variation of constants (nilpotent => exact closed form) -----------------

@@ -26,6 +26,8 @@ using nimblecas::hammersley_point_rational;
 using nimblecas::l2_star_discrepancy;
 using nimblecas::l2_star_discrepancy_squared_exact;
 using nimblecas::lattice_point_rational;
+using nimblecas::parallel_qmc_integrate;
+using nimblecas::parallel_rqmc_integrate;
 using nimblecas::qmc_integrate;
 using nimblecas::qmc_integrate_exact;
 using nimblecas::Rational;
@@ -33,6 +35,9 @@ using nimblecas::rational_to_double;
 using nimblecas::Rng;
 using nimblecas::RqmcResult;
 using nimblecas::rqmc_integrate;
+using nimblecas::rqmc_reduce_shards;
+using nimblecas::rqmc_shard;
+using nimblecas::RqmcShardResult;
 using nimblecas::sobol_point_rational;
 using nimblecas::van_der_corput_rational;
 using nimblecas::testing::TestContext;
@@ -285,6 +290,116 @@ auto main() -> int {
                   t.expect(!bad.has_value() &&
                                bad.error() == nimblecas::MathError::domain_error,
                            "rqmc(replications<2) yields domain_error");
+              })
+        .test("parallel_qmc_integrate_matches_serial_bit_for_bit",
+              [](TestContext& t) {
+                  // The parallel point-batch integrator sums the SAME point evaluations in the
+                  // SAME index order as the serial one, so the result is bit-identical (not merely
+                  // close) for any thread count.
+                  auto f = [](std::span<const double> p) { return p[0] * p[1] + std::sin(p[0]); };
+                  const std::array<std::uint64_t, 3> Ns{1, 64, 1000};
+                  for (const std::uint64_t N : Ns) {
+                      auto s = qmc_integrate(f, 2, N);
+                      auto p = parallel_qmc_integrate(f, 2, N);
+                      t.expect(s.has_value() && p.has_value(),
+                               std::format("both qmc_integrate variants succeed (N={})", N));
+                      if (s && p) {
+                          t.expect(*p == *s,
+                                   std::format("parallel_qmc_integrate == serial bit-for-bit (N={}, "
+                                               "got {} vs {})",
+                                               N, *p, *s));
+                      }
+                  }
+                  // Domain errors mirror the serial version.
+                  auto d0 = parallel_qmc_integrate(f, 0, 100);
+                  t.expect(!d0.has_value() && d0.error() == nimblecas::MathError::domain_error,
+                           "parallel_qmc_integrate(dimension 0) yields domain_error");
+                  auto n0 = parallel_qmc_integrate(f, 2, 0);
+                  t.expect(!n0.has_value() && n0.error() == nimblecas::MathError::domain_error,
+                           "parallel_qmc_integrate(N 0) yields domain_error");
+              })
+        .test("parallel_rqmc_integrate_matches_serial_bit_for_bit",
+              [](TestContext& t) {
+                  // Determinism: each replication is a pure function of base.split(r) and the fixed
+                  // Halton points, and the mean/variance reduction runs in fixed index order — so
+                  // the parallel result is bit-identical to the serial rqmc_integrate.
+                  auto f = [](std::span<const double> p) { return p[0] * p[1]; };
+                  const std::uint64_t N = 256;
+                  const std::uint64_t reps = 8;
+                  const std::uint64_t seed = 12345;
+                  auto s = rqmc_integrate(f, 2, N, reps, seed);
+                  auto p = parallel_rqmc_integrate(f, 2, N, reps, seed);
+                  t.expect(s.has_value() && p.has_value(), "both rqmc_integrate variants succeed");
+                  if (s && p) {
+                      t.expect(p->estimate == s->estimate,
+                               std::format("parallel RQMC estimate bit-identical ({} vs {})",
+                                           p->estimate, s->estimate));
+                      t.expect(p->error_estimate == s->error_estimate,
+                               std::format("parallel RQMC error bit-identical ({} vs {})",
+                                           p->error_estimate, s->error_estimate));
+                      t.expect(p->points_used == s->points_used &&
+                                   p->replications == s->replications,
+                               "parallel RQMC points_used/replications match serial");
+                  }
+                  auto bad = parallel_rqmc_integrate(f, 1, 10, 1, 1);
+                  t.expect(!bad.has_value() &&
+                               bad.error() == nimblecas::MathError::domain_error,
+                           "parallel_rqmc_integrate(replications<2) yields domain_error");
+              })
+        .test("rqmc_shard_reduction_is_partition_independent",
+              [](TestContext& t) {
+                  // Distributed building block: sharding the replications across num_shards and
+                  // reducing gives the SAME global estimate as the serial run, bit-for-bit, for
+                  // num_shards = 1, 2, 4 — replication i is seeded from base.split(i) independent
+                  // of the partition, and the driver reassembles in canonical index order.
+                  auto f = [](std::span<const double> p) { return std::exp(p[0]) * p[1]; };
+                  const std::uint64_t N = 128;
+                  const std::uint64_t reps = 8;
+                  const std::uint64_t seed = 777;
+                  auto serial = rqmc_integrate(f, 2, N, reps, seed);
+                  t.expect(serial.has_value(), "serial rqmc_integrate succeeds");
+
+                  const std::array<std::uint64_t, 3> shard_counts{1, 2, 4};
+                  for (const std::uint64_t num_shards : shard_counts) {
+                      std::vector<RqmcShardResult> shards;
+                      bool ok = true;
+                      for (std::uint64_t si = 0; si < num_shards; ++si) {
+                          auto sh = rqmc_shard(f, 2, N, reps, si, num_shards, seed);
+                          if (!sh) {
+                              ok = false;
+                              break;
+                          }
+                          shards.push_back(std::move(*sh));
+                      }
+                      t.expect(ok, std::format("all {} shards compute", num_shards));
+                      if (!ok) {
+                          continue;
+                      }
+                      auto global =
+                          rqmc_reduce_shards(std::span<const RqmcShardResult>{shards});
+                      t.expect(global.has_value(),
+                               std::format("reduce over {} shards succeeds", num_shards));
+                      if (global && serial) {
+                          t.expect(global->estimate == serial->estimate,
+                                   std::format("{}-shard estimate bit-identical to serial ({} vs {})",
+                                               num_shards, global->estimate, serial->estimate));
+                          t.expect(global->error_estimate == serial->error_estimate,
+                                   std::format("{}-shard error bit-identical to serial", num_shards));
+                          t.expect(global->points_used == serial->points_used,
+                                   std::format("{}-shard points_used matches serial", num_shards));
+                      }
+                  }
+
+                  // Domain errors: shard_index >= num_shards, and an empty shard span.
+                  auto bad_shard = rqmc_shard(f, 2, N, reps, 4, 4, seed);
+                  t.expect(!bad_shard.has_value() &&
+                               bad_shard.error() == nimblecas::MathError::domain_error,
+                           "rqmc_shard(shard_index >= num_shards) yields domain_error");
+                  std::vector<RqmcShardResult> empty;
+                  auto bad_reduce = rqmc_reduce_shards(std::span<const RqmcShardResult>{empty});
+                  t.expect(!bad_reduce.has_value() &&
+                               bad_reduce.error() == nimblecas::MathError::domain_error,
+                           "rqmc_reduce_shards(empty) yields domain_error");
               })
         .test("adaptive_qmc_refines_to_budget_or_tolerance",
               [](TestContext& t) {

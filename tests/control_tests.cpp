@@ -15,21 +15,27 @@ import nimblecas.testing;
 
 using nimblecas::bilinear_c2d;
 using nimblecas::bode;
+using nimblecas::bode_shard;
+using nimblecas::BodePoint;
 using nimblecas::Complex;
 using nimblecas::evaluate_exact;
 using nimblecas::hurwitz_minors;
 using nimblecas::is_hurwitz_stable;
-using nimblecas::is_positive_definite;
+using nimblecas::is_spd;
 using nimblecas::is_robustly_stable;
 using nimblecas::is_stable_continuous;
 using nimblecas::is_stable_discrete;
-using nimblecas::is_stable_lyapunov;
+using nimblecas::is_lyapunov_stable;
 using nimblecas::kharitonov_polynomials;
 using nimblecas::lyapunov_solve;
 using nimblecas::logspace;
 using nimblecas::MathError;
 using nimblecas::Matrix;
+using nimblecas::nyquist;
 using nimblecas::nyquist_criterion;
+using nimblecas::NyquistPoint;
+using nimblecas::parallel_bode;
+using nimblecas::parallel_nyquist;
 using nimblecas::Rational;
 using nimblecas::RationalPoly;
 using nimblecas::ss_to_tf;
@@ -364,10 +370,10 @@ auto main() -> int {
                       t.expect(p->at(0, 0) == rq(1, 2) && p->at(1, 1) == rq(1, 4) &&
                                    p->at(0, 1) == ri(0) && p->at(1, 0) == ri(0),
                                "P = diag(1/2, 1/4) exactly");
-                      auto pd = is_positive_definite(*p);
+                      auto pd = is_spd(*p);
                       t.expect(pd.has_value() && pd.value_or(false), "P is positive definite");
                   }
-                  auto lyap = is_stable_lyapunov(a);
+                  auto lyap = is_lyapunov_stable(a);
                   t.expect(lyap.has_value() && lyap.value_or(false),
                            "Lyapunov verdict: diag(-1,-2) is stable");
                   // Cross-check against the state-space Routh-Hurwitz verdict.
@@ -380,7 +386,7 @@ auto main() -> int {
                                "Lyapunov agrees with Routh-Hurwitz");
                   }
                   // Unstable A = diag(1, -2): P exists but is not positive definite.
-                  auto un = is_stable_lyapunov(mat({{1, 0}, {0, -2}}));
+                  auto un = is_lyapunov_stable(mat({{1, 0}, {0, -2}}));
                   t.expect(un.has_value() && !un.value_or(true),
                            "diag(1,-2) is not Lyapunov-stable");
                   // Rotation A = [[0,-1],[1,0]] (eigenvalues +/- i): singular Kronecker sum.
@@ -388,7 +394,7 @@ auto main() -> int {
                   auto sing = lyapunov_solve(rot);
                   t.expect(!sing.has_value() && sing.error() == MathError::domain_error,
                            "purely imaginary spectrum => singular Lyapunov operator");
-                  auto rot_stable = is_stable_lyapunov(rot);
+                  auto rot_stable = is_lyapunov_stable(rot);
                   t.expect(rot_stable.has_value() && !rot_stable.value_or(true),
                            "rotation is not Lyapunov-stable");
               })
@@ -426,6 +432,82 @@ auto main() -> int {
                   t.expect(std::abs(m.phase_margin - 67.6418) < 0.3, "phase margin ~ 67.64 deg");
                   t.expect(std::abs(m.gain_crossover - 0.76642) < 0.01,
                            "gain crossover ~ 0.7664");
+              })
+        .test("parallel_bode_matches_serial_bit_identical",
+              [](TestContext& t) {
+                  // parallel_bode / parallel_nyquist are order-preserving maps over independent
+                  // per-ω evaluations: they must equal the serial sweep element-for-element and
+                  // BIT-for-BIT (same double arithmetic), regardless of thread count. Use a grid
+                  // well past the parallel grain size so the parallel path is actually exercised.
+                  const auto h = TF(rp({1, 2}), rp({2, 3, 1}));  // (2s + 1)/(s^2 + 3s + 2)
+                  const auto grid = logspace(1e-3, 1e3, 5000);
+
+                  const auto serial_b = bode(h, grid);
+                  const auto par_b = parallel_bode(h, grid);
+                  t.expect(par_b.size() == serial_b.size(),
+                           "parallel_bode size matches serial bode");
+                  bool bode_identical = par_b.size() == serial_b.size();
+                  for (std::size_t i = 0; i < par_b.size() && bode_identical; ++i) {
+                      // Exact equality: same ω order, and each field the identical double bit
+                      // pattern (NaN-free here because none of these ω hit an imaginary-axis pole).
+                      if (par_b[i].omega != serial_b[i].omega ||
+                          par_b[i].magnitude_db != serial_b[i].magnitude_db ||
+                          par_b[i].phase_deg != serial_b[i].phase_deg) {
+                          bode_identical = false;
+                      }
+                  }
+                  t.expect(bode_identical, "parallel_bode == serial bode element-for-element");
+
+                  const auto serial_n = nyquist(h, grid);
+                  const auto par_n = parallel_nyquist(h, grid);
+                  t.expect(par_n.size() == serial_n.size(),
+                           "parallel_nyquist size matches serial nyquist");
+                  bool nyq_identical = par_n.size() == serial_n.size();
+                  for (std::size_t i = 0; i < par_n.size() && nyq_identical; ++i) {
+                      if (par_n[i].omega != serial_n[i].omega ||
+                          par_n[i].re != serial_n[i].re || par_n[i].im != serial_n[i].im) {
+                          nyq_identical = false;
+                      }
+                  }
+                  t.expect(nyq_identical,
+                           "parallel_nyquist == serial nyquist element-for-element");
+              })
+        .test("bode_shard_reduction_reconstructs_full_sweep",
+              [](TestContext& t) {
+                  // Distributed reduction: concatenating the contiguous shards IN SHARD ORDER
+                  // must reconstruct the full serial bode sweep exactly, for any shard count
+                  // (partition independence + ordering). 4001 points -> uneven blocks, so the
+                  // balanced-partition arithmetic is exercised, not just clean divisions.
+                  const auto h = TF(rp({1, 2}), rp({2, 3, 1}));
+                  const auto grid = logspace(1e-2, 1e2, 4001);
+                  const auto full = bode(h, grid);
+
+                  for (const std::size_t num_shards : {std::size_t{1}, std::size_t{2},
+                                                       std::size_t{3}}) {
+                      std::vector<BodePoint> reduced;
+                      reduced.reserve(full.size());
+                      for (std::size_t s = 0; s < num_shards; ++s) {
+                          const auto part = bode_shard(h, grid, s, num_shards);
+                          reduced.insert(reduced.end(), part.begin(), part.end());
+                      }
+                      t.expect(reduced.size() == full.size(),
+                               "concatenated shards cover every frequency exactly once");
+                      bool identical = reduced.size() == full.size();
+                      for (std::size_t i = 0; i < reduced.size() && identical; ++i) {
+                          if (reduced[i].omega != full[i].omega ||
+                              reduced[i].magnitude_db != full[i].magnitude_db ||
+                              reduced[i].phase_deg != full[i].phase_deg) {
+                              identical = false;
+                          }
+                      }
+                      t.expect(identical,
+                               "bode_shard reduction is bit-identical to the full serial sweep");
+                  }
+
+                  // Out-of-range / empty-work shards contribute nothing.
+                  t.expect(bode_shard(h, grid, 0, 0).empty(), "num_shards == 0 => empty shard");
+                  t.expect(bode_shard(h, grid, 3, 3).empty(),
+                           "shard_index >= num_shards => empty shard");
               })
         .run();
 }

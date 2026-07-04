@@ -20,7 +20,7 @@ using nimblecas::cauchy_solution;
 using nimblecas::is_contraction_generator;
 using nimblecas::is_dissipative;
 using nimblecas::is_hurwitz;
-using nimblecas::lyapunov_solve;
+using nimblecas::lyapunov_equation;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::operator_norm_1;
@@ -238,9 +238,9 @@ auto main() -> int {
                   const Matrix a = mat({{-1, 0}, {0, -2}});
                   const Matrix x = mat({{2, 1}, {1, 3}});
                   const Matrix c = mat({{-4, -3}, {-3, -12}});
-                  auto sol = lyapunov_solve(a, c);
+                  auto sol = lyapunov_equation(a, c);
                   t.expect(sol.has_value(), "Lyapunov solve succeeds");
-                  t.expect(sol && sol->is_equal(x), "lyapunov_solve(A,C) = X exactly");
+                  t.expect(sol && sol->is_equal(x), "lyapunov_equation(A,C) = X exactly");
               })
         .test("variation_of_constants_constant_forcing",
               [](TestContext& t) {

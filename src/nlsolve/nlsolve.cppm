@@ -41,6 +41,7 @@ export module nimblecas.nlsolve;
 
 import std;
 import nimblecas.core;
+import nimblecas.parallel;  // deterministic fork-join runtime (PPL/TBB/serial)
 
 // ===========================================================================
 // Public types.
@@ -1089,6 +1090,213 @@ using detail::Vec;
         return j;
     };
     return detail_lm::run(F, jac, x0, opts, lambda0);
+}
+
+}  // namespace nimblecas::nlsolve
+
+// ===========================================================================
+// PARALLEL + DISTRIBUTED multistart (ROADMAP §7 acceleration layer).
+// ---------------------------------------------------------------------------
+// ADDITIVE: none of the solvers above change. This layer runs an EXISTING solver
+// (newton / broyden / chord / ... — the caller picks) from MANY starting points and
+// keeps the single best result, using nimblecas.parallel for the fan-out.
+//
+// HONESTY BOUNDARY — read before trusting a multistart result.
+//   * Nonlinear solving is NUMERIC with LOCAL convergence (see the module header). A
+//     multistart sweep only improves the CHANCE of locating a root of a system with
+//     several solutions by seeding the local solver from many basins; it is NOT a global
+//     solver and gives NO guarantee that a root exists or was found. If nothing converges
+//     the layer still returns a value: the smallest-residual iterate it saw.
+//   * converged == false is a RESULT, not an error. An individual start that hits a hard
+//     domain_error (e.g. a non-finite start, or F breaking down at the start point) is
+//     simply not a candidate; only if NO start yields a value does the whole sweep report
+//     domain_error.
+//   * The reduction is DETERMINISTIC. Candidates are ordered by a fixed TOTAL order —
+//     (converged desc, residual_norm asc, then lowest GLOBAL start index) — so the answer
+//     is bit-identical regardless of thread count, backend (ppl/tbb/serial), or how the
+//     starts are partitioned across distributed shards. It equals the serial sweep over
+//     the same starts, and reducing per-shard results equals the single-process sweep
+//     (partition independence), because the winner is the global optimum of that total
+//     order and the globally-best start is, a fortiori, the best within whichever shard
+//     owns it. Ties never depend on scheduling: the global start index is unique.
+//
+// CONCURRENCY PRECONDITION: F and the chosen solver are invoked concurrently for distinct
+// starts, so both callables MUST be safe to call from multiple threads at once (stateless
+// or internally synchronised). Each start is solved independently over its own point; the
+// per-start numeric result is identical to solving it in isolation.
+// ===========================================================================
+export namespace nimblecas::nlsolve {
+
+// A solver adaptor: (F, x0, opts) -> Result<SolveResult>. Bind any solver above whose
+// square-system signature matches, e.g. newton or broyden:
+//   Solver s = [](const ResidualFn& F, std::span<const double> x0, const Options& o) {
+//                  return broyden(F, x0, o); };
+using Solver =
+    std::function<Result<SolveResult>(const ResidualFn&, std::span<const double>, const Options&)>;
+
+// Default solver used when the caller does not pass one: finite-difference Newton.
+inline const Solver default_solver =
+    [](const ResidualFn& F, std::span<const double> x0, const Options& o) -> Result<SolveResult> {
+    return newton(F, x0, o);
+};
+
+// A shard's best result over its subset of starts. `start_index` is the GLOBAL index of
+// the winning start (carried so a distributed driver can reproduce the exact tie-break
+// when reducing across shards). `valid == false` means the subset produced no candidate
+// (empty subset, or every start errored), in which case `result` is unspecified.
+struct MultistartResult {
+    SolveResult result{};
+    std::size_t start_index{0};
+    bool valid{false};
+};
+
+}  // namespace nimblecas::nlsolve
+
+namespace nimblecas::nlsolve::detail {
+
+// A comparable summary of one start's outcome under the deterministic total order.
+struct Candidate {
+    std::size_t index{0};
+    double residual{std::numeric_limits<double>::infinity()};
+    bool converged{false};
+    bool valid{false};
+};
+
+// Strict "a is better than b" under (valid > invalid, converged desc, residual asc,
+// index asc). A total order over valid candidates (indices are unique), so the chosen
+// minimum is independent of evaluation/fold order — the source of determinism.
+[[nodiscard]] inline auto better_candidate(const Candidate& a, const Candidate& b) noexcept
+    -> bool {
+    if (a.valid != b.valid) {
+        return a.valid;  // any real result beats "no result"
+    }
+    if (!a.valid) {
+        return false;  // neither is a candidate
+    }
+    if (a.converged != b.converged) {
+        return a.converged;  // a converged root beats a non-converged iterate
+    }
+    if (a.residual != b.residual) {
+        return a.residual < b.residual;  // then smaller residual
+    }
+    return a.index < b.index;  // then lowest global start index
+}
+
+// Evaluate the solver from every start whose global index is in `which`, in parallel and
+// order-preserving (results[k] <-> which[k]), then reduce to the single best under the
+// deterministic total order. `which` MUST be ascending so the reduction's index tie-break
+// is unambiguous; the fold is serial over a total order, hence thread-count independent.
+[[nodiscard]] inline auto multistart_over(const ResidualFn& F,
+                                          std::span<const std::vector<double>> starts,
+                                          std::span<const std::size_t> which,
+                                          const Solver& solver, const Options& opts,
+                                          std::size_t grain) -> MultistartResult {
+    MultistartResult best{};  // valid == false
+    const std::size_t n = which.size();
+    if (n == 0 || !solver) {
+        return best;
+    }
+    // Fan-out: transform_index is blocking, order-preserving, and deterministic (the
+    // result depends only on the solver, not on scheduling). Each task writes its own slot.
+    std::vector<Result<SolveResult>> results = nimblecas::parallel::transform_index(
+        n,
+        [&](std::size_t k) -> Result<SolveResult> {
+            return solver(F, std::span<const double>{starts[which[k]]}, opts);
+        },
+        grain);
+
+    Candidate best_cand{};  // invalid sentinel (residual = +inf)
+    for (std::size_t k = 0; k < n; ++k) {
+        const std::size_t g = which[k];
+        auto& r = results[k];
+        const Candidate cand{
+            g,
+            r.has_value() ? r->residual_norm : std::numeric_limits<double>::infinity(),
+            r.has_value() && r->converged,
+            r.has_value()};
+        if (better_candidate(cand, best_cand)) {
+            best_cand = cand;
+            best.result = std::move(*r);  // only reached when r has a value
+            best.start_index = g;
+            best.valid = true;
+        }
+    }
+    return best;
+}
+
+}  // namespace nimblecas::nlsolve::detail
+
+export namespace nimblecas::nlsolve {
+
+// Run `solver` from EVERY start in `starts` in parallel and return the deterministic best:
+// the converged root of smallest residual (ties broken by lowest start index), or — if
+// nothing converged — the smallest-residual iterate seen. Bit-identical to the serial
+// sweep over the same starts, for any thread count / backend. Returns domain_error only
+// when no start produced a value at all (e.g. empty `starts`, or all starts errored).
+// `grain` forwards to the parallel runtime (1 = one task per start; the backend chunks).
+[[nodiscard]] auto parallel_multistart(const ResidualFn& F,
+                                       std::span<const std::vector<double>> starts,
+                                       const Options& opts = {},
+                                       const Solver& solver = default_solver,
+                                       std::size_t grain = 1) -> Result<SolveResult> {
+    std::vector<std::size_t> which(starts.size());
+    std::iota(which.begin(), which.end(), std::size_t{0});
+    MultistartResult best =
+        detail::multistart_over(F, starts, std::span<const std::size_t>{which}, solver, opts, grain);
+    if (!best.valid) {
+        return make_error<SolveResult>(MathError::domain_error);
+    }
+    return std::move(best.result);
+}
+
+// DISTRIBUTED shard entrypoint: a stateless PURE function returning THIS shard's best
+// result over its subset of `starts` (the global indices i with i % num_shards ==
+// shard_index). Intended to run one-per-worker under SGE / Ray / etc.; a driver collects
+// the MultistartResults and calls reduce_multistart to obtain the final answer. Returns an
+// invalid MultistartResult when the shard spec is degenerate (num_shards == 0 or
+// shard_index >= num_shards) or its subset produced no candidate.
+[[nodiscard]] auto multistart_shard(const ResidualFn& F,
+                                    std::span<const std::vector<double>> starts,
+                                    std::size_t shard_index, std::size_t num_shards,
+                                    const Options& opts = {},
+                                    const Solver& solver = default_solver) -> MultistartResult {
+    if (num_shards == 0 || shard_index >= num_shards) {
+        return MultistartResult{};  // invalid: no result
+    }
+    // i % num_shards == shard_index, enumerated in ascending global-index order.
+    std::vector<std::size_t> which;
+    which.reserve(starts.size() / num_shards + 1);
+    for (std::size_t i = shard_index; i < starts.size(); i += num_shards) {
+        which.push_back(i);
+    }
+    return detail::multistart_over(F, starts, std::span<const std::size_t>{which}, solver, opts,
+                                   /*grain=*/1);
+}
+
+// Driver-side reduction over shard results, using the SAME deterministic total order as
+// the single-process sweep. Because shards partition the starts (disjoint global indices)
+// and each shard reports its own best, folding the shard bests reproduces the global best
+// exactly — the sweep is partition-independent. Returns domain_error when no shard yielded
+// a candidate.
+[[nodiscard]] auto reduce_multistart(std::span<const MultistartResult> shard_results)
+    -> Result<SolveResult> {
+    detail::Candidate best_cand{};  // invalid sentinel
+    const MultistartResult* best = nullptr;
+    for (const MultistartResult& s : shard_results) {
+        const detail::Candidate cand{
+            s.start_index,
+            s.valid ? s.result.residual_norm : std::numeric_limits<double>::infinity(),
+            s.valid && s.result.converged,
+            s.valid};
+        if (detail::better_candidate(cand, best_cand)) {
+            best_cand = cand;
+            best = &s;
+        }
+    }
+    if (best == nullptr || !best->valid) {
+        return make_error<SolveResult>(MathError::domain_error);
+    }
+    return best->result;
 }
 
 }  // namespace nimblecas::nlsolve

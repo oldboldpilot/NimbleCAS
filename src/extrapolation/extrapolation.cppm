@@ -138,6 +138,87 @@ struct DoubleTableau {
 // NUMERICAL double form (guards an exact-zero ε difference).
 [[nodiscard]] auto wynn_epsilon(std::span<const double> s) -> Result<double>;
 
+// ===========================================================================
+// LEVIN TRANSFORMS (u-, t-, v-).
+// ===========================================================================
+// Nonlinear sequence transforms built from the partial sums s_n and an explicit
+// remainder estimate ω_n. With the sequence viewed as 1-indexed (first partial sum is
+// s_1, term Δs_n = s_n - s_{n-1}) the three classic remainder estimates are:
+//   * t:  ω_n = Δs_n                              (Levin t-transform),
+//   * u:  ω_n = n · Δs_n                          (Levin u-transform),
+//   * v:  ω_n = Δs_n · Δs_{n+1} / (Δs_n - Δs_{n+1})   (Levin v-transform).
+// Each returns the top-order transform 𝓛_{k}^{(0)} = Σ_j w_j s_j/ω_j / Σ_j w_j/ω_j with
+// w_j = (-1)^j C(k,j) (j+1)^{k-1} — a pure RATIONAL LINEAR-FRACTIONAL combination, hence
+// EXACT over Q on rational inputs. These are among the most powerful accelerators for
+// BOTH linearly and logarithmically convergent series, but like every nonlinear
+// transform they carry NO universal-convergence guarantee: on data that violates the
+// implied remainder model they may fail to accelerate (or, in double, amplify rounding).
+// Fails with domain_error on too-short input (t/u need >= 2 terms, v needs >= 3), a zero
+// remainder estimate ω_n, or a vanishing final denominator; propagates Rational overflow.
+[[nodiscard]] auto levin_t(std::span<const Rational> s) -> Result<Rational>;
+[[nodiscard]] auto levin_u(std::span<const Rational> s) -> Result<Rational>;
+[[nodiscard]] auto levin_v(std::span<const Rational> s) -> Result<Rational>;
+// NUMERICAL double forms (same contract; the model-violation caveat above applies).
+[[nodiscard]] auto levin_t(std::span<const double> s) -> Result<double>;
+[[nodiscard]] auto levin_u(std::span<const double> s) -> Result<double>;
+[[nodiscard]] auto levin_v(std::span<const double> s) -> Result<double>;
+
+// ===========================================================================
+// EULER TRANSFORMATION of an alternating series.
+// ===========================================================================
+// For an alternating series Σ_{k>=0} (-1)^k a_k with magnitudes a = [a_0, ..., a_{N-1}],
+// the Euler transform reweights by iterated forward differences:
+//   E = Σ_{k=0}^{N-1} D_k / 2^{k+1},   D_k = Σ_{i=0}^{k} (-1)^i C(k,i) a_i.
+// EXACT over Q (only halvings and integer-binomial-weighted rational sums — no division
+// by a data-dependent quantity, so it never stalls). Fails with domain_error only on an
+// empty input; propagates Rational overflow (large binomials). NUMERICAL in the double
+// form. Accelerates alternating series well; it is not meant for same-sign series (use
+// van_wijngaarden first).
+[[nodiscard]] auto euler_transform(std::span<const Rational> a) -> Result<Rational>;
+[[nodiscard]] auto euler_transform(std::span<const double> a) -> Result<double>;
+
+// ===========================================================================
+// THETA ALGORITHM (Brezinski).
+// ===========================================================================
+// θ_{-1}^{(n)} = 0, θ_0^{(n)} = s_n, and
+//   θ_{2k+1}^{(n)} = θ_{2k-1}^{(n+1)} + 1 / Δθ_{2k}^{(n)},
+//   θ_{2k+2}^{(n)} = θ_{2k}^{(n+1)} + (Δθ_{2k}^{(n+1)} · Δθ_{2k+1}^{(n+1)}) / Δ²θ_{2k+1}^{(n)},
+// where Δ acts on the upper index. The even columns hold the accelerated estimates;
+// θ returns the deepest even-column entry. More robust than Wynn ε for some sequences,
+// but still a nonlinear transform with NO universal-convergence guarantee. EXACT over Q.
+// Needs >= 4 terms for θ_2 (else domain_error). A vanishing denominator STOPS the table
+// early and returns the best even column already formed; it is a domain_error only if no
+// acceleration column (beyond θ_0) could be formed at all.
+[[nodiscard]] auto theta(std::span<const Rational> s) -> Result<Rational>;
+[[nodiscard]] auto theta(std::span<const double> s) -> Result<double>;
+
+// ===========================================================================
+// RHO ALGORITHM (Wynn), for LOGARITHMICALLY convergent sequences.
+// ===========================================================================
+// ρ_{-1}^{(n)} = 0, ρ_0^{(n)} = s_n, and
+//   ρ_{k+1}^{(n)} = ρ_{k-1}^{(n+1)} + (x_{n+k+1} - x_n) / (ρ_k^{(n+1)} - ρ_k^{(n)}),
+// with the auxiliary abscissae taken as the index positions x_n = n by default, so the
+// step x_{n+k+1} - x_n reduces to the integer (k+1). The even columns hold the estimates;
+// ρ returns the deepest even-column entry. Designed for logarithmic convergence (where
+// ε/Aitken struggle); still nonlinear, no universal guarantee. EXACT over Q. Needs >= 3
+// terms (else domain_error). Same stall policy as theta: a zero denominator stops the
+// table and returns the best even column, domain_error only if none was formed.
+[[nodiscard]] auto rho(std::span<const Rational> s) -> Result<Rational>;
+[[nodiscard]] auto rho(std::span<const double> s) -> Result<double>;
+
+// ===========================================================================
+// VAN WIJNGAARDEN TRANSFORMATION.
+// ===========================================================================
+// Condenses a slowly-convergent series of POSITIVE terms Σ_{n>=1} a_n (input a = [a_1,
+// ..., a_N], 1-indexed) into an alternating series Σ_{k>=1} (-1)^{k-1} b_k with the SAME
+// sum, where b_k = Σ_{j>=0} 2^j a_{2^j k} (each b_k truncated to the terms available in
+// the input). Returns the magnitudes b = [b_1, ..., b_N]; feed them straight into
+// euler_transform (whose Σ (-1)^k b_{k+1} matches the (-1)^{k-1} sign pattern). EXACT over
+// Q (only powers of two and rational sums — never divides). Fails with domain_error on an
+// empty input; propagates overflow if an index 2^j k exceeds int64.
+[[nodiscard]] auto van_wijngaarden(std::span<const Rational> a) -> Result<std::vector<Rational>>;
+[[nodiscard]] auto van_wijngaarden(std::span<const double> a) -> Result<std::vector<double>>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -599,6 +680,644 @@ auto wynn_epsilon(std::span<const double> s) -> Result<double> {
     }
     const std::size_t k_best = ((N - 1) % 2 == 0) ? (N - 1) : (N - 2);
     return cols[k_best][0];
+}
+
+// ===========================================================================
+// ADDITIONAL transforms: Levin (u/t/v), Euler, theta, rho, van Wijngaarden.
+// ===========================================================================
+namespace {
+
+// Exact binomial coefficient C(k, j) as int64, overflow-checked (Rule 32).
+[[nodiscard]] auto binom_i64(std::size_t k, std::size_t j) -> Result<std::int64_t> {
+    if (j > k) {
+        return std::int64_t{0};
+    }
+    const std::size_t jj = std::min(j, k - j);
+    std::int64_t result = 1;
+    for (std::size_t i = 0; i < jj; ++i) {
+        std::int64_t prod = 0;
+        const std::int64_t mul = static_cast<std::int64_t>(k - jj + 1 + i);
+        if (__builtin_mul_overflow(result, mul, &prod)) {
+            return make_error<std::int64_t>(MathError::overflow);
+        }
+        result = prod / static_cast<std::int64_t>(i + 1);  // exact: running binomial
+    }
+    return result;
+}
+
+// Numerical binomial (no overflow railway — used only on the double paths).
+[[nodiscard]] auto binom_double(std::size_t k, std::size_t j) -> double {
+    if (j > k) {
+        return 0.0;
+    }
+    const std::size_t jj = std::min(j, k - j);
+    double result = 1.0;
+    for (std::size_t i = 0; i < jj; ++i) {
+        result = result * static_cast<double>(k - jj + 1 + i) / static_cast<double>(i + 1);
+    }
+    return result;
+}
+
+// Levin core: 𝓛_{L-1}^{(0)} = Σ_j w_j s_j/ω_j / Σ_j w_j/ω_j, w_j = (-1)^j C(k,j)(j+1)^{k-1}.
+// EXACT over Q. s and ω must share length L >= 2.
+[[nodiscard]] auto levin_core(std::span<const Rational> s, std::span<const Rational> omega)
+    -> Result<Rational> {
+    const std::size_t L = s.size();
+    if (L < 2 || omega.size() != L) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    const std::size_t k = L - 1;
+    Rational num{};
+    Rational den{};
+    for (std::size_t j = 0; j <= k; ++j) {
+        if (omega[j].is_zero()) {  // remainder estimate must be non-zero
+            return make_error<Rational>(MathError::domain_error);
+        }
+        auto bin = binom_i64(k, j);
+        if (!bin) {
+            return make_error<Rational>(bin.error());
+        }
+        auto powp = rat_int_pow(static_cast<std::int64_t>(j + 1),
+                                static_cast<std::int64_t>(k) - 1);  // (j+1)^{k-1}
+        if (!powp) {
+            return make_error<Rational>(powp.error());
+        }
+        auto w = Rational::from_int(*bin).multiply(*powp);
+        if (!w) {
+            return make_error<Rational>(w.error());
+        }
+        Rational weight = *w;
+        if (j % 2 == 1) {
+            auto neg = weight.negate();
+            if (!neg) {
+                return make_error<Rational>(neg.error());
+            }
+            weight = *neg;
+        }
+        auto coeff = weight.divide(omega[j]);  // w_j / ω_j
+        if (!coeff) {
+            return make_error<Rational>(coeff.error());
+        }
+        auto ns = coeff->multiply(s[j]);
+        if (!ns) {
+            return make_error<Rational>(ns.error());
+        }
+        auto nn = num.add(*ns);
+        if (!nn) {
+            return make_error<Rational>(nn.error());
+        }
+        num = *nn;
+        auto dd = den.add(*coeff);
+        if (!dd) {
+            return make_error<Rational>(dd.error());
+        }
+        den = *dd;
+    }
+    if (den.is_zero()) {  // degenerate weighting
+        return make_error<Rational>(MathError::domain_error);
+    }
+    return num.divide(den);
+}
+
+// Numerical Levin core.
+[[nodiscard]] auto levin_core_d(std::span<const double> s, std::span<const double> omega)
+    -> Result<double> {
+    const std::size_t L = s.size();
+    if (L < 2 || omega.size() != L) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const std::size_t k = L - 1;
+    double num = 0.0;
+    double den = 0.0;
+    for (std::size_t j = 0; j <= k; ++j) {
+        if (omega[j] == 0.0) {
+            return make_error<double>(MathError::domain_error);
+        }
+        double weight = binom_double(k, j) * std::pow(static_cast<double>(j + 1),
+                                                      static_cast<double>(k) - 1.0);
+        if (j % 2 == 1) {
+            weight = -weight;
+        }
+        const double coeff = weight / omega[j];
+        num += coeff * s[j];
+        den += coeff;
+    }
+    if (den == 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    return num / den;
+}
+
+// Forward differences a = [a_0 = s_0, a_i = s_i - s_{i-1}] over the partial sums (exact).
+[[nodiscard]] auto exact_terms(std::span<const Rational> s) -> Result<std::vector<Rational>> {
+    std::vector<Rational> a(s.size());
+    if (!s.empty()) {
+        a[0] = s[0];
+    }
+    for (std::size_t i = 1; i < s.size(); ++i) {
+        auto d = s[i].subtract(s[i - 1]);
+        if (!d) {
+            return make_error<std::vector<Rational>>(d.error());
+        }
+        a[i] = *d;
+    }
+    return a;
+}
+
+}  // namespace
+
+// --- Levin transforms -------------------------------------------------------
+
+auto levin_t(std::span<const Rational> s) -> Result<Rational> {
+    if (s.size() < 2) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    auto a = exact_terms(s);  // ω_n = Δs_n
+    if (!a) {
+        return make_error<Rational>(a.error());
+    }
+    return levin_core(s, *a);
+}
+
+auto levin_u(std::span<const Rational> s) -> Result<Rational> {
+    if (s.size() < 2) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    auto a = exact_terms(s);
+    if (!a) {
+        return make_error<Rational>(a.error());
+    }
+    std::vector<Rational> omega(s.size());  // ω_n = n · Δs_n (1-indexed) = (i+1) · a_i
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        auto w = Rational::from_int(static_cast<std::int64_t>(i + 1)).multiply((*a)[i]);
+        if (!w) {
+            return make_error<Rational>(w.error());
+        }
+        omega[i] = *w;
+    }
+    return levin_core(s, omega);
+}
+
+auto levin_v(std::span<const Rational> s) -> Result<Rational> {
+    const std::size_t N = s.size();
+    if (N < 3) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    auto a = exact_terms(s);
+    if (!a) {
+        return make_error<Rational>(a.error());
+    }
+    // ω_i = a_i · a_{i+1} / (a_i - a_{i+1}), i = 0..N-2; paired with s_0..s_{N-2}.
+    std::vector<Rational> omega(N - 1);
+    for (std::size_t i = 0; i + 1 < N; ++i) {
+        auto diff = (*a)[i].subtract((*a)[i + 1]);
+        if (!diff) {
+            return make_error<Rational>(diff.error());
+        }
+        if (diff->is_zero()) {
+            return make_error<Rational>(MathError::domain_error);
+        }
+        auto prod = (*a)[i].multiply((*a)[i + 1]);
+        if (!prod) {
+            return make_error<Rational>(prod.error());
+        }
+        auto w = prod->divide(*diff);
+        if (!w) {
+            return make_error<Rational>(w.error());
+        }
+        omega[i] = *w;
+    }
+    return levin_core(s.first(N - 1), omega);
+}
+
+auto levin_t(std::span<const double> s) -> Result<double> {
+    const std::size_t N = s.size();
+    if (N < 2) {
+        return make_error<double>(MathError::domain_error);
+    }
+    std::vector<double> a(N);
+    a[0] = s[0];
+    for (std::size_t i = 1; i < N; ++i) {
+        a[i] = s[i] - s[i - 1];
+    }
+    return levin_core_d(s, a);
+}
+
+auto levin_u(std::span<const double> s) -> Result<double> {
+    const std::size_t N = s.size();
+    if (N < 2) {
+        return make_error<double>(MathError::domain_error);
+    }
+    std::vector<double> omega(N);
+    omega[0] = s[0];  // (0+1) · a_0
+    for (std::size_t i = 1; i < N; ++i) {
+        omega[i] = static_cast<double>(i + 1) * (s[i] - s[i - 1]);
+    }
+    return levin_core_d(s, omega);
+}
+
+auto levin_v(std::span<const double> s) -> Result<double> {
+    const std::size_t N = s.size();
+    if (N < 3) {
+        return make_error<double>(MathError::domain_error);
+    }
+    std::vector<double> a(N);
+    a[0] = s[0];
+    for (std::size_t i = 1; i < N; ++i) {
+        a[i] = s[i] - s[i - 1];
+    }
+    std::vector<double> omega(N - 1);
+    for (std::size_t i = 0; i + 1 < N; ++i) {
+        const double diff = a[i] - a[i + 1];
+        if (diff == 0.0) {
+            return make_error<double>(MathError::domain_error);
+        }
+        omega[i] = a[i] * a[i + 1] / diff;
+    }
+    return levin_core_d(s.first(N - 1), omega);
+}
+
+// --- Euler transformation ---------------------------------------------------
+
+auto euler_transform(std::span<const Rational> a) -> Result<Rational> {
+    const std::size_t N = a.size();
+    if (N == 0) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    Rational total{};
+    for (std::size_t k = 0; k < N; ++k) {
+        // D_k = Σ_{i=0}^{k} (-1)^i C(k,i) a_i.
+        Rational dk{};
+        for (std::size_t i = 0; i <= k; ++i) {
+            auto bin = binom_i64(k, i);
+            if (!bin) {
+                return make_error<Rational>(bin.error());
+            }
+            auto term = Rational::from_int(*bin).multiply(a[i]);
+            if (!term) {
+                return make_error<Rational>(term.error());
+            }
+            Rational t = *term;
+            if (i % 2 == 1) {
+                auto neg = t.negate();
+                if (!neg) {
+                    return make_error<Rational>(neg.error());
+                }
+                t = *neg;
+            }
+            auto acc = dk.add(t);
+            if (!acc) {
+                return make_error<Rational>(acc.error());
+            }
+            dk = *acc;
+        }
+        // contribution D_k / 2^{k+1}.
+        auto pow2 = rat_int_pow(2, static_cast<std::int64_t>(k) + 1);
+        if (!pow2) {
+            return make_error<Rational>(pow2.error());
+        }
+        auto contrib = dk.divide(*pow2);
+        if (!contrib) {
+            return make_error<Rational>(contrib.error());
+        }
+        auto nt = total.add(*contrib);
+        if (!nt) {
+            return make_error<Rational>(nt.error());
+        }
+        total = *nt;
+    }
+    return total;
+}
+
+auto euler_transform(std::span<const double> a) -> Result<double> {
+    const std::size_t N = a.size();
+    if (N == 0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    double total = 0.0;
+    for (std::size_t k = 0; k < N; ++k) {
+        double dk = 0.0;
+        for (std::size_t i = 0; i <= k; ++i) {
+            const double term = binom_double(k, i) * a[i];
+            dk += (i % 2 == 1) ? -term : term;
+        }
+        total += dk / std::pow(2.0, static_cast<double>(k) + 1.0);
+    }
+    return total;
+}
+
+// --- Theta algorithm (Brezinski) --------------------------------------------
+
+auto theta(std::span<const Rational> s) -> Result<Rational> {
+    const std::size_t N = s.size();
+    if (N < 4) {  // need θ_2, which consumes 4 partial sums
+        return make_error<Rational>(MathError::domain_error);
+    }
+    std::vector<std::vector<Rational>> cols;
+    cols.emplace_back(s.begin(), s.end());  // θ_0, length N
+    const Rational two = Rational::from_int(2);
+    bool stalled = false;
+    for (std::size_t j = 1; !stalled; ++j) {
+        const std::size_t l_prev = cols[j - 1].size();
+        const std::size_t l_prev2 =
+            (j >= 2) ? cols[j - 2].size() : std::numeric_limits<std::size_t>::max();
+        const std::size_t base = std::min(l_prev, l_prev2);
+        const std::size_t shrink = (j % 2 == 1) ? 1U : 2U;
+        if (base <= shrink) {
+            break;  // no room for another column
+        }
+        const std::size_t l_new = base - shrink;
+        std::vector<Rational> col(l_new);
+        for (std::size_t n = 0; n < l_new; ++n) {
+            if (j % 2 == 1) {
+                // θ_j^{(n)} = θ_{j-2}^{(n+1)} + 1 / (θ_{j-1}^{(n+1)} - θ_{j-1}^{(n)}).
+                auto denom = cols[j - 1][n + 1].subtract(cols[j - 1][n]);
+                if (!denom) {
+                    return make_error<Rational>(denom.error());
+                }
+                if (denom->is_zero()) {
+                    stalled = true;
+                    break;
+                }
+                auto inv = Rational::from_int(1).divide(*denom);
+                if (!inv) {
+                    return make_error<Rational>(inv.error());
+                }
+                const Rational prev2 = (j >= 2) ? cols[j - 2][n + 1] : Rational{};
+                auto val = prev2.add(*inv);
+                if (!val) {
+                    return make_error<Rational>(val.error());
+                }
+                col[n] = *val;
+            } else {
+                // θ_j^{(n)} = θ_{j-2}^{(n+1)}
+                //   + (Δθ_{j-2}^{(n+1)} · Δθ_{j-1}^{(n+1)}) / Δ²θ_{j-1}^{(n)}.
+                auto dprev2 = cols[j - 2][n + 2].subtract(cols[j - 2][n + 1]);
+                if (!dprev2) {
+                    return make_error<Rational>(dprev2.error());
+                }
+                auto dprev1 = cols[j - 1][n + 2].subtract(cols[j - 1][n + 1]);
+                if (!dprev1) {
+                    return make_error<Rational>(dprev1.error());
+                }
+                auto two_mid = two.multiply(cols[j - 1][n + 1]);
+                if (!two_mid) {
+                    return make_error<Rational>(two_mid.error());
+                }
+                auto tmp = cols[j - 1][n + 2].subtract(*two_mid);
+                if (!tmp) {
+                    return make_error<Rational>(tmp.error());
+                }
+                auto d2 = tmp->add(cols[j - 1][n]);
+                if (!d2) {
+                    return make_error<Rational>(d2.error());
+                }
+                if (d2->is_zero()) {
+                    stalled = true;
+                    break;
+                }
+                auto prod = dprev2->multiply(*dprev1);
+                if (!prod) {
+                    return make_error<Rational>(prod.error());
+                }
+                auto frac = prod->divide(*d2);
+                if (!frac) {
+                    return make_error<Rational>(frac.error());
+                }
+                auto val = cols[j - 2][n + 1].add(*frac);
+                if (!val) {
+                    return make_error<Rational>(val.error());
+                }
+                col[n] = *val;
+            }
+        }
+        if (stalled) {
+            break;  // discard the partial column; keep those already formed
+        }
+        cols.push_back(std::move(col));
+    }
+    // Deepest even column that was fully formed; domain_error if only θ_0 exists.
+    std::size_t best = 0;
+    for (std::size_t c = 0; c < cols.size(); ++c) {
+        if (c % 2 == 0 && !cols[c].empty()) {
+            best = c;
+        }
+    }
+    if (best == 0) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    return cols[best][0];
+}
+
+auto theta(std::span<const double> s) -> Result<double> {
+    const std::size_t N = s.size();
+    if (N < 4) {
+        return make_error<double>(MathError::domain_error);
+    }
+    std::vector<std::vector<double>> cols;
+    cols.emplace_back(s.begin(), s.end());
+    bool stalled = false;
+    for (std::size_t j = 1; !stalled; ++j) {
+        const std::size_t l_prev = cols[j - 1].size();
+        const std::size_t l_prev2 =
+            (j >= 2) ? cols[j - 2].size() : std::numeric_limits<std::size_t>::max();
+        const std::size_t base = std::min(l_prev, l_prev2);
+        const std::size_t shrink = (j % 2 == 1) ? 1U : 2U;
+        if (base <= shrink) {
+            break;
+        }
+        const std::size_t l_new = base - shrink;
+        std::vector<double> col(l_new);
+        for (std::size_t n = 0; n < l_new; ++n) {
+            if (j % 2 == 1) {
+                const double denom = cols[j - 1][n + 1] - cols[j - 1][n];
+                if (denom == 0.0) {
+                    stalled = true;
+                    break;
+                }
+                const double prev2 = (j >= 2) ? cols[j - 2][n + 1] : 0.0;
+                col[n] = prev2 + 1.0 / denom;
+            } else {
+                const double dprev2 = cols[j - 2][n + 2] - cols[j - 2][n + 1];
+                const double dprev1 = cols[j - 1][n + 2] - cols[j - 1][n + 1];
+                const double d2 =
+                    cols[j - 1][n + 2] - 2.0 * cols[j - 1][n + 1] + cols[j - 1][n];
+                if (d2 == 0.0) {
+                    stalled = true;
+                    break;
+                }
+                col[n] = cols[j - 2][n + 1] + (dprev2 * dprev1) / d2;
+            }
+        }
+        if (stalled) {
+            break;
+        }
+        cols.push_back(std::move(col));
+    }
+    std::size_t best = 0;
+    for (std::size_t c = 0; c < cols.size(); ++c) {
+        if (c % 2 == 0 && !cols[c].empty()) {
+            best = c;
+        }
+    }
+    if (best == 0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    return cols[best][0];
+}
+
+// --- Rho algorithm (Wynn) ---------------------------------------------------
+
+auto rho(std::span<const Rational> s) -> Result<Rational> {
+    const std::size_t N = s.size();
+    if (N < 3) {  // need ρ_2
+        return make_error<Rational>(MathError::domain_error);
+    }
+    std::vector<std::vector<Rational>> cols;
+    cols.emplace_back(s.begin(), s.end());  // ρ_0, length N
+    bool stalled = false;
+    for (std::size_t j = 1; j < N && !stalled; ++j) {
+        std::vector<Rational> col(N - j);
+        const Rational step = Rational::from_int(static_cast<std::int64_t>(j));  // x_{n+j}-x_n
+        for (std::size_t n = 0; n + j < N; ++n) {
+            auto denom = cols[j - 1][n + 1].subtract(cols[j - 1][n]);
+            if (!denom) {
+                return make_error<Rational>(denom.error());
+            }
+            if (denom->is_zero()) {
+                stalled = true;
+                break;
+            }
+            auto frac = step.divide(*denom);
+            if (!frac) {
+                return make_error<Rational>(frac.error());
+            }
+            const Rational prev2 = (j >= 2) ? cols[j - 2][n + 1] : Rational{};
+            auto val = prev2.add(*frac);
+            if (!val) {
+                return make_error<Rational>(val.error());
+            }
+            col[n] = *val;
+        }
+        if (stalled) {
+            break;
+        }
+        cols.push_back(std::move(col));
+    }
+    std::size_t best = 0;
+    for (std::size_t c = 0; c < cols.size(); ++c) {
+        if (c % 2 == 0 && !cols[c].empty()) {
+            best = c;
+        }
+    }
+    if (best == 0) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    return cols[best][0];
+}
+
+auto rho(std::span<const double> s) -> Result<double> {
+    const std::size_t N = s.size();
+    if (N < 3) {
+        return make_error<double>(MathError::domain_error);
+    }
+    std::vector<std::vector<double>> cols;
+    cols.emplace_back(s.begin(), s.end());
+    bool stalled = false;
+    for (std::size_t j = 1; j < N && !stalled; ++j) {
+        std::vector<double> col(N - j);
+        const double step = static_cast<double>(j);
+        for (std::size_t n = 0; n + j < N; ++n) {
+            const double denom = cols[j - 1][n + 1] - cols[j - 1][n];
+            if (denom == 0.0) {
+                stalled = true;
+                break;
+            }
+            const double prev2 = (j >= 2) ? cols[j - 2][n + 1] : 0.0;
+            col[n] = prev2 + step / denom;
+        }
+        if (stalled) {
+            break;
+        }
+        cols.push_back(std::move(col));
+    }
+    std::size_t best = 0;
+    for (std::size_t c = 0; c < cols.size(); ++c) {
+        if (c % 2 == 0 && !cols[c].empty()) {
+            best = c;
+        }
+    }
+    if (best == 0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    return cols[best][0];
+}
+
+// --- Van Wijngaarden transformation -----------------------------------------
+
+auto van_wijngaarden(std::span<const Rational> a) -> Result<std::vector<Rational>> {
+    const std::size_t N = a.size();
+    if (N == 0) {
+        return make_error<std::vector<Rational>>(MathError::domain_error);
+    }
+    constexpr std::int64_t i64_max = std::numeric_limits<std::int64_t>::max();
+    const std::int64_t n = static_cast<std::int64_t>(N);
+    std::vector<Rational> b(N);
+    for (std::int64_t k = 1; k <= n; ++k) {
+        // b_k = Σ_{j>=0, 2^j k <= N} 2^j a_{2^j k}.
+        Rational bk{};
+        std::int64_t p2 = 1;      // 2^j
+        std::int64_t idx = k;     // 2^j k
+        while (idx <= n) {
+            auto term = Rational::from_int(p2).multiply(a[static_cast<std::size_t>(idx) - 1]);
+            if (!term) {
+                return make_error<std::vector<Rational>>(term.error());
+            }
+            auto acc = bk.add(*term);
+            if (!acc) {
+                return make_error<std::vector<Rational>>(acc.error());
+            }
+            bk = *acc;
+            if (p2 > i64_max / 2) {
+                break;  // next power of two would overflow
+            }
+            p2 *= 2;
+            if (p2 > i64_max / k) {
+                break;  // next index 2^j k would overflow
+            }
+            idx = p2 * k;
+        }
+        b[static_cast<std::size_t>(k) - 1] = bk;
+    }
+    return b;
+}
+
+auto van_wijngaarden(std::span<const double> a) -> Result<std::vector<double>> {
+    const std::size_t N = a.size();
+    if (N == 0) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    constexpr std::int64_t i64_max = std::numeric_limits<std::int64_t>::max();
+    const std::int64_t n = static_cast<std::int64_t>(N);
+    std::vector<double> b(N);
+    for (std::int64_t k = 1; k <= n; ++k) {
+        double bk = 0.0;
+        std::int64_t p2 = 1;
+        std::int64_t idx = k;
+        while (idx <= n) {
+            bk += static_cast<double>(p2) * a[static_cast<std::size_t>(idx) - 1];
+            if (p2 > i64_max / 2) {
+                break;
+            }
+            p2 *= 2;
+            if (p2 > i64_max / k) {
+                break;
+            }
+            idx = p2 * k;
+        }
+        b[static_cast<std::size_t>(k) - 1] = bk;
+    }
+    return b;
 }
 
 }  // namespace nimblecas

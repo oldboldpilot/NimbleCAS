@@ -54,6 +54,18 @@ auto cos_map(std::span<const double> x) -> std::vector<double> {
     return {std::cos(x[0])};
 }
 
+// Residual F(x) = [x^2 - 1] as a 1-D system with TWO roots, +1 and -1; Newton converges to
+// whichever basin the start falls in — used to exercise the multistart layer.
+auto sq_minus_one(std::span<const double> x) -> std::vector<double> {
+    return {x[0] * x[0] - 1.0};
+}
+
+// A Solver adaptor binding finite-difference Newton (the caller-selected method).
+auto newton_solver(const nl::ResidualFn& F, std::span<const double> x0,
+                   const nl::Options& o) -> nimblecas::Result<nl::SolveResult> {
+    return nl::newton(F, x0, o);
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -248,6 +260,116 @@ auto main() -> int {
                   auto r4 = nl::finite_difference_jacobian(scalar_sq_minus_two, bad);
                   t.expect(!r4.has_value() && r4.error() == MathError::domain_error,
                            "FD Jacobian at non-finite x -> domain_error");
+              })
+        .test("parallel_multistart_deterministic_best",
+              [&](TestContext& t) {
+                  // F(x) = x^2 - 1 has roots +1 and -1; different starts land in different
+                  // basins. parallel_multistart must return the SAME best as a serial sweep
+                  // that applies the (converged desc, residual asc, index asc) tie-break.
+                  const std::vector<std::vector<double>> starts{
+                      {3.0}, {-3.0}, {0.7}, {-0.4}, {5.0}};
+                  const std::span<const std::vector<double>> ss{starts};
+                  nl::Solver solver = newton_solver;
+                  const nl::Options o;
+
+                  auto par = nl::parallel_multistart(sq_minus_one, ss, o, solver);
+                  t.expect(par.has_value(), "parallel_multistart returns a result");
+                  t.expect(par.has_value() && par->converged, "best is a converged root");
+                  t.expect(par.has_value() &&
+                               (close(par->x[0], 1.0) || close(par->x[0], -1.0)),
+                           "best sits on a genuine root (+/-1)");
+
+                  // Serial reference with the identical deterministic tie-break.
+                  bool have = false;
+                  std::size_t bidx = 0;
+                  double bres = 0.0;
+                  bool bconv = false;
+                  std::vector<double> bx;
+                  for (std::size_t i = 0; i < starts.size(); ++i) {
+                      auto r = nl::newton(sq_minus_one, std::span<const double>{starts[i]}, o);
+                      if (!r.has_value()) {
+                          continue;
+                      }
+                      bool better = false;
+                      if (!have) {
+                          better = true;
+                      } else if (r->converged != bconv) {
+                          better = r->converged;
+                      } else if (r->residual_norm != bres) {
+                          better = r->residual_norm < bres;
+                      } else {
+                          better = i < bidx;
+                      }
+                      if (better) {
+                          have = true;
+                          bidx = i;
+                          bres = r->residual_norm;
+                          bconv = r->converged;
+                          bx = r->x;
+                      }
+                  }
+                  t.expect(have, "serial reference sweep found a best");
+                  bool matches = par.has_value() && have && par->converged == bconv &&
+                                 par->residual_norm == bres && par->x.size() == bx.size();
+                  if (matches) {
+                      for (std::size_t i = 0; i < bx.size(); ++i) {
+                          if (par->x[i] != bx[i]) {
+                              matches = false;
+                          }
+                      }
+                  }
+                  t.expect(matches, "parallel best is bit-identical to the serial best");
+              })
+        .test("multistart_shard_partition_independence",
+              [&](TestContext& t) {
+                  // Reducing over shards must be independent of how the starts are split:
+                  // num_shards = 1 and num_shards = 2 give the identical final result, and
+                  // both equal the whole-set parallel_multistart.
+                  const std::vector<std::vector<double>> starts{
+                      {3.0}, {-3.0}, {0.7}, {-0.4}, {5.0}, {-2.5}};
+                  const std::span<const std::vector<double>> ss{starts};
+                  nl::Solver solver = newton_solver;
+                  const nl::Options o;
+
+                  // One shard covering everything.
+                  const std::array<nl::MultistartResult, 1> one{
+                      nl::multistart_shard(sq_minus_one, ss, 0, 1, o, solver)};
+                  auto r1 = nl::reduce_multistart(std::span<const nl::MultistartResult>{one});
+
+                  // Two shards: even indices vs odd indices.
+                  const std::array<nl::MultistartResult, 2> two{
+                      nl::multistart_shard(sq_minus_one, ss, 0, 2, o, solver),
+                      nl::multistart_shard(sq_minus_one, ss, 1, 2, o, solver)};
+                  auto r2 = nl::reduce_multistart(std::span<const nl::MultistartResult>{two});
+
+                  t.expect(r1.has_value() && r2.has_value(),
+                           "both shard reductions produce a result");
+                  bool same = r1.has_value() && r2.has_value() &&
+                              r1->converged == r2->converged &&
+                              r1->residual_norm == r2->residual_norm &&
+                              r1->x.size() == r2->x.size();
+                  if (same) {
+                      for (std::size_t i = 0; i < r1->x.size(); ++i) {
+                          if (r1->x[i] != r2->x[i]) {
+                              same = false;
+                          }
+                      }
+                  }
+                  t.expect(same, "num_shards=1 and num_shards=2 reduce to the same result");
+
+                  // And both equal the single-process whole-set sweep.
+                  auto par = nl::parallel_multistart(sq_minus_one, ss, o, solver);
+                  bool eq = par.has_value() && r2.has_value() &&
+                            par->residual_norm == r2->residual_norm &&
+                            par->x.size() == r2->x.size();
+                  if (eq) {
+                      for (std::size_t i = 0; i < par->x.size(); ++i) {
+                          if (par->x[i] != r2->x[i]) {
+                              eq = false;
+                          }
+                      }
+                  }
+                  t.expect(eq, "shard reduction equals whole-set parallel_multistart");
               })
         .run();
 }

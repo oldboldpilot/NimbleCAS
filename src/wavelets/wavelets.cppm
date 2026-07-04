@@ -41,6 +41,7 @@ export module nimblecas.wavelets;
 import std;
 import nimblecas.core;
 import nimblecas.ratpoly;
+import nimblecas.parallel;  // deterministic fork-join (order-preserving index map)
 
 // ===========================================================================
 // Internal (module-linkage) helpers — not exported.
@@ -916,6 +917,136 @@ struct SwtLevel {
                                          [[maybe_unused]] std::size_t cols)
     -> Result<std::vector<std::vector<double>>> {
     return make_error<std::vector<std::vector<double>>>(MathError::not_implemented);
+}
+
+// ===========================================================================
+// PARALLEL acceleration — deterministic, order-preserving (reuses nimblecas.parallel).
+// ===========================================================================
+// These are ADDITIVE wrappers around the existing serial routines. Each independent
+// unit of work — one signal in a batch, or one scale row of a CWT — is transformed by
+// the SAME serial function, and the outputs are reassembled STRICTLY IN INPUT ORDER by
+// parallel::transform_index (an order-preserving map: out[i] = fn(i)).
+//
+// DETERMINISM (why this is identical to serial regardless of thread count):
+//   * transform_index writes each result into its OWN disjoint slot i and gathers them
+//     back in ascending index order, so the returned sequence never depends on which
+//     thread finished first or on how the work was chunked (the grain).
+//   * The units are mutually INDEPENDENT — batch signals share nothing, CWT scale rows
+//     share nothing — and every unit is computed by the unmodified serial routine, so
+//     each out[i] is byte-for-byte what the serial call on input[i] produces.
+//
+// HONESTY BOUNDARY (unchanged from the top of this file):
+//   * The Haar batch calls haar_dwt / haar_dwt_multi and therefore stays EXACT over Q.
+//   * The db/sym/coif batch (dwt / dwt_multi) and the CWT are NUMERICAL (double /
+//     std::complex<double>). The parallel form performs the SAME arithmetic in the SAME
+//     order within each unit and units never interact, so it is bit-identical to the
+//     serial numerical result. The parallelism buys WALL-CLOCK time only — never a
+//     different (or "more accurate") number.
+//
+// PRECONDITION (CWT): psi must be safe to invoke concurrently for distinct arguments
+// (stateless / pure, like the module's own morlet/ricker/... primitives). The batch
+// entry points only read their const inputs, so they carry no extra precondition.
+//
+// Per-unit work here is COARSE (a whole DWT, or a whole O(n^2) convolution row), so the
+// grain defaults to 1: every unit becomes an independent task and the backend
+// auto-chunks. The grain affects scheduling ONLY, never the result.
+inline constexpr std::size_t default_batch_grain = 1;
+
+// ---- Haar batch (EXACT over Q) -------------------------------------------------------
+// Single-level Haar DWT of many signals, in parallel, results in input order.
+[[nodiscard]] auto parallel_dwt_batch(std::span<const std::vector<Rational>> signals,
+                                      std::size_t grain = default_batch_grain)
+    -> std::vector<Result<HaarLevel>> {
+    return parallel::transform_index(
+        signals.size(),
+        [&](std::size_t i) -> Result<HaarLevel> { return haar_dwt(signals[i]); }, grain);
+}
+
+// Multi-level (Mallat) Haar decomposition of many signals, in parallel, in input order.
+[[nodiscard]] auto parallel_dwt_multi_batch(std::span<const std::vector<Rational>> signals,
+                                            std::size_t levels,
+                                            std::size_t grain = default_batch_grain)
+    -> std::vector<Result<HaarDecomposition>> {
+    return parallel::transform_index(
+        signals.size(),
+        [&](std::size_t i) -> Result<HaarDecomposition> {
+            return haar_dwt_multi(signals[i], levels);
+        },
+        grain);
+}
+
+// ---- Numerical db/sym/coif batch (NUMERICAL, bit-identical to serial) ----------------
+// Single-level periodic DWT of many signals under one filter bank, in parallel, in order.
+[[nodiscard]] auto parallel_dwt_batch(std::span<const std::vector<double>> signals,
+                                      const FilterBank& fb,
+                                      std::size_t grain = default_batch_grain)
+    -> std::vector<Result<DwtLevel>> {
+    return parallel::transform_index(
+        signals.size(),
+        [&](std::size_t i) -> Result<DwtLevel> { return dwt(signals[i], fb); }, grain);
+}
+
+// Multi-level periodic decomposition of many signals, in parallel, in input order.
+[[nodiscard]] auto parallel_dwt_multi_batch(std::span<const std::vector<double>> signals,
+                                            const FilterBank& fb, std::size_t levels,
+                                            std::size_t grain = default_batch_grain)
+    -> std::vector<Result<Decomposition>> {
+    return parallel::transform_index(
+        signals.size(),
+        [&](std::size_t i) -> Result<Decomposition> {
+            return dwt_multi(signals[i], fb, levels);
+        },
+        grain);
+}
+
+// ---- Parallel CWT (NUMERICAL, bit-identical to serial cwt) ---------------------------
+// Each scale row is an independent convolution
+//   W(a, b) = (1/sqrt(a)) Sum_t x[t] conj(psi((t - b)/a)),  b = 0 .. n-1,
+// so the rows are computed in parallel and reassembled in scale order. The result is
+// element-for-element identical to serial cwt. A non-positive scale yields a per-row
+// domain_error which is surfaced as the overall error at the FIRST offending scale
+// (index order), exactly matching serial cwt's per-scale guard.
+[[nodiscard]] auto parallel_cwt(std::span<const double> signal, std::span<const double> scales,
+                                const std::function<std::complex<double>(double)>& psi,
+                                std::size_t grain = default_batch_grain)
+    -> Result<std::vector<std::vector<std::complex<double>>>> {
+    using Matrix = std::vector<std::vector<std::complex<double>>>;
+    const std::size_t n = signal.size();
+    if (n == 0 || scales.empty()) {
+        return make_error<Matrix>(MathError::domain_error);
+    }
+    using Row = Result<std::vector<std::complex<double>>>;
+    std::vector<Row> rows = parallel::transform_index(
+        scales.size(),
+        [&](std::size_t si) -> Row {
+            const double a = scales[si];
+            if (!(a > 0.0)) {
+                return make_error<std::vector<std::complex<double>>>(MathError::domain_error);
+            }
+            const double inv_sqrt_a = 1.0 / std::sqrt(a);
+            std::vector<std::complex<double>> row(n);
+            for (std::size_t b = 0; b < n; ++b) {
+                std::complex<double> acc{0.0, 0.0};
+                for (std::size_t t = 0; t < n; ++t) {
+                    const double arg = (static_cast<double>(t) - static_cast<double>(b)) / a;
+                    acc += signal[t] * std::conj(psi(arg));
+                }
+                row[b] = inv_sqrt_a * acc;
+            }
+            return row;
+        },
+        grain);
+    // Gather in scale order; the first failing scale (if any) becomes the overall error,
+    // exactly as serial cwt would have returned on encountering it.
+    Matrix out;
+    out.reserve(rows.size());
+    for (auto& r : rows) {
+        if (!r) {
+            return make_error<Matrix>(r.error());
+        }
+        out.push_back(std::move(*r));
+    }
+    return out;
 }
 
 }  // namespace nimblecas::wavelets

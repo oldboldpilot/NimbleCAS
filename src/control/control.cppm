@@ -45,6 +45,7 @@ import nimblecas.matrix;
 import nimblecas.dynamics;
 import nimblecas.roots;
 import nimblecas.complex;
+import nimblecas.parallel;
 
 export namespace nimblecas {
 
@@ -254,6 +255,42 @@ private:
 [[nodiscard]] auto nyquist(const TransferFunction& tf, std::span<const double> omegas)
     -> std::vector<NyquistPoint>;
 
+// --- PARALLEL & DISTRIBUTED frequency-response sweeps ------------------------
+//
+// The frequency response H(iω) at each ω is an INDEPENDENT numerical evaluation
+// (double-precision complex Horner + log/atan2). These entry points accelerate the
+// sweep in WALL-CLOCK time only: every point is produced by the exact same
+// double-precision arithmetic as bode()/nyquist(), and the returned vector is
+// ORDER-PRESERVING with respect to the input omegas. The result is therefore
+// DETERMINISTIC and BIT-IDENTICAL to the serial bode()/nyquist() regardless of thread
+// count or backend — the parallelism is an order-preserving index map (each ω writes
+// its own disjoint output slot) via nimblecas.parallel::transform_index. Reusing the
+// immutable TransferFunction concurrently is safe: fn only reads the (const) coefficient
+// spans and produces a fresh point, so distinct indices never race.
+
+// Parallel Bode sweep. Element-for-element identical to bode(tf, omegas).
+[[nodiscard]] auto parallel_bode(const TransferFunction& tf, std::span<const double> omegas)
+    -> std::vector<BodePoint>;
+
+// Parallel Nyquist sweep. Element-for-element identical to nyquist(tf, omegas).
+[[nodiscard]] auto parallel_nyquist(const TransferFunction& tf, std::span<const double> omegas)
+    -> std::vector<NyquistPoint>;
+
+// DISTRIBUTED shard entry point — a stateless, pure function (no shared mutable state; the
+// result depends only on the arguments). Returns the BodePoints for the CONTIGUOUS block of
+// frequencies assigned to shard `shard_index` of `num_shards`, namely the half-open index
+// range [ (shard_index·n)/num_shards, ((shard_index+1)·n)/num_shards ) with n = omegas.size().
+// These blocks are disjoint and tile [0, n) exactly and in order, so a driver that concatenates
+// the shard results IN SHARD ORDER (shard 0, then 1, ..., then num_shards-1) reconstructs the
+// full serial bode(tf, omegas) sweep in the original omega order, EXACTLY — no re-indexing is
+// needed (contiguous, not strided, partitioning is chosen precisely for this property). Each
+// point is the same numerical evaluation as bode(); the sweep is embarrassingly parallel over
+// frequency. Returns an empty vector when num_shards == 0 or shard_index >= num_shards (a shard
+// with no assigned work).
+[[nodiscard]] auto bode_shard(const TransferFunction& tf, std::span<const double> omegas,
+                              std::size_t shard_index, std::size_t num_shards)
+    -> std::vector<BodePoint>;
+
 // Convenience: `count` logarithmically spaced frequencies in [w_start, w_end] (both must
 // be > 0). Returns a single point when count <= 1 and an empty vector when count == 0.
 [[nodiscard]] auto logspace(double w_start, double w_end, std::size_t count)
@@ -307,7 +344,7 @@ private:
 // positive definite iff every leading principal minor is strictly positive (computed with
 // exact rational determinants). Requires a square matrix; the 0 x 0 matrix is vacuously
 // positive definite.
-[[nodiscard]] auto is_positive_definite(const Matrix& p) -> Result<bool>;
+[[nodiscard]] auto is_spd(const Matrix& p) -> Result<bool>;
 
 // The unique solution P of the continuous Lyapunov equation Aᵀ P + P A = -I, obtained
 // EXACTLY over Q by assembling the Kronecker-sum system (I ⊗ Aᵀ + Aᵀ ⊗ I) vec(P) = -vec(I)
@@ -321,7 +358,7 @@ private:
 // definite solution P. EXACT over Q; agrees with is_asymptotically_stable /
 // is_stable_continuous (the tests cross-check this). A singular Kronecker-sum operator
 // (no unique P) means A is not asymptotically stable, reported as false.
-[[nodiscard]] auto is_stable_lyapunov(const Matrix& a) -> Result<bool>;
+[[nodiscard]] auto is_lyapunov_stable(const Matrix& a) -> Result<bool>;
 
 // --- Nyquist stability criterion (P exact; N and the trace NUMERICAL) -------
 
@@ -599,6 +636,32 @@ namespace {
         acc = acc * s + std::complex<double>(v, 0.0);
     }
     return acc;
+}
+
+// The single numerical Bode sample H(iω) for one angular frequency ω. Shared by the serial
+// bode(), the parallel_bode() map and the distributed bode_shard() so all three paths are, by
+// construction, the SAME computation (guaranteeing bit-identical results). Pure: it only reads
+// the immutable transfer function, so it is safe to invoke concurrently for distinct ω.
+[[nodiscard]] auto bode_point_at(const TransferFunction& tf, double w) -> BodePoint {
+    constexpr double rad_to_deg = 180.0 / std::numbers::pi;
+    const std::complex<double> s{0.0, w};
+    const std::complex<double> num = eval_poly_cd(tf.numerator(), s);
+    const std::complex<double> den = eval_poly_cd(tf.denominator(), s);
+    const std::complex<double> h = num / den;  // may be inf/nan at an imaginary-axis pole
+    const double mag = std::abs(h);
+    return BodePoint{.omega = w,
+                     .magnitude_db = 20.0 * std::log10(mag),
+                     .phase_deg = std::arg(h) * rad_to_deg};
+}
+
+// The single numerical Nyquist sample H(iω) for one ω. Shared by nyquist() and
+// parallel_nyquist(); pure and concurrency-safe for distinct ω (see bode_point_at).
+[[nodiscard]] auto nyquist_point_at(const TransferFunction& tf, double w) -> NyquistPoint {
+    const std::complex<double> s{0.0, w};
+    const std::complex<double> num = eval_poly_cd(tf.numerator(), s);
+    const std::complex<double> den = eval_poly_cd(tf.denominator(), s);
+    const std::complex<double> h = num / den;
+    return NyquistPoint{.omega = w, .re = h.real(), .im = h.imag()};
 }
 
 // The exact determinant of the top-left k x k block of a dense Rational matrix given as
@@ -1146,18 +1209,10 @@ auto evaluate_exact(const TransferFunction& tf, const Complex& s) -> Result<Comp
 }
 
 auto bode(const TransferFunction& tf, std::span<const double> omegas) -> std::vector<BodePoint> {
-    constexpr double rad_to_deg = 180.0 / std::numbers::pi;
     std::vector<BodePoint> out;
     out.reserve(omegas.size());
     for (const double w : omegas) {
-        const std::complex<double> s{0.0, w};
-        const std::complex<double> num = eval_poly_cd(tf.numerator(), s);
-        const std::complex<double> den = eval_poly_cd(tf.denominator(), s);
-        const std::complex<double> h = num / den;  // may be inf/nan at an imaginary-axis pole
-        const double mag = std::abs(h);
-        out.push_back(BodePoint{.omega = w,
-                                .magnitude_db = 20.0 * std::log10(mag),
-                                .phase_deg = std::arg(h) * rad_to_deg});
+        out.push_back(bode_point_at(tf, w));
     }
     return out;
 }
@@ -1167,11 +1222,7 @@ auto nyquist(const TransferFunction& tf, std::span<const double> omegas)
     std::vector<NyquistPoint> out;
     out.reserve(omegas.size());
     for (const double w : omegas) {
-        const std::complex<double> s{0.0, w};
-        const std::complex<double> num = eval_poly_cd(tf.numerator(), s);
-        const std::complex<double> den = eval_poly_cd(tf.denominator(), s);
-        const std::complex<double> h = num / den;
-        out.push_back(NyquistPoint{.omega = w, .re = h.real(), .im = h.imag()});
+        out.push_back(nyquist_point_at(tf, w));
     }
     return out;
 }
@@ -1191,6 +1242,42 @@ auto logspace(double w_start, double w_end, std::size_t count) -> std::vector<do
     const double step = (log_hi - log_lo) / static_cast<double>(count - 1);
     for (std::size_t i = 0; i < count; ++i) {
         out.push_back(std::pow(10.0, log_lo + step * static_cast<double>(i)));
+    }
+    return out;
+}
+
+// --- PARALLEL & DISTRIBUTED frequency-response sweeps ------------------------
+
+auto parallel_bode(const TransferFunction& tf, std::span<const double> omegas)
+    -> std::vector<BodePoint> {
+    // Order-preserving parallel map: result[i] = bode_point_at(tf, omegas[i]). transform_index
+    // fills each index's own disjoint slot and returns them in index order, so the output is
+    // element-for-element equal to serial bode() and independent of thread count / backend.
+    return parallel::transform_index(
+        omegas.size(), [&](std::size_t i) -> BodePoint { return bode_point_at(tf, omegas[i]); });
+}
+
+auto parallel_nyquist(const TransferFunction& tf, std::span<const double> omegas)
+    -> std::vector<NyquistPoint> {
+    return parallel::transform_index(
+        omegas.size(),
+        [&](std::size_t i) -> NyquistPoint { return nyquist_point_at(tf, omegas[i]); });
+}
+
+auto bode_shard(const TransferFunction& tf, std::span<const double> omegas,
+                std::size_t shard_index, std::size_t num_shards) -> std::vector<BodePoint> {
+    if (num_shards == 0 || shard_index >= num_shards) {
+        return {};  // this shard has no assigned work
+    }
+    const std::size_t n = omegas.size();
+    // Balanced contiguous block [begin, end) for this shard. The blocks tile [0, n) exactly and
+    // in shard order, so concatenating shards 0..num_shards-1 rebuilds the full ordered sweep.
+    const std::size_t begin = (shard_index * n) / num_shards;
+    const std::size_t end = ((shard_index + 1) * n) / num_shards;
+    std::vector<BodePoint> out;
+    out.reserve(end - begin);
+    for (std::size_t i = begin; i < end; ++i) {
+        out.push_back(bode_point_at(tf, omegas[i]));  // same numerical evaluation as bode()
     }
     return out;
 }
@@ -1299,7 +1386,7 @@ auto is_robustly_stable(std::span<const Rational> lower, std::span<const Rationa
 
 // --- Lyapunov stability ------------------------------------------------------
 
-auto is_positive_definite(const Matrix& p) -> Result<bool> {
+auto is_spd(const Matrix& p) -> Result<bool> {
     if (!p.is_square()) {
         return make_error<bool>(MathError::domain_error);
     }
@@ -1395,7 +1482,7 @@ auto lyapunov_solve(const Matrix& a) -> Result<Matrix> {
     return Matrix::from_rows(std::move(p));
 }
 
-auto is_stable_lyapunov(const Matrix& a) -> Result<bool> {
+auto is_lyapunov_stable(const Matrix& a) -> Result<bool> {
     if (!a.is_square()) {
         return make_error<bool>(MathError::domain_error);
     }
@@ -1411,7 +1498,7 @@ auto is_stable_lyapunov(const Matrix& a) -> Result<bool> {
         }
         return make_error<bool>(p.error());
     }
-    return is_positive_definite(*p);
+    return is_spd(*p);
 }
 
 // --- Nyquist stability criterion --------------------------------------------

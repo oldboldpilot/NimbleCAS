@@ -302,5 +302,122 @@ auto main() -> int {
                   t.expect(!s.has_value() && s.error() == MathError::not_implemented,
                            "shearlet transform is honestly not_implemented");
               })
+        .test("parallel_dwt_batch_haar_matches_serial_exact_over_Q",
+              [](TestContext& t) {
+                  // A batch of independent rational signals (all length 8, so a 2-level
+                  // Haar decomposition is well-defined). The parallel batch must equal
+                  // transforming each one serially, EXACTLY over Q, in input order.
+                  std::vector<std::vector<Rational>> signals{
+                      rats({3, -1, 4, 1, 5, 9, 2, 6}),
+                      rats({1, 2, 3, 4, 5, 6, 7, 8}),
+                      rats({0, 0, 0, 0, 0, 0, 0, 0}),
+                      rats({7, 7, 7, 7, 7, 7, 7, 7}),
+                      rats({2, -2, 2, -2, 2, -2, 2, -2}),
+                  };
+                  // Non-dyadic entries too, to stress exactness in Q.
+                  signals.push_back(std::vector<Rational>{
+                      *Rational::make(1, 3), *Rational::make(2, 5), Rational::from_int(7),
+                      *Rational::make(-4, 9), *Rational::make(11, 2), Rational::from_int(0),
+                      *Rational::make(-1, 7), *Rational::make(8, 3)});
+
+                  auto batch = wl::parallel_dwt_batch(signals);
+                  t.expect(batch.size() == signals.size(), "batch preserves signal count/order");
+                  bool all_ok = batch.size() == signals.size();
+                  for (std::size_t i = 0; all_ok && i < signals.size(); ++i) {
+                      auto serial = wl::haar_dwt(signals[i]);
+                      all_ok = all_ok && batch[i].has_value() && serial.has_value() &&
+                               equal_exact(batch[i]->approx, serial->approx) &&
+                               equal_exact(batch[i]->detail, serial->detail);
+                  }
+                  t.expect(all_ok,
+                           "parallel Haar batch == serial haar_dwt EXACTLY, in input order");
+
+                  // Multi-level batch: same exactness, in order.
+                  auto mbatch = wl::parallel_dwt_multi_batch(signals, 2);
+                  bool multi_ok = mbatch.size() == signals.size();
+                  for (std::size_t i = 0; multi_ok && i < signals.size(); ++i) {
+                      auto serial = wl::haar_dwt_multi(signals[i], 2);
+                      multi_ok = multi_ok && mbatch[i].has_value() && serial.has_value() &&
+                                 equal_exact(mbatch[i]->approx, serial->approx) &&
+                                 mbatch[i]->details.size() == serial->details.size();
+                      for (std::size_t l = 0; multi_ok && l < serial->details.size(); ++l) {
+                          multi_ok = multi_ok &&
+                                     equal_exact(mbatch[i]->details[l], serial->details[l]);
+                      }
+                  }
+                  t.expect(multi_ok,
+                           "parallel multi-level Haar batch == serial, EXACT & in order");
+              })
+        .test("parallel_dwt_batch_daubechies_matches_serial_numerical",
+              [](TestContext& t) {
+                  auto fb = wl::daubechies(4);
+                  t.expect(fb.has_value(), "db4 available");
+                  if (fb) {
+                      std::vector<std::vector<double>> signals{
+                          {1.0, 2.0, -3.0, 0.5, 4.0, -1.5, 2.5, 3.0},
+                          {0.25, -0.75, 6.0, -2.0, 1.0, 1.0, -4.0, 2.0},
+                          {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0},
+                          {-1.0, 2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0},
+                      };
+                      auto batch = wl::parallel_dwt_batch(signals, *fb);
+                      bool ok = batch.size() == signals.size();
+                      for (std::size_t i = 0; ok && i < signals.size(); ++i) {
+                          auto serial = wl::dwt(signals[i], *fb);
+                          ok = ok && batch[i].has_value() && serial.has_value() &&
+                               batch[i]->approx.size() == serial->approx.size() &&
+                               batch[i]->detail.size() == serial->detail.size();
+                          for (std::size_t j = 0; ok && j < serial->approx.size(); ++j) {
+                              ok = ok && close(batch[i]->approx[j], serial->approx[j], 1e-12) &&
+                                   close(batch[i]->detail[j], serial->detail[j], 1e-12);
+                          }
+                      }
+                      t.expect(ok,
+                               "parallel db4 batch == serial dwt (identical to tolerance, in order)");
+
+                      // Multi-level numerical batch matches serial dwt_multi too.
+                      auto mbatch = wl::parallel_dwt_multi_batch(signals, *fb, 2);
+                      bool mok = mbatch.size() == signals.size();
+                      for (std::size_t i = 0; mok && i < signals.size(); ++i) {
+                          auto serial = wl::dwt_multi(signals[i], *fb, 2);
+                          mok = mok && mbatch[i].has_value() && serial.has_value() &&
+                                mbatch[i]->approx.size() == serial->approx.size() &&
+                                mbatch[i]->details.size() == serial->details.size();
+                          for (std::size_t j = 0; mok && j < serial->approx.size(); ++j) {
+                              mok = mok && close(mbatch[i]->approx[j], serial->approx[j], 1e-12);
+                          }
+                      }
+                      t.expect(mok, "parallel multi-level db4 batch == serial dwt_multi, in order");
+                  }
+              })
+        .test("parallel_cwt_matches_serial_elementwise",
+              [](TestContext& t) {
+                  const std::size_t n = 24;
+                  std::vector<double> x(n, 0.0);
+                  x[5] = 1.0;
+                  x[13] = -2.0;
+                  x[20] = 0.5;
+                  std::vector<double> scales{1.0, 2.0, 3.0, 4.0, 8.0};
+                  auto psi = [](double tt) { return std::complex<double>{wl::ricker(tt), 0.0}; };
+                  auto serial = wl::cwt(x, scales, psi);
+                  auto par = wl::parallel_cwt(x, scales, psi);
+                  t.expect(serial.has_value() && par.has_value(), "both cwt paths succeed");
+                  if (serial && par) {
+                      bool ok = serial->size() == par->size();
+                      for (std::size_t i = 0; ok && i < serial->size(); ++i) {
+                          ok = ok && (*serial)[i].size() == (*par)[i].size();
+                          for (std::size_t j = 0; ok && j < (*serial)[i].size(); ++j) {
+                              // Byte-identical: same arithmetic, same order, per row.
+                              ok = ok && ((*serial)[i][j] == (*par)[i][j]);
+                          }
+                      }
+                      t.expect(ok,
+                               "parallel_cwt == serial cwt element-for-element (byte-identical)");
+                  }
+                  // A non-positive scale must surface domain_error, exactly like serial.
+                  std::vector<double> bad{1.0, -1.0, 2.0};
+                  auto pbad = wl::parallel_cwt(x, bad, psi);
+                  t.expect(!pbad.has_value() && pbad.error() == MathError::domain_error,
+                           "parallel_cwt surfaces domain_error on a non-positive scale");
+              })
         .run();
 }

@@ -181,9 +181,9 @@ lies in `[lower[i], upper[i]]` (ascending order, both vectors the same length).
 
 | Function | Signature | Behavior |
 | :--- | :--- | :--- |
-| `is_positive_definite` | `[[nodiscard]] auto is_positive_definite(const Matrix& p) -> Result<bool>` | Exact positive-definiteness via **Sylvester's criterion**: a symmetric `P` is positive definite iff every leading principal minor is strictly positive (exact rational determinants). Requires a square matrix, else `domain_error`; the `0×0` matrix is vacuously positive definite. |
+| `is_spd` | `[[nodiscard]] auto is_spd(const Matrix& p) -> Result<bool>` | Exact positive-definiteness via **Sylvester's criterion**: a symmetric `P` is positive definite iff every leading principal minor is strictly positive (exact rational determinants). Requires a square matrix, else `domain_error`; the `0×0` matrix is vacuously positive definite. |
 | `lyapunov_solve` | `[[nodiscard]] auto lyapunov_solve(const Matrix& a) -> Result<Matrix>` | The unique solution `P` of `Aᵀ P + P A = −I`, obtained exactly by assembling the **Kronecker-sum** system `(I ⊗ Aᵀ + Aᵀ ⊗ I) vec(P) = −vec(I)` and solving with exact rational elimination. Requires a square `A`; fails `domain_error` when the Kronecker-sum operator is singular (some `λ_i + λ_j = 0`, e.g. a purely imaginary spectrum — which already means `A` is not asymptotically stable). |
-| `is_stable_lyapunov` | `[[nodiscard]] auto is_stable_lyapunov(const Matrix& a) -> Result<bool>` | Lyapunov's theorem: `A` is asymptotically stable iff `Aᵀ P + P A = −I` has a positive-definite solution `P`. Exact over `Q`; agrees with `is_asymptotically_stable` / `is_stable_continuous`. A singular Kronecker-sum operator (no unique `P`) means `A` is not asymptotically stable, reported as `false`. |
+| `is_lyapunov_stable` | `[[nodiscard]] auto is_lyapunov_stable(const Matrix& a) -> Result<bool>` | Lyapunov's theorem: `A` is asymptotically stable iff `Aᵀ P + P A = −I` has a positive-definite solution `P`. Exact over `Q`; agrees with `is_asymptotically_stable` / `is_stable_continuous`. A singular Kronecker-sum operator (no unique `P`) means `A` is not asymptotically stable, reported as `false`. |
 
 ## Discrete transforms — bilinear (Tustin) (exact over `Q`)
 
@@ -250,8 +250,8 @@ honestly **numerical** double-precision path.
 | `tf_to_ss` on an improper plant (`deg num > deg den`) or zero denominator | `MathError::domain_error` |
 | `is_stable_discrete` / `hurwitz_matrix` / `hurwitz_minors` on the zero polynomial | `MathError::domain_error` |
 | `kharitonov_polynomials` / `is_robustly_stable`: mismatched/empty vectors or `lower[i] > upper[i]` | `MathError::domain_error` |
-| `is_positive_definite` / `lyapunov_solve` / `is_stable_lyapunov` on a non-square matrix | `MathError::domain_error` |
-| `lyapunov_solve` with a singular Kronecker-sum operator | `MathError::domain_error` (surfaced as `false` by `is_stable_lyapunov`) |
+| `is_spd` / `lyapunov_solve` / `is_lyapunov_stable` on a non-square matrix | `MathError::domain_error` |
+| `lyapunov_solve` with a singular Kronecker-sum operator | `MathError::domain_error` (surfaced as `false` by `is_lyapunov_stable`) |
 | `bilinear_c2d` / `bilinear_d2c` with `T == 0` | `MathError::division_by_zero` |
 | `evaluate_exact` with `den(s) == 0` | `MathError::division_by_zero` |
 | `nyquist_criterion` on an empty grid or unobtainable poles | `MathError::domain_error` |
@@ -368,11 +368,11 @@ const auto a = mat({{-1, 0}, {0, -2}});
 auto P = lyapunov_solve(a).value();
 P.at(0, 0);                                  // 1/2
 P.at(1, 1);                                  // 1/4   (P = diag(1/2, 1/4) exactly)
-is_positive_definite(P).value();             // true
-is_stable_lyapunov(a).value();               // true  (agrees with Routh-Hurwitz)
+is_spd(P).value();             // true
+is_lyapunov_stable(a).value();               // true  (agrees with Routh-Hurwitz)
 // Rotation [[0,-1],[1,0]] (eigenvalues ±i): singular Kronecker sum.
 lyapunov_solve(mat({{0, -1}, {1, 0}})).error();      // domain_error
-is_stable_lyapunov(mat({{0, -1}, {1, 0}})).value();  // false
+is_lyapunov_stable(mat({{0, -1}, {1, 0}})).value();  // false
 
 // --- bilinear (Tustin) transform (exact) -----------------------------------
 // H(s) = 1/(s+1), T = 2 => H(z) = (z+1)/(2z).

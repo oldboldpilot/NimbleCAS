@@ -169,5 +169,133 @@ auto main() -> int {
                   t.expect(tab.has_value(), "numeric derivative tableau builds");
                   t.expect(tab.has_value() && close(tab->best, 1.0), "sin'(0) ~ 1");
               })
+
+        // ---- Levin u/t/v: accelerate geometric partial sums exactly to the limit ----
+        .test("levin_t_u_v_exact_geometric",
+              [&](TestContext& t) {
+                  // Partial sums of Σ (1/2)^k: 1, 3/2, 7/4 -> limit 2.
+                  const std::array<Rational, 3> s{ri(1), rat(3, 2), rat(7, 4)};
+                  std::span<const Rational> sp{s};
+                  auto lt = nx::levin_t(sp);
+                  auto lu = nx::levin_u(sp);
+                  auto lv = nx::levin_v(sp);
+                  t.expect(lt.has_value() && *lt == ri(2), "Levin t -> 2 exactly over Q");
+                  t.expect(lu.has_value() && *lu == ri(2), "Levin u -> 2 exactly over Q");
+                  t.expect(lv.has_value() && *lv == ri(2), "Levin v -> 2 exactly over Q");
+              })
+        .test("levin_double_geometric",
+              [&](TestContext& t) {
+                  const std::array<double, 3> s{1.0, 1.5, 1.75};
+                  std::span<const double> sp{s};
+                  auto lt = nx::levin_t(sp);
+                  auto lu = nx::levin_u(sp);
+                  t.expect(lt.has_value() && close(*lt, 2.0), "numerical Levin t ~ 2");
+                  t.expect(lu.has_value() && close(*lu, 2.0), "numerical Levin u ~ 2");
+              })
+        .test("levin_domain_errors",
+              [&](TestContext& t) {
+                  const std::array<Rational, 1> one{ri(1)};
+                  auto tshort = nx::levin_t(std::span<const Rational>{one});
+                  t.expect(!tshort && tshort.error() == MathError::domain_error,
+                           "levin_t on 1 term -> domain_error");
+                  const std::array<Rational, 2> two{ri(1), rat(3, 2)};
+                  auto vshort = nx::levin_v(std::span<const Rational>{two});
+                  t.expect(!vshort && vshort.error() == MathError::domain_error,
+                           "levin_v needs >= 3 terms -> domain_error");
+                  // A constant sequence gives ω_1 = Δs = 0 -> zero remainder estimate.
+                  const std::array<Rational, 3> c{ri(5), ri(5), ri(5)};
+                  auto tzero = nx::levin_t(std::span<const Rational>{c});
+                  t.expect(!tzero && tzero.error() == MathError::domain_error,
+                           "levin_t zero remainder -> domain_error");
+              })
+
+        // ---- Euler transformation of an alternating rational series ----
+        .test("euler_transform_exact",
+              [&](TestContext& t) {
+                  // Alternating harmonic magnitudes a_k = 1/(k+1): Σ (-1)^k /(k+1).
+                  // Euler-accelerated 3-term value = 1/2 + 1/8 + 1/24 = 2/3 exactly.
+                  const std::array<Rational, 3> a{ri(1), rat(1, 2), rat(1, 3)};
+                  auto e = nx::euler_transform(std::span<const Rational>{a});
+                  t.expect(e.has_value(), "euler_transform builds");
+                  t.expect(e.has_value() && *e == rat(2, 3), "Euler value == 2/3 exactly over Q");
+              })
+        .test("euler_transform_empty_domain_error",
+              [&](TestContext& t) {
+                  std::span<const Rational> empty{};
+                  auto e = nx::euler_transform(empty);
+                  t.expect(!e && e.error() == MathError::domain_error, "empty -> domain_error");
+              })
+
+        // ---- Theta algorithm: θ_2 on a rational sequence, hand-checked ----
+        .test("theta_exact_geometric",
+              [&](TestContext& t) {
+                  // 1, 3/2, 7/4, 15/8 -> θ_2^(0) = 3/2 + (1/4)(4)/2 = 2 exactly.
+                  const std::array<Rational, 4> s{ri(1), rat(3, 2), rat(7, 4), rat(15, 8)};
+                  auto th = nx::theta(std::span<const Rational>{s});
+                  t.expect(th.has_value(), "theta builds");
+                  t.expect(th.has_value() && *th == ri(2), "θ_2 == 2 exactly over Q");
+              })
+        .test("theta_domain_errors",
+              [&](TestContext& t) {
+                  const std::array<Rational, 3> shortseq{ri(1), rat(3, 2), rat(7, 4)};
+                  auto ts = nx::theta(std::span<const Rational>{shortseq});
+                  t.expect(!ts && ts.error() == MathError::domain_error, "< 4 terms -> domain_error");
+                  const std::array<Rational, 4> constseq{ri(2), ri(2), ri(2), ri(2)};
+                  auto tc = nx::theta(std::span<const Rational>{constseq});
+                  t.expect(!tc && tc.error() == MathError::domain_error,
+                           "constant (stall at column 1) -> domain_error");
+              })
+
+        // ---- Rho algorithm on a logarithmic-model rational sequence ----
+        .test("rho_exact_rational_model",
+              [&](TestContext& t) {
+                  // s_n = n/(n+1) -> limit 1. ρ_2^(0) = s_1 + 2/(ρ_1^(1)-ρ_1^(0)) = 1 exactly.
+                  const std::array<Rational, 4> s{ri(0), rat(1, 2), rat(2, 3), rat(3, 4)};
+                  auto r = nx::rho(std::span<const Rational>{s});
+                  t.expect(r.has_value(), "rho builds");
+                  t.expect(r.has_value() && *r == ri(1), "ρ_2 == 1 exactly over Q");
+              })
+        .test("rho_domain_errors",
+              [&](TestContext& t) {
+                  const std::array<Rational, 2> shortseq{ri(0), rat(1, 2)};
+                  auto rs = nx::rho(std::span<const Rational>{shortseq});
+                  t.expect(!rs && rs.error() == MathError::domain_error, "< 3 terms -> domain_error");
+                  const std::array<Rational, 3> constseq{ri(7), ri(7), ri(7)};
+                  auto rc = nx::rho(std::span<const Rational>{constseq});
+                  t.expect(!rc && rc.error() == MathError::domain_error,
+                           "constant (stall at column 1) -> domain_error");
+              })
+
+        // ---- Van Wijngaarden: condense a positive series into an alternating one ----
+        .test("van_wijngaarden_exact",
+              [&](TestContext& t) {
+                  // a = [a_1..a_4] = [1, 1/2, 1/3, 1/4]. b_k = Σ_j 2^j a_{2^j k}:
+                  //   b_1 = 1 + 2(1/2) + 4(1/4) = 3;  b_2 = 1/2 + 2(1/4) = 1;
+                  //   b_3 = 1/3;  b_4 = 1/4.
+                  const std::array<Rational, 4> a{ri(1), rat(1, 2), rat(1, 3), rat(1, 4)};
+                  auto b = nx::van_wijngaarden(std::span<const Rational>{a});
+                  t.expect(b.has_value() && b->size() == 4, "produces 4 alternating-series terms");
+                  t.expect(b.has_value() && (*b)[0] == ri(3), "b_1 == 3 exactly");
+                  t.expect(b.has_value() && (*b)[1] == ri(1), "b_2 == 1 exactly");
+                  t.expect(b.has_value() && (*b)[2] == rat(1, 3), "b_3 == 1/3 exactly");
+                  t.expect(b.has_value() && (*b)[3] == rat(1, 4), "b_4 == 1/4 exactly");
+              })
+        .test("van_wijngaarden_feeds_euler",
+              [&](TestContext& t) {
+                  // The condensed b-terms plug straight into euler_transform.
+                  const std::array<Rational, 4> a{ri(1), rat(1, 2), rat(1, 3), rat(1, 4)};
+                  auto b = nx::van_wijngaarden(std::span<const Rational>{a});
+                  t.expect(b.has_value(), "van Wijngaarden builds");
+                  if (b.has_value()) {
+                      auto e = nx::euler_transform(std::span<const Rational>{*b});
+                      t.expect(e.has_value(), "Euler accepts the condensed alternating series");
+                  }
+              })
+        .test("van_wijngaarden_empty_domain_error",
+              [&](TestContext& t) {
+                  std::span<const Rational> empty{};
+                  auto b = nx::van_wijngaarden(empty);
+                  t.expect(!b && b.error() == MathError::domain_error, "empty -> domain_error");
+              })
         .run();
 }

@@ -28,6 +28,7 @@ export module nimblecas.optimize;
 
 import std;
 import nimblecas.core;
+import nimblecas.parallel;
 
 export namespace nimblecas::optimize {
 
@@ -178,6 +179,105 @@ struct OptimizeResult {
                                       std::span<const double> lo = {},
                                       std::span<const double> hi = {}, Options opts = {})
     -> Result<OptimizeResult>;
+
+// ===========================================================================
+// PARALLEL + DISTRIBUTED multistart (built on nimblecas.parallel).
+// ===========================================================================
+// HONESTY (read before trusting a multistart result)
+// ---------------------------------------------------------------------------
+// Multistart runs a LOCAL optimizer (bfgs / newton / nelder_mead / ...) from many
+// initial points and keeps the best. This is the standard way to attack multimodal /
+// non-convex problems with local methods, but it inherits every caveat of the
+// underlying local method:
+//   * Each local run finds a LOCAL stationary point, NOT a global minimum. Trying more
+//     starts IMPROVES THE CHANCE of finding a good/global basin but gives NO
+//     global-optimality guarantee and NO exactness claim.
+//   * A start whose local run ends with converged == false is NOT an error; it is a
+//     valid (if unpolished) candidate and still competes for "best". Only genuinely
+//     invalid input (empty x0 / non-finite entry / non-finite f(x0)) makes a start's
+//     Result an error, and such starts are simply skipped in the reduction.
+//   * DETERMINISM: the argmin over starts is fixed as (lowest fx, then LOWEST start
+//     index). Because every local run is itself deterministic (same start -> identical
+//     result), the winner is identical regardless of thread count, of serial vs.
+//     parallel execution, and of how the starts are partitioned across distributed
+//     shards. parallel_multistart therefore returns exactly what a serial loop with the
+//     same tie-break would return.
+// PRECONDITION (parallel path): the objective, gradient, Hessian and the selected local
+// optimizer must be safe to INVOKE CONCURRENTLY for distinct starts (stateless or
+// internally synchronised). The starts are optimized on multiple threads at once.
+
+// Local optimizers multistart can dispatch to (see make_local_optimizer).
+enum class Method : std::uint8_t {
+    gradient_descent,
+    newton,
+    bfgs,
+    l_bfgs,
+    conjugate_gradient,
+    nelder_mead,
+};
+
+// A local optimizer bound to its objective / derivatives / options: it maps a single
+// start x0 to a Result<OptimizeResult>. This is the general "method selector" the caller
+// supplies to parallel_multistart / multistart_shard; use make_local_optimizer to build
+// one from a Method, or provide any custom callable with this shape.
+// PRECONDITION: must be safe to invoke concurrently for distinct start points.
+using LocalOptimizer = std::function<Result<OptimizeResult>(std::span<const double>)>;
+
+// Outcome of a multistart (or shard) run.
+struct MultistartResult {
+    OptimizeResult best;          // best local result: lowest fx, ties broken by start index.
+    std::size_t best_start = 0;   // GLOBAL index (into `starts`) of the winning start.
+    std::size_t succeeded = 0;    // number of starts that produced a value (not a domain_error).
+};
+
+// Bind `method` (with the given optional gradient / Hessian / CG variant / Options) into
+// a LocalOptimizer. Methods that ignore a callback simply never read it (nelder_mead uses
+// neither gradient nor Hessian; only newton reads the Hessian; only conjugate_gradient
+// reads the CG variant). A default-constructed Gradient/HessianFn selects finite
+// differences, exactly as in the single-method entry points.
+[[nodiscard]] auto make_local_optimizer(Method method, Objective f, Gradient grad = {},
+                                        HessianFn hess = {},
+                                        CGVariant cg_variant = CGVariant::polak_ribiere,
+                                        Options opts = {}) -> LocalOptimizer;
+
+// Run `local` from every start in `starts` IN PARALLEL (nimblecas.parallel; serial below
+// the runtime's grain, or when parallel == false) and return the deterministic best
+// (lowest fx, ties -> lowest start index). Starts whose local run errors are skipped.
+//   * domain_error — `starts` empty, or EVERY start errored (the first/lowest-index
+//     start's error code is propagated).
+//   * otherwise a MultistartResult whose best_start identifies the winning start.
+[[nodiscard]] auto parallel_multistart(const LocalOptimizer& local,
+                                       std::span<const std::vector<double>> starts,
+                                       bool parallel = true) -> Result<MultistartResult>;
+
+// Convenience overload: pick the local method by enum instead of pre-binding a
+// LocalOptimizer. Equivalent to parallel_multistart(make_local_optimizer(...), starts).
+[[nodiscard]] auto multistart(Method method, Objective f,
+                              std::span<const std::vector<double>> starts, Gradient grad = {},
+                              HessianFn hess = {},
+                              CGVariant cg_variant = CGVariant::polak_ribiere, Options opts = {},
+                              bool parallel = true) -> Result<MultistartResult>;
+
+// DISTRIBUTED shard entry point (stateless, pure — safe to map across processes / nodes
+// via SGE, Ray, etc.). Runs `local` over ONLY this shard's subset of starts, namely every
+// starts[i] with i % num_shards == shard_index, and returns THIS shard's best local result
+// with best_start set to the GLOBAL index. A driver then takes reduce_shards over the
+// per-shard results to recover the global winner — identical to a single-process
+// parallel_multistart over the same starts, for any num_shards.
+//   * domain_error — num_shards == 0, shard_index >= num_shards, `starts` empty, this
+//     shard was assigned no starts, or every assigned start errored.
+[[nodiscard]] auto multistart_shard(const LocalOptimizer& local,
+                                    std::span<const std::vector<double>> starts,
+                                    std::size_t shard_index, std::size_t num_shards,
+                                    bool parallel = true) -> Result<MultistartResult>;
+
+// Driver reduction over per-shard MultistartResults: the global argmin (lowest fx, ties
+// -> smallest GLOBAL best_start). Order-independent — the shards may be gathered in any
+// order — because best_start values are disjoint across shards, so the (fx, best_start)
+// order is total. `succeeded` in the result is the sum across shards. Empty span ->
+// domain_error.
+[[nodiscard]] auto reduce_shards(std::span<const MultistartResult> shard_results)
+    -> Result<MultistartResult>;
 
 }  // namespace nimblecas::optimize
 
@@ -1214,6 +1314,148 @@ auto implicit_filtering(Objective f, std::span<const double> x0, std::span<const
     const double final_crit =
         projected_grad_norm(x, simplex_gradient(f, x, std::max(h, h_min), lo, hi), lo, hi);
     return finish(std::move(x), fx, iter, converged, final_crit);
+}
+
+// --- parallel + distributed multistart --------------------------------------
+namespace {
+
+// Canonical multistart order. Returns true iff candidate (cf, ci) should REPLACE the
+// incumbent (bf, bi): a strictly lower fx wins; on an exact fx tie the SMALLER start
+// index wins. A non-finite candidate fx never displaces a (finite) incumbent — the
+// comparisons below are all false when cf is NaN.
+[[nodiscard]] auto better_candidate(double cf, std::size_t ci, double bf,
+                                    std::size_t bi) noexcept -> bool {
+    if (cf < bf) {
+        return true;
+    }
+    if (cf > bf) {
+        return false;
+    }
+    if (cf == bf) {  // exact tie (excludes NaN, for which == is false): break by index.
+        return ci < bi;
+    }
+    return false;  // any NaN involved: keep the incumbent.
+}
+
+// Deterministic in-order argmin over per-start results. `global_index[j]` is the global
+// start index of results[j] (strictly increasing at every call site, so equal-fx ties
+// resolve to the earliest start). Skips error results; on none-valid, propagates the
+// first (lowest-slot) error, or domain_error if there were no results at all.
+[[nodiscard]] auto argmin_results(std::vector<Result<OptimizeResult>> results,
+                                  std::span<const std::size_t> global_index)
+    -> Result<MultistartResult> {
+    std::optional<std::size_t> best_slot;
+    std::size_t succeeded = 0;
+    bool saw_error = false;
+    MathError first_error = MathError::domain_error;
+    for (std::size_t j = 0; j < results.size(); ++j) {
+        if (results[j].has_value()) {
+            ++succeeded;
+            if (!best_slot.has_value() ||
+                better_candidate(results[j]->fx, global_index[j], results[*best_slot]->fx,
+                                 global_index[*best_slot])) {
+                best_slot = j;
+            }
+        } else if (!saw_error) {
+            saw_error = true;
+            first_error = results[j].error();
+        }
+    }
+    if (!best_slot.has_value()) {
+        return make_error<MultistartResult>(saw_error ? first_error : MathError::domain_error);
+    }
+    return MultistartResult{std::move(*results[*best_slot]), global_index[*best_slot], succeeded};
+}
+
+}  // namespace
+
+auto make_local_optimizer(Method method, Objective f, Gradient grad, HessianFn hess,
+                          CGVariant cg_variant, Options opts) -> LocalOptimizer {
+    return [method, f = std::move(f), grad = std::move(grad), hess = std::move(hess), cg_variant,
+            opts](std::span<const double> x0) -> Result<OptimizeResult> {
+        switch (method) {
+            case Method::gradient_descent:
+                return gradient_descent(f, x0, grad, opts);
+            case Method::newton:
+                return newton_method(f, x0, grad, hess, opts);
+            case Method::bfgs:
+                return bfgs(f, x0, grad, opts);
+            case Method::l_bfgs:
+                return l_bfgs(f, x0, grad, opts);
+            case Method::conjugate_gradient:
+                return conjugate_gradient(f, x0, grad, cg_variant, opts);
+            case Method::nelder_mead:
+                return nelder_mead(f, x0, opts);
+        }
+        return make_error<OptimizeResult>(MathError::not_implemented);  // unreachable.
+    };
+}
+
+auto parallel_multistart(const LocalOptimizer& local,
+                         std::span<const std::vector<double>> starts, bool parallel)
+    -> Result<MultistartResult> {
+    const std::size_t k = starts.size();
+    if (k == 0 || !local) {
+        return make_error<MultistartResult>(MathError::domain_error);
+    }
+    // Order-preserving, deterministic parallel map: one independent local run per start.
+    // grain 1 (via transform_index_if) so even a handful of expensive starts fan out.
+    std::vector<Result<OptimizeResult>> results = nimblecas::parallel::transform_index_if(
+        parallel, k, [&](std::size_t i) -> Result<OptimizeResult> {
+            return local(std::span<const double>(starts[i]));
+        });
+    std::vector<std::size_t> global_index(k);
+    std::iota(global_index.begin(), global_index.end(), std::size_t{0});
+    return argmin_results(std::move(results), global_index);
+}
+
+auto multistart(Method method, Objective f, std::span<const std::vector<double>> starts,
+                Gradient grad, HessianFn hess, CGVariant cg_variant, Options opts, bool parallel)
+    -> Result<MultistartResult> {
+    LocalOptimizer local = make_local_optimizer(method, std::move(f), std::move(grad),
+                                                std::move(hess), cg_variant, opts);
+    return parallel_multistart(local, starts, parallel);
+}
+
+auto multistart_shard(const LocalOptimizer& local, std::span<const std::vector<double>> starts,
+                      std::size_t shard_index, std::size_t num_shards, bool parallel)
+    -> Result<MultistartResult> {
+    if (num_shards == 0 || shard_index >= num_shards || starts.empty() || !local) {
+        return make_error<MultistartResult>(MathError::domain_error);
+    }
+    // Global indices assigned to this shard: i = shard_index, shard_index+num_shards, ...
+    // (exactly the i with i % num_shards == shard_index), kept in increasing order.
+    std::vector<std::size_t> assigned;
+    for (std::size_t i = shard_index; i < starts.size(); i += num_shards) {
+        assigned.push_back(i);
+    }
+    if (assigned.empty()) {
+        return make_error<MultistartResult>(MathError::domain_error);  // no work for this shard.
+    }
+    std::vector<Result<OptimizeResult>> results = nimblecas::parallel::transform_index_if(
+        parallel, assigned.size(), [&](std::size_t j) -> Result<OptimizeResult> {
+            return local(std::span<const double>(starts[assigned[j]]));
+        });
+    return argmin_results(std::move(results), assigned);
+}
+
+auto reduce_shards(std::span<const MultistartResult> shard_results) -> Result<MultistartResult> {
+    if (shard_results.empty()) {
+        return make_error<MultistartResult>(MathError::domain_error);
+    }
+    std::optional<std::size_t> best;
+    std::size_t total_succeeded = 0;
+    for (std::size_t k = 0; k < shard_results.size(); ++k) {
+        total_succeeded += shard_results[k].succeeded;
+        if (!best.has_value() ||
+            better_candidate(shard_results[k].best.fx, shard_results[k].best_start,
+                             shard_results[*best].best.fx, shard_results[*best].best_start)) {
+            best = k;
+        }
+    }
+    MultistartResult out = shard_results[*best];  // copy the winning shard's best.
+    out.succeeded = total_succeeded;              // aggregate across shards.
+    return out;
 }
 
 }  // namespace nimblecas::optimize

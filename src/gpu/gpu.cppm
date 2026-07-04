@@ -151,4 +151,81 @@ export namespace nimblecas::gpu {
     return static_cast<std::uint64_t>(count);
 }
 
+// QMC integration reduction on the device: the equal-weight average of the polynomial integrand
+// `coeffs` (low degree first) over the supplied sample `points`, i.e. (1/N) * sum_i p(points_i),
+// evaluated and summed on the GPU. This mirrors the numerical nimblecas::qmc_integrate but runs
+// the per-point evaluation and the reduction on the device; the caller supplies the
+// low-discrepancy sample points (e.g. from nimblecas::halton_point / sobol_point) and scales the
+// returned mean by the domain measure to obtain an integral.
+//
+// HONESTY: this is a NUMERICAL (double) estimator — GPU acceleration here applies only to
+// regular, data-parallel floating-point work. The exact-rational / symbolic paths (qmc_integrate_exact,
+// the CAS) cannot run on the GPU and are unaffected. DETERMINISM: the device reduces in
+// block/tree order rather than the CPU's strict left-to-right order, so the estimate may differ
+// from a CPU average in the last bits — each is a valid equal-weight estimate.
+//
+// Fails with MathError::gpu_error when no device is present, the point set is empty (the mean of
+// an empty set is undefined), or a CUDA call fails, and MathError::overflow when a span exceeds
+// the int kernel bound.
+[[nodiscard]] auto qmc_poly_integrate(std::span<const double> coeffs, std::span<const double> points)
+    -> Result<double> {
+    if (!available()) {
+        return make_error<double>(MathError::gpu_error);
+    }
+    if (points.empty()) {
+        return make_error<double>(MathError::gpu_error);
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (coeffs.size() > int_max || points.size() > int_max) {
+        return make_error<double>(MathError::overflow);
+    }
+    double mean = 0.0;
+    const int rc = nimblecas_gpu_qmc_poly_integrate(coeffs.data(), static_cast<int>(coeffs.size()),
+                                                    points.data(), static_cast<int>(points.size()),
+                                                    &mean);
+    if (rc != 0) {
+        return make_error<double>(MathError::gpu_error);
+    }
+    return mean;
+}
+
+// One-level batch Haar discrete wavelet transform (orthonormal 1/sqrt(2) normalization) over
+// `batch` contiguous signal blocks of `len` samples each — `data` is row-major, so
+// data.size() == batch*len and `len` must be even. For each block the result packs its len/2
+// approximation coefficients followed by its len/2 detail coefficients, so the returned vector
+// has the same size and layout as the input.
+//
+// HONESTY: a REGULAR, DATA-PARALLEL numerical transform (double) — one independent lift per
+// output pair — which is exactly the workload shape that maps well to the GPU. It is NOT a
+// symbolic/exact operation. DETERMINISM: each output element is a single (e +/- o)/sqrt(2)
+// expression with no cross-element reduction, so the result is elementwise deterministic and
+// matches a CPU reference to within FMA-contraction last bits.
+//
+// Fails with MathError::domain_error when batch/len are non-positive, len is odd, or
+// data.size() != batch*len; MathError::gpu_error when no device is present or a CUDA call fails;
+// and MathError::overflow when the flat size exceeds the int kernel bound.
+[[nodiscard]] auto haar_dwt_batch(std::span<const double> data, int batch, int len)
+    -> Result<std::vector<double>> {
+    if (!available()) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    if (batch <= 0 || len <= 0 || (len % 2) != 0) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    const auto expected = static_cast<std::size_t>(batch) * static_cast<std::size_t>(len);
+    if (data.size() != expected) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (expected > int_max) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    std::vector<double> out(expected);
+    const int rc = nimblecas_gpu_haar_dwt_batch(data.data(), batch, len, out.data());
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    return out;
+}
+
 }  // namespace nimblecas::gpu
