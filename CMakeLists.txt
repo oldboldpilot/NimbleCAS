@@ -1233,10 +1233,14 @@ add_test(NAME parallel_tests COMMAND parallel_tests)
 # src/gpu/gpu_bridge.h; only POD crosses the nvcc <-> clang boundary.
 option(NIMBLECAS_CUDA "Build the CUDA GPU kernels (requires nvcc)" OFF)
 if(NIMBLECAS_CUDA AND NOT WIN32)
-  set(NIMBLECAS_NVCC "" CACHE FILEPATH "Path to nvcc (auto-detected if empty)")
+  # Allow user override via -DNIMBLECAS_NVCC=/path/to/nvcc; otherwise auto-detect.
+  # NOTE: do NOT pre-seed NIMBLECAS_NVCC with an empty CACHE entry -- find_program
+  # skips the search when its result variable already holds any value (including ""),
+  # which silently leaves nvcc empty and collapses the custom command to a bare `cd`.
   if(NOT NIMBLECAS_NVCC)
-    find_program(NIMBLECAS_NVCC nvcc
+    find_program(NIMBLECAS_NVCC_EXE nvcc
       HINTS /usr/local/cuda/bin /usr/local/cuda-13.2/bin ENV CUDA_HOME ENV PATH REQUIRED)
+    set(NIMBLECAS_NVCC "${NIMBLECAS_NVCC_EXE}")
   endif()
   get_filename_component(_cuda_bin "${NIMBLECAS_NVCC}" DIRECTORY)
   find_library(NIMBLECAS_CUDART cudart
