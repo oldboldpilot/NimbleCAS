@@ -313,6 +313,13 @@ target_sources(nimblecas_ode PUBLIC
 target_link_libraries(nimblecas_ode
   PUBLIC nimblecas_powerseries nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.dde : exact delay differential equations via the method of steps ----
+add_library(nimblecas_dde STATIC)
+target_sources(nimblecas_dde PUBLIC
+  FILE_SET CXX_MODULES FILES src/dde/dde.cppm)
+target_link_libraries(nimblecas_dde
+  PUBLIC nimblecas_powerseries nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.pfd : partial-fraction decomposition over Q[x] (Yun + Bezout) ----
 add_library(nimblecas_pfd STATIC)
 target_sources(nimblecas_pfd PUBLIC
@@ -570,6 +577,12 @@ add_executable(sde_tests tests/sde_tests.cpp)
 target_link_libraries(sde_tests
   PRIVATE nimblecas_sde nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME sde_tests COMMAND sde_tests)
+
+add_executable(dde_tests tests/dde_tests.cpp)
+target_link_libraries(dde_tests
+  PRIVATE nimblecas_dde nimblecas_powerseries nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME dde_tests COMMAND dde_tests)
 
 add_executable(ode_tests tests/ode_tests.cpp)
 target_link_libraries(ode_tests
