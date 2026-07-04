@@ -295,6 +295,21 @@ target_link_libraries(nimblecas_bigmatrix
   PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_matrix nimblecas_ratpoly
          nimblecas_core std_module)
 
+# ---- nimblecas.bigeigen : exact characteristic polynomials & rational eigenvalues over BigRational --
+add_library(nimblecas_bigeigen STATIC)
+target_sources(nimblecas_bigeigen PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigeigen/bigeigen.cppm)
+target_link_libraries(nimblecas_bigeigen
+  PUBLIC nimblecas_bigmatrix nimblecas_bigrational nimblecas_bigint nimblecas_matrix
+         nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.symconst : symbolic math constants (pi, e, gamma, phi) leaves + numeric bridge ----
+add_library(nimblecas_symconst STATIC)
+target_sources(nimblecas_symconst PUBLIC
+  FILE_SET CXX_MODULES FILES src/symconst/symconst.cppm)
+target_link_libraries(nimblecas_symconst
+  PUBLIC nimblecas_symbolic nimblecas_constants nimblecas_bigfloat nimblecas_core std_module)
+
 # ---- nimblecas.bigcombinatorics : unbounded exact integer combinatorics (BigInt-backed) ----
 add_library(nimblecas_bigcombinatorics STATIC)
 target_sources(nimblecas_bigcombinatorics PUBLIC
@@ -604,6 +619,20 @@ target_link_libraries(bigmatrix_tests
   PRIVATE nimblecas_bigmatrix nimblecas_matrix nimblecas_bigrational nimblecas_bigint
           nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigmatrix_tests COMMAND bigmatrix_tests)
+
+add_executable(bigeigen_tests tests/bigeigen_tests.cpp)
+target_link_libraries(bigeigen_tests
+  PRIVATE nimblecas_bigeigen nimblecas_bigmatrix nimblecas_bigrational nimblecas_bigint
+          nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME bigeigen_tests COMMAND bigeigen_tests)
+
+add_executable(symconst_tests tests/symconst_tests.cpp)
+target_link_libraries(symconst_tests
+  PRIVATE nimblecas_symconst nimblecas_constants nimblecas_bigfloat nimblecas_bigint
+          nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_cache
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME symconst_tests COMMAND symconst_tests)
 
 add_executable(bigpowerseries_tests tests/bigpowerseries_tests.cpp)
 target_link_libraries(bigpowerseries_tests
