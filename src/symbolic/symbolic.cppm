@@ -349,6 +349,52 @@ auto Expr::is_equivalent_to(const Expr& other) const -> bool {
         a.value);
 }
 
+namespace {
+
+// A ConstantNode holding an exact rational a/b (as opposed to an int64 or double).
+[[nodiscard]] auto is_rational_constant(const Expr& e) -> bool {
+    if (const auto* c = std::get_if<ConstantNode>(&e.node().value)) {
+        return std::holds_alternative<std::pair<std::int64_t, std::int64_t>>(c->value);
+    }
+    return false;
+}
+
+// A ConstantNode with a strictly negative value (int, double, or rational numerator).
+[[nodiscard]] auto is_negative_constant(const Expr& e) -> bool {
+    const auto* c = std::get_if<ConstantNode>(&e.node().value);
+    if (c == nullptr) {
+        return false;
+    }
+    return std::visit(
+        [](const auto& v) -> bool {
+            using V = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<V, std::pair<std::int64_t, std::int64_t>>) {
+                return v.first < 0;
+            } else {
+                return v < 0;
+            }
+        },
+        c->value);
+}
+
+// The BASE of a printed power `base^exp` needs explicit parentheses when its bare rendering
+// would otherwise bind wrong: a rational (`1/2^x` -> `1/(2^x)`), a negative constant
+// (`-2^x` -> `-(2^x)`), or a nested power (`a^b^c` -> right-assoc `a^(b^c)`). Sums and
+// products already self-parenthesize in to_string, so they are safe.
+[[nodiscard]] auto power_base_needs_parens(const Expr& e) -> bool {
+    return std::holds_alternative<PowerNode>(e.node().value) || is_rational_constant(e) ||
+           is_negative_constant(e);
+}
+
+// The EXPONENT needs parentheses only for a rational (`x^1/2` -> `(x^1)/2`); a negative
+// constant is fine (`x^-2` parses as x^(-2) via unary minus), a nested power is the desired
+// right-assoc form (`x^y^z` = x^(y^z)), and sums/products self-parenthesize.
+[[nodiscard]] auto power_exp_needs_parens(const Expr& e) -> bool {
+    return is_rational_constant(e);
+}
+
+}  // namespace
+
 auto Expr::to_string() const -> std::string {
     return std::visit(
         []<typename T>(const T& n) -> std::string {
@@ -370,7 +416,15 @@ auto Expr::to_string() const -> std::string {
             } else if constexpr (std::is_same_v<T, MulNode>) {
                 return std::format("({})", join(n.factors, " * "));
             } else if constexpr (std::is_same_v<T, PowerNode>) {
-                return std::format("{}^{}", n.base.to_string(), n.exponent.to_string());
+                std::string base = n.base.to_string();
+                if (power_base_needs_parens(n.base)) {
+                    base = std::format("({})", base);
+                }
+                std::string exp = n.exponent.to_string();
+                if (power_exp_needs_parens(n.exponent)) {
+                    exp = std::format("({})", exp);
+                }
+                return std::format("{}^{}", base, exp);
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
                 return std::format("{}({})", n.name, join(n.args, ", "));
             } else {

@@ -115,9 +115,10 @@ auto main() -> int {
               })
         .test("round_trip_printer_language",
               [&](TestContext& t) {
-                  // The set below is restricted to expressions the printer renders
-                  // unambiguously (see the printer/parser caveats reported to the main
-                  // thread): no real leaves, no rational/negative/power bases under `^`.
+                  // Reals are still excluded (the reader is exact and never emits Expr::real).
+                  // The former printer caveats (rational/negative/power bases under `^`, and
+                  // rational exponents) are now handled by explicit parenthesization in
+                  // Expr::to_string and are exercised in the dedicated test below.
                   round_trips(t, x);
                   round_trips(t, Expr::integer(42));
                   round_trips(t, Expr::integer(-7));
@@ -134,6 +135,17 @@ auto main() -> int {
                   round_trips(t, Expr::apply("atan2", {y, x}));
                   round_trips(t, Expr::apply("f", {Expr::apply("g", {x})}));  // nested calls
                   round_trips(t, Expr::sum({x, Expr::product({Expr::integer(-1), y})}));  // a - b
+              })
+        .test("round_trip_power_operands_now_parenthesized",
+              [&](TestContext& t) {
+                  // Regression for the printer fix (task #16): these forms previously printed
+                  // ambiguously and re-parsed to a DIFFERENT tree; to_string now parenthesizes
+                  // the power operands so they round-trip.
+                  round_trips(t, Expr::power(Expr::rational(1, 2).value(), x));   // (1/2)^x
+                  round_trips(t, Expr::power(Expr::integer(-2), x));             // (-2)^x
+                  round_trips(t, Expr::power(Expr::power(x, y), Expr::symbol("z")));  // (x^y)^z
+                  round_trips(t, Expr::power(x, Expr::rational(1, 2).value()));   // x^(1/2)
+                  round_trips(t, Expr::power(x, Expr::rational(-3, 2).value()));  // x^(-3/2)
               })
         .test("malformed_inputs_rejected",
               [&](TestContext& t) {

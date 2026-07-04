@@ -60,12 +60,12 @@ Verified: `-x^2 → -(x^2)`, `2^3^2 → 2^(3^2)`, `a-b-c → (a-b)-c`, `1+2*3 �
 The key correctness property, tested against a set of hand-built expressions:
 `parse(e.to_string())` `is_equivalent_to` `e`.
 
-**Known printer limitation** (tracked separately): `Expr::to_string()`
-under-parenthesizes a `PowerNode`, so a *rational or negative-constant* base under
-`^` (`1/2^x`, `-2^x`) and a *left-nested* power (`a^b^c`) print in a form that
-re-parses to a different tree. The parser is correct per standard precedence; the
-printer is the lossy side. The round-trip test set avoids these until the printer
-is fixed.
+`Expr::to_string()` now parenthesizes power operands so the full round-trip holds,
+including the cases that were formerly lossy: a rational or negative-constant base
+under `^` (`(1/2)^x`, `(-2)^x`), a left-nested power (`(x^y)^z`), and a rational
+exponent (`x^(1/2)`, `x^(-3/2)`). The only remaining exclusion is `Expr::real` —
+the reader is exact and never emits a real, so a real leaf's decimal rendering
+re-parses to the exact rational it denotes.
 
 ## See also
 
