@@ -232,6 +232,13 @@ target_sources(nimblecas_csp PUBLIC
 target_link_libraries(nimblecas_csp
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.doubledouble : ~106-bit extended-precision float (SIMD-batched) ----
+add_library(nimblecas_doubledouble STATIC)
+target_sources(nimblecas_doubledouble PUBLIC
+  FILE_SET CXX_MODULES FILES src/doubledouble/doubledouble.cppm)
+target_link_libraries(nimblecas_doubledouble
+  PUBLIC nimblecas_simd nimblecas_core std_module)
+
 # ---- nimblecas.bigint : arbitrary-precision signed integer (Knuth Algorithm D, modpow) ----
 add_library(nimblecas_bigint STATIC)
 target_sources(nimblecas_bigint PUBLIC
@@ -483,6 +490,11 @@ add_executable(logic_tests tests/logic_tests.cpp)
 target_link_libraries(logic_tests
   PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_tests COMMAND logic_tests)
+
+add_executable(doubledouble_tests tests/doubledouble_tests.cpp)
+target_link_libraries(doubledouble_tests
+  PRIVATE nimblecas_doubledouble nimblecas_simd nimblecas_core nimblecas_testing std_module)
+add_test(NAME doubledouble_tests COMMAND doubledouble_tests)
 
 add_executable(bigint_tests tests/bigint_tests.cpp)
 target_link_libraries(bigint_tests
