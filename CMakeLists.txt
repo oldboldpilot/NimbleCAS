@@ -456,6 +456,13 @@ target_sources(nimblecas_latex PUBLIC
 target_link_libraries(nimblecas_latex
   PUBLIC nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.webexport : JSON export bridge for the WebGPU/WASM front-end ----
+add_library(nimblecas_webexport STATIC)
+target_sources(nimblecas_webexport PUBLIC
+  FILE_SET CXX_MODULES FILES src/webexport/webexport.cppm)
+target_link_libraries(nimblecas_webexport
+  PUBLIC nimblecas_latex nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.series : Taylor series via the diff engine (§7.3) ----
 add_library(nimblecas_series STATIC)
 target_sources(nimblecas_series PUBLIC
@@ -746,6 +753,12 @@ add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
   PRIVATE nimblecas_latex nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
 add_test(NAME latex_tests COMMAND latex_tests)
+
+add_executable(webexport_tests tests/webexport_tests.cpp)
+target_link_libraries(webexport_tests
+  PRIVATE nimblecas_webexport nimblecas_latex nimblecas_symbolic nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME webexport_tests COMMAND webexport_tests)
 
 add_executable(series_tests tests/series_tests.cpp)
 target_link_libraries(series_tests
