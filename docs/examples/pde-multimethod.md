@@ -11,7 +11,8 @@ exactly zero for this closed form.
 ```nimblecas
 u = x - x^2 - 2*t
 ut = diff(u, t)
-uxx = diff(diff(u, x), x)
+ux = diff(u, x)
+uxx = diff(ux, x)
 residual = simplify(ut - uxx)
 ```
 

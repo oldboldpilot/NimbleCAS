@@ -62,7 +62,8 @@ const std::string pde_doc =
     "```nimblecas\n"
     "u = x - x^2 - 2*t\n"
     "ut = diff(u, t)\n"
-    "uxx = diff(diff(u, x), x)\n"
+    "ux = diff(u, x)\n"
+    "uxx = diff(ux, x)\n"
     "residual = simplify(ut - uxx)\n"
     "```\n\n"
     "Finite Elements (fem_p1_solve) independently reproduces the same spatial profile:\n"
@@ -100,7 +101,7 @@ const std::string inteq_doc =
     "```nimblecas\n"
     "phi4 = 1 + x + x^2/2 + x^3/6 + x^4/24\n"
     "phi4prime = diff(phi4, x)\n"
-    "residual4 = simplify(phi4prime - phi4)\n"
+    "residual4 = simplify(phi4prime + (-1 - x - x^2/2 - x^3/6 - x^4/24))\n"
     "```\n\n"
     "The full Neumann == ADM == HPM == HAM(hbar=-1) cross-check (bit-identical rational\n"
     "coefficients) and the nonlinear ADM/HPM/HAM convergence toward the exact phi(x) = x are\n"
@@ -119,7 +120,8 @@ auto main() -> int {
                   Session s;
                   auto r = s.execute_cell("u = x - x^2 - 2*t\n"
                                           "ut = diff(u, t)\n"
-                                          "uxx = diff(diff(u, x), x)\n"
+                                          "ux = diff(u, x)\n"
+                                          "uxx = diff(ux, x)\n"
                                           "residual = simplify(ut - uxx)");
                   t.expect(r.has_value(), "cell executes without hard failure");
                   if (!r) {
@@ -164,7 +166,7 @@ auto main() -> int {
                   Session s;
                   auto r = s.execute_cell("phi4 = 1 + x + x^2/2 + x^3/6 + x^4/24\n"
                                           "phi4prime = diff(phi4, x)\n"
-                                          "residual4 = simplify(phi4prime - phi4)");
+                                          "residual4 = simplify(phi4prime + (-1 - x - x^2/2 - x^3/6 - x^4/24))");
                   t.expect(r.has_value(), "cell executes without hard failure");
                   if (!r) {
                       return;

@@ -18,7 +18,7 @@ truncation error rather than a vague "approximately":
 ```nimblecas
 phi4 = 1 + x + x^2/2 + x^3/6 + x^4/24
 phi4prime = diff(phi4, x)
-residual4 = simplify(phi4prime - phi4)
+residual4 = simplify(phi4prime + (-1 - x - x^2/2 - x^3/6 - x^4/24))
 ```
 
 The full Neumann == ADM == HPM == HAM(hbar=-1) cross-check (bit-identical rational
