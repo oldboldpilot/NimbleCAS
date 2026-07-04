@@ -1,0 +1,1075 @@
+<!--
+  NimbleCAS Viewer — fully self-contained WebGPU document + plotting viewer.
+
+  This single file has NO external dependencies. It embeds:
+    * inline CSS (light/dark aware via prefers-color-scheme)
+    * inline JS (a single IIFE, runs from file:// or as a claude.ai Artifact)
+    * inline WGSL shader source (see WGSL_SOURCE below)
+    * an embedded sample Document (renders immediately with zero external files)
+
+  Rendering backends:
+    * WebGPU (real WGSL pipeline) when navigator.gpu is available and a device
+      can be acquired; otherwise an equivalent Canvas2D fallback. A badge shows
+      which backend is live.
+
+  It consumes this JSON contract (produced by the C++ `webexport` module):
+    PlotSpec = {type:"plot", title, xLabel, yLabel, xRange:[a,b]|null,
+                yRange:[a,b]|null, series:[{kind:"line"|"scatter", label,
+                color:"#rrggbb", points:[[x,y],...]}]}
+    Document = {type:"document", title, blocks:[
+                  {kind:"prose", text} |
+                  {kind:"math",  latex} |
+                  {kind:"plot",  plot:PlotSpec} ]}
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NimbleCAS Viewer</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f6f7f9;
+    --panel-2: #eef0f3;
+    --ink: #1b1f24;
+    --ink-soft: #55606b;
+    --border: #d7dce2;
+    --axis: #3a4149;
+    --grid: #dde2e8;
+    --accent: #2563eb;
+    --code-bg: #eef1f5;
+    --shadow: 0 1px 3px rgba(20,25,35,.10), 0 1px 2px rgba(20,25,35,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1319;
+      --panel: #171c24;
+      --panel-2: #1e242e;
+      --ink: #e7ebf0;
+      --ink-soft: #9aa6b2;
+      --border: #2a323d;
+      --axis: #aeb8c4;
+      --grid: #262d38;
+      --accent: #5b8cff;
+      --code-bg: #1c222b;
+      --shadow: 0 1px 3px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  header.app {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 12px 20px;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  header.app h1 {
+    font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  header.app .spacer { flex: 1 1 auto; }
+  .badge {
+    font: 600 12px/1 system-ui, sans-serif;
+    padding: 6px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel);
+    color: var(--ink-soft); white-space: nowrap;
+  }
+  .badge.gpu   { color: #0a7d33; border-color: #7fd39a55; background: #0a7d3312; }
+  .badge.cpu   { color: #b25a00; border-color: #e0a35e55; background: #b25a0012; }
+  @media (prefers-color-scheme: dark) {
+    .badge.gpu { color: #6ee7a0; background: #6ee7a015; }
+    .badge.cpu { color: #f0b866; background: #f0b86615; }
+  }
+  .btn, label.filebtn {
+    font: 600 13px/1 system-ui, sans-serif;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--ink);
+    transition: background .12s ease, border-color .12s ease;
+  }
+  .btn:hover, label.filebtn:hover { background: var(--panel-2); border-color: var(--accent); }
+  .btn:active { transform: translateY(1px); }
+  label.filebtn input { display: none; }
+  main {
+    max-width: 900px; margin: 0 auto; padding: 24px 20px 80px;
+  }
+  .doc-title { font-size: 30px; font-weight: 720; margin: 8px 0 4px; letter-spacing: -.4px; }
+  .prose h1 { font-size: 24px; margin: 26px 0 8px; }
+  .prose h2 { font-size: 20px; margin: 22px 0 6px; }
+  .prose h3 { font-size: 17px; margin: 18px 0 4px; color: var(--ink-soft); }
+  .prose p  { margin: 10px 0; }
+  .prose ul { margin: 10px 0; padding-left: 22px; }
+  .prose li { margin: 4px 0; }
+  .prose strong { font-weight: 680; }
+  code, .prose code {
+    font: 13.5px/1.5 ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    background: var(--code-bg); padding: 1px 6px; border-radius: 5px;
+  }
+  .mathblock {
+    margin: 16px 0; padding: 14px 16px; overflow-x: auto;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .mathblock math { font-size: 20px; }
+  .math-fallback {
+    display: block; white-space: pre-wrap; color: var(--ink-soft);
+  }
+  figure.plot {
+    margin: 22px 0; padding: 12px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+  }
+  figure.plot figcaption {
+    font-size: 13px; color: var(--ink-soft); margin-top: 6px; text-align: center;
+  }
+  .plotwrap { position: relative; width: 100%; }
+  .plotwrap canvas { display: block; width: 100%; height: auto; border-radius: 8px; }
+  .plotwrap canvas.overlay {
+    position: absolute; inset: 0; pointer-events: none;
+  }
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin: 20px 0; padding: 14px 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .controls .hint { font-size: 13px; color: var(--ink-soft); }
+  .live-tag {
+    font: 600 11px/1 system-ui, sans-serif; padding: 4px 8px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--ink-soft); background: var(--bg);
+  }
+  .notice {
+    margin: 16px 0; padding: 10px 14px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--ink-soft);
+    font-size: 14px;
+  }
+</style>
+
+<header class="app">
+  <h1>NimbleCAS <span style="color:var(--ink-soft);font-weight:500">Viewer</span></h1>
+  <span id="backendBadge" class="badge">detecting…</span>
+  <span class="spacer"></span>
+  <label class="filebtn" title="Load a document JSON matching the webexport contract">
+    Load document…
+    <input id="fileInput" type="file" accept="application/json,.json">
+  </label>
+</header>
+
+<main id="app"></main>
+
+<script>
+"use strict";
+(function () {
+  /* =========================================================================
+     WGSL SHADER SOURCE (inline)
+     One pipeline draws ALL plot geometry as a triangle list. Each vertex
+     carries a clip-space position (vec2) + an RGBA color (vec4), so gridlines,
+     axes, line series (triangulated to quads for width) and scatter points
+     (small quads) all render in a single draw call.
+     ========================================================================= */
+  const WGSL_SOURCE = `
+struct VSOut {
+  @builtin(position) pos : vec4<f32>,
+  @location(0)       col : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position : vec2<f32>,
+           @location(1) color    : vec4<f32>) -> VSOut {
+  var out : VSOut;
+  out.pos = vec4<f32>(position, 0.0, 1.0);
+  out.col = color;
+  return out;
+}
+
+@fragment
+fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
+  return in.col;
+}
+`;
+
+  /* =========================================================================
+     THEME PALETTE — read once from CSS custom properties so both the WebGPU
+     and Canvas2D backends draw with identical colors, and both react to the
+     prefers-color-scheme media query.
+     ========================================================================= */
+  function cssVar(name, fallback) {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+  function palette() {
+    return {
+      panel: cssVar('--panel', '#f6f7f9'),
+      axis:  cssVar('--axis', '#3a4149'),
+      grid:  cssVar('--grid', '#dde2e8'),
+      ink:   cssVar('--ink', '#1b1f24'),
+      inkSoft: cssVar('--ink-soft', '#55606b'),
+      border: cssVar('--border', '#d7dce2'),
+    };
+  }
+  // A default categorical palette for series that omit an explicit color.
+  const SERIES_COLORS = ['#2563eb', '#e0533d', '#12a150', '#a855f7', '#d97706', '#0891b2'];
+
+  /* ---- color helpers ---- */
+  function hexToRGBA(hex, a) {
+    if (typeof hex !== 'string') return [0.2, 0.4, 0.9, a == null ? 1 : a];
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const n = parseInt(h, 16);
+    if (!isFinite(n)) return [0.2, 0.4, 0.9, a == null ? 1 : a];
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, a == null ? 1 : a];
+  }
+
+  /* =========================================================================
+     WebGPU device — acquired once, lazily, at startup. If anything fails we
+     flip GPU.ok=false and every plot uses the Canvas2D path instead.
+     ========================================================================= */
+  const GPU = { ok: false, device: null, format: null, pipeline: null };
+
+  async function initWebGPU() {
+    if (!('gpu' in navigator) || !navigator.gpu) return false;
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) return false;
+      const device = await adapter.requestDevice();
+      if (!device) return false;
+      // A lost device should degrade gracefully on the next render.
+      device.lost.then((info) => {
+        console.warn('WebGPU device lost:', info && info.message);
+        GPU.ok = false;
+        setBadge('cpu');
+        rerender();
+      });
+      const format = navigator.gpu.getPreferredCanvasFormat();
+      const module = device.createShaderModule({ code: WGSL_SOURCE });
+      const pipeline = device.createRenderPipeline({
+        layout: 'auto',
+        vertex: {
+          module, entryPoint: 'vs_main',
+          buffers: [{
+            arrayStride: 6 * 4, // vec2 position + vec4 color = 6 floats
+            attributes: [
+              { shaderLocation: 0, offset: 0,     format: 'float32x2' },
+              { shaderLocation: 1, offset: 2 * 4, format: 'float32x4' },
+            ],
+          }],
+        },
+        fragment: {
+          module, entryPoint: 'fs_main',
+          targets: [{
+            format,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one',       dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            },
+          }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+      GPU.device = device; GPU.format = format; GPU.pipeline = pipeline; GPU.ok = true;
+      return true;
+    } catch (e) {
+      console.warn('WebGPU init failed, falling back to Canvas2D:', e);
+      return false;
+    }
+  }
+
+  /* =========================================================================
+     PLOT LAYOUT — shared by both backends. Computes the plot rectangle,
+     data->pixel mappings (honoring xRange/yRange, auto-fitting when null) and
+     "nice" tick positions.
+     ========================================================================= */
+  function niceNum(range, round) {
+    const exp = Math.floor(Math.log10(range || 1));
+    const f = (range || 1) / Math.pow(10, exp);
+    let nf;
+    if (round) nf = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+    else       nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+    return nf * Math.pow(10, exp);
+  }
+  function niceTicks(min, max, count) {
+    if (!(isFinite(min) && isFinite(max)) || min === max) { min -= 1; max += 1; }
+    const range = niceNum(max - min, false);
+    const step = niceNum(range / Math.max(1, (count - 1)), true);
+    const gmin = Math.floor(min / step) * step;
+    const gmax = Math.ceil(max / step) * step;
+    const ticks = [];
+    for (let v = gmin; v <= gmax + step * 0.5; v += step) {
+      ticks.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+    }
+    return ticks;
+  }
+  function fmtTick(v) {
+    if (v === 0) return '0';
+    const a = Math.abs(v);
+    if (a >= 1e4 || a < 1e-3) return v.toExponential(1);
+    return String(Math.round(v * 1000) / 1000);
+  }
+
+  function autoRange(series, axis) {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of series) {
+      for (const p of (s.points || [])) {
+        const v = axis === 0 ? p[0] : p[1];
+        if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
+      }
+    }
+    if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.05;
+    return [lo - pad, hi + pad];
+  }
+
+  function computeLayout(spec, W, H) {
+    const M = { l: 58, r: 16, t: 34, b: 46 };
+    const rect = { x: M.l, y: M.t, w: Math.max(10, W - M.l - M.r), h: Math.max(10, H - M.t - M.b) };
+    const series = spec.series || [];
+    const xr = (spec.xRange && spec.xRange.length === 2) ? spec.xRange.slice() : autoRange(series, 0);
+    const yr = (spec.yRange && spec.yRange.length === 2) ? spec.yRange.slice() : autoRange(series, 1);
+    const [x0, x1] = xr, [y0, y1] = yr;
+    const xToPx = (x) => rect.x + (x - x0) / (x1 - x0 || 1) * rect.w;
+    const yToPx = (y) => rect.y + rect.h - (y - y0) / (y1 - y0 || 1) * rect.h;
+    return {
+      W, H, rect, xr, yr, xToPx, yToPx,
+      xticks: niceTicks(x0, x1, 8).filter(t => t >= x0 - 1e-9 && t <= x1 + 1e-9),
+      yticks: niceTicks(y0, y1, 6).filter(t => t >= y0 - 1e-9 && t <= y1 + 1e-9),
+    };
+  }
+
+  /* =========================================================================
+     TEXT OVERLAY — always drawn with Canvas2D (WebGPU cannot draw text). Used
+     by BOTH backends so labels look identical: title, axis labels, tick
+     labels and a legend.
+     ========================================================================= */
+  function drawText(ctx, layout, spec) {
+    const pal = palette();
+    const { rect } = layout;
+    ctx.clearRect(0, 0, layout.W, layout.H);
+    ctx.textBaseline = 'middle';
+
+    // Title
+    ctx.fillStyle = pal.ink;
+    ctx.font = '650 15px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    if (spec.title) ctx.fillText(spec.title, layout.W / 2, 16);
+
+    // Tick labels
+    ctx.fillStyle = pal.inkSoft;
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    for (const t of layout.xticks) {
+      ctx.fillText(fmtTick(t), layout.xToPx(t), rect.y + rect.h + 14);
+    }
+    ctx.textAlign = 'right';
+    for (const t of layout.yticks) {
+      ctx.fillText(fmtTick(t), rect.x - 8, layout.yToPx(t));
+    }
+
+    // Axis labels
+    ctx.fillStyle = pal.inkSoft;
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    if (spec.xLabel) ctx.fillText(spec.xLabel, rect.x + rect.w / 2, layout.H - 8);
+    if (spec.yLabel) {
+      ctx.save();
+      ctx.translate(14, rect.y + rect.h / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(spec.yLabel, 0, 0);
+      ctx.restore();
+    }
+
+    // Legend (top-right, inside plot)
+    const series = spec.series || [];
+    if (series.length) {
+      ctx.font = '600 11px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      let ly = rect.y + 12;
+      const lx = rect.x + rect.w - 128;
+      for (let i = 0; i < series.length; i++) {
+        const s = series[i];
+        const col = s.color || SERIES_COLORS[i % SERIES_COLORS.length];
+        ctx.fillStyle = col;
+        ctx.fillRect(lx, ly - 4, 14, 8);
+        ctx.fillStyle = pal.ink;
+        ctx.fillText(s.label || ('series ' + (i + 1)), lx + 20, ly);
+        ly += 16;
+      }
+    }
+  }
+
+  /* =========================================================================
+     CANVAS2D GEOMETRY — the complete, independent fallback renderer.
+     ========================================================================= */
+  function drawGeom2D(ctx, layout, spec) {
+    const pal = palette();
+    const { rect } = layout;
+    ctx.clearRect(0, 0, layout.W, layout.H);
+
+    // panel
+    ctx.fillStyle = pal.panel;
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+    // gridlines
+    ctx.strokeStyle = pal.grid; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const t of layout.xticks) { const px = Math.round(layout.xToPx(t)) + 0.5; ctx.moveTo(px, rect.y); ctx.lineTo(px, rect.y + rect.h); }
+    for (const t of layout.yticks) { const py = Math.round(layout.yToPx(t)) + 0.5; ctx.moveTo(rect.x, py); ctx.lineTo(rect.x + rect.w, py); }
+    ctx.stroke();
+
+    // axis border
+    ctx.strokeStyle = pal.axis; ctx.lineWidth = 1.25;
+    ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w, rect.h);
+
+    // clip to plot area for series
+    ctx.save();
+    ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.w, rect.h); ctx.clip();
+
+    const series = spec.series || [];
+    for (let i = 0; i < series.length; i++) {
+      const s = series[i];
+      const col = s.color || SERIES_COLORS[i % SERIES_COLORS.length];
+      const pts = s.points || [];
+      if (s.kind === 'scatter') {
+        ctx.fillStyle = col;
+        for (const p of pts) {
+          ctx.beginPath();
+          ctx.arc(layout.xToPx(p[0]), layout.yToPx(p[1]), 3.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else { // line (default)
+        ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.beginPath();
+        let started = false;
+        for (const p of pts) {
+          const px = layout.xToPx(p[0]), py = layout.yToPx(p[1]);
+          if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  /* =========================================================================
+     WebGPU GEOMETRY — builds a triangle-list vertex buffer in clip space that
+     mirrors the Canvas2D geometry exactly, then issues one draw call.
+     ========================================================================= */
+  function buildGeometry(layout, spec, W, H) {
+    const pal = palette();
+    const verts = []; // flat [x,y, r,g,b,a] per vertex
+
+    // pixel -> clip space (WebGPU: x,y in [-1,1], y up)
+    const cx = (px) => (px / W) * 2 - 1;
+    const cy = (py) => 1 - (py / H) * 2;
+
+    function pushQuadPx(x0, y0, x1, y1, col) {
+      const ax = cx(x0), ay = cy(y0), bx = cx(x1), by = cy(y1);
+      const [r, g, b, a] = col;
+      // two triangles: (a, b0, b1) covering axis-aligned rect [x0,y0]-[x1,y1]
+      const v = [
+        ax, ay, r, g, b, a,  bx, ay, r, g, b, a,  bx, by, r, g, b, a,
+        ax, ay, r, g, b, a,  bx, by, r, g, b, a,  ax, by, r, g, b, a,
+      ];
+      for (let i = 0; i < v.length; i++) verts.push(v[i]);
+    }
+    function pushSegPx(x0, y0, x1, y1, width, col) {
+      let dx = x1 - x0, dy = y1 - y0;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len * width / 2, ny = dx / len * width / 2;
+      const p = [
+        [x0 + nx, y0 + ny], [x1 + nx, y1 + ny],
+        [x1 - nx, y1 - ny], [x0 - nx, y0 - ny],
+      ];
+      const [r, g, b, a] = col;
+      const tri = (A, B, C) => {
+        verts.push(cx(A[0]), cy(A[1]), r, g, b, a);
+        verts.push(cx(B[0]), cy(B[1]), r, g, b, a);
+        verts.push(cx(C[0]), cy(C[1]), r, g, b, a);
+      };
+      tri(p[0], p[1], p[2]); tri(p[0], p[2], p[3]);
+    }
+
+    const { rect } = layout;
+    // panel
+    pushQuadPx(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h, hexToRGBA(pal.panel, 1));
+    // gridlines (thin quads)
+    const gcol = hexToRGBA(pal.grid, 1);
+    for (const t of layout.xticks) { const px = layout.xToPx(t); pushQuadPx(px - 0.5, rect.y, px + 0.5, rect.y + rect.h, gcol); }
+    for (const t of layout.yticks) { const py = layout.yToPx(t); pushQuadPx(rect.x, py - 0.5, rect.x + rect.w, py + 0.5, gcol); }
+    // axis border (4 thin quads)
+    const acol = hexToRGBA(pal.axis, 1);
+    pushQuadPx(rect.x, rect.y, rect.x + rect.w, rect.y + 1.25, acol);
+    pushQuadPx(rect.x, rect.y + rect.h - 1.25, rect.x + rect.w, rect.y + rect.h, acol);
+    pushQuadPx(rect.x, rect.y, rect.x + 1.25, rect.y + rect.h, acol);
+    pushQuadPx(rect.x + rect.w - 1.25, rect.y, rect.x + rect.w, rect.y + rect.h, acol);
+
+    // series — clamp to plot rect (cheap manual clip so lines don't bleed).
+    const inX = (x) => Math.max(rect.x, Math.min(rect.x + rect.w, x));
+    const inY = (y) => Math.max(rect.y, Math.min(rect.y + rect.h, y));
+    const series = spec.series || [];
+    for (let i = 0; i < series.length; i++) {
+      const s = series[i];
+      const col = hexToRGBA(s.color || SERIES_COLORS[i % SERIES_COLORS.length], 1);
+      const pts = s.points || [];
+      if (s.kind === 'scatter') {
+        for (const p of pts) {
+          const px = layout.xToPx(p[0]), py = layout.yToPx(p[1]);
+          if (px < rect.x - 4 || px > rect.x + rect.w + 4 || py < rect.y - 4 || py > rect.y + rect.h + 4) continue;
+          pushQuadPx(px - 3.2, py - 3.2, px + 3.2, py + 3.2, col); // point quad
+        }
+      } else { // line strip -> triangulated segments (honors width)
+        for (let k = 1; k < pts.length; k++) {
+          const ax = inX(layout.xToPx(pts[k - 1][0])), ay = inY(layout.yToPx(pts[k - 1][1]));
+          const bx = inX(layout.xToPx(pts[k][0])),     by = inY(layout.yToPx(pts[k][1]));
+          pushSegPx(ax, ay, bx, by, 2.0, col);
+        }
+      }
+    }
+    return new Float32Array(verts);
+  }
+
+  function renderGeomGPU(canvas, layout, spec, dpr) {
+    const device = GPU.device;
+    const ctx = canvas.getContext('webgpu');
+    ctx.configure({ device, format: GPU.format, alphaMode: 'premultiplied' });
+
+    // NOTE: geometry is built in CSS-pixel space with the CSS W/H; the canvas
+    // backing store is W*dpr, but clip space is resolution-independent, so the
+    // same clip coords fill the (larger) framebuffer correctly.
+    const data = buildGeometry(layout, spec, layout.W, layout.H);
+    const vbuf = device.createBuffer({
+      size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(vbuf, 0, data);
+
+    const bg = hexToRGBA(cssVar('--bg', '#ffffff'), 1);
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: ctx.getCurrentTexture().createView(),
+        clearValue: { r: bg[0], g: bg[1], b: bg[2], a: 1 },
+        loadOp: 'clear', storeOp: 'store',
+      }],
+    });
+    pass.setPipeline(GPU.pipeline);
+    pass.setVertexBuffer(0, vbuf);
+    pass.draw(data.length / 6);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    vbuf.destroy && vbuf.destroy();
+  }
+
+  /* =========================================================================
+     PLOT ENTRY — creates the canvases and dispatches to the active backend.
+     Returns nothing; appends into `host`.
+     ========================================================================= */
+  function makeCanvas(W, H, dpr, cls) {
+    const c = document.createElement('canvas');
+    c.width = Math.round(W * dpr);
+    c.height = Math.round(H * dpr);
+    c.style.width = W + 'px';
+    c.style.height = H + 'px';
+    if (cls) c.className = cls;
+    return c;
+  }
+
+  function renderPlot(host, spec) {
+    const wrap = document.createElement('div');
+    wrap.className = 'plotwrap';
+    host.appendChild(wrap);
+
+    const W = Math.max(320, Math.floor(wrap.clientWidth || host.clientWidth || 720));
+    const H = Math.round(Math.min(440, Math.max(240, W * 0.58)));
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    const base = makeCanvas(W, H, dpr, 'base');
+    const overlay = makeCanvas(W, H, dpr, 'overlay');
+    wrap.appendChild(base);
+    wrap.appendChild(overlay);
+
+    const layout = computeLayout(spec, W, H);
+
+    // text overlay (Canvas2D, both backends)
+    const octx = overlay.getContext('2d');
+    octx.scale(dpr, dpr);
+    drawText(octx, layout, spec);
+
+    // geometry
+    if (GPU.ok) {
+      try {
+        renderGeomGPU(base, layout, spec, dpr);
+        return;
+      } catch (e) {
+        console.warn('Per-plot WebGPU render failed; switching to Canvas2D:', e);
+        GPU.ok = false;
+        setBadge('cpu');
+        // fall through to 2D on a fresh canvas (a canvas that got a webgpu
+        // context can't also give a 2d context, so replace it)
+        const fresh = makeCanvas(W, H, dpr, 'base');
+        wrap.replaceChild(fresh, base);
+        const b2 = fresh.getContext('2d'); b2.scale(dpr, dpr);
+        drawGeom2D(b2, layout, spec);
+        return;
+      }
+    }
+    const bctx = base.getContext('2d');
+    bctx.scale(dpr, dpr);
+    drawGeom2D(bctx, layout, spec);
+  }
+
+  /* =========================================================================
+     MARKDOWN SUBSET — headings (#/##/###), **bold**, `code`, paragraphs, and
+     - / * lists. Everything is HTML-escaped first, so injected content is safe.
+     ========================================================================= */
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function inlineMD(s) {
+    let t = escapeHTML(s);
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return t;
+  }
+  function renderProse(text) {
+    const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+    let html = '', para = [], list = null;
+    const flushPara = () => { if (para.length) { html += '<p>' + inlineMD(para.join(' ')) + '</p>'; para = []; } };
+    const flushList = () => { if (list) { html += '<ul>' + list.map(li => '<li>' + inlineMD(li) + '</li>').join('') + '</ul>'; list = null; } };
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      const h = /^(#{1,3})\s+(.*)$/.exec(line);
+      const li = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (h) { flushPara(); flushList(); const lvl = h[1].length; html += `<h${lvl}>${inlineMD(h[2])}</h${lvl}>`; }
+      else if (li) { flushPara(); (list || (list = [])).push(li[1]); }
+      else if (line.trim() === '') { flushPara(); flushList(); }
+      else { flushList(); para.push(line.trim()); }
+    }
+    flushPara(); flushList();
+    return html;
+  }
+
+  /* =========================================================================
+     MINIMAL LaTeX -> MathML converter.
+     Supported: \frac{}{}, ^ superscript, _ subscript, \sqrt{}, grouping {},
+     Greek letters, common operators/functions, numbers, identifiers.
+     ANY unsupported command throws -> caller falls back to the LaTeX source.
+     ========================================================================= */
+  const GREEK = {
+    alpha:'α', beta:'β', gamma:'γ', delta:'δ', epsilon:'ε', varepsilon:'ε',
+    zeta:'ζ', eta:'η', theta:'θ', vartheta:'ϑ', iota:'ι', kappa:'κ', lambda:'λ',
+    mu:'μ', nu:'ν', xi:'ξ', pi:'π', rho:'ρ', sigma:'σ', tau:'τ', upsilon:'υ',
+    phi:'φ', varphi:'φ', chi:'χ', psi:'ψ', omega:'ω',
+    Gamma:'Γ', Delta:'Δ', Theta:'Θ', Lambda:'Λ', Xi:'Ξ', Pi:'Π', Sigma:'Σ',
+    Phi:'Φ', Psi:'Ψ', Omega:'Ω',
+  };
+  const OPS = {
+    cdot:'⋅', times:'×', div:'÷', pm:'±', mp:'∓', le:'≤', leq:'≤', ge:'≥', geq:'≥',
+    neq:'≠', ne:'≠', approx:'≈', equiv:'≡', int:'∫', sum:'∑', prod:'∏', infty:'∞',
+    partial:'∂', nabla:'∇', rightarrow:'→', to:'→', leftarrow:'←', Rightarrow:'⇒',
+    leftrightarrow:'↔', in:'∈', notin:'∉', subset:'⊂', subseteq:'⊆', cup:'∪',
+    cap:'∩', forall:'∀', exists:'∃', langle:'⟨', rangle:'⟩', ldots:'…', dots:'…',
+    cdots:'⋯', mapsto:'↦', propto:'∝', sim:'∼', star:'⋆', ast:'∗', circ:'∘',
+  };
+  // Function/operator names rendered as upright identifiers.
+  const FUNCS = ['sin','cos','tan','cot','sec','csc','sinh','cosh','tanh','log',
+    'ln','exp','det','dim','ker','deg','gcd','lim','max','min','arg','sup','inf'];
+
+  function tokenizeLatex(src) {
+    const toks = [];
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '\\') {
+        let j = i + 1, name = '';
+        if (/[a-zA-Z]/.test(src[j])) { while (j < src.length && /[a-zA-Z]/.test(src[j])) name += src[j++]; }
+        else { name = src[j]; j++; } // escaped symbol like \{ or \,
+        toks.push({ t: 'cmd', v: name }); i = j;
+      } else if (/\s/.test(c)) { i++; }
+      else if (c === '{' || c === '}' || c === '^' || c === '_') { toks.push({ t: c }); i++; }
+      else if (/[0-9.]/.test(c)) { let n = ''; while (i < src.length && /[0-9.]/.test(src[i])) n += src[i++]; toks.push({ t: 'num', v: n }); }
+      else if (/[a-zA-Z]/.test(c)) { toks.push({ t: 'ident', v: c }); i++; }
+      else { toks.push({ t: 'op', v: c }); i++; } // + - = ( ) etc.
+    }
+    return toks;
+  }
+
+  // Parse a whitespace-free MathML fragment for a sequence until `stop` ('}' or null).
+  function parseSeq(toks, i, stop) {
+    let out = '';
+    while (i < toks.length && !(stop && toks[i].t === stop)) {
+      let atom = parseAtom(toks, i); i = atom.i;
+      let node = atom.node, sub = null, sup = null;
+      while (i < toks.length && (toks[i].t === '^' || toks[i].t === '_')) {
+        const kind = toks[i].t; i++;
+        const s = parseAtom(toks, i); i = s.i;
+        if (kind === '^') sup = s.node; else sub = s.node;
+      }
+      if (sub && sup) node = `<msubsup>${node}${sub}${sup}</msubsup>`;
+      else if (sub)   node = `<msub>${node}${sub}</msub>`;
+      else if (sup)   node = `<msup>${node}${sup}</msup>`;
+      out += node;
+    }
+    return { node: out, i };
+  }
+
+  function parseAtom(toks, i) {
+    const tk = toks[i];
+    if (!tk) return { node: '<mi></mi>', i };
+    if (tk.t === '{') {
+      const g = parseSeq(toks, i + 1, '}');
+      let j = g.i; if (toks[j] && toks[j].t === '}') j++;
+      return { node: `<mrow>${g.node}</mrow>`, i: j };
+    }
+    if (tk.t === 'num') return { node: `<mn>${escapeHTML(tk.v)}</mn>`, i: i + 1 };
+    if (tk.t === 'ident') return { node: `<mi>${escapeHTML(tk.v)}</mi>`, i: i + 1 };
+    if (tk.t === 'op') return { node: `<mo>${escapeHTML(tk.v)}</mo>`, i: i + 1 };
+    if (tk.t === '^' || tk.t === '_') return { node: '<mi></mi>', i }; // orphan script guard
+    if (tk.t === 'cmd') {
+      const name = tk.v;
+      if (name === 'frac') {
+        const a = parseAtom(toks, i + 1); const b = parseAtom(toks, a.i);
+        return { node: `<mfrac>${a.node}${b.node}</mfrac>`, i: b.i };
+      }
+      if (name === 'sqrt') {
+        const a = parseAtom(toks, i + 1);
+        return { node: `<msqrt>${a.node}</msqrt>`, i: a.i };
+      }
+      if (name === 'left' || name === 'right') {
+        // \left( \right) — treat the following delimiter as a plain operator
+        const d = toks[i + 1];
+        if (d && (d.t === 'op' || d.t === 'cmd')) {
+          const sym = d.t === 'op' ? d.v : (OPS[d.v] || '');
+          return { node: `<mo>${escapeHTML(sym)}</mo>`, i: i + 2 };
+        }
+        return { node: '', i: i + 1 };
+      }
+      if (Object.prototype.hasOwnProperty.call(GREEK, name)) return { node: `<mi>${GREEK[name]}</mi>`, i: i + 1 };
+      if (Object.prototype.hasOwnProperty.call(OPS, name))   return { node: `<mo>${OPS[name]}</mo>`, i: i + 1 };
+      if (FUNCS.indexOf(name) !== -1) return { node: `<mi>${name}</mi>`, i: i + 1 };
+      if (name === '{' || name === '}' || name === ',' || name === ';' || name === ' ') {
+        return { node: `<mo>${escapeHTML(name.trim())}</mo>`, i: i + 1 };
+      }
+      // Unknown command -> abort, caller shows source.
+      throw new Error('unsupported LaTeX command: \\' + name);
+    }
+    return { node: '<mi></mi>', i: i + 1 };
+  }
+
+  function latexToMathML(latex) {
+    const toks = tokenizeLatex(latex);
+    const seq = parseSeq(toks, 0, null);
+    return `<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><mrow>${seq.node}</mrow></math>`;
+  }
+
+  function renderMath(host, latex) {
+    const box = document.createElement('div');
+    box.className = 'mathblock';
+    try {
+      box.innerHTML = latexToMathML(latex);
+    } catch (e) {
+      // Fallback: show the raw LaTeX source in a styled code span.
+      const code = document.createElement('code');
+      code.className = 'math-fallback';
+      code.textContent = latex;
+      box.appendChild(code);
+      box.title = 'Unsupported LaTeX construct — showing source';
+    }
+    host.appendChild(box);
+  }
+
+  /* =========================================================================
+     DOCUMENT RENDERER
+     ========================================================================= */
+  let CURRENT_DOC = null;
+
+  function renderDocument(doc) {
+    const app = document.getElementById('app');
+    app.innerHTML = '';
+    if (!doc || doc.type !== 'document') {
+      const n = document.createElement('div'); n.className = 'notice';
+      n.textContent = 'Not a NimbleCAS document (expected {"type":"document", ...}).';
+      app.appendChild(n);
+      return;
+    }
+    if (doc.title) {
+      const h = document.createElement('div'); h.className = 'doc-title';
+      h.textContent = doc.title; app.appendChild(h);
+    }
+    for (const block of (doc.blocks || [])) {
+      if (!block || !block.kind) continue;
+      if (block.kind === 'prose') {
+        const d = document.createElement('div'); d.className = 'prose';
+        d.innerHTML = renderProse(block.text || '');
+        app.appendChild(d);
+      } else if (block.kind === 'math') {
+        renderMath(app, block.latex || '');
+      } else if (block.kind === 'plot' && block.plot) {
+        const fig = document.createElement('figure'); fig.className = 'plot';
+        app.appendChild(fig);
+        renderPlot(fig, block.plot);
+        if (block.plot.title) {
+          const cap = document.createElement('figcaption');
+          cap.textContent = block.plot.title;
+          fig.appendChild(cap);
+        }
+      }
+    }
+    // Live-compute controls always live at the end of the document.
+    app.appendChild(buildLiveControls());
+  }
+
+  function rerender() { if (CURRENT_DOC) renderDocument(CURRENT_DOC); }
+
+  /* =========================================================================
+     OPTIONAL WASM KERNEL HOOK
+     Contract: a same-directory `kernel.wasm` freestanding module exporting
+        memory                                (WebAssembly.Memory)
+        poly_eval(ptr:i32, n:i32, x:f64)->f64  (Horner eval of n coeffs c0..c_{n-1})
+     We write the coefficients as little-endian f64 into `memory` at COEFF_PTR,
+     then call poly_eval for each x. If the module is absent or lacks these
+     exports, we evaluate the identical polynomial in plain JS instead.
+     ========================================================================= */
+  const WASM = { ready: false, mod: null, active: false, coeffPtr: 1024 };
+  const COEFF_PTR_FALLBACK = 1024;
+
+  async function initWasm() {
+    try {
+      const resp = await fetch('kernel.wasm');
+      if (!resp || !resp.ok) return false;
+      const bytes = await resp.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      const ex = instance.exports;
+      if (typeof ex.poly_eval !== 'function' || !(ex.memory instanceof WebAssembly.Memory)) return false;
+      // Prefer the kernel's own scratch-buffer offset when it exports coeff_buffer();
+      // fall back to the documented fixed offset otherwise. This avoids assuming a
+      // linker-chosen data address.
+      WASM.coeffPtr = (typeof ex.coeff_buffer === 'function') ? ex.coeff_buffer() : COEFF_PTR_FALLBACK;
+      WASM.mod = instance; WASM.ready = true;
+      return true;
+    } catch (e) {
+      // Absent file, non-WASM MIME under file://, or instantiation error.
+      return false;
+    }
+  }
+
+  function polyJS(coeffs, x) { // Horner, matches the WASM contract
+    let acc = 0;
+    for (let k = coeffs.length - 1; k >= 0; k--) acc = acc * x + coeffs[k];
+    return acc;
+  }
+  function polyWasm(coeffs, x) {
+    const ex = WASM.mod.exports;
+    const view = new Float64Array(ex.memory.buffer, WASM.coeffPtr, coeffs.length);
+    view.set(coeffs);
+    return ex.poly_eval(WASM.coeffPtr, coeffs.length, x);
+  }
+
+  function samplePolynomial() {
+    // A fixed demo polynomial: 0.5 - 0.8x - 0.3x^2 + 0.12x^3
+    const coeffs = [0.5, -0.8, -0.3, 0.12];
+    const useWasm = WASM.ready;
+    const N = 240, x0 = -4, x1 = 4;
+    const pts = [];
+    for (let k = 0; k <= N; k++) {
+      const x = x0 + (x1 - x0) * k / N;
+      const y = useWasm ? polyWasm(coeffs, x) : polyJS(coeffs, x);
+      pts.push([x, y]);
+    }
+    WASM.active = useWasm;
+    return {
+      type: 'plot',
+      title: 'Live polynomial  p(x) = 0.5 − 0.8x − 0.3x² + 0.12x³',
+      xLabel: 'x', yLabel: 'p(x)',
+      xRange: [x0, x1], yRange: null,
+      series: [{ kind: 'line', label: (useWasm ? 'WASM kernel' : 'JS kernel'), color: '#a855f7', points: pts }],
+    };
+  }
+
+  function buildLiveControls() {
+    const box = document.createElement('div');
+    box.className = 'controls';
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.textContent = 'Sample a polynomial live';
+    const tag = document.createElement('span');
+    tag.className = 'live-tag';
+    tag.textContent = WASM.ready ? 'kernel.wasm loaded' : 'JS kernel (no kernel.wasm)';
+    const hint = document.createElement('span');
+    hint.className = 'hint';
+    hint.textContent = 'Evaluates a cubic across x∈[−4,4] and plots it through the active renderer.';
+    const target = document.createElement('div');
+    target.style.width = '100%';
+
+    btn.addEventListener('click', () => {
+      target.innerHTML = '';
+      const fig = document.createElement('figure'); fig.className = 'plot';
+      target.appendChild(fig);
+      const spec = samplePolynomial();
+      renderPlot(fig, spec);
+      const cap = document.createElement('figcaption');
+      cap.textContent = (WASM.active ? 'Computed via WASM kernel' : 'Computed in JS')
+        + ' · rendered via ' + (GPU.ok ? 'WebGPU' : 'Canvas2D');
+      fig.appendChild(cap);
+    });
+
+    box.appendChild(btn);
+    box.appendChild(tag);
+    box.appendChild(hint);
+    box.appendChild(target);
+    return box;
+  }
+
+  /* =========================================================================
+     EMBEDDED SAMPLE DOCUMENT — showcases prose, math and two plots. Plot
+     points are generated programmatically so the sample stays realistic while
+     the file remains fully self-contained.
+     ========================================================================= */
+  function buildSampleDocument() {
+    const TWO_PI = Math.PI * 2;
+    const sinPts = [], cosPts = [];
+    for (let k = 0; k <= 160; k++) {
+      const x = -TWO_PI + (2 * TWO_PI) * k / 160;
+      sinPts.push([x, Math.sin(x)]);
+      cosPts.push([x, Math.cos(x)]);
+    }
+    // Deterministic pseudo-noise scatter around a y = 0.5x + 1 trend.
+    const scatter = [], fit = [];
+    const rand = (i) => { const s = Math.sin(i * 12.9898) * 43758.5453; return s - Math.floor(s); };
+    for (let i = 0; i <= 44; i++) {
+      const x = i / 44 * 10;
+      const y = 0.5 * x + 1 + (rand(i) - 0.5) * 1.6;
+      scatter.push([x, y]);
+    }
+    fit.push([0, 1], [10, 6]);
+
+    return {
+      type: 'document',
+      title: 'NimbleCAS — Exact Computer Algebra',
+      blocks: [
+        { kind: 'prose', text:
+`# Welcome to NimbleCAS
+
+**NimbleCAS** is a C++23 exact computer-algebra system. This viewer is a
+self-contained WebGPU front-end for documents produced by the \`webexport\`
+module — it renders **prose**, **math**, and **plots** with zero external
+dependencies.
+
+## What you are looking at
+
+- Prose blocks use a minimal Markdown subset (headings, \`code\`, **bold**, lists).
+- Math blocks convert a small LaTeX subset directly to native **MathML**.
+- Plot blocks render through a real **WebGPU** pipeline, with a **Canvas2D**
+  fallback so the page always works.` },
+
+        { kind: 'prose', text:
+`## A little mathematics
+
+The exponential function has the Taylor series expansion:` },
+        { kind: 'math', latex: 'e^x = \\sum_{n=0}^{\\infty} \\frac{x^n}{n!}' },
+
+        { kind: 'prose', text: `The determinant of a 2×2 matrix is a classic exact result:` },
+        { kind: 'math', latex: '\\det(A) = a_{11} a_{22} - a_{12} a_{21}' },
+
+        { kind: 'prose', text: `And a Gaussian integral, using \\sqrt and \\pi:` },
+        { kind: 'math', latex: '\\int_{-\\infty}^{\\infty} e^{-x^2} \\, dx = \\sqrt{\\pi}' },
+
+        { kind: 'prose', text:
+`## Plots
+
+Below: a pair of trigonometric curves rendered as line strips, then a scatter
+of noisy samples with a linear trend line.` },
+
+        { kind: 'plot', plot: {
+          type: 'plot',
+          title: 'Trigonometric functions',
+          xLabel: 'x (radians)', yLabel: 'value',
+          xRange: [-TWO_PI, TWO_PI], yRange: [-1.2, 1.2],
+          series: [
+            { kind: 'line', label: 'sin(x)', color: '#2563eb', points: sinPts },
+            { kind: 'line', label: 'cos(x)', color: '#e0533d', points: cosPts },
+          ],
+        }},
+
+        { kind: 'plot', plot: {
+          type: 'plot',
+          title: 'Noisy samples with linear trend',
+          xLabel: 'x', yLabel: 'y',
+          xRange: null, yRange: null,
+          series: [
+            { kind: 'scatter', label: 'samples', color: '#12a150', points: scatter },
+            { kind: 'line',    label: 'y = 0.5x + 1', color: '#a855f7', points: fit },
+          ],
+        }},
+
+        { kind: 'prose', text:
+`## Live compute
+
+Use the control below to evaluate a polynomial across a range and plot it. If a
+same-directory \`kernel.wasm\` is present it runs the native WASM kernel;
+otherwise it computes the identical samples in JavaScript.` },
+      ],
+    };
+  }
+
+  /* =========================================================================
+     BADGE + FILE INPUT + RESIZE
+     ========================================================================= */
+  function setBadge(kind) {
+    const b = document.getElementById('backendBadge');
+    if (!b) return;
+    b.classList.remove('gpu', 'cpu');
+    if (kind === 'gpu') { b.classList.add('gpu'); b.textContent = 'WebGPU'; }
+    else                { b.classList.add('cpu'); b.textContent = 'Canvas2D fallback'; }
+  }
+
+  function wireFileInput() {
+    const input = document.getElementById('fileInput');
+    input.addEventListener('change', (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const doc = JSON.parse(reader.result);
+          CURRENT_DOC = doc;
+          renderDocument(doc);
+        } catch (e) {
+          const app = document.getElementById('app');
+          app.innerHTML = '';
+          const n = document.createElement('div'); n.className = 'notice';
+          n.textContent = 'Could not parse JSON: ' + e.message;
+          app.appendChild(n);
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(rerender, 150);
+  });
+  // Re-render when the color scheme flips so palette-baked GPU geometry updates.
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    (mq.addEventListener ? mq.addEventListener.bind(mq, 'change') : mq.addListener.bind(mq))(rerender);
+  }
+
+  /* =========================================================================
+     BOOT
+     ========================================================================= */
+  (async function boot() {
+    wireFileInput();
+    const gpuOk = await initWebGPU();
+    setBadge(gpuOk ? 'gpu' : 'cpu');
+    await initWasm(); // best-effort; never blocks rendering
+    CURRENT_DOC = buildSampleDocument();
+    renderDocument(CURRENT_DOC);
+  })();
+})();
+</script>
