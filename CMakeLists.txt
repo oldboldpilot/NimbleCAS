@@ -592,6 +592,22 @@ target_link_libraries(feature_linalg_tests
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME feature_linalg_tests COMMAND feature_linalg_tests)
 
+add_executable(feature_polycalc_tests tests/feature_polycalc_tests.cpp)
+target_link_libraries(feature_polycalc_tests
+  PRIVATE nimblecas_integrate nimblecas_ratint nimblecas_rothstein nimblecas_pfd
+          nimblecas_resultant nimblecas_roots nimblecas_recurrence nimblecas_orthopoly
+          nimblecas_combinatorics nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME feature_polycalc_tests COMMAND feature_polycalc_tests)
+
+add_executable(feature_numprob_tests tests/feature_numprob_tests.cpp)
+target_link_libraries(feature_numprob_tests
+  PRIVATE nimblecas_numeric nimblecas_rng nimblecas_montecarlo nimblecas_mcmc nimblecas_pade
+          nimblecas_powerseries nimblecas_dynamics nimblecas_eigen nimblecas_matrix
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME feature_numprob_tests COMMAND feature_numprob_tests)
+
 # CPU profiling harness (perf / VTune) — a plain executable, not a ctest target.
 add_executable(cpu_bench tools/cpu_bench.cpp)
 target_link_libraries(cpu_bench
