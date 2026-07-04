@@ -85,12 +85,26 @@ target_sources(nimblecas_ratpoly PUBLIC
 target_link_libraries(nimblecas_ratpoly
   PUBLIC nimblecas_polynomial nimblecas_core std_module)
 
+# ---- nimblecas.wavelets : wavelet transforms (Haar exact over Q; db/sym/coif/bior numerical) ----
+add_library(nimblecas_wavelets STATIC)
+target_sources(nimblecas_wavelets PUBLIC
+  FILE_SET CXX_MODULES FILES src/wavelets/wavelets.cppm)
+target_link_libraries(nimblecas_wavelets
+  PUBLIC nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
+
 # ---- nimblecas.matrix : dense exact-rational matrices (§7.2) ----
 add_library(nimblecas_matrix STATIC)
 target_sources(nimblecas_matrix PUBLIC
   FILE_SET CXX_MODULES FILES src/matrix/matrix.cppm)
 target_link_libraries(nimblecas_matrix
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.krylov : Krylov subspace methods (exact CG/Arnoldi/Lanczos over Q + numerical GMRES/etc.) ----
+add_library(nimblecas_krylov STATIC)
+target_sources(nimblecas_krylov PUBLIC
+  FILE_SET CXX_MODULES FILES src/krylov/krylov.cppm)
+target_link_libraries(nimblecas_krylov
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
 
 # ---- nimblecas.stats : descriptive statistics & covariance matrix (§7.7) ----
 add_library(nimblecas_stats STATIC)
@@ -148,12 +162,33 @@ target_sources(nimblecas_numeric PUBLIC
 target_link_libraries(nimblecas_numeric
   PUBLIC nimblecas_core std_module)
 
+# ---- nimblecas.optimize : unconstrained numerical optimization over R^n (+ implicit filtering) ----
+add_library(nimblecas_optimize STATIC)
+target_sources(nimblecas_optimize PUBLIC
+  FILE_SET CXX_MODULES FILES src/optimize/optimize.cppm)
+target_link_libraries(nimblecas_optimize
+  PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.nlsolve : iterative solvers for F(x)=0 in R^n (Kelley) (§7.14) ----
+add_library(nimblecas_nlsolve STATIC)
+target_sources(nimblecas_nlsolve PUBLIC
+  FILE_SET CXX_MODULES FILES src/nlsolve/nlsolve.cppm)
+target_link_libraries(nimblecas_nlsolve
+  PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.lp : exact-rational linear programming (Simplex) (§7.22) ----
 add_library(nimblecas_lp STATIC)
 target_sources(nimblecas_lp PUBLIC
   FILE_SET CXX_MODULES FILES src/lp/lp.cppm)
 target_link_libraries(nimblecas_lp
   PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.compsense : compressed sensing / sparse recovery (exact BP via LP dual) ----
+add_library(nimblecas_compsense STATIC)
+target_sources(nimblecas_compsense PUBLIC
+  FILE_SET CXX_MODULES FILES src/compsense/compsense.cppm)
+target_link_libraries(nimblecas_compsense
+  PUBLIC nimblecas_lp nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
 
 # ---- nimblecas.rng : parallelisable counter-based RNG (Threefry-2x64) (§7.8 dependency) ----
 add_library(nimblecas_rng STATIC)
@@ -183,6 +218,13 @@ target_sources(nimblecas_montecarlo PUBLIC
 target_link_libraries(nimblecas_montecarlo
   PUBLIC nimblecas_rng nimblecas_core std_module)
 
+# ---- nimblecas.qmc : quasi-Monte Carlo low-discrepancy sequences & adaptive integration (§7.8) ----
+add_library(nimblecas_qmc STATIC)
+target_sources(nimblecas_qmc PUBLIC
+  FILE_SET CXX_MODULES FILES src/qmc/qmc.cppm)
+target_link_libraries(nimblecas_qmc
+  PUBLIC nimblecas_rng nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.powerseries : truncated formal power series over Q (§7.4/7.5 dependency) ----
 add_library(nimblecas_powerseries STATIC)
 target_sources(nimblecas_powerseries PUBLIC
@@ -196,6 +238,22 @@ target_sources(nimblecas_dynamics PUBLIC
   FILE_SET CXX_MODULES FILES src/dynamics/dynamics.cppm)
 target_link_libraries(nimblecas_dynamics
   PUBLIC nimblecas_eigen nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.analysis : conditioning, convergence & Lyapunov stability (§7.10) ----
+add_library(nimblecas_analysis STATIC)
+target_sources(nimblecas_analysis PUBLIC
+  FILE_SET CXX_MODULES FILES src/analysis/analysis.cppm)
+target_link_libraries(nimblecas_analysis
+  PUBLIC nimblecas_dynamics nimblecas_eigen nimblecas_matrix nimblecas_ratpoly
+         nimblecas_polynomial nimblecas_core std_module)
+
+# ---- nimblecas.control : linear control systems (TF/SS, stability criteria, Bode) ----
+add_library(nimblecas_control STATIC)
+target_sources(nimblecas_control PUBLIC
+  FILE_SET CXX_MODULES FILES src/control/control.cppm)
+target_link_libraries(nimblecas_control
+  PUBLIC nimblecas_dynamics nimblecas_roots nimblecas_complex nimblecas_matrix
+         nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
 # ---- nimblecas.pade : [m/n] Pade approximants for resummation (§7.4/7.5) ----
 add_library(nimblecas_pade STATIC)
@@ -211,6 +269,13 @@ target_sources(nimblecas_matexp PUBLIC
 target_link_libraries(nimblecas_matexp
   PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.lie : matrix Lie algebras & Lie transforms over Q ----
+add_library(nimblecas_lie STATIC)
+target_sources(nimblecas_lie PUBLIC
+  FILE_SET CXX_MODULES FILES src/lie/lie.cppm)
+target_link_libraries(nimblecas_lie
+  PUBLIC nimblecas_matexp nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.mcmc : Metropolis-Hastings MCMC on the parallel RNG (§7.8) ----
 add_library(nimblecas_mcmc STATIC)
 target_sources(nimblecas_mcmc PUBLIC
@@ -224,6 +289,20 @@ target_sources(nimblecas_matdecomp PUBLIC
   FILE_SET CXX_MODULES FILES src/matdecomp/matdecomp.cppm)
 target_link_libraries(nimblecas_matdecomp
   PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.matstruct : structured matrices + exact LDL^T/Cholesky/Hessenberg (§7.2) ----
+add_library(nimblecas_matstruct STATIC)
+target_sources(nimblecas_matstruct PUBLIC
+  FILE_SET CXX_MODULES FILES src/matstruct/matstruct.cppm)
+target_link_libraries(nimblecas_matstruct
+  PUBLIC nimblecas_matdecomp nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.interpolation : exact polynomial interpolation over Q ----
+add_library(nimblecas_interpolation STATIC)
+target_sources(nimblecas_interpolation PUBLIC
+  FILE_SET CXX_MODULES FILES src/interpolation/interpolation.cppm)
+target_link_libraries(nimblecas_interpolation
+  PUBLIC nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
 # ---- nimblecas.cmatrix : complex (Gaussian-rational) matrices (§7.2, §7.15 dep) ----
 add_library(nimblecas_cmatrix STATIC)
@@ -435,6 +514,14 @@ target_sources(nimblecas_integrate PUBLIC
 target_link_libraries(nimblecas_integrate
   PUBLIC nimblecas_ratint nimblecas_rothstein nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.inteq : integral equations (Fredholm/Volterra; ADM/HPM/HAM) ----
+add_library(nimblecas_inteq STATIC)
+target_sources(nimblecas_inteq PUBLIC
+  FILE_SET CXX_MODULES FILES src/inteq/inteq.cppm)
+target_link_libraries(nimblecas_inteq
+  PUBLIC nimblecas_integrate nimblecas_laplace nimblecas_simplify nimblecas_matrix
+         nimblecas_symbolic nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.diff : symbolic differentiation ----
 add_library(nimblecas_diff STATIC)
 target_sources(nimblecas_diff PUBLIC
@@ -449,6 +536,21 @@ target_sources(nimblecas_vectorcalc PUBLIC
   FILE_SET CXX_MODULES FILES src/vectorcalc/vectorcalc.cppm)
 target_link_libraries(nimblecas_vectorcalc
   PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
+# ---- nimblecas.mechanics : Hamiltonian mechanics, phase space, action-angle ----
+add_library(nimblecas_mechanics STATIC)
+target_sources(nimblecas_mechanics PUBLIC
+  FILE_SET CXX_MODULES FILES src/mechanics/mechanics.cppm)
+target_link_libraries(nimblecas_mechanics
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
+# ---- nimblecas.calcvar : calculus of variations (Euler-Lagrange, Beltrami, constraints) ----
+add_library(nimblecas_calcvar STATIC)
+target_sources(nimblecas_calcvar PUBLIC
+  FILE_SET CXX_MODULES FILES src/calcvar/calcvar.cppm)
+target_link_libraries(nimblecas_calcvar
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_cache
+         nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.svgplot : in-core standalone SVG-string plotter (visualization) ----
 add_library(nimblecas_svgplot STATIC)
@@ -503,6 +605,12 @@ target_link_libraries(matrix_tests
           nimblecas_testing std_module)
 add_test(NAME matrix_tests COMMAND matrix_tests)
 
+add_executable(krylov_tests tests/krylov_tests.cpp)
+target_link_libraries(krylov_tests
+  PRIVATE nimblecas_krylov nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME krylov_tests COMMAND krylov_tests)
+
 add_executable(stats_tests tests/stats_tests.cpp)
 target_link_libraries(stats_tests
   PRIVATE nimblecas_stats nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
@@ -550,6 +658,34 @@ target_link_libraries(numeric_tests
   PRIVATE nimblecas_numeric nimblecas_core nimblecas_testing std_module)
 add_test(NAME numeric_tests COMMAND numeric_tests)
 
+add_executable(compsense_tests tests/compsense_tests.cpp)
+target_link_libraries(compsense_tests
+  PRIVATE nimblecas_compsense nimblecas_lp nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME compsense_tests COMMAND compsense_tests)
+
+add_executable(optimize_tests tests/optimize_tests.cpp)
+target_link_libraries(optimize_tests
+  PRIVATE nimblecas_optimize nimblecas_core nimblecas_testing std_module)
+add_test(NAME optimize_tests COMMAND optimize_tests)
+
+add_executable(nlsolve_tests tests/nlsolve_tests.cpp)
+target_link_libraries(nlsolve_tests
+  PRIVATE nimblecas_nlsolve nimblecas_core nimblecas_testing std_module)
+add_test(NAME nlsolve_tests COMMAND nlsolve_tests)
+
+add_executable(wavelets_tests tests/wavelets_tests.cpp)
+target_link_libraries(wavelets_tests
+  PRIVATE nimblecas_wavelets nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME wavelets_tests COMMAND wavelets_tests)
+
+add_executable(qmc_tests tests/qmc_tests.cpp)
+target_link_libraries(qmc_tests
+  PRIVATE nimblecas_qmc nimblecas_montecarlo nimblecas_rng nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME qmc_tests COMMAND qmc_tests)
+
 add_executable(lp_tests tests/lp_tests.cpp)
 target_link_libraries(lp_tests
   PRIVATE nimblecas_lp nimblecas_ratpoly nimblecas_polynomial nimblecas_core
@@ -595,6 +731,25 @@ target_link_libraries(matexp_tests
   PRIVATE nimblecas_matexp nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME matexp_tests COMMAND matexp_tests)
+
+add_executable(lie_tests tests/lie_tests.cpp)
+target_link_libraries(lie_tests
+  PRIVATE nimblecas_lie nimblecas_matexp nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME lie_tests COMMAND lie_tests)
+
+add_executable(matstruct_tests tests/matstruct_tests.cpp)
+target_link_libraries(matstruct_tests
+  PRIVATE nimblecas_matstruct nimblecas_matdecomp nimblecas_eigen nimblecas_roots
+          nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME matstruct_tests COMMAND matstruct_tests)
+
+add_executable(interpolation_tests tests/interpolation_tests.cpp)
+target_link_libraries(interpolation_tests
+  PRIVATE nimblecas_interpolation nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME interpolation_tests COMMAND interpolation_tests)
 
 add_executable(mcmc_tests tests/mcmc_tests.cpp)
 target_link_libraries(mcmc_tests
@@ -812,6 +967,31 @@ target_link_libraries(vectorcalc_tests
           nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME vectorcalc_tests COMMAND vectorcalc_tests)
 
+add_executable(mechanics_tests tests/mechanics_tests.cpp)
+target_link_libraries(mechanics_tests
+  PRIVATE nimblecas_mechanics nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME mechanics_tests COMMAND mechanics_tests)
+
+add_executable(calcvar_tests tests/calcvar_tests.cpp)
+target_link_libraries(calcvar_tests
+  PRIVATE nimblecas_calcvar nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME calcvar_tests COMMAND calcvar_tests)
+
+add_executable(analysis_tests tests/analysis_tests.cpp)
+target_link_libraries(analysis_tests
+  PRIVATE nimblecas_analysis nimblecas_dynamics nimblecas_eigen nimblecas_matrix
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME analysis_tests COMMAND analysis_tests)
+
+add_executable(control_tests tests/control_tests.cpp)
+target_link_libraries(control_tests
+  PRIVATE nimblecas_control nimblecas_dynamics nimblecas_eigen nimblecas_matrix
+          nimblecas_complex nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME control_tests COMMAND control_tests)
+
 add_executable(simd_tests tests/simd_tests.cpp)
 target_link_libraries(simd_tests PRIVATE nimblecas_simd nimblecas_testing std_module)
 add_test(NAME simd_tests COMMAND simd_tests)
@@ -862,6 +1042,15 @@ target_link_libraries(integrate_tests
           nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME integrate_tests COMMAND integrate_tests)
+
+add_executable(inteq_tests tests/inteq_tests.cpp)
+target_link_libraries(inteq_tests
+  PRIVATE nimblecas_inteq nimblecas_integrate nimblecas_ratint nimblecas_rothstein
+          nimblecas_pfd nimblecas_resultant nimblecas_laplace nimblecas_simplify
+          nimblecas_cache nimblecas_matrix nimblecas_symbolic nimblecas_parallel
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_simd nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME inteq_tests COMMAND inteq_tests)
 
 # ---- cross-module feature / integration tests ----
 add_executable(feature_algebra_tests tests/feature_algebra_tests.cpp)
