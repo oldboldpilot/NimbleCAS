@@ -1,6 +1,11 @@
 #!/bin/bash
 # Backup script for NimbleCAS to NAS
 # Olumuyiwa Oluwasanmi
+#
+# The NAS is a PRIVATE, full working-state backup, so config/.env IS included here
+# (it holds credentials). config/.env must still NEVER be committed/pushed to the git
+# remotes (github/gitea/mgpu) — it is .gitignored for exactly that reason. Only the
+# git path excludes it; the NAS mirror keeps it.
 
 SOURCE_DIR="/mnt/c/ClaudeCodeExec/NimbleCAS"
 BACKUP_DIR="/mnt/z/PycharmProjects/NimbleCAS"
@@ -24,7 +29,6 @@ rsync -rv --delete --no-g --no-o --no-p --no-t --no-links --ignore-errors --inpl
     --exclude='*.exe' \
     --exclude='*.dll' \
     --exclude='*.so' \
-    --exclude='config/.env' \
     --exclude='.venv/' \
     --exclude='.av_cache/' \
     --exclude='.claude/' \
