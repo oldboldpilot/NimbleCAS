@@ -156,6 +156,23 @@ auto main() -> int {
                   t.expect(big.add(big).error() == MathError::overflow,
                            "overflow in the cross-multiplied denominator is reported");
               })
+        .test("rational128_int128_min_boundary_guards",
+              [](TestContext& t) {
+                  // -2^127 has no positive counterpart, so make() must reject it as a numerator
+                  // or denominator (negating/normalising it would overflow) rather than risk UB.
+                  // These regression-lock the guards the review verified.
+                  auto n_min = Rational128::make(i128(kMin), 1);
+                  t.expect(!n_min.has_value() && n_min.error() == MathError::overflow,
+                           "make(INT128_MIN, 1) rejected as overflow (no UB)");
+                  auto d_min = Rational128::make(1, i128(kMin));
+                  t.expect(!d_min.has_value() && d_min.error() == MathError::overflow,
+                           "make(1, INT128_MIN) rejected as overflow (no UB)");
+                  // A value one above the minimum is fine, and INT128_MAX as a numerator works.
+                  auto ok = Rational128::make(i128("-170141183460469231731687303715884105727"), 1);
+                  t.expect(ok.has_value(), "make(-(2^127 - 1), 1) is representable");
+                  t.expect(r128(i128(kMax), 1).numerator() == i128(kMax),
+                           "INT128_MAX numerator is preserved");
+              })
         .test("cross_check_with_int64_rational",
               [](TestContext& t) {
                   // For values both tiers can represent, Rational128 must agree with the
