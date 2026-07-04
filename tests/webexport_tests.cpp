@@ -4,11 +4,12 @@
 //
 // The suite pins the fixed JSON contract: the PlotSpec object keys/shape, that raw
 // data points serialize losslessly (a known line yields an exact "points" substring —
-// no pixel mapping, unlike svgplot), that JSON string escaping handles quotes and
-// backslashes, that non-finite input is rejected with domain_error, that function
-// sampling drops non-finite results, and that a Document assembles prose+math+plot
-// blocks with all three kinds present. Because numbers are formatted with a fixed
-// 3-decimal precision, the expected strings are exact and locale-independent.
+// no pixel mapping, unlike svgplot), that JSON string escaping handles quotes,
+// backslashes, control characters, and '<'/'>' (HTML-inline safety), that non-finite
+// input is rejected with domain_error, that function sampling drops non-finite
+// results, and that a Document assembles prose+math+plot blocks with all three kinds
+// present. Numbers are emitted as their shortest round-trippable decimal (e.g. 1.0 ->
+// "1", 2.5 -> "2.5"), so the expected strings are exact and locale-independent.
 
 import std;
 import nimblecas.core;
@@ -59,15 +60,15 @@ auto main() -> int {
     return TestSuite("nimblecas.webexport")
         .test("line_points_serialize_losslessly",
               [](TestContext& t) {
-                  // Points are the raw doubles the CAS produced, fixed 3-decimals, NOT
-                  // pixel-mapped: xs={0,1,2}, ys={0,1,0} -> the exact pairs below.
+                  // Points are the raw doubles the CAS produced (shortest round-trip),
+                  // NOT pixel-mapped: xs={0,1,2}, ys={0,1,0} -> the exact pairs below.
                   std::vector<double> xs{0.0, 1.0, 2.0};
                   std::vector<double> ys{0.0, 1.0, 0.0};
                   auto r = plot_spec_line(xs, ys, PlotSpecOptions{});
                   t.expect(r.has_value(), "plot_spec_line succeeds on valid series");
                   const std::string& s = r.value();
                   t.expect(
-                      has(s, "\"points\":[[0.000,0.000],[1.000,1.000],[2.000,0.000]]"),
+                      has(s, "\"points\":[[0,0],[1,1],[2,0]]"),
                       "points carry the exact raw data coordinates");
               })
         .test("plotspec_shape_and_keys",
@@ -103,8 +104,8 @@ auto main() -> int {
                   auto r = plot_spec_line(xs, ys, o);
                   t.expect(r.has_value(), "plot_spec_line succeeds with ranges");
                   const std::string& s = r.value();
-                  t.expect(has(s, "\"xRange\":[0.000,10.000]"), "xRange as [lo,hi]");
-                  t.expect(has(s, "\"yRange\":[-1.000,1.000]"), "yRange as [lo,hi]");
+                  t.expect(has(s, "\"xRange\":[0,10]"), "xRange as [lo,hi]");
+                  t.expect(has(s, "\"yRange\":[-1,1]"), "yRange as [lo,hi]");
               })
         .test("scatter_kind",
               [](TestContext& t) {
@@ -123,8 +124,7 @@ auto main() -> int {
                                               PlotSpecOptions{});
                   t.expect(r.has_value(), "plot_spec_function succeeds");
                   const std::string& s = r.value();
-                  t.expect(has(s, "\"points\":[[0.000,0.000],[1.000,1.000],[2.000,2.000],"
-                                  "[3.000,3.000],[4.000,4.000]]"),
+                  t.expect(has(s, "\"points\":[[0,0],[1,1],[2,2],[3,3],[4,4]]"),
                            "sampled points are exact");
               })
         .test("function_drops_non_finite_samples",
@@ -176,6 +176,41 @@ auto main() -> int {
                   // The exact escaped title fragment.
                   t.expect(has(s, R"("title":"a \"q\" \\ b")"),
                            "title escaped in full");
+              })
+        .test("control_char_and_html_escaping",
+              [](TestContext& t) {
+                  // Newline/tab become named escapes; '<'/'>' become </> so the
+                  // payload is safe to inline verbatim inside an HTML <script> block.
+                  PlotSpecOptions o;
+                  o.title = "a\nb\tc</script>";
+                  std::vector<double> xs{0.0, 1.0};
+                  std::vector<double> ys{0.0, 1.0};
+                  auto r = plot_spec_line(xs, ys, o);
+                  t.expect(r.has_value(), "spec with control/HTML chars succeeds");
+                  const std::string& s = r.value();
+                  t.expect(has(s, R"(\n)"), "newline escaped as backslash-n");
+                  t.expect(has(s, R"(\t)"), "tab escaped as backslash-t");
+                  t.expect(has(s, "\\u003c") && has(s, "\\u003e"),
+                           "'<' and '>' escaped for safe HTML embedding");
+                  t.expect(!has(s, "</script>"),
+                           "no literal </script> can terminate an HTML <script> embed");
+              })
+        .test("non_finite_range_rejected",
+              [](TestContext& t) {
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  const double inf = std::numeric_limits<double>::infinity();
+                  std::vector<double> xs{0.0, 1.0};
+                  std::vector<double> ys{0.0, 1.0};
+                  PlotSpecOptions ox;
+                  ox.xRange = std::pair{nan, 1.0};
+                  auto rx = plot_spec_line(xs, ys, ox);
+                  t.expect(!rx.has_value() && rx.error() == MathError::domain_error,
+                           "non-finite xRange -> domain_error");
+                  PlotSpecOptions oy;
+                  oy.yRange = std::pair{0.0, inf};
+                  auto ry = plot_spec_line(xs, ys, oy);
+                  t.expect(!ry.has_value() && ry.error() == MathError::domain_error,
+                           "non-finite yRange -> domain_error");
               })
         .test("domain_error_length_mismatch",
               [](TestContext& t) {

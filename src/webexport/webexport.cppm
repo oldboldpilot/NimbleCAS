@@ -7,10 +7,13 @@
 // string (no external JSON library) that a front-end later renders. It is the JSON
 // analogue of nimblecas.svgplot.
 //
-// Honesty (Rule 32 & project policy): this is a LOSSLESS data bridge. Plot points are
-// the exact doubles the CAS produced (formatted, not pixel-mapped — unlike svgplot,
-// which maps to pixels for drawing). Math blocks carry the LaTeX the nimblecas.latex
-// module emits. No rendering claims are made here; rendering is the front-end's job.
+// Honesty (Rule 32 & project policy): this is a lossless data bridge. Plot points are
+// the exact doubles the CAS produced — each number is emitted as its SHORTEST
+// round-trippable decimal (std::format's default float form == std::to_chars), so it
+// parses back to the identical IEEE double (no precision is discarded, and values are
+// NOT pixel-mapped — unlike svgplot, which maps to pixels for drawing). Math blocks
+// carry the LaTeX the nimblecas.latex module emits. No rendering claims are made here;
+// rendering is the front-end's job.
 //
 // Emitted JSON contract:
 //   PlotSpec:
@@ -23,10 +26,11 @@
 //        {"kind":"prose","text":<str>} | {"kind":"math","latex":<str>}
 //        | {"kind":"plot","plot":<PlotSpec>} ]}
 //
-// Numbers are formatted with a FIXED 3-decimal precision via std::format (mirroring
-// svgplot), so output is byte-reproducible and locale-independent (no group
-// separators). Strings are JSON-escaped ("\"", "\\", and control chars). Non-finite
-// x/y (NaN/±inf) are rejected with MathError::domain_error exactly as svgplot does.
+// Numbers are emitted as their shortest round-trippable decimal via std::format, so
+// output is byte-reproducible, locale-independent (no group separators), and lossless.
+// Strings are JSON-escaped ("\"", "\\", control chars, and '<'/'>' as </> so
+// the payload is safe to inline inside an HTML <script> block). Non-finite x/y (NaN/
+// ±inf) are rejected with MathError::domain_error exactly as svgplot does.
 //
 // Conforms to config/cpp_details.txt: C++23 modules, `import std`, trailing return
 // types, no owning raw pointers, std::expected error handling (no exceptions),
@@ -131,13 +135,18 @@ namespace {
 template <typename...>
 inline constexpr bool always_false = false;
 
-// Format a number with fixed precision so the output is byte-reproducible and
-// locale-independent (mirrors svgplot's std::format("{:.3f}", v)).
-[[nodiscard]] auto jnum(double v) -> std::string { return std::format("{:.3f}", v); }
+// Format a number as its SHORTEST round-trippable decimal (std::format's default
+// float format == std::to_chars shortest form): the emitted token parses back to
+// the exact same IEEE double, so the bridge is lossless, while staying
+// byte-reproducible and locale-independent. Callers finite-check every value
+// (validate_xy / range guards) before this runs, so no inf/nan token can appear.
+[[nodiscard]] auto jnum(double v) -> std::string { return std::format("{}", v); }
 
 // Escape a string for inclusion inside JSON double quotes: the two structural
-// characters ('"' and '\'), the named control escapes, and any remaining control
-// character (< 0x20) as a \u00xx sequence.
+// characters ('"' and '\'), the named control escapes, any remaining control
+// character (< 0x20) as a \u00xx sequence, and '<' / '>' as < / > so the
+// payload is also safe to inline verbatim inside an HTML <script> block (a '</script>'
+// substring in a title/label/LaTeX can never terminate the script element).
 [[nodiscard]] auto escape_json(std::string_view in) -> std::string {
     std::string out;
     out.reserve(in.size() + 2);
@@ -150,6 +159,8 @@ inline constexpr bool always_false = false;
             case '\n': out += "\\n"; break;
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
+            case '<': out += "\\u003c"; break;
+            case '>': out += "\\u003e"; break;
             default:
                 if (c < 0x20) {
                     out += std::format("\\u{:04x}", static_cast<unsigned>(c));
