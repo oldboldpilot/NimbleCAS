@@ -8,8 +8,12 @@ distinct tracks, and only the first is a "quick win":
 1. **Freestanding compute kernel** (DONE) — `src/webkernel/kernel.cpp` compiled with
    `clang++-22 --target=wasm32` (no Emscripten), exporting a dependency-free numeric
    ABI the browser front-end loads. See [webkernel.md](../reference/webkernel.md).
-2. **The full modular CAS to WASM** (VIABILITY PROVEN, integration pending) — the
-   subject of this page.
+2. **The full modular CAS to WASM** (SLICE DONE) — the exact symbolic core
+   (`core → parallel → symbolic → cache → simplify → diff → latex → reader`) now
+   compiles to wasm and runs the real engine in the browser. Build it with
+   [`scripts/build-wasm-slice.sh`](../../scripts/build-wasm-slice.sh); the entry ABI
+   is [`src/wasm/wasm_entry.cpp`](../../src/wasm/wasm_entry.cpp) and a live REPL is
+   [`web/cas-repl.html`](../../web/cas-repl.html). See "Status of the slice" below.
 
 ## Toolchain
 
@@ -82,6 +86,40 @@ The wasm libc++ `std` module **source** ships in the emscripten sysroot:
 Once (1)–(4) are in place, the front-end can call the real engine in-browser rather
 than only the freestanding `poly_eval` kernel. The hard unknown (named modules +
 `import std` on wasm) is already resolved above.
+
+## Status of the slice (DONE)
+
+The symbolic-core slice is built and verified end to end:
+
+- **Toolchain** — rather than CMake's still-unreliable module scanning under emscripten,
+  [`scripts/build-wasm-slice.sh`](../../scripts/build-wasm-slice.sh) drives the proven
+  two-phase recipe over the eight modules in dependency order, links the entry TU, and
+  emits `nimblecas.js` + `nimblecas.wasm` (~390 KB).
+- **(2) TBB** — handled with no code change: `nimblecas.parallel` selects its serial
+  backend on wasm because `__has_include(<tbb/parallel_for.h>)` is false there.
+- **(3) SIMD** — not reached: no module in this slice imports `nimblecas.simd`.
+- **(4) Excluded** — `nimblecas.gpu` (CUDA) and the nanobind Python bindings are simply
+  not part of the slice configuration.
+- **(5) Entry surface** — [`src/wasm/wasm_entry.cpp`](../../src/wasm/wasm_entry.cpp)
+  exposes `extern "C" nimblecas_eval_latex(const char*)`: text → `parse` → `simplify` →
+  `to_latex`, the same exact-over-ℚ engine as native. A parse/eval failure returns a
+  LaTeX `\text{…}` marker, never a crash.
+
+**Verified under node** (`Module.ccall('nimblecas_eval_latex', 'string', ['string'], …)`):
+
+| input | output |
+| :--- | :--- |
+| `1 + 2*3` | `7` |
+| `2/4 + 1/4` | `\frac{3}{4}` (exact rational — not a float) |
+| `x^2 + x^2` | `2 x^{2}` |
+| `sin(x) + sin(x)` | `2 \sin\left(x\right)` |
+| `(x + 1)^2` | `\left(1 + x\right)^{2}` |
+| `1 +` | `\text{parse error}` |
+
+[`web/cas-repl.html`](../../web/cas-repl.html) is a minimal in-browser REPL over this
+ABI (MathJax renders the LaTeX). **Still open:** wiring the ABI into the full WebGPU
+document/plot front-end (`web/app.js`), and widening the slice beyond the symbolic core
+(the numeric/linear-algebra modules) as needed.
 
 ## See also
 - [webkernel.md](../reference/webkernel.md) — the freestanding kernel (track 1).

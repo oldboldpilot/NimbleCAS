@@ -1,0 +1,70 @@
+<!doctype html>
+<!--
+  NimbleCAS in-browser REPL — the REAL exact symbolic engine compiled to WebAssembly.
+  @author Olumuyiwa Oluwasanmi
+
+  Loads nimblecas.js / nimblecas.wasm (the core+symbolic+cache+simplify+diff+latex+reader
+  slice, see docs/architecture/wasm-build.md) and calls the C ABI nimblecas_eval_latex:
+  text -> parse -> simplify -> LaTeX, all exact over Q. MathJax (CDN) renders the LaTeX.
+  This is NOT the freestanding numeric kernel — 2/4 + 1/4 evaluates to the exact 3/4.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NimbleCAS — in-browser REPL</title>
+  <script>
+    window.MathJax = { tex: { inlineMath: [['\\(', '\\)']] }, svg: { fontCache: 'global' } };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; } .sub { color: #666; margin-top: -0.5rem; }
+    input { width: 100%; font-size: 1.1rem; padding: 0.6rem; box-sizing: border-box; font-family: ui-monospace, monospace; }
+    #out { margin-top: 1rem; min-height: 3rem; font-size: 1.3rem; padding: 1rem; border: 1px solid #ddd; border-radius: 6px; overflow-x: auto; }
+    .raw { color: #888; font-family: ui-monospace, monospace; font-size: 0.85rem; margin-top: 0.4rem; word-break: break-all; }
+    .ex { color: #06c; cursor: pointer; font-family: ui-monospace, monospace; margin-right: 0.8rem; }
+    #status { color: #999; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>NimbleCAS — in-browser REPL</h1>
+  <p class="sub">The exact-over-ℚ symbolic engine, compiled to WebAssembly. Type an expression.</p>
+  <input id="in" placeholder="e.g.  2/4 + 1/4    or    (x + 1)^2    or    sin(x) + sin(x)" autocomplete="off" />
+  <div id="out"></div>
+  <div class="raw" id="raw"></div>
+  <p><span id="status">loading engine…</span></p>
+  <p>
+    <span class="ex" data-e="2/4 + 1/4">2/4 + 1/4</span>
+    <span class="ex" data-e="(x + 1)^2">(x + 1)^2</span>
+    <span class="ex" data-e="x^2 + 3*x^2">x^2 + 3*x^2</span>
+    <span class="ex" data-e="sin(x) + sin(x)">sin(x) + sin(x)</span>
+    <span class="ex" data-e="(a + b)*(a - b)">(a + b)*(a - b)</span>
+  </p>
+
+  <script type="module">
+    import NimbleCAS from './nimblecas.js';
+    const inEl = document.getElementById('in');
+    const outEl = document.getElementById('out');
+    const rawEl = document.getElementById('raw');
+    const statusEl = document.getElementById('status');
+
+    const M = await NimbleCAS();
+    const evalLatex = (s) => M.ccall('nimblecas_eval_latex', 'string', ['string'], [s]);
+    statusEl.textContent = 'engine ready (exact over ℚ).';
+
+    function render() {
+      const src = inEl.value.trim();
+      if (!src) { outEl.textContent = ''; rawEl.textContent = ''; return; }
+      const latex = evalLatex(src);
+      rawEl.textContent = latex;
+      outEl.innerHTML = '\\(' + latex + '\\)';
+      if (window.MathJax && window.MathJax.typesetPromise) window.MathJax.typesetPromise([outEl]);
+    }
+    inEl.addEventListener('input', render);
+    document.querySelectorAll('.ex').forEach((el) =>
+      el.addEventListener('click', () => { inEl.value = el.dataset.e; render(); }));
+    inEl.focus();
+  </script>
+</body>
+</html>
