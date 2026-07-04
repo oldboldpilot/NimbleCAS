@@ -287,6 +287,14 @@ target_sources(nimblecas_bigpowerseries PUBLIC
 target_link_libraries(nimblecas_bigpowerseries
   PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigmatrix : big-backed dense matrix over BigRational (exact Bareiss determinant) --
+add_library(nimblecas_bigmatrix STATIC)
+target_sources(nimblecas_bigmatrix PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigmatrix/bigmatrix.cppm)
+target_link_libraries(nimblecas_bigmatrix
+  PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_matrix nimblecas_ratpoly
+         nimblecas_core std_module)
+
 # ---- nimblecas.bigcombinatorics : unbounded exact integer combinatorics (BigInt-backed) ----
 add_library(nimblecas_bigcombinatorics STATIC)
 target_sources(nimblecas_bigcombinatorics PUBLIC
@@ -590,6 +598,12 @@ target_link_libraries(bigcombinatorics_tests
   PRIVATE nimblecas_bigcombinatorics nimblecas_combinatorics nimblecas_bigint nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigcombinatorics_tests COMMAND bigcombinatorics_tests)
+
+add_executable(bigmatrix_tests tests/bigmatrix_tests.cpp)
+target_link_libraries(bigmatrix_tests
+  PRIVATE nimblecas_bigmatrix nimblecas_matrix nimblecas_bigrational nimblecas_bigint
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigmatrix_tests COMMAND bigmatrix_tests)
 
 add_executable(bigpowerseries_tests tests/bigpowerseries_tests.cpp)
 target_link_libraries(bigpowerseries_tests
