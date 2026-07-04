@@ -232,6 +232,19 @@ target_sources(nimblecas_csp PUBLIC
 target_link_libraries(nimblecas_csp
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.bitset : branchless / bit-parallel fixed-capacity bit set ----
+add_library(nimblecas_bitset STATIC)
+target_sources(nimblecas_bitset PUBLIC
+  FILE_SET CXX_MODULES FILES src/bitset/bitset.cppm)
+target_link_libraries(nimblecas_bitset PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.bitcsp : branchless bitset-domain CSP (AC-3, bitmask N-queens) ----
+add_library(nimblecas_bitcsp STATIC)
+target_sources(nimblecas_bitcsp PUBLIC
+  FILE_SET CXX_MODULES FILES src/bitcsp/bitcsp.cppm)
+target_link_libraries(nimblecas_bitcsp
+  PUBLIC nimblecas_bitset nimblecas_parallel nimblecas_core std_module)
+
 # ---- nimblecas.sat : internal parallel SAT solver (DPLL/CDCL/WalkSAT/GSAT, distributed) ----
 add_library(nimblecas_sat STATIC)
 target_sources(nimblecas_sat PUBLIC
@@ -451,6 +464,17 @@ add_executable(logic_tests tests/logic_tests.cpp)
 target_link_libraries(logic_tests
   PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_tests COMMAND logic_tests)
+
+add_executable(bitset_tests tests/bitset_tests.cpp)
+target_link_libraries(bitset_tests
+  PRIVATE nimblecas_bitset nimblecas_core nimblecas_testing std_module)
+add_test(NAME bitset_tests COMMAND bitset_tests)
+
+add_executable(bitcsp_tests tests/bitcsp_tests.cpp)
+target_link_libraries(bitcsp_tests
+  PRIVATE nimblecas_bitcsp nimblecas_bitset nimblecas_csp nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME bitcsp_tests COMMAND bitcsp_tests)
 
 add_executable(sat_tests tests/sat_tests.cpp)
 target_link_libraries(sat_tests
