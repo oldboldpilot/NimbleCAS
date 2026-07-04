@@ -159,6 +159,93 @@ using TimeSeriesOperator =
                                         const Rational& alpha, const Rational& b,
                                         const Rational& beta) -> Result<RationalPoly>;
 
+// ===========================================================================
+// Additional equation families (ADDITIVE; all built on the machinery above).
+// @author Olumuyiwa Oluwasanmi
+// ===========================================================================
+
+// --- Wave equation / second-order-in-time linear evolution ------------------
+// For a SECOND-order-in-time linear PDE u_tt = L[u] the Cauchy-Kovalevskaya data are
+// BOTH u(x,0) = phi and u_t(x,0) = psi (one datum no longer determines the solution).
+// Expanding u(x,t) = sum_n c_n(x) t^n and matching [t^n] (u_tt shifts the index down by
+// two) gives the exact two-step recurrence
+//
+//     (n+2)(n+1) c_{n+2} = L[c_n],      c_0 = phi,  c_1 = psi,
+//
+// so the even coefficients descend from phi and the odd ones from psi. Returns the exact
+// truncated time series c_0..c_order (order+1 RationalPolys). order == 0 (which cannot
+// carry the second datum psi) or an empty operator is a domain_error; any error raised by
+// L propagates. For polynomial phi, psi under a constant-coefficient L the series
+// TERMINATES and the truncation is the closed form; otherwise it is the exact truncated
+// Taylor series in t (local in t, no boundary conditions imposed).
+[[nodiscard]] auto solve_wave_pde(SpatialOperator l, const RationalPoly& phi,
+                                  const RationalPoly& psi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+
+// Classical wave equation u_tt = speed^2 * u_xx with u(x,0) = phi, u_t(x,0) = psi. Wires
+// L = heat_operator(speed^2) (i.e. speed^2 * d^2/dx^2) into solve_wave_pde; hence
+// c_2 = (speed^2 / 2) * phi''. speed may be any rational (including 0). Returns the exact
+// truncated time series c_0..c_order (see solve_wave_pde for semantics).
+[[nodiscard]] auto wave_equation(Rational speed, const RationalPoly& phi,
+                                 const RationalPoly& psi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+
+// --- KdV: nonlinear dispersive evolution ------------------------------------
+// Korteweg-de Vries u_t + u u_x + u_xxx = 0, i.e. u_t = -u_xxx - u u_x. The dispersive
+// third-derivative term is LINEAR, so it is carried as L[u] = -u_xxx; the convective term
+// N[u] = -(u * u_x) is the same nonlinearity shape as inviscid Burgers and reuses the
+// Adomian / Cauchy-Kovalevskaya machinery of solve_nonlinear_evolution_pde. Returns the
+// exact truncated time series c_0..c_order. For a genuine (non-linear-datum) phi the
+// series does NOT terminate: it is a LOCAL-in-t exact Taylor solution, NOT a global closed
+// form and NOT a travelling-wave soliton in closed form. order == 0 is a domain_error;
+// any RationalPoly error propagates.
+[[nodiscard]] auto kdv(const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+
+// --- Schrodinger equation (exact Gaussian-rational time series) -------------
+// A time coefficient of the Schrodinger series is intrinsically COMPLEX (the recurrence
+// carries the exact factor i), so it cannot live in the real RationalPoly ring. ComplexPoly
+// is a Gaussian-rational polynomial: re + i*im with re, im exact RationalPolys over Q[x].
+// This keeps the whole construction EXACT (coefficients in (Q + iQ)[x]) using only the
+// existing RationalPoly substrate, so NO new module dependency is pulled in.
+struct ComplexPoly {
+    RationalPoly re;  // real part (polynomial in x over Q)
+    RationalPoly im;  // imaginary part (polynomial in x over Q)
+
+    [[nodiscard]] static auto make(RationalPoly real_part, RationalPoly imag_part) -> ComplexPoly {
+        return ComplexPoly{std::move(real_part), std::move(imag_part)};
+    }
+    [[nodiscard]] auto is_zero() const noexcept -> bool { return re.is_zero() && im.is_zero(); }
+    [[nodiscard]] auto is_equal(const ComplexPoly& o) const noexcept -> bool {
+        return re.is_equal(o.re) && im.is_equal(o.im);
+    }
+};
+
+// Solve the time-dependent Schrodinger equation  i u_t = -u_xx + V(x) u,  u(x,0) = phi,
+// for a real polynomial potential V and real polynomial initial datum phi. Rearranged to
+// first-order-in-time form u_t = M[u] with the EXACT complex operator
+//
+//     M[u] = i * ( u_xx - V*u ),
+//
+// the Cauchy-Kovalevskaya recurrence is c_0 = phi (as re=phi, im=0) and
+// c_n = M[c_{n-1}] / n, evaluated natively over ComplexPoly. Returns the exact truncated
+// series c_0..c_order (order+1 ComplexPolys).
+//
+// HONESTY. Coefficients are EXACT Gaussian-rational polynomials; the discrete law
+// n*c_n = M[c_{n-1}] holds exactly on every retained term. For the FREE particle (V = 0)
+// and polynomial phi the operator strictly lowers spatial degree, so the series
+// TERMINATES and the truncation is the closed form. For a non-zero polynomial potential V
+// multiplication by V raises degree and the series need NOT terminate: it is then the
+// EXACT truncated Taylor series in t, LOCAL in t, with NO boundary conditions imposed.
+// order == 0 is a domain_error; any RationalPoly error propagates.
+[[nodiscard]] auto solve_schrodinger(const RationalPoly& potential, const RationalPoly& phi,
+                                     std::size_t order) -> Result<std::vector<ComplexPoly>>;
+
+// Free-particle special case  i u_t = -u_xx  (V = 0). For polynomial phi the exact series
+// TERMINATES (closed form). Thin wrapper over solve_schrodinger with a zero potential.
+[[nodiscard]] auto schrodinger_free_particle(const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<ComplexPoly>>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -522,6 +609,230 @@ auto solve_poisson_bvp_1d(const RationalPoly& f, const Rational& a, const Ration
         return make_error<RationalPoly>(with_linear.error());
     }
     return with_linear->add(RationalPoly::constant(*c0));  // + C0
+}
+
+// ===========================================================================
+// Wave equation, KdV, and Schrodinger.
+// ===========================================================================
+
+auto solve_wave_pde(SpatialOperator l, const RationalPoly& phi, const RationalPoly& psi,
+                    std::size_t order) -> Result<std::vector<RationalPoly>> {
+    using Coeffs = std::vector<RationalPoly>;
+    if (order == 0 || !l) {
+        return make_error<Coeffs>(MathError::domain_error);
+    }
+    // n+2 is cast to int64 for the exact 1/(n+2) and 1/(n+1) scalings; guard the physically
+    // unreachable case of an order beyond INT64_MAX so the casts can never wrap.
+    if (order > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+        return make_error<Coeffs>(MathError::overflow);
+    }
+    Coeffs coeffs(order + 1);  // all zero polynomials
+    coeffs[0] = phi;           // c_0 = phi
+    coeffs[1] = psi;           // c_1 = psi = u_t(x,0)
+    // (n+2)(n+1) c_{n+2} = L[c_n]; the two divisions by (n+1) and (n+2) are done
+    // separately so their product can never overflow int64 for large order.
+    for (std::size_t n = 0; n + 2 <= order; ++n) {
+        auto applied = l(coeffs[n]);  // L[c_n]
+        if (!applied) {
+            return make_error<Coeffs>(applied.error());
+        }
+        auto inv_a = Rational::make(1, static_cast<std::int64_t>(n + 1));
+        if (!inv_a) {
+            return make_error<Coeffs>(inv_a.error());
+        }
+        auto step = applied->scale(*inv_a);  // L[c_n] / (n+1)
+        if (!step) {
+            return make_error<Coeffs>(step.error());
+        }
+        auto inv_b = Rational::make(1, static_cast<std::int64_t>(n + 2));
+        if (!inv_b) {
+            return make_error<Coeffs>(inv_b.error());
+        }
+        auto c_next = step->scale(*inv_b);  // L[c_n] / ((n+1)(n+2))
+        if (!c_next) {
+            return make_error<Coeffs>(c_next.error());
+        }
+        coeffs[n + 2] = std::move(*c_next);
+    }
+    return coeffs;
+}
+
+auto wave_equation(Rational speed, const RationalPoly& phi, const RationalPoly& psi,
+                   std::size_t order) -> Result<std::vector<RationalPoly>> {
+    // u_tt = speed^2 u_xx: L = (speed^2) * d^2/dx^2 = heat_operator(speed^2).
+    auto c2 = speed.multiply(speed);  // speed^2 (exact)
+    if (!c2) {
+        return make_error<std::vector<RationalPoly>>(c2.error());
+    }
+    return solve_wave_pde(heat_operator(*c2), phi, psi, order);
+}
+
+auto kdv(const RationalPoly& phi, std::size_t order) -> Result<std::vector<RationalPoly>> {
+    // Dispersion carried as the LINEAR operator L[u] = -u_xxx.
+    SpatialOperator dispersion = [](const RationalPoly& p) -> Result<RationalPoly> {
+        auto d1 = p.derivative();
+        if (!d1) {
+            return make_error<RationalPoly>(d1.error());
+        }
+        auto d2 = d1->derivative();
+        if (!d2) {
+            return make_error<RationalPoly>(d2.error());
+        }
+        auto d3 = d2->derivative();  // u_xxx
+        if (!d3) {
+            return make_error<RationalPoly>(d3.error());
+        }
+        return d3->scale(Rational::from_int(-1));  // -u_xxx
+    };
+    // Convective nonlinearity N[u] = -(u * u_x): identical in shape to inviscid Burgers.
+    TimeSeriesOperator convective = [](const std::vector<RationalPoly>& u)
+        -> Result<std::vector<RationalPoly>> {
+        auto ux = series_dx(u);
+        if (!ux) {
+            return make_error<std::vector<RationalPoly>>(ux.error());
+        }
+        auto prod = series_product(u, *ux);
+        if (!prod) {
+            return make_error<std::vector<RationalPoly>>(prod.error());
+        }
+        return series_scale(*prod, Rational::from_int(-1));
+    };
+    return solve_nonlinear_evolution_pde(std::move(dispersion), std::move(convective), phi, order);
+}
+
+namespace {
+
+// --- ComplexPoly arithmetic (Gaussian-rational polynomial ring) --------------
+// Multiply by i: i*(re + i*im) = -im + i*re.  (Exact; negation via scale by -1.)
+[[nodiscard]] auto cpoly_times_i(const ComplexPoly& z) -> Result<ComplexPoly> {
+    auto neg_im = z.im.scale(Rational::from_int(-1));  // -im
+    if (!neg_im) {
+        return make_error<ComplexPoly>(neg_im.error());
+    }
+    return ComplexPoly::make(std::move(*neg_im), z.re);  // re' = -im, im' = re
+}
+
+// Second spatial derivative applied to both parts: (re + i*im)_xx.
+[[nodiscard]] auto cpoly_dxx(const ComplexPoly& z) -> Result<ComplexPoly> {
+    auto re1 = z.re.derivative();
+    if (!re1) {
+        return make_error<ComplexPoly>(re1.error());
+    }
+    auto re2 = re1->derivative();
+    if (!re2) {
+        return make_error<ComplexPoly>(re2.error());
+    }
+    auto im1 = z.im.derivative();
+    if (!im1) {
+        return make_error<ComplexPoly>(im1.error());
+    }
+    auto im2 = im1->derivative();
+    if (!im2) {
+        return make_error<ComplexPoly>(im2.error());
+    }
+    return ComplexPoly::make(std::move(*re2), std::move(*im2));
+}
+
+// Multiply by a real polynomial V: V*(re + i*im) = (V*re) + i*(V*im).
+[[nodiscard]] auto cpoly_mul_real(const ComplexPoly& z, const RationalPoly& v)
+    -> Result<ComplexPoly> {
+    auto re = z.re.multiply(v);
+    if (!re) {
+        return make_error<ComplexPoly>(re.error());
+    }
+    auto im = z.im.multiply(v);
+    if (!im) {
+        return make_error<ComplexPoly>(im.error());
+    }
+    return ComplexPoly::make(std::move(*re), std::move(*im));
+}
+
+// Component-wise subtraction a - b.
+[[nodiscard]] auto cpoly_sub(const ComplexPoly& a, const ComplexPoly& b) -> Result<ComplexPoly> {
+    auto re = a.re.subtract(b.re);
+    if (!re) {
+        return make_error<ComplexPoly>(re.error());
+    }
+    auto im = a.im.subtract(b.im);
+    if (!im) {
+        return make_error<ComplexPoly>(im.error());
+    }
+    return ComplexPoly::make(std::move(*re), std::move(*im));
+}
+
+// Scale both parts by a rational s.
+[[nodiscard]] auto cpoly_scale(const ComplexPoly& z, const Rational& s) -> Result<ComplexPoly> {
+    auto re = z.re.scale(s);
+    if (!re) {
+        return make_error<ComplexPoly>(re.error());
+    }
+    auto im = z.im.scale(s);
+    if (!im) {
+        return make_error<ComplexPoly>(im.error());
+    }
+    return ComplexPoly::make(std::move(*re), std::move(*im));
+}
+
+// Apply the Schrodinger operator M[z] = i * ( z_xx - V*z ) to a ComplexPoly.
+[[nodiscard]] auto schrodinger_apply(const ComplexPoly& z, const RationalPoly& potential,
+                                     bool free_particle) -> Result<ComplexPoly> {
+    auto zxx = cpoly_dxx(z);  // z_xx
+    if (!zxx) {
+        return make_error<ComplexPoly>(zxx.error());
+    }
+    ComplexPoly inner = std::move(*zxx);
+    if (!free_particle) {
+        auto vz = cpoly_mul_real(z, potential);  // V*z
+        if (!vz) {
+            return make_error<ComplexPoly>(vz.error());
+        }
+        auto diff = cpoly_sub(inner, *vz);  // z_xx - V*z
+        if (!diff) {
+            return make_error<ComplexPoly>(diff.error());
+        }
+        inner = std::move(*diff);
+    }
+    return cpoly_times_i(inner);  // i * ( z_xx - V*z )
+}
+
+}  // namespace
+
+auto solve_schrodinger(const RationalPoly& potential, const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<ComplexPoly>> {
+    using Coeffs = std::vector<ComplexPoly>;
+    if (order == 0) {
+        return make_error<Coeffs>(MathError::domain_error);
+    }
+    // The step index n is cast to int64 for Rational::make; guard the physically
+    // unreachable case of an order beyond INT64_MAX so the cast can never wrap.
+    if (order > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+        return make_error<Coeffs>(MathError::overflow);
+    }
+    const bool free_particle = potential.is_zero();
+    Coeffs coeffs;
+    coeffs.reserve(order + 1);
+    coeffs.push_back(ComplexPoly::make(phi, RationalPoly{}));  // c_0 = phi + i*0
+    for (std::size_t n = 1; n <= order; ++n) {
+        auto applied = schrodinger_apply(coeffs.back(), potential, free_particle);  // M[c_{n-1}]
+        if (!applied) {
+            return make_error<Coeffs>(applied.error());
+        }
+        auto inv_n = Rational::make(1, static_cast<std::int64_t>(n));  // 1/n
+        if (!inv_n) {
+            return make_error<Coeffs>(inv_n.error());
+        }
+        auto c_n = cpoly_scale(*applied, *inv_n);  // c_n = M[c_{n-1}] / n
+        if (!c_n) {
+            return make_error<Coeffs>(c_n.error());
+        }
+        coeffs.push_back(std::move(*c_n));
+    }
+    return coeffs;
+}
+
+auto schrodinger_free_particle(const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<ComplexPoly>> {
+    return solve_schrodinger(RationalPoly{}, phi, order);  // V = 0
 }
 
 }  // namespace nimblecas

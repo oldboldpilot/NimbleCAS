@@ -40,6 +40,21 @@ namespace {
     return true;
 }
 
+// Verify the second-order-in-time relation (n+2)(n+1) c_{n+2} == L[c_n] on the retained
+// coefficients: the truncated statement of u_tt == L[u].
+[[nodiscard]] auto wave_residual_holds(const nimblecas::SpatialOperator& l,
+                                       const std::vector<RationalPoly>& c) -> bool {
+    for (std::size_t n = 0; n + 2 < c.size(); ++n) {
+        auto factor = Rational::from_int(static_cast<std::int64_t>((n + 2) * (n + 1)));
+        auto lhs = c[n + 2].scale(factor);  // (n+2)(n+1) c_{n+2}
+        auto rhs = l(c[n]);                 // L[c_n]
+        if (!lhs || !rhs || !lhs->is_equal(*rhs)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -299,6 +314,146 @@ auto main() -> int {
                                                              Rational::from_int(0));
                   t.expect(!bad.has_value(), "a == b fails");
                   t.expect(bad.error() == MathError::domain_error, "degenerate interval is domain_error");
+              })
+        // ---- Wave equation: second-order-in-time linear evolution ----
+        .test("wave_x2_speed_one_static",
+              [](TestContext& t) {
+                  // u_tt = u_xx, u(x,0)=x^2, u_t(x,0)=0. c_0=x^2, c_1=0,
+                  // c_2 = (x^2)''/2 = 1, c_3=0, c_4=(1)''/12=0 => u = x^2 + t^2
+                  // (d'Alembert: ((x+t)^2+(x-t)^2)/2 = x^2 + t^2).
+                  auto c = nimblecas::wave_equation(Rational::from_int(1), ipoly({0, 0, 1}),
+                                                    RationalPoly{}, 4)
+                               .value();
+                  t.expect_eq(c.size(), std::size_t{5}, "returns c_0..c_4");
+                  t.expect(c[0].is_equal(ipoly({0, 0, 1})), "c_0 = x^2");
+                  t.expect(c[1].is_zero(), "c_1 = 0 (psi = 0)");
+                  t.expect(c[2].is_equal(ipoly({1})), "c_2 = 1");
+                  t.expect(c[3].is_zero(), "c_3 = 0");
+                  t.expect(c[4].is_zero(), "c_4 = 0 (series terminated)");
+                  auto l = nimblecas::heat_operator(Rational::from_int(1));  // L = 1 * d^2/dx^2
+                  t.expect(wave_residual_holds(l, c), "(n+2)(n+1) c_{n+2} == c_n''");
+                  // u(2,1) = 4 + 1 = 5.
+                  auto v = nimblecas::evaluate(c, Rational::from_int(2), Rational::from_int(1));
+                  t.expect(v.value() == Rational::from_int(5), "u(2,1) = 5");
+              })
+        .test("wave_c2_equals_half_c_squared_phi_pp",
+              [](TestContext& t) {
+                  // Task check: c_2 = (speed^2 / 2) * phi''. speed=2, phi=x^4:
+                  // speed^2=4, phi''=12x^2 => c_2 = 4*12x^2/2 = 24 x^2.
+                  auto c = nimblecas::wave_equation(Rational::from_int(2), ipoly({0, 0, 0, 0, 1}),
+                                                    RationalPoly{}, 2)
+                               .value();
+                  t.expect(c[0].is_equal(ipoly({0, 0, 0, 0, 1})), "c_0 = x^4");
+                  t.expect(c[1].is_zero(), "c_1 = 0");
+                  t.expect(c[2].is_equal(ipoly({0, 0, 24})), "c_2 = (c^2/2) phi'' = 24 x^2");
+              })
+        .test("wave_nonzero_psi_dalembert",
+              [](TestContext& t) {
+                  // u_tt = u_xx, u(x,0)=0, u_t(x,0)=x. d'Alembert gives u = x t exactly.
+                  // c_0=0, c_1=x, c_2=(0)''/2=0, c_3=(x)''/6=0 => u = x t.
+                  auto c = nimblecas::wave_equation(Rational::from_int(1), RationalPoly{},
+                                                    ipoly({0, 1}), 3)
+                               .value();
+                  t.expect(c[0].is_zero(), "c_0 = 0");
+                  t.expect(c[1].is_equal(ipoly({0, 1})), "c_1 = x (psi)");
+                  t.expect(c[2].is_zero(), "c_2 = 0");
+                  t.expect(c[3].is_zero(), "c_3 = 0");
+                  // u(3,2) = 3*2 = 6.
+                  auto v = nimblecas::evaluate(c, Rational::from_int(3), Rational::from_int(2));
+                  t.expect(v.value() == Rational::from_int(6), "u(3,2) = x t = 6");
+              })
+        .test("wave_error_paths",
+              [](TestContext& t) {
+                  // order 0 cannot carry the second datum psi => domain_error.
+                  auto bad = nimblecas::wave_equation(Rational::from_int(1), ipoly({0, 0, 1}),
+                                                      RationalPoly{}, 0);
+                  t.expect(bad.error() == MathError::domain_error, "order 0 is domain_error");
+                  // empty operator => domain_error.
+                  auto bad2 = nimblecas::solve_wave_pde(nimblecas::SpatialOperator{}, ipoly({1}),
+                                                        RationalPoly{}, 2);
+                  t.expect(bad2.error() == MathError::domain_error, "empty operator is domain_error");
+              })
+        // ---- KdV: nonlinear dispersive evolution (u u_x + u_xxx) ----
+        .test("kdv_x3_datum_hand_series",
+              [](TestContext& t) {
+                  // u_t + u u_x + u_xxx = 0, phi = x^3 (phi''' = 6, exercises dispersion).
+                  // Hand-derived (k+1)c_{k+1} = -c_k''' - [t^k](u u_x):
+                  //   c_0 = x^3
+                  //   c_1 = -c_0''' - x^3*3x^2 = -6 - 3 x^5
+                  //   c_2 = ( -c_1''' - [t^1](u u_x) ) / 2 = (180 x^2 + 24 x^7 + 18 x^2)/2
+                  //       = 12 x^7 + 99 x^2
+                  auto c = nimblecas::kdv(ipoly({0, 0, 0, 1}), 2).value();
+                  t.expect_eq(c.size(), std::size_t{3}, "returns c_0..c_2");
+                  t.expect(c[0].is_equal(ipoly({0, 0, 0, 1})), "c_0 = x^3");
+                  t.expect(c[1].is_equal(ipoly({-6, 0, 0, 0, 0, -3})), "c_1 = -6 - 3 x^5");
+                  t.expect(c[2].is_equal(ipoly({0, 0, 99, 0, 0, 0, 0, 12})),
+                           "c_2 = 99 x^2 + 12 x^7");
+              })
+        .test("kdv_linear_datum_reduces_to_burgers",
+              [](TestContext& t) {
+                  // phi = x has phi''' = 0, so dispersion vanishes and KdV reduces to
+                  // inviscid Burgers u_t + u u_x = 0, phi = x => c_n = (-1)^n x.
+                  auto c = nimblecas::kdv(ipoly({0, 1}), 3).value();
+                  t.expect(c[0].is_equal(ipoly({0, 1})), "c_0 = x");
+                  t.expect(c[1].is_equal(ipoly({0, -1})), "c_1 = -x");
+                  t.expect(c[2].is_equal(ipoly({0, 1})), "c_2 = x");
+                  t.expect(c[3].is_equal(ipoly({0, -1})), "c_3 = -x");
+              })
+        .test("kdv_error_path",
+              [](TestContext& t) {
+                  auto bad = nimblecas::kdv(ipoly({0, 0, 0, 1}), 0);
+                  t.expect(bad.error() == MathError::domain_error, "order 0 is domain_error");
+              })
+        // ---- Schrodinger: exact Gaussian-rational time series ----
+        .test("schrodinger_free_x2_terminates",
+              [](TestContext& t) {
+                  // i u_t = -u_xx (V=0), phi = x^2. c_1 = i*(x^2)'' = 2i, c_1''=0 => c_2=0.
+                  // Exact terminating series u = x^2 + 2 i t.
+                  auto c = nimblecas::schrodinger_free_particle(ipoly({0, 0, 1}), 3).value();
+                  t.expect_eq(c.size(), std::size_t{4}, "returns c_0..c_3");
+                  t.expect(c[0].is_equal(nimblecas::ComplexPoly::make(ipoly({0, 0, 1}),
+                                                                      RationalPoly{})),
+                           "c_0 = x^2");
+                  t.expect(c[1].is_equal(nimblecas::ComplexPoly::make(RationalPoly{}, ipoly({2}))),
+                           "c_1 = 2 i");
+                  t.expect(c[2].is_zero(), "c_2 = 0 (series terminated)");
+                  t.expect(c[3].is_zero(), "c_3 = 0");
+              })
+        .test("schrodinger_free_x4_terminates",
+              [](TestContext& t) {
+                  // phi = x^4. c_1 = i*(x^4)'' = 12 i x^2; c_2 = i*(12 i x^2)''/2 = -12;
+                  // c_3 = i*(-12)''/3 = 0. Exact series u = x^4 + 12 i x^2 t - 12 t^2.
+                  auto c = nimblecas::schrodinger_free_particle(ipoly({0, 0, 0, 0, 1}), 3).value();
+                  t.expect(c[0].is_equal(nimblecas::ComplexPoly::make(ipoly({0, 0, 0, 0, 1}),
+                                                                      RationalPoly{})),
+                           "c_0 = x^4");
+                  t.expect(c[1].is_equal(
+                               nimblecas::ComplexPoly::make(RationalPoly{}, ipoly({0, 0, 12}))),
+                           "c_1 = 12 i x^2");
+                  t.expect(c[2].is_equal(nimblecas::ComplexPoly::make(ipoly({-12}), RationalPoly{})),
+                           "c_2 = -12");
+                  t.expect(c[3].is_zero(), "c_3 = 0 (series terminated)");
+              })
+        .test("schrodinger_constant_potential_is_phase",
+              [](TestContext& t) {
+                  // i u_t = -u_xx + V u, V=1, phi=1 => u_xx=0, so u_t = -i u, u = e^{-i t} =
+                  // 1 - i t - t^2/2 + i t^3/6 - ...  Exact Gaussian-rational coefficients.
+                  auto c = nimblecas::solve_schrodinger(ipoly({1}), ipoly({1}), 3).value();
+                  t.expect(c[0].is_equal(nimblecas::ComplexPoly::make(ipoly({1}), RationalPoly{})),
+                           "c_0 = 1");
+                  t.expect(c[1].is_equal(nimblecas::ComplexPoly::make(RationalPoly{}, ipoly({-1}))),
+                           "c_1 = -i");
+                  t.expect(c[2].is_equal(nimblecas::ComplexPoly::make(
+                               RationalPoly::from_coeffs({rat(-1, 2)}), RationalPoly{})),
+                           "c_2 = -1/2");
+                  t.expect(c[3].is_equal(nimblecas::ComplexPoly::make(
+                               RationalPoly{}, RationalPoly::from_coeffs({rat(1, 6)}))),
+                           "c_3 = i/6");
+              })
+        .test("schrodinger_error_path",
+              [](TestContext& t) {
+                  auto bad = nimblecas::schrodinger_free_particle(ipoly({0, 0, 1}), 0);
+                  t.expect(bad.error() == MathError::domain_error, "order 0 is domain_error");
               })
         .run();
 }
