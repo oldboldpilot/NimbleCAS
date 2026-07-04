@@ -530,6 +530,14 @@ target_sources(nimblecas_integrate PUBLIC
 target_link_libraries(nimblecas_integrate
   PUBLIC nimblecas_ratint nimblecas_rothstein nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.pdenum : numerical PDE methods — FDM/FEM/FVM/method-of-lines (§7.2) ----
+add_library(nimblecas_pdenum STATIC)
+target_sources(nimblecas_pdenum PUBLIC
+  FILE_SET CXX_MODULES FILES src/pdenum/pdenum.cppm)
+target_link_libraries(nimblecas_pdenum
+  PUBLIC nimblecas_bandsolve nimblecas_matrix nimblecas_ratpoly nimblecas_parallel
+         nimblecas_core std_module)
+
 # ---- nimblecas.inteq : integral equations (Fredholm/Volterra; ADM/HPM/HAM) ----
 add_library(nimblecas_inteq STATIC)
 target_sources(nimblecas_inteq PUBLIC
@@ -1071,6 +1079,12 @@ target_link_libraries(integrate_tests
           nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME integrate_tests COMMAND integrate_tests)
+
+add_executable(pdenum_tests tests/pdenum_tests.cpp)
+target_link_libraries(pdenum_tests
+  PRIVATE nimblecas_pdenum nimblecas_bandsolve nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME pdenum_tests COMMAND pdenum_tests)
 
 add_executable(inteq_tests tests/inteq_tests.cpp)
 target_link_libraries(inteq_tests
