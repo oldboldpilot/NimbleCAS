@@ -312,7 +312,21 @@ function makeCanvas(W, H, dpr, cls) {
   return c;
 }
 
+// Keep only series with a points array, and within each only [x,y] pairs of two
+// finite numbers (guards null / short / non-finite points loaded from arbitrary JSON).
+function sanitizeSpec(spec) {
+  const s = (spec && typeof spec === 'object') ? spec : {};
+  const series = Array.isArray(s.series) ? s.series : [];
+  const cleanSeries = series.filter(se => se && Array.isArray(se.points)).map(se => ({
+    ...se,
+    points: se.points.filter(p => Array.isArray(p) && p.length >= 2
+      && Number.isFinite(p[0]) && Number.isFinite(p[1])),
+  }));
+  return { ...s, series: cleanSeries };
+}
+
 export function renderPlot(host, spec, opts = {}) {
+  spec = sanitizeSpec(spec);
   const wrap = document.createElement('div');
   wrap.className = 'plotwrap';
   host.appendChild(wrap);

@@ -154,8 +154,10 @@ function polyJS(c, x) { let a = 0; for (let k = c.length - 1; k >= 0; k--) a = a
 function polyWasm(c, x) { const ex = WASM.mod.exports; new Float64Array(ex.memory.buffer, WASM.coeffPtr, c.length).set(c); return ex.poly_eval(WASM.coeffPtr, c.length, x); }
 function samplePolynomial() {
   const coeffs = [0.5, -0.8, -0.3, 0.12];
-  const useWasm = WASM.ready, N = 240, x0 = -4, x1 = 4, pts = [];
-  for (let k = 0; k <= N; k++) { const x = x0 + (x1 - x0) * k / N; pts.push([x, useWasm ? polyWasm(coeffs, x) : polyJS(coeffs, x)]); }
+  let useWasm = WASM.ready; const N = 240, x0 = -4, x1 = 4, pts = [];
+  // Degrade to the JS Horner path on any WASM error (e.g. a bad offset -> RangeError).
+  const evalAt = (x) => { if (useWasm) { try { return polyWasm(coeffs, x); } catch (e) { useWasm = false; } } return polyJS(coeffs, x); };
+  for (let k = 0; k <= N; k++) { const x = x0 + (x1 - x0) * k / N; pts.push([x, evalAt(x)]); }
   WASM.active = useWasm;
   return { type: 'plot', title: 'Live polynomial p(x) = 0.5 − 0.8x − 0.3x² + 0.12x³', xLabel: 'x', yLabel: 'p(x)', xRange: [x0, x1], yRange: null,
     series: [{ kind: 'line', label: useWasm ? 'WASM kernel' : 'JS kernel', color: '#a855f7', points: pts }] };
@@ -167,12 +169,17 @@ function buildLiveControls() {
   const hint = document.createElement('span'); hint.className = 'hint'; hint.textContent = 'Evaluates a cubic across x∈[−4,4] and plots it through the active renderer.';
   const target = document.createElement('div'); target.style.width = '100%';
   btn.addEventListener('click', () => {
-    target.innerHTML = '';
-    const fig = document.createElement('figure'); fig.className = 'plot'; target.appendChild(fig);
-    renderPlot(fig, samplePolynomial(), { onBackendChange: () => setBadge('cpu') });
-    const cap = document.createElement('figcaption');
-    cap.textContent = (WASM.active ? 'Computed via WASM kernel' : 'Computed in JS') + ' · rendered via ' + (GPU.ok ? 'WebGPU' : 'Canvas2D');
-    fig.appendChild(cap);
+    try {
+      target.innerHTML = '';
+      const fig = document.createElement('figure'); fig.className = 'plot'; target.appendChild(fig);
+      renderPlot(fig, samplePolynomial(), { onBackendChange: () => setBadge('cpu') });
+      const cap = document.createElement('figcaption');
+      cap.textContent = (WASM.active ? 'Computed via WASM kernel' : 'Computed in JS') + ' · rendered via ' + (GPU.ok ? 'WebGPU' : 'Canvas2D');
+      fig.appendChild(cap);
+    } catch (e) {
+      target.innerHTML = '';
+      const n = document.createElement('div'); n.className = 'notice'; n.textContent = 'Live sample failed: ' + e.message; target.appendChild(n);
+    }
   });
   box.append(btn, tag, hint, target);
   return box;
@@ -189,14 +196,19 @@ function renderDocument(doc) {
     app.appendChild(n); return;
   }
   if (doc.title) { const h = document.createElement('div'); h.className = 'doc-title'; h.textContent = doc.title; app.appendChild(h); }
-  for (const block of (doc.blocks || [])) {
+  const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+  for (const block of blocks) {
     if (!block || !block.kind) continue;
-    if (block.kind === 'prose') { const d = document.createElement('div'); d.className = 'prose'; d.innerHTML = renderProse(block.text || ''); app.appendChild(d); }
-    else if (block.kind === 'math') renderMath(app, block.latex || '');
-    else if (block.kind === 'plot' && block.plot) {
-      const fig = document.createElement('figure'); fig.className = 'plot'; app.appendChild(fig);
-      renderPlot(fig, block.plot, { onBackendChange: () => setBadge('cpu') });
-      if (block.plot.title) { const cap = document.createElement('figcaption'); cap.textContent = block.plot.title; fig.appendChild(cap); }
+    try {
+      if (block.kind === 'prose') { const d = document.createElement('div'); d.className = 'prose'; d.innerHTML = renderProse(block.text || ''); app.appendChild(d); }
+      else if (block.kind === 'math') renderMath(app, block.latex || '');
+      else if (block.kind === 'plot' && block.plot) {
+        const fig = document.createElement('figure'); fig.className = 'plot'; app.appendChild(fig);
+        renderPlot(fig, block.plot, { onBackendChange: () => setBadge('cpu') });
+        if (block.plot.title) { const cap = document.createElement('figcaption'); cap.textContent = block.plot.title; fig.appendChild(cap); }
+      }
+    } catch (e) {
+      const err = document.createElement('div'); err.className = 'notice'; err.textContent = 'Skipped a malformed ' + block.kind + ' block: ' + e.message; app.appendChild(err);
     }
   }
   app.appendChild(buildLiveControls());
@@ -214,15 +226,20 @@ function wireFileInput() {
   const input = document.getElementById('fileInput');
   input.addEventListener('change', (ev) => {
     const file = ev.target.files && ev.target.files[0]; if (!file) return;
+    const showNotice = (msg) => { const app = document.getElementById('app'); app.innerHTML = ''; const n = document.createElement('div'); n.className = 'notice'; n.textContent = msg; app.appendChild(n); };
     const reader = new FileReader();
+    reader.onerror = () => showNotice('Could not read the file.');
     reader.onload = () => {
-      try { CURRENT_DOC = JSON.parse(reader.result); renderDocument(CURRENT_DOC); }
-      catch (e) {
-        const app = document.getElementById('app'); app.innerHTML = '';
-        const n = document.createElement('div'); n.className = 'notice'; n.textContent = 'Could not parse JSON: ' + e.message; app.appendChild(n);
-      }
+      let doc;
+      try { doc = JSON.parse(reader.result); }
+      catch (e) { showNotice('Could not parse JSON: ' + e.message); return; }
+      // Render errors are distinct from parse errors; renderDocument also isolates
+      // each block, so a partial document still shows.
+      try { CURRENT_DOC = doc; renderDocument(doc); }
+      catch (e) { showNotice('Could not render document: ' + e.message); }
     };
     reader.readAsText(file);
+    ev.target.value = '';  // re-selecting the same file fires 'change' again
   });
 }
 

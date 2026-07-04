@@ -576,7 +576,22 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     return c;
   }
 
+  // Defensively clean a plot spec loaded from arbitrary JSON: keep only series that
+  // carry a points array, and within each keep only [x,y] pairs of two finite numbers
+  // (guards against null / short / non-finite points that would otherwise throw).
+  function sanitizeSpec(spec) {
+    const s = (spec && typeof spec === 'object') ? spec : {};
+    const series = Array.isArray(s.series) ? s.series : [];
+    const cleanSeries = series.filter(se => se && Array.isArray(se.points)).map(se => ({
+      ...se,
+      points: se.points.filter(p => Array.isArray(p) && p.length >= 2
+        && Number.isFinite(p[0]) && Number.isFinite(p[1])),
+    }));
+    return { ...s, series: cleanSeries };
+  }
+
   function renderPlot(host, spec) {
+    spec = sanitizeSpec(spec);
     const wrap = document.createElement('div');
     wrap.className = 'plotwrap';
     host.appendChild(wrap);
@@ -799,23 +814,32 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
       const h = document.createElement('div'); h.className = 'doc-title';
       h.textContent = doc.title; app.appendChild(h);
     }
-    for (const block of (doc.blocks || [])) {
+    const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
+    for (const block of blocks) {
       if (!block || !block.kind) continue;
-      if (block.kind === 'prose') {
-        const d = document.createElement('div'); d.className = 'prose';
-        d.innerHTML = renderProse(block.text || '');
-        app.appendChild(d);
-      } else if (block.kind === 'math') {
-        renderMath(app, block.latex || '');
-      } else if (block.kind === 'plot' && block.plot) {
-        const fig = document.createElement('figure'); fig.className = 'plot';
-        app.appendChild(fig);
-        renderPlot(fig, block.plot);
-        if (block.plot.title) {
-          const cap = document.createElement('figcaption');
-          cap.textContent = block.plot.title;
-          fig.appendChild(cap);
+      // Isolate each block: a malformed block renders an inline error placeholder
+      // instead of aborting the whole document.
+      try {
+        if (block.kind === 'prose') {
+          const d = document.createElement('div'); d.className = 'prose';
+          d.innerHTML = renderProse(block.text || '');
+          app.appendChild(d);
+        } else if (block.kind === 'math') {
+          renderMath(app, block.latex || '');
+        } else if (block.kind === 'plot' && block.plot) {
+          const fig = document.createElement('figure'); fig.className = 'plot';
+          app.appendChild(fig);
+          renderPlot(fig, block.plot);
+          if (block.plot.title) {
+            const cap = document.createElement('figcaption');
+            cap.textContent = block.plot.title;
+            fig.appendChild(cap);
+          }
         }
+      } catch (e) {
+        const err = document.createElement('div'); err.className = 'notice';
+        err.textContent = 'Skipped a malformed ' + block.kind + ' block: ' + e.message;
+        app.appendChild(err);
       }
     }
     // Live-compute controls always live at the end of the document.
@@ -871,13 +895,21 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
   function samplePolynomial() {
     // A fixed demo polynomial: 0.5 - 0.8x - 0.3x^2 + 0.12x^3
     const coeffs = [0.5, -0.8, -0.3, 0.12];
-    const useWasm = WASM.ready;
+    let useWasm = WASM.ready;
+    // Evaluate via the WASM kernel when ready, but degrade to the JS Horner path on
+    // ANY kernel error (e.g. a bad coeff_buffer offset -> Float64Array RangeError).
+    const evalAt = (x) => {
+      if (useWasm) {
+        try { return polyWasm(coeffs, x); }
+        catch (e) { useWasm = false; }
+      }
+      return polyJS(coeffs, x);
+    };
     const N = 240, x0 = -4, x1 = 4;
     const pts = [];
     for (let k = 0; k <= N; k++) {
       const x = x0 + (x1 - x0) * k / N;
-      const y = useWasm ? polyWasm(coeffs, x) : polyJS(coeffs, x);
-      pts.push([x, y]);
+      pts.push([x, evalAt(x)]);
     }
     WASM.active = useWasm;
     return {
@@ -905,15 +937,22 @@ fn fs_main(in : VSOut) -> @location(0) vec4<f32> {
     target.style.width = '100%';
 
     btn.addEventListener('click', () => {
-      target.innerHTML = '';
-      const fig = document.createElement('figure'); fig.className = 'plot';
-      target.appendChild(fig);
-      const spec = samplePolynomial();
-      renderPlot(fig, spec);
-      const cap = document.createElement('figcaption');
-      cap.textContent = (WASM.active ? 'Computed via WASM kernel' : 'Computed in JS')
-        + ' · rendered via ' + (GPU.ok ? 'WebGPU' : 'Canvas2D');
-      fig.appendChild(cap);
+      try {
+        target.innerHTML = '';
+        const fig = document.createElement('figure'); fig.className = 'plot';
+        target.appendChild(fig);
+        const spec = samplePolynomial();
+        renderPlot(fig, spec);
+        const cap = document.createElement('figcaption');
+        cap.textContent = (WASM.active ? 'Computed via WASM kernel' : 'Computed in JS')
+          + ' · rendered via ' + (GPU.ok ? 'WebGPU' : 'Canvas2D');
+        fig.appendChild(cap);
+      } catch (e) {
+        target.innerHTML = '';
+        const n = document.createElement('div'); n.className = 'notice';
+        n.textContent = 'Live sample failed: ' + e.message;
+        target.appendChild(n);
+      }
     });
 
     box.appendChild(btn);
@@ -1031,21 +1070,35 @@ otherwise it computes the identical samples in JavaScript.` },
     input.addEventListener('change', (ev) => {
       const file = ev.target.files && ev.target.files[0];
       if (!file) return;
+      const showNotice = (msg) => {
+        const app = document.getElementById('app');
+        app.innerHTML = '';
+        const n = document.createElement('div'); n.className = 'notice';
+        n.textContent = msg;
+        app.appendChild(n);
+      };
       const reader = new FileReader();
+      reader.onerror = () => showNotice('Could not read the file.');
       reader.onload = () => {
+        let doc;
         try {
-          const doc = JSON.parse(reader.result);
+          doc = JSON.parse(reader.result);
+        } catch (e) {
+          showNotice('Could not parse JSON: ' + e.message);
+          return;
+        }
+        // Render errors are distinct from parse errors and are reported as such;
+        // renderDocument also isolates each block, so a partial document still shows.
+        try {
           CURRENT_DOC = doc;
           renderDocument(doc);
         } catch (e) {
-          const app = document.getElementById('app');
-          app.innerHTML = '';
-          const n = document.createElement('div'); n.className = 'notice';
-          n.textContent = 'Could not parse JSON: ' + e.message;
-          app.appendChild(n);
+          showNotice('Could not render document: ' + e.message);
         }
       };
       reader.readAsText(file);
+      // Reset so re-selecting the same file fires 'change' again.
+      ev.target.value = '';
     });
   }
 
