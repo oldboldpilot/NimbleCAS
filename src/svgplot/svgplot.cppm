@@ -133,8 +133,21 @@ auto pad_if_degenerate(double& lo, double& hi) -> void {
     if (opt.width <= 0 || opt.height <= 0) {
         return make_error<Mapper>(MathError::domain_error);  // non-positive canvas
     }
-    if (2 * opt.margin >= opt.width || 2 * opt.margin >= opt.height) {
-        return make_error<Mapper>(MathError::domain_error);  // margin leaves no plot area
+    if (opt.margin < 0 || 2 * opt.margin >= opt.width || 2 * opt.margin >= opt.height) {
+        return make_error<Mapper>(MathError::domain_error);  // negative margin or no plot area
+    }
+    // Reject non-finite input outright: a NaN/inf coordinate would defeat the range scan
+    // (NaN comparisons are all false) and emit a literal "nan"/"inf" into the SVG. (plot_function
+    // pre-drops non-finite samples, so its surviving data is already finite here.)
+    for (const double v : xs) {
+        if (!std::isfinite(v)) {
+            return make_error<Mapper>(MathError::domain_error);  // non-finite x coordinate
+        }
+    }
+    for (const double v : ys) {
+        if (!std::isfinite(v)) {
+            return make_error<Mapper>(MathError::domain_error);  // non-finite y coordinate
+        }
     }
 
     auto [xlo, xhi] = std::ranges::minmax(xs);

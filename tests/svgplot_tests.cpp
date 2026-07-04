@@ -231,6 +231,33 @@ auto main() -> int {
                   t.expect(!r.has_value() && r.error() == MathError::domain_error,
                            "oversized margin -> domain_error");
               })
+        .test("domain_error_non_finite_direct_input",
+              [](TestContext& t) {
+                  // A NaN/inf passed straight to plot_line/plot_scatter must be rejected, not
+                  // emitted as a literal "nan"/"inf" coordinate in the SVG.
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  const double inf = std::numeric_limits<double>::infinity();
+                  std::vector<double> xs{0.0, nan};
+                  std::vector<double> ys{0.0, 1.0};
+                  auto r = plot_line(xs, ys, tiny());
+                  t.expect(!r.has_value() && r.error() == MathError::domain_error,
+                           "non-finite x in plot_line -> domain_error");
+                  std::vector<double> ys2{0.0, inf};
+                  std::vector<double> xs2{0.0, 1.0};
+                  auto r2 = plot_scatter(xs2, ys2, tiny());
+                  t.expect(!r2.has_value() && r2.error() == MathError::domain_error,
+                           "non-finite y in plot_scatter -> domain_error");
+              })
+        .test("domain_error_negative_margin",
+              [](TestContext& t) {
+                  std::vector<double> xs{0.0, 1.0};
+                  std::vector<double> ys{0.0, 1.0};
+                  PlotOptions o = tiny();
+                  o.margin = -5;  // negative margin would push points off-canvas
+                  auto r = plot_line(xs, ys, o);
+                  t.expect(!r.has_value() && r.error() == MathError::domain_error,
+                           "negative margin -> domain_error");
+              })
         .test("domain_error_function_bad_samples_and_domain",
               [](TestContext& t) {
                   auto few = plot_function([](double x) { return x; }, 0.0, 1.0, 1, tiny());
