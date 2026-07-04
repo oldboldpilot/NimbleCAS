@@ -146,6 +146,28 @@ auto main() -> int {
                   t.expect(dd_bits_equal(d, nimblecas::dd_dot_scalar(a, b)), "dd_dot == scalar ref");
               })
 
+        .test("dd_sum_ill_conditioned_through_the_simd_lanes",
+              [](TestContext& t) {
+                  // The n=3 cancellation cases above stay in the scalar tail (n < 4 lanes). Use
+                  // n=16 (four full 4-lane blocks) so the VECTORIZED accumulation itself carries
+                  // the cancellation, verifying compensated ACCURACY on the SIMD path — not just
+                  // that SIMD==scalar. Pattern: i%4==0 -> +1e16, i%4==2 -> -1e16, else 1.0, so
+                  // the 1e16 terms cancel exactly and the true sum is the count of 1.0s (8).
+                  std::vector<double> x(16);
+                  for (std::size_t i = 0; i < x.size(); ++i) {
+                      x[i] = (i % 4 == 0) ? 1e16 : (i % 4 == 2) ? -1e16 : 1.0;
+                  }
+                  double naive = 0.0;
+                  for (double v : x) naive += v;
+                  t.expect(!bits_equal(naive, 8.0), "naive double sum loses the small terms");
+
+                  const DoubleDouble s = nimblecas::dd_sum(x);
+                  t.expect(bits_equal(s.to_double(), 8.0),
+                           "dd_sum recovers 8 exactly through the SIMD lanes");
+                  t.expect(dd_bits_equal(s, nimblecas::dd_sum_scalar(x)),
+                           "SIMD dd_sum == scalar ref on the ill-conditioned n=16 input");
+              })
+
         // --- SIMD path == scalar path, bit-for-bit, across ragged sizes ---------
         .test("simd_path_matches_scalar_bit_for_bit",
               [](TestContext& t) {
