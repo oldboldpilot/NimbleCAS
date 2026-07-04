@@ -282,5 +282,35 @@ auto main() -> int {
                                MathError::domain_error,
                            "non-square rational_eigenvalues -> domain_error");
               })
+        .test("honesty_mixed_spectrum_partial_detection",
+              [](TestContext& t) {
+                  // block-diag([1], [[0,1],[2,0]]) has spectrum {1, +sqrt2, -sqrt2}: ONE
+                  // rational eigenvalue and two surds. This is the interesting honesty case
+                  // 0 < total_mult < n -- the rational part is found, the surds omitted, and
+                  // the caller can tell the spectrum is only PARTLY rational.
+                  auto m = bmat({{1, 0, 0}, {0, 0, 1}, {0, 2, 0}});
+                  auto p = nimblecas::characteristic_polynomial(m).value();
+                  // (x-1)(x^2-2) = x^3 - x^2 - 2x + 2.
+                  t.expect(poly_eq(p, {bi(2), bi(-2), bi(-1), bi(1)}),
+                           "charpoly = x^3 -x^2 -2x +2");
+                  auto eig = nimblecas::rational_eigenvalues(m).value();
+                  t.expect(mult_of(eig, bi(1)) == 1, "the one rational eigenvalue 1 is found");
+                  t.expect(total_mult(eig) == 1 && total_mult(eig) < 3,
+                           "0 < total_mult(1) < n(3): spectrum only partly rational");
+              })
+        .test("rational_eigenvalue_negative_fraction",
+              [](TestContext& t) {
+                  // diag(-3/2, 1/2): a NEGATIVE fractional eigenvalue exercises the
+                  // pos.negate() branch on a non-integer candidate p/q.
+                  auto m = BigMatrix::from_rows({{brat(-3, 2), bi(0)}, {bi(0), brat(1, 2)}}).value();
+                  auto p = nimblecas::characteristic_polynomial(m).value();
+                  // (x+3/2)(x-1/2) = x^2 + x - 3/4.
+                  t.expect(poly_eq(p, {brat(-3, 4), bi(1), bi(1)}), "charpoly = x^2 + x - 3/4");
+                  auto eig = nimblecas::rational_eigenvalues(m).value();
+                  t.expect(mult_of(eig, brat(-3, 2)) == 1 && mult_of(eig, brat(1, 2)) == 1,
+                           "eigenvalues {-3/2, 1/2}");
+                  t.expect(total_mult(eig) == 2 && eig.front().first == brat(-3, 2),
+                           "fully rational, ascending: -3/2 first");
+              })
         .run();
 }

@@ -1,4 +1,5 @@
-// NimbleCAS exact linear index-1 differential-algebraic equations (DAE).
+// NimbleCAS exact linear differential-algebraic equations (DAE): index-1 semi-explicit
+// plus arbitrary-index regular pencils via shuffle-algorithm index reduction.
 // @author Olumuyiwa Oluwasanmi
 //
 // A semi-explicit linear DAE couples a differential block to an algebraic constraint:
@@ -106,11 +107,12 @@ struct DaeSolution {
 // not_implemented). A genuinely SINGULAR / non-regular pencil (the shuffle never terminates:
 // E stays singular after n passes) is rejected with MathError::domain_error rather than
 // returning a wrong answer. The DIFFERENTIATION INDEX used is the number of constraint
-// differentiations to reach an ODE. Index reduction differentiates f, so exact truncated
-// results to `order` require f to be sufficiently smooth and supplied to sufficient order:
-// polynomial / terminating forcing (as nimblecas.ode supports) captured within `order` is
-// exact; a forcing supplied at too low an order loses its highest coefficients under
-// differentiation (documented, not silently wrong). Everything is EXACT over Q — no floats.
+// differentiations to reach an ODE. Index reduction differentiates f, and the forcing is
+// truncated to `order` BEFORE reduction, so for a genuinely non-terminating forcing the top
+// ~index coefficients of the solution are lost under differentiation — and this is NOT
+// recovered by supplying f at a higher input order (it is retruncated to `order` first).
+// The exact case is therefore POLYNOMIAL / TERMINATING forcing (as nimblecas.ode supports)
+// whose terms all lie within `order`: that is exact to `order`. Everything is EXACT over Q.
 
 // How to treat an initial vector that does not lie on the DAE's hidden constraint manifold.
 enum class ConsistencyPolicy : std::uint8_t {

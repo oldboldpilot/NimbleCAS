@@ -422,5 +422,31 @@ auto main() -> int {
                                empty_fn.error() == nimblecas::MathError::domain_error,
                            "tamed_euler(empty drift) yields domain_error");
               })
+        .test("scheme_driver_matches_legacy_bit_for_bit",
+              [](TestContext& t) {
+                  // The Scheme-parameterised driver must reproduce the legacy bool-selected
+                  // driver BIT-FOR-BIT for euler_maruyama and milstein, locking the
+                  // byte-identical guarantee against future refactors. Nonlinear a/b so the
+                  // trajectories are non-trivial (not a degenerate constant).
+                  auto a = [](double x) { return 0.3 * x - 0.05 * x * x; };
+                  auto b = [](double x) { return 0.2 * x + 0.1; };
+                  auto bp = [](double) { return 0.2; };
+
+                  auto legacy_e = simulate_terminal(a, b, {}, 1.0, 1.5, 64, 500, 424242, false);
+                  auto scheme_e = simulate_terminal_scheme(a, b, {}, 1.0, 1.5, 64, 500, 424242,
+                                                           Scheme::euler_maruyama);
+                  t.expect(legacy_e.has_value() && scheme_e.has_value(),
+                           "both euler drivers succeed");
+                  t.expect(legacy_e && scheme_e && *legacy_e == *scheme_e,
+                           "Scheme::euler_maruyama == legacy use_milstein=false, bit-for-bit");
+
+                  auto legacy_m = simulate_terminal(a, b, bp, 1.0, 1.5, 64, 500, 424242, true);
+                  auto scheme_m = simulate_terminal_scheme(a, b, bp, 1.0, 1.5, 64, 500, 424242,
+                                                           Scheme::milstein);
+                  t.expect(legacy_m.has_value() && scheme_m.has_value(),
+                           "both milstein drivers succeed");
+                  t.expect(legacy_m && scheme_m && *legacy_m == *scheme_m,
+                           "Scheme::milstein == legacy use_milstein=true, bit-for-bit");
+              })
         .run();
 }

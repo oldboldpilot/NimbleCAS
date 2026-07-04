@@ -325,6 +325,18 @@ auto evaluate_constant(const Expr& u, std::int64_t prec) -> Result<BigFloat> {
     if (prec <= 0) {
         return make_error<BigFloat>(MathError::domain_error);
     }
+    // A single named-constant leaf resolves straight to its constants value at the
+    // requested precision: the constants provider is already correctly rounded to
+    // `prec`, so we skip the guard-bit elevation and avoid a second (double) rounding.
+    if (auto name = named_constant_name(u)) {
+        return named_constant_value(*name, prec);
+    }
+    // A compound expression is evaluated at elevated precision then rounded once.
+    // Guard the working-precision addition against signed-int64 overflow (a `prec`
+    // near INT64_MAX would otherwise wrap — matching the module's overflow discipline).
+    if (prec > std::numeric_limits<std::int64_t>::max() - guard_bits) {
+        return make_error<BigFloat>(MathError::overflow);
+    }
     const std::int64_t work = prec + guard_bits;  // elevated working precision
     auto value = eval_node(u, work);
     if (!value) {
