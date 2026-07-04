@@ -127,12 +127,15 @@ Additional linear algebra, numerics & simulation:
 | `nimblecas.mcmc` | [mcmc.md](reference/mcmc.md) | Metropolis–Hastings MCMC on the parallel RNG; per-chain seed `splitmix64(seed ^ chain)`. |
 | `nimblecas.montecarlo` | [montecarlo.md](reference/montecarlo.md) | Monte Carlo integration / estimation + sample statistics — numerical. |
 | `nimblecas.svgplot` | [svgplot.md](reference/svgplot.md) | In-core standalone SVG-string plotter (line/scatter/function; exact data → pixel mapping). |
+| `nimblecas.quantum` | [quantum.md](reference/quantum.md) | Exact non-commutative operator algebra (ROADMAP §7.15): operators, commutators/Jacobi, Dirac bra/ket, dagger adjoint, `normal_form` canonicalizer. |
 
-Tooling and integration:
+Tooling, front-end & integration:
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
 | `nimblecas.testing` | [testing.md](reference/testing.md) | Internal, dependency-free test framework (`TestSuite`/`TestContext`) wired to ctest. |
+| `nimblecas.webexport` | [webexport.md](reference/webexport.md) | JSON export bridge — serializes plot data + documents to the contract the `web/` front-end renders (the JSON analogue of `svgplot`). |
+| `nimblecas.webkernel` | [webkernel.md](reference/webkernel.md) | Freestanding `wasm32` compute kernel (clang, no Emscripten) the browser front-end loads for live in-page sampling. See also [WASM build](architecture/wasm-build.md). |
 | `nimblecas_ext` (Python) | [python-bindings.md](reference/python-bindings.md) | nanobind bindings: the `Expr` API, module functions, and `MathError`→exception translation. |
 
 ## Testing

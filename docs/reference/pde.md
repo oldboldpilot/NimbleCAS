@@ -6,7 +6,7 @@ Source: `src/pde/pde.cppm`
 
 Exact **partial differential equation** solvers over the rationals. Everything
 here is exact over **Q** — polynomial initial/boundary data with
-rational-polynomial coefficients — and **no floating point ever enters**. Three
+rational-polynomial coefficients — and **no floating point ever enters**. Several
 families live in this module, each with an honest boundary on what "exact" buys
 you:
 
@@ -57,6 +57,31 @@ preserves it), the recurrence is causal and well defined.
 `u(a) = α`, `u(b) = β`, for a polynomial source `f`. A particular `p` with
 `p'' = f` is obtained by integrating `f` twice; then `u = p + C₁x + C₀` with
 `(C₁, C₀)` fixed by the exact 2×2 rational solve of the two boundary equations.
+
+**(d) Wave equation** `u_tt = L[u]`, `u(x,0) = φ`, `u_t(x,0) = ψ` — a
+**second-order-in-time** linear evolution. Being second order it needs **two**
+Cauchy data (φ and ψ); matching `[t^n]` (with `u_tt` shifting the index *down* by
+two) gives the exact two-step recurrence `(n+2)(n+1) c_{n+2} = L[c_n]`,
+`c_0 = φ`, `c_1 = ψ`, so the even coefficients descend from `φ` and the odd ones
+from `ψ`. For polynomial data under a constant-coefficient `L` the series
+**terminates** and the truncation is the closed form (e.g. `u_tt = c² u_xx`,
+`φ = x²`, `ψ = 0` ⟹ `u = x² + c² t²`); otherwise it is the exact truncated Taylor
+series in `t`.
+
+**(e) KdV** `u_t + u u_x + u_xxx = 0` — the dispersive third-derivative term is
+**linear**, so it is carried as `L[u] = −u_xxx`, while the convective `u u_x` is
+the same nonlinearity shape as inviscid Burgers and reuses the Adomian machinery
+of **(b)**. Exact truncated series, **local in `t`**: for a genuine (non-linear)
+datum it does **not** terminate and is **not** a closed-form soliton.
+
+**(f) Schrödinger** `i u_t = −u_xx + V u`, `u(x,0) = φ` — rearranged to the
+first-order-in-time form `u_t = i(u_xx − V u)`, whose coefficients are
+**intrinsically complex** (the recurrence carries the exact factor `i`) and so
+cannot live in the real `RationalPoly` ring. They live instead in a small
+Gaussian-rational polynomial type `ComplexPoly` (`re + i·im`, both `RationalPoly`
+over `Q[x]`), keeping the whole construction exact in `(Q + iQ)[x]`. Free-particle
+polynomial data terminates (`φ = x²` ⟹ `x² + 2 i t`); a constant potential
+recovers the `e^{−it}` phase series.
 
 **Honesty boundary.** The **linear evolution** series is exact and (for
 polynomial data under a constant-coefficient `L`) closed-form because it
@@ -204,6 +229,128 @@ collapse onto one point) and is `MathError::domain_error`; any `Rational`
 overflow is propagated. Note that with `f = 0` this returns the exact linear
 interpolant `u(a) = α`, `u(b) = β` — the 1-D harmonic (Laplace) solution.
 
+## Wave equation: `u_tt = L[u]` (second order in time)
+
+```cpp
+[[nodiscard]] auto solve_wave_pde(SpatialOperator l, const RationalPoly& phi,
+                                  const RationalPoly& psi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+[[nodiscard]] auto wave_equation(Rational speed, const RationalPoly& phi,
+                                 const RationalPoly& psi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+```
+
+`solve_wave_pde` solves the **second-order-in-time** linear PDE `u_tt = L[u]`
+with **two** initial data `u(x,0) = φ` and `u_t(x,0) = ψ` — for a second-order
+equation one datum no longer determines the solution. Expanding
+`u(x,t) = Σ_n c_n(x) t^n` and matching `[t^n]` (where `u_tt` shifts the time
+index *down* by two) gives the exact **two-step Cauchy–Kovalevskaya recurrence**
+
+```
+(n+2)(n+1) c_{n+2} = L[c_n],      c_0 = φ,  c_1 = ψ,
+```
+
+so the even coefficients descend from `φ` and the odd ones from `ψ`. The two
+divisions by `(n+1)` and `(n+2)` are performed **separately** (never as the
+product `(n+1)(n+2)`) so the step scalars cannot overflow `int64` for large
+`order`. The returned vector holds `order+1` `RationalPoly`s. For polynomial
+`φ`, `ψ` under a constant-coefficient `L` the series **terminates** and the
+truncation is the closed form (e.g. `u_tt = c² u_xx`, `φ = x²`, `ψ = 0` ⟹
+`u = x² + c² t²`); otherwise it is the **exact truncated Taylor series in `t`**
+(local in `t`, no boundary conditions imposed).
+
+`wave_equation` wires the classical wave equation `u_tt = speed² · u_xx` into
+`solve_wave_pde` by taking `L = heat_operator(speed²)` (i.e. `speed² · d²/dx²`),
+hence `c_2 = (speed² / 2) · φ''`. `speed` may be any rational, including `0`.
+
+`MathError::domain_error` if `order == 0` (which cannot carry the second datum
+`ψ`) or `l` is an empty callable; an `order` beyond `INT64_MAX` is
+`MathError::overflow`; any error raised by `L` (or by the `speed²` product in
+`wave_equation`) is propagated verbatim.
+
+## KdV: `u_t + u u_x + u_xxx = 0`
+
+```cpp
+[[nodiscard]] auto kdv(const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<RationalPoly>>;
+```
+
+Solve the Korteweg–de Vries equation `u_t + u u_x + u_xxx = 0`, i.e.
+`u_t = −u_xxx − u u_x`, `u(x,0) = φ`. The dispersive third-derivative term is
+**linear** and is carried as the `SpatialOperator` `L[u] = −u_xxx`; the
+convective term `N[u] = −(u · u_x)` is the same nonlinearity shape as inviscid
+Burgers and reuses the Adomian / Cauchy–Kovalevskaya machinery of
+`solve_nonlinear_evolution_pde`. Returns the time coefficients `c_0 … c_order`
+(`order+1` `RationalPoly`s).
+
+This is the **EXACT truncated Taylor series in `t`**: for a genuine
+(non-linear-datum) `φ` the series does **not** terminate — it is a **LOCAL-in-`t`**
+exact solution, **NOT** a global closed form and **NOT** a travelling-wave
+soliton in closed form. (For a linear datum `φ = x`, `φ''' = 0`, dispersion
+vanishes and KdV reduces to inviscid Burgers with `c_n = (−1)^n x`.)
+`MathError::domain_error` if `order == 0`; any `RationalPoly` error propagates.
+
+## Schrödinger equation: `i u_t = −u_xx + V u`
+
+### `ComplexPoly` — Gaussian-rational polynomial
+
+```cpp
+struct ComplexPoly {
+    RationalPoly re;  // real part (polynomial in x over Q)
+    RationalPoly im;  // imaginary part (polynomial in x over Q)
+
+    [[nodiscard]] static auto make(RationalPoly real_part, RationalPoly imag_part) -> ComplexPoly;
+    [[nodiscard]] auto is_zero() const noexcept -> bool;
+    [[nodiscard]] auto is_equal(const ComplexPoly& o) const noexcept -> bool;
+};
+```
+
+A **Gaussian-rational polynomial** `re + i·im`, where `re` and `im` are exact
+`RationalPoly`s over `Q[x]`. A Schrödinger time coefficient is intrinsically
+**complex** (the recurrence carries the exact factor `i`), so it cannot live in
+the real `RationalPoly` ring; `ComplexPoly` keeps the whole construction exact in
+`(Q + iQ)[x]` using only the existing `RationalPoly` substrate — **no new module
+dependency** is pulled in. `make` builds a value from its real and imaginary
+parts; `is_zero` holds when both parts are the zero polynomial; `is_equal`
+compares both parts.
+
+### Free functions
+
+```cpp
+[[nodiscard]] auto solve_schrodinger(const RationalPoly& potential, const RationalPoly& phi,
+                                     std::size_t order) -> Result<std::vector<ComplexPoly>>;
+[[nodiscard]] auto schrodinger_free_particle(const RationalPoly& phi, std::size_t order)
+    -> Result<std::vector<ComplexPoly>>;
+```
+
+`solve_schrodinger` solves the time-dependent Schrödinger equation
+`i u_t = −u_xx + V(x) u`, `u(x,0) = φ`, for a real polynomial potential `V` and
+real polynomial initial datum `φ`. Rearranged to the first-order-in-time form
+`u_t = M[u]` with the **exact complex operator**
+
+```
+M[u] = i · ( u_xx − V·u ),
+```
+
+the Cauchy–Kovalevskaya recurrence is `c_0 = φ` (as `re = φ`, `im = 0`) and
+`c_n = M[c_{n-1}] / n`, evaluated natively over `ComplexPoly`. Returns the exact
+truncated series `c_0 … c_order` (`order+1` `ComplexPoly`s).
+
+Coefficients are **exact Gaussian-rational polynomials** and the discrete law
+`n · c_n = M[c_{n-1}]` holds exactly on every retained term. For the **free
+particle** (`V = 0`) and polynomial `φ` the operator strictly lowers spatial
+degree, so the series **terminates** and the truncation is the closed form (e.g.
+`φ = x²` ⟹ `x² + 2 i t`). For a non-zero polynomial potential `V`,
+multiplication by `V` raises degree and the series need **not** terminate: it is
+then the **EXACT truncated Taylor series in `t`**, **LOCAL in `t`**, with no
+boundary conditions imposed (a constant potential recovers the `e^{−it}` phase
+series). `MathError::domain_error` if `order == 0`; an `order` beyond `INT64_MAX`
+is `MathError::overflow`; any `RationalPoly` error propagates.
+
+`schrodinger_free_particle` is the free-particle special case `i u_t = −u_xx`
+(`V = 0`) — a thin wrapper over `solve_schrodinger` with a zero potential; for
+polynomial `φ` the exact series terminates (closed form).
+
 ## Error model
 
 | Condition | Error |
@@ -215,7 +362,10 @@ interpolant `u(a) = α`, `u(b) = β` — the 1-D harmonic (Laplace) solution.
 | `series_product` operands of differing length | `MathError::domain_error` |
 | `evaluate` on an empty coefficient list | `MathError::domain_error` |
 | `solve_poisson_bvp_1d` with a degenerate interval `a == b` | `MathError::domain_error` |
-| `order` beyond `INT64_MAX` (physically unreachable step-index cast guard) | `MathError::overflow` |
+| `solve_wave_pde` (or `wave_equation`) with `order == 0` (cannot carry the second datum `ψ`) or an empty `SpatialOperator` | `MathError::domain_error` |
+| `kdv` with `order == 0` | `MathError::domain_error` |
+| `solve_schrodinger` (or `schrodinger_free_particle`) with `order == 0` | `MathError::domain_error` |
+| `order` beyond `INT64_MAX` (physically unreachable step-index cast guard; applies to every series solver) | `MathError::overflow` |
 | Any `int64` numerator/denominator computation in `Rational` wraps (Horner evaluation, scaling, the 2×2 BVP solve) | `MathError::overflow` (propagated) |
 | Any error raised by `L` or `N`, or by an underlying `RationalPoly` operation (`derivative`, `scale`, `multiply`, `add`, `divide`) | that operation's error, propagated verbatim |
 
@@ -296,6 +446,37 @@ solve_poisson_bvp_1d(ipoly({0, 1}), ri(0), ri(0), ri(1), ri(0)).value()
 solve_poisson_bvp_1d(RationalPoly{}, ri(0), ri(1), ri(2), ri(5)).value()
     .is_equal(ipoly({1, 2}));      // u = 1 + 2x
 
+// --- Wave: u_tt = u_xx, phi = x^2, psi = 0 -> u = x^2 + t^2 (TERMINATES) ---
+// d'Alembert ((x+t)^2 + (x-t)^2)/2 = x^2 + t^2.
+auto w = wave_equation(ri(1), ipoly({0, 0, 1}), RationalPoly{}, 4).value();
+w[0].is_equal(ipoly({0, 0, 1}));   // c_0 = x^2
+w[1].is_zero();                    // c_1 = 0  (psi = 0)
+w[2].is_equal(ipoly({1}));         // c_2 = (x^2)''/2 = 1
+w[3].is_zero();                    // c_3 = 0
+w[4].is_zero();                    // c_4 = 0  (terminated: closed form)
+evaluate(w, ri(2), ri(1)).value(); // 5   (u(2,1) = 4 + 1)
+
+// Nonzero psi: u_tt = u_xx, phi = 0, psi = x -> u = x t exactly.
+auto wp = wave_equation(ri(1), RationalPoly{}, ipoly({0, 1}), 3).value();
+wp[1].is_equal(ipoly({0, 1}));     // c_1 = x (psi)
+evaluate(wp, ri(3), ri(2)).value();// 6   (u(3,2) = x t)
+
+// --- KdV: u_t + u u_x + u_xxx = 0, phi = x -> reduces to inviscid Burgers --
+// phi''' = 0, so dispersion vanishes and c_n = (-1)^n x.
+auto kv = kdv(ipoly({0, 1}), 3).value();
+kv[1].is_equal(ipoly({0, -1}));    // c_1 = -x   (LOCAL in t, not a soliton)
+
+// --- Schrodinger free particle: i u_t = -u_xx, phi = x^2 -> x^2 + 2 i t ----
+auto sf = schrodinger_free_particle(ipoly({0, 0, 1}), 3).value();  // vector<ComplexPoly>
+sf[0].is_equal(ComplexPoly::make(ipoly({0, 0, 1}), RationalPoly{}));  // c_0 = x^2
+sf[1].is_equal(ComplexPoly::make(RationalPoly{}, ipoly({2})));        // c_1 = 2 i
+sf[2].is_zero();                   // c_2 = 0  (terminated: closed form)
+
+// Constant potential V = 1, phi = 1: recovers e^{-i t} = 1 - i t - t^2/2 + ...
+auto sc = solve_schrodinger(ipoly({1}), ipoly({1}), 3).value();
+sc[1].is_equal(ComplexPoly::make(RationalPoly{}, ipoly({-1})));       // c_1 = -i
+sc[2].is_equal(ComplexPoly::make(RationalPoly::from_coeffs({rat(-1,2)}), RationalPoly{})); // c_2 = -1/2
+
 // --- Degenerate arguments are domain errors -------------------------------
 solve_evolution_pde(heat, ipoly({0, 0, 1}), 0).error();          // domain_error (order 0)
 solve_evolution_pde(SpatialOperator{}, ipoly({1}), 2).error();   // domain_error (empty L)
@@ -304,6 +485,9 @@ reaction_diffusion_quadratic(ri(1), ipoly({0, 1}), 0).error();   // domain_error
 solve_nonlinear_evolution_pde(heat_operator(ri(1)), TimeSeriesOperator{},
                               ipoly({0, 1}), 3).error();          // domain_error (null N)
 solve_poisson_bvp_1d(ipoly({2}), ri(1), ri(0), ri(1), ri(0)).error();  // domain_error (a == b)
+wave_equation(ri(1), ipoly({0, 0, 1}), RationalPoly{}, 0).error(); // domain_error (order 0, no psi)
+kdv(ipoly({0, 0, 0, 1}), 0).error();                               // domain_error (order 0)
+schrodinger_free_particle(ipoly({0, 0, 1}), 0).error();            // domain_error (order 0)
 ```
 
 ## See also
