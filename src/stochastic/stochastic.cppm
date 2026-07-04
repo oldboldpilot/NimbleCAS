@@ -726,6 +726,11 @@ auto cross_covariance_at(std::span<const Rational> x, std::span<const Rational> 
     if (n == 0 || y.size() != n) {
         return make_error<Rational>(MathError::domain_error);
     }
+    // `lag` is raw user input (unlike the canonical-Rational-numerator callers of abs_i64), so
+    // guard INT64_MIN before negating — its magnitude is unrepresentable and always >= n anyway.
+    if (lag == std::numeric_limits<std::int64_t>::min()) {
+        return make_error<Rational>(MathError::domain_error);
+    }
     const std::size_t alag = static_cast<std::size_t>(abs_i64(lag));
     if (alag >= n) {
         return make_error<Rational>(MathError::domain_error);

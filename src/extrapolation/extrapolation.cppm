@@ -371,7 +371,7 @@ auto romberg(const RealFunction& f, double a, double b, std::size_t levels)
     const double span = b - a;
     col0[0] = 0.5 * span * (f(a) + f(b));  // one-interval trapezoid T(h_0)
     for (std::size_t i = 1; i <= levels; ++i) {
-        if (i - 1 >= 63) {  // 2^{i-1} sub-count would overflow the loop counter
+        if (i >= 63) {  // guard BOTH shifts below: 1<<(i-1) and 1<<i (the latter needs i<=62)
             return make_error<DoubleTableau>(MathError::overflow);
         }
         const std::int64_t new_pts = std::int64_t{1} << (i - 1);  // new midpoints added

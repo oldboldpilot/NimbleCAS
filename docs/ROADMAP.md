@@ -18,11 +18,19 @@ This section tracks what is **built, tested, and adversarially reviewed** agains
 - **Reasoning & algorithmics** — `search`, `sat`, `csp`, `logic`, and the branchless `bitset`/`bitcsp`, on the `parallel` fork–join runtime; stateless-shard design for SGE/Ray/NCCL.
 - **Simulation & numerics** — `rng` (counter-based, partition-independent), `mcmc`, `montecarlo`, `numeric`, `stats`, `lp`, `combinatorics`, `orthopoly`, `complex`, `dynamics` (Routh–Hurwitz stability).
 - **Runtime / tooling** — `parallel`, `simd`, `gpu` (opt-in CUDA), `testing`, `svgplot`, and the nanobind Python bindings.
+- **Applied linear algebra & operators** — `matstruct` (LDL^T/Cholesky/Hessenberg), `lie` (Lie algebras + transforms), `krylov` (exact CG + numerical GMRES/etc.), `semigroup` (functional analysis + C₀-semigroups); `quantum` (§7.15 non-commutative operator algebra).
+- **Variational & analytical mechanics** — `calcvar` (Euler–Lagrange, constraints, Lagrange multipliers), `mechanics` (Hamiltonian/Legendre/Poisson/action-angle).
+- **Numerical methods & solvers** — `interpolation`, `optimize` (+ Kelley implicit filtering), `nlsolve` (Kelley Newton/Broyden/JFNK/Anderson/LM), `extrapolation` (Richardson/Romberg/Aitken/Wynn), `pdenum` (FDM/FEM/FVM), `spectral` (Galerkin/collocation/Fourier/DG).
+- **Signals & uncertainty** — `wavelets` (Haar exact + modern families), `qmc` (low-discrepancy + RQMC), `compsense` (exact basis pursuit via LP dual + OMP).
+- **Analysis, control & stochastics** — `analysis` (conditioning/convergence/Lyapunov), `control` (TF/SS + Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability + Bode), `inteq` (Fredholm/Volterra + ADM/HPM/HAM), `stochastic` (Markov chains, WSS, Yule–Walker, PSD), `hmm` (Forward/Backward/Viterbi/Baum–Welch, exact over Q).
+
+Every module above is honest about its exact-over-`Q` vs numerical boundary, built on the mgpu gate (tests + ASan + adversarial review) and documented under [Module reference](Index.md#module-reference).
 
 **Open / not yet built** (see the module reference and section 7 for scope):
 
-- A **WebGPU/WASM interactive** plotting + document front-end (§7.11/§7.13). `svgplot` is the static substrate it would render.
-- Breadth items: SDE schemes beyond the current set, nonlinear/variable-coefficient higher-index DAEs, boundary/nonlinear PDEs beyond the current builders, and the quantum/functional-analysis engine (§7.15).
+- **GPU / parallel / distributed acceleration** of the numerical, data-parallel modules (batched `qmc`/`optimize`/`nlsolve`/`control`/`wavelets`/`krylov`) — TBB batch APIs + CUDA kernels (opt-in) + stateless shard entrypoints. The exact-rational/symbolic cores do not GPU-accelerate.
+- A **WebGPU/WASM interactive** plotting + document front-end (§7.11/§7.13); the full-CAS WASM compile (Emscripten toolchain is set up — see [WASM build](architecture/wasm-build.md)).
+- Breadth items: SDE schemes beyond the current set, nonlinear/variable-coefficient higher-index DAEs, boundary/nonlinear PDEs beyond the current builders.
 - The full JIT/multi-GPU (§5) and `StochasticGraphExecutionEngine` distributed DAG (§6) scaling paths.
 
 ---
