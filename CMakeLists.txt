@@ -245,6 +245,13 @@ target_sources(nimblecas_bigint PUBLIC
   FILE_SET CXX_MODULES FILES src/bigint/bigint.cppm)
 target_link_libraries(nimblecas_bigint PUBLIC nimblecas_core std_module)
 
+# ---- nimblecas.bigfloat : arbitrary-precision software binary float on the BigInt mantissa ----
+add_library(nimblecas_bigfloat STATIC)
+target_sources(nimblecas_bigfloat PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigfloat/bigfloat.cppm)
+target_link_libraries(nimblecas_bigfloat
+  PUBLIC nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
 add_library(nimblecas_int128 STATIC)
 target_sources(nimblecas_int128 PUBLIC
@@ -500,6 +507,11 @@ add_executable(bigint_tests tests/bigint_tests.cpp)
 target_link_libraries(bigint_tests
   PRIVATE nimblecas_bigint nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigint_tests COMMAND bigint_tests)
+
+add_executable(bigfloat_tests tests/bigfloat_tests.cpp)
+target_link_libraries(bigfloat_tests
+  PRIVATE nimblecas_bigfloat nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigfloat_tests COMMAND bigfloat_tests)
 
 add_executable(int128_tests tests/int128_tests.cpp)
 target_link_libraries(int128_tests
