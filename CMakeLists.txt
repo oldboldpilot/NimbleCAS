@@ -259,6 +259,13 @@ target_sources(nimblecas_bigfloat PUBLIC
 target_link_libraries(nimblecas_bigfloat
   PUBLIC nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.numbertheory : crypto primitives on BigInt (modinv, Miller-Rabin, CRT, RSA) ----
+add_library(nimblecas_numbertheory STATIC)
+target_sources(nimblecas_numbertheory PUBLIC
+  FILE_SET CXX_MODULES FILES src/numbertheory/numbertheory.cppm)
+target_link_libraries(nimblecas_numbertheory
+  PUBLIC nimblecas_bigint nimblecas_rng nimblecas_core std_module)
+
 # ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
 add_library(nimblecas_int128 STATIC)
 target_sources(nimblecas_int128 PUBLIC
@@ -549,6 +556,12 @@ add_executable(bigint_tests tests/bigint_tests.cpp)
 target_link_libraries(bigint_tests
   PRIVATE nimblecas_bigint nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigint_tests COMMAND bigint_tests)
+
+add_executable(numbertheory_tests tests/numbertheory_tests.cpp)
+target_link_libraries(numbertheory_tests
+  PRIVATE nimblecas_numbertheory nimblecas_bigint nimblecas_rng nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME numbertheory_tests COMMAND numbertheory_tests)
 
 add_executable(bigfloat_tests tests/bigfloat_tests.cpp)
 target_link_libraries(bigfloat_tests
