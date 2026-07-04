@@ -161,13 +161,15 @@ auto main() -> int {
         .test("ode_linear_systems_rotation_and_hyperbolic_closed_forms",
               [](TestContext& t) {
                   constexpr std::size_t order = 9;
-                  // Rotation u1' = u2, u2' = -u1, u(0) = (1, 0): u1 -> cos, u2 -> sin.
+                  // Rotation u1' = -u2, u2' = u1, u(0) = (1, 0): u1 -> cos, u2 -> sin.
+                  // (Note u1'=u2, u2'=-u1 would instead give u2 -> -sin; this standard
+                  // orientation is the one matching the cos/sin expectations below.)
                   SystemOperator rot = [](const SeriesVec& u) -> Result<SeriesVec> {
-                      auto neg = u[0].scale(Rational::from_int(-1));
+                      auto neg = u[1].scale(Rational::from_int(-1));  // -u2
                       if (!neg) {
                           return make_error<SeriesVec>(neg.error());
                       }
-                      return SeriesVec{u[1], *neg};
+                      return SeriesVec{*neg, u[0]};  // u1' = -u2, u2' = u1
                   };
                   auto rsol = solve_first_order_system(
                       rot, {Rational::from_int(1), Rational::from_int(0)}, order);
