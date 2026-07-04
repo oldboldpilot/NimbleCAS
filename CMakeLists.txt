@@ -280,6 +280,13 @@ target_sources(nimblecas_bigrational PUBLIC
 target_link_libraries(nimblecas_bigrational
   PUBLIC nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigpowerseries : big-backed truncated power series Q[[x]]/(x^N) over BigRational --
+add_library(nimblecas_bigpowerseries STATIC)
+target_sources(nimblecas_bigpowerseries PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigpowerseries/bigpowerseries.cppm)
+target_link_libraries(nimblecas_bigpowerseries
+  PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.bigcombinatorics : unbounded exact integer combinatorics (BigInt-backed) ----
 add_library(nimblecas_bigcombinatorics STATIC)
 target_sources(nimblecas_bigcombinatorics PUBLIC
@@ -583,6 +590,12 @@ target_link_libraries(bigcombinatorics_tests
   PRIVATE nimblecas_bigcombinatorics nimblecas_combinatorics nimblecas_bigint nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigcombinatorics_tests COMMAND bigcombinatorics_tests)
+
+add_executable(bigpowerseries_tests tests/bigpowerseries_tests.cpp)
+target_link_libraries(bigpowerseries_tests
+  PRIVATE nimblecas_bigpowerseries nimblecas_powerseries nimblecas_bigrational nimblecas_bigint
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigpowerseries_tests COMMAND bigpowerseries_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests
