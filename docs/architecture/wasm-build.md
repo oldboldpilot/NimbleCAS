@@ -116,10 +116,24 @@ The symbolic-core slice is built and verified end to end:
 | `(x + 1)^2` | `\left(1 + x\right)^{2}` |
 | `1 +` | `\text{parse error}` |
 
-[`web/cas-repl.html`](../../web/cas-repl.html) is a minimal in-browser REPL over this
-ABI (MathJax renders the LaTeX). **Still open:** wiring the ABI into the full WebGPU
-document/plot front-end (`web/app.js`), and widening the slice beyond the symbolic core
-(the numeric/linear-algebra modules) as needed.
+Two front-ends use this ABI:
+
+- [`web/cas-repl.html`](../../web/cas-repl.html) — a minimal standalone REPL (MathJax
+  renders the LaTeX).
+- [`web/app.html`](../../web/app.html) — the **full WebGPU document viewer** with the
+  engine wired in: executable `nimblecas` document cells and a live CAS box are
+  evaluated in-browser and rendered as native MathML alongside the WebGPU/Canvas2D
+  plots (`web/app.js` → `initCAS` / `renderCasCell` / `buildCasRepl`). Browser-verified
+  end to end (Chrome, WebGPU active, no console errors).
+
+Two build notes learned wiring it in: emit a **true ES module** (`EXPORT_ES6`, so
+`nimblecas.js` carries `export default` and imports in the browser — `python
+http.server` serves `.mjs` as `text/plain`, which browsers reject), and use a **fixed
+heap** (`INITIAL_MEMORY=256MB`, no `ALLOW_MEMORY_GROWTH`) so a mid-call heap growth can't
+detach the buffer `ccall`'s string marshaling reads.
+
+**Still open:** widening the slice beyond the symbolic core (the numeric / linear-algebra
+modules) as the front-end needs them.
 
 ## See also
 - [webkernel.md](../reference/webkernel.md) — the freestanding kernel (track 1).
