@@ -129,6 +129,50 @@ Additional linear algebra, numerics & simulation:
 | `nimblecas.svgplot` | [svgplot.md](reference/svgplot.md) | In-core standalone SVG-string plotter (line/scatter/function; exact data → pixel mapping). |
 | `nimblecas.quantum` | [quantum.md](reference/quantum.md) | Exact non-commutative operator algebra (ROADMAP §7.15): operators, commutators/Jacobi, Dirac bra/ket, dagger adjoint, `normal_form` canonicalizer. |
 
+Applied linear algebra & operators (exact over `Q` unless noted):
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.matstruct` | [matstruct.md](reference/matstruct.md) | Structured matrices + exact `LDL^T`/Cholesky/rational-Hessenberg factorizations; block builders & predicates. |
+| `nimblecas.lie` | [lie.md](reference/lie.md) | Matrix Lie algebras: bracket, structure constants, Killing form, exponential map, truncated Lie transforms/series. |
+| `nimblecas.krylov` | [krylov.md](reference/krylov.md) | Krylov methods: exact-over-`Q` conjugate gradient (SPD) + rational Arnoldi/Lanczos; numerical GMRES/MINRES/BiCGSTAB. |
+| `nimblecas.semigroup` | [semigroup.md](reference/semigroup.md) | Functional analysis + C₀-semigroups (finite-dim): resolvent, spectrum, `e^{tA}`, Cauchy problem, Hille–Yosida, Sylvester/Lyapunov. |
+
+Variational & analytical mechanics (exact symbolic):
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.calcvar` | [calcvar.md](reference/calcvar.md) | Calculus of variations: Euler–Lagrange, Beltrami, holonomic/non-holonomic constraints, Lagrange multipliers. |
+| `nimblecas.mechanics` | [mechanics.md](reference/mechanics.md) | Hamiltonian mechanics: Legendre transform, canonical equations, Poisson brackets, phase space, action-angle. |
+
+Numerical methods & solvers:
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.interpolation` | [interpolation.md](reference/interpolation.md) | Exact polynomial interpolation over `Q`: Lagrange, Newton divided differences, barycentric, Neville, Hermite. |
+| `nimblecas.optimize` | [optimize.md](reference/optimize.md) | Numerical unconstrained optimization: gradient descent, Newton, BFGS/L-BFGS, CG, Nelder–Mead, Kelley implicit filtering. |
+| `nimblecas.nlsolve` | [nlsolve.md](reference/nlsolve.md) | Kelley iterative solvers for `F(x)=0`: Newton/Broyden/Newton–Krylov(JFNK)/Anderson/Levenberg–Marquardt (numerical). |
+| `nimblecas.extrapolation` | [extrapolation.md](reference/extrapolation.md) | Sequence acceleration: Richardson, Romberg, Aitken Δ², Wynn ε — exact over `Q` for rational data, else numerical. |
+| `nimblecas.pdenum` | [pdenum.md](reference/pdenum.md) | Numerical PDEs: FDM/FEM/FVM exact-over-`Q` discretizations + solves; method-of-lines; Crank–Nicolson (numerical). |
+| `nimblecas.spectral` | [spectral.md](reference/spectral.md) | Spectral methods: exact Legendre/Chebyshev Galerkin + coefficient differentiation; numerical collocation/Fourier; DG/SEM. |
+
+Signal processing & uncertainty:
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.wavelets` | [wavelets.md](reference/wavelets.md) | Wavelet transforms: Haar exact over `Q`; Daubechies/Symlets/Coiflets/biorthogonal/CWT numerical; DWT/SWT/packets/lifting. |
+| `nimblecas.qmc` | [qmc.md](reference/qmc.md) | Quasi-Monte Carlo: exact low-discrepancy points (Van der Corput/Halton/Sobol/lattice) + RQMC + adaptive integration. |
+| `nimblecas.compsense` | [compsense.md](reference/compsense.md) | Compressed sensing: exact-over-`Q` basis pursuit (via the LP dual), mutual coherence; numerical OMP/CoSaMP/IHT. |
+
+Analysis, control & stochastic processes:
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.analysis` | [analysis.md](reference/analysis.md) | Condition number (κ₁/κ_∞ exact), convergence tests, Lyapunov equation/stability (exact), Lyapunov exponent (numerical). |
+| `nimblecas.control` | [control.md](reference/control.md) | Control systems: transfer-function/state-space, controllability/observability, Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability, Bode. |
+| `nimblecas.inteq` | [inteq.md](reference/inteq.md) | Integral equations: Fredholm/Volterra (linear + nonlinear), separable-kernel exact reduction, Neumann/Picard, ADM/HPM/HAM. |
+| `nimblecas.stochastic` | [stochastic.md](reference/stochastic.md) | Stochastic processes: Markov-chain stationary distribution + hitting times (exact), WSS autocovariance, Yule–Walker, PSD. |
+
 Tooling, front-end & integration:
 
 | Module | Reference | Summary |
