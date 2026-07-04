@@ -667,7 +667,10 @@ auto fredholm1_separable(const RationalPoly& f, const SeparableKernel& kernel, c
         maxdeg = std::max(maxdeg, gi.degree());
     }
     if (maxdeg < 0) {
-        return FirstKindSolution{.moments = std::vector<Rational>(r)};  // all zero
+        // f and every g_i are the zero polynomial: 0 = Σ c_i·0 holds for ANY c, so the moments
+        // are genuinely non-unique — honestly not recoverable (same verdict as the dependent-g_i
+        // singular-Gram case below), never a fabricated all-zero "solution".
+        return make_error<FirstKindSolution>(MathError::not_implemented);
     }
     const std::size_t rowsn = static_cast<std::size_t>(maxdeg) + 1;
 

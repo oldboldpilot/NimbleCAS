@@ -546,7 +546,10 @@ using JacProvider = std::function<Result<Vec>(std::span<const double>, std::span
         Fx = std::move(ls.F_new);
         fnorm = ls.fnorm;
     }
-    return SolveResult{std::move(x), fnorm, opts.max_iter, false, fevals};
+    // The convergence test sits at the loop TOP, so an iterate that first meets tolerance on
+    // the final permitted iteration would exit here — re-check the residual so it is reported
+    // converged rather than falsely converged=false.
+    return SolveResult{std::move(x), fnorm, opts.max_iter, fnorm <= opts.tol, fevals};
 }
 
 }  // namespace nimblecas::nlsolve::detail
@@ -761,7 +764,7 @@ export namespace nimblecas::nlsolve {
         Fx = std::move(ls.F_new);
         fnorm = ls.fnorm;
     }
-    return SolveResult{std::move(x), fnorm, opts.max_iter, false, fevals};
+    return SolveResult{std::move(x), fnorm, opts.max_iter, fnorm <= opts.tol, fevals};
 }
 
 // --- Newton-Krylov (JFNK) ---------------------------------------------------
@@ -830,7 +833,7 @@ export namespace nimblecas::nlsolve {
         }
         eta = std::min(eta, eta_max);
     }
-    return SolveResult{std::move(x), fnorm, opts.max_iter, false, fevals};
+    return SolveResult{std::move(x), fnorm, opts.max_iter, fnorm <= opts.tol, fevals};
 }
 
 // --- Anderson acceleration (fixed-point g(x) = x) ---------------------------
@@ -939,7 +942,7 @@ export namespace nimblecas::nlsolve {
         }
         fnorm = detail::norm2(fh.back());
     }
-    return SolveResult{std::move(x), fnorm, opts.max_iter, false, fevals};
+    return SolveResult{std::move(x), fnorm, opts.max_iter, fnorm <= opts.tol, fevals};
 }
 
 // --- Levenberg-Marquardt (nonlinear least squares) --------------------------
@@ -1048,7 +1051,7 @@ using detail::Vec;
             return SolveResult{std::move(x), fnorm, it + 1, false, fevals};
         }
     }
-    return SolveResult{std::move(x), fnorm, opts.max_iter, false, fevals};
+    return SolveResult{std::move(x), fnorm, opts.max_iter, fnorm <= opts.tol, fevals};
 }
 
 }  // namespace detail_lm

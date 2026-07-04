@@ -1259,7 +1259,11 @@ auto kharitonov_polynomials(std::span<const Rational> lower, std::span<const Rat
         return make_error<std::array<RationalPoly, 4>>(MathError::domain_error);
     }
     for (std::size_t i = 0; i < lower.size(); ++i) {
-        if (rsign_of(upper[i].subtract(lower[i]).value_or(Rational::from_int(-1))) < 0) {
+        auto diff = upper[i].subtract(lower[i]);
+        if (!diff) {
+            return make_error<std::array<RationalPoly, 4>>(diff.error());  // surface overflow, not lo>hi
+        }
+        if (rsign_of(*diff) < 0) {
             return make_error<std::array<RationalPoly, 4>>(MathError::domain_error);  // lo > hi
         }
     }
@@ -1300,6 +1304,17 @@ auto is_positive_definite(const Matrix& p) -> Result<bool> {
         return make_error<bool>(MathError::domain_error);
     }
     const std::size_t n = p.rows();
+    // Sylvester's leading-principal-minor criterion certifies positive-definiteness only for a
+    // SYMMETRIC matrix (for a non-symmetric P the minors say nothing about x^T P x, whose sign
+    // is governed by the symmetric part). Enforce the documented precondition rather than
+    // returning a wrong verdict for non-symmetric input (internal Lyapunov callers pass P=P^T).
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = i + 1; j < n; ++j) {
+            if (!(p.at(i, j) == p.at(j, i))) {
+                return make_error<bool>(MathError::domain_error);
+            }
+        }
+    }
     std::vector<std::vector<Rational>> rows(n, std::vector<Rational>(n));
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = 0; j < n; ++j) {

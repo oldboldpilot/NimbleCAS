@@ -113,6 +113,14 @@ target_sources(nimblecas_stats PUBLIC
 target_link_libraries(nimblecas_stats
   PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.stochastic : stochastic-process analysis (Markov/WSS/ARMA/PSD) ----
+add_library(nimblecas_stochastic STATIC)
+target_sources(nimblecas_stochastic PUBLIC
+  FILE_SET CXX_MODULES FILES src/stochastic/stochastic.cppm)
+target_link_libraries(nimblecas_stochastic
+  PUBLIC nimblecas_stats nimblecas_matrix nimblecas_roots nimblecas_ratpoly
+         nimblecas_polynomial nimblecas_core std_module)
+
 # ---- nimblecas.combinatorics : factorial/binomial/Bernoulli/Stirling (§7.18) ----
 add_library(nimblecas_combinatorics STATIC)
 target_sources(nimblecas_combinatorics PUBLIC
@@ -183,6 +191,13 @@ target_sources(nimblecas_nlsolve PUBLIC
   FILE_SET CXX_MODULES FILES src/nlsolve/nlsolve.cppm)
 target_link_libraries(nimblecas_nlsolve
   PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.extrapolation : sequence acceleration (Richardson/Romberg/Aitken/Wynn) ----
+add_library(nimblecas_extrapolation STATIC)
+target_sources(nimblecas_extrapolation PUBLIC
+  FILE_SET CXX_MODULES FILES src/extrapolation/extrapolation.cppm)
+target_link_libraries(nimblecas_extrapolation
+  PUBLIC nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
 # ---- nimblecas.lp : exact-rational linear programming (Simplex) (§7.22) ----
 add_library(nimblecas_lp STATIC)
@@ -641,6 +656,12 @@ target_link_libraries(stats_tests
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME stats_tests COMMAND stats_tests)
 
+add_executable(stochastic_tests tests/stochastic_tests.cpp)
+target_link_libraries(stochastic_tests
+  PRIVATE nimblecas_stochastic nimblecas_stats nimblecas_matrix nimblecas_roots
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME stochastic_tests COMMAND stochastic_tests)
+
 add_executable(combinatorics_tests tests/combinatorics_tests.cpp)
 target_link_libraries(combinatorics_tests
   PRIVATE nimblecas_combinatorics nimblecas_ratpoly nimblecas_polynomial nimblecas_core
@@ -710,6 +731,12 @@ add_executable(nlsolve_tests tests/nlsolve_tests.cpp)
 target_link_libraries(nlsolve_tests
   PRIVATE nimblecas_nlsolve nimblecas_core nimblecas_testing std_module)
 add_test(NAME nlsolve_tests COMMAND nlsolve_tests)
+
+add_executable(extrapolation_tests tests/extrapolation_tests.cpp)
+target_link_libraries(extrapolation_tests
+  PRIVATE nimblecas_extrapolation nimblecas_ratpoly nimblecas_polynomial nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME extrapolation_tests COMMAND extrapolation_tests)
 
 add_executable(wavelets_tests tests/wavelets_tests.cpp)
 target_link_libraries(wavelets_tests

@@ -1025,6 +1025,19 @@ export namespace nimblecas {
             V.push_back(std::move(vn));
         }
     }
+    // On an invariant-subspace breakdown dim < mm, but H was laid out with row stride mm.
+    // Repack the valid leading dim x dim block into a contiguous buffer so the returned
+    // {h, dim} honors its documented "dim x dim row-major" contract (a consumer indexing
+    // h[i*dim + j] must not read foreign-row entries).
+    if (dim < mm) {
+        std::vector<double> Hc(dim * dim, 0.0);
+        for (std::size_t i = 0; i < dim; ++i) {
+            for (std::size_t j = 0; j < dim; ++j) {
+                Hc[i * dim + j] = H[i * mm + j];
+            }
+        }
+        return DoubleHessenberg{std::move(Hc), dim};
+    }
     return DoubleHessenberg{std::move(H), dim};
 }
 

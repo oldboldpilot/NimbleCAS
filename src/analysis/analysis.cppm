@@ -531,11 +531,15 @@ auto ratio_test(const RationalSequence& a) -> RatioTest {
         return result;
     }
 
-    // NUMERICAL fallback: the finite-n ratio at the largest sampled index (heuristic).
+    // NUMERICAL fallback: the ratios are NOT a single constant, so this is not a geometric
+    // sequence and a few finite-n samples cannot certify the limit L — in particular they
+    // cannot distinguish a genuine L < 1 from L -> 1 (e.g. the harmonic series has ratios
+    // n/(n+1) -> 1 yet DIVERGES). Honestly report `inconclusive` rather than a confident,
+    // possibly-wrong verdict; only the exact constant-ratio (geometric) path above concludes.
+    // The finite-sample estimate is still surfaced in numeric_limit for the caller's inspection.
     result.exact = false;
     result.numeric_limit = have_numeric ? last_numeric : 0.0;
-    result.verdict = have_numeric ? verdict_from_double(last_numeric, 1e-9)
-                                  : Verdict::inconclusive;
+    result.verdict = Verdict::inconclusive;
     return result;
 }
 
@@ -547,7 +551,15 @@ auto root_test(const RealSequence& a, std::int64_t n) -> NumericTest {
     const double an = std::fabs(a(n));
     const double l = (an == 0.0) ? 0.0 : std::pow(an, 1.0 / static_cast<double>(n));
     result.numeric_limit = l;
-    result.verdict = verdict_from_double(l, 1e-9);
+    // Single-sample estimate of the root L = lim |a_n|^{1/n}. Because the root test is
+    // genuinely INCONCLUSIVE at L = 1, and a slowly-varying divergent series (e.g. 1/n, whose
+    // root n^{-1/n} ~ 0.94 at n=64) sits just below 1, only conclude when the estimate is
+    // CLEARLY bounded away from 1 (band 0.1); otherwise report inconclusive rather than a
+    // confident, possibly-wrong verdict.
+    constexpr double band = 0.1;
+    result.verdict = (l < 1.0 - band)   ? Verdict::converges
+                     : (l > 1.0 + band) ? Verdict::diverges
+                                        : Verdict::inconclusive;
     return result;
 }
 

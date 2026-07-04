@@ -1140,6 +1140,10 @@ auto implicit_filtering(Objective f, std::span<const double> x0, std::span<const
             }
             h *= 0.5;               // refine: shrink the scale and reset the model.
             reset_hinv();
+            ++iter;                 // count refinements against the hard max_iterations cap
+            if (!std::isfinite(h)) {
+                break;              // degenerate scale (e.g. non-finite imf_h0) -> stop safely
+            }
             continue;
         }
 
