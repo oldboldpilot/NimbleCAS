@@ -45,6 +45,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff → vector
 | `nimblecas.series` | [series.md](reference/series.md) | Taylor series over `diff` + `simplify`: `taylor_coefficients` (`c_k = f^(k)(point)/k!`) and the truncated `taylor_polynomial`, overflow-checked `k!`. |
 | `nimblecas.laplace` | [laplace.md](reference/laplace.md) | Table-driven symbolic Laplace transform `L{f(t)} = F(s)` by linearity over the elementary forms, simplified; `not_implemented` off-table. |
 | `nimblecas.vectorcalc` | [vectorcalc.md](reference/vectorcalc.md) | Vector calculus over `diff`: gradient, divergence, curl, Laplacian, Jacobian, Hessian, directional / total derivatives. |
+| `nimblecas.limits` | [limits.md](reference/limits.md) | Symbolic limits over `diff` + `simplify`: continuity substitution, iterated L'Hôpital for `0/0`, rational functions at `±∞`; a narrow decidable class — anything undecidable returns an honest `MathError`. |
 | `nimblecas.latex` | [latex.md](reference/latex.md) | Precedence-aware LaTeX math export: `to_latex(Expr)` rendering `\frac`/`\sqrt`, Greek letters, and function control words. |
 
 The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein} → integrate}}`; `parallel`):

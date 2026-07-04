@@ -591,6 +591,13 @@ target_sources(nimblecas_vectorcalc PUBLIC
 target_link_libraries(nimblecas_vectorcalc
   PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.limits : symbolic limits / L'Hopital (§7) ----
+add_library(nimblecas_limits STATIC)
+target_sources(nimblecas_limits PUBLIC
+  FILE_SET CXX_MODULES FILES src/limits/limits.cppm)
+target_link_libraries(nimblecas_limits
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.mechanics : Hamiltonian mechanics, phase space, action-angle ----
 add_library(nimblecas_mechanics STATIC)
 target_sources(nimblecas_mechanics PUBLIC
@@ -1057,6 +1064,12 @@ target_link_libraries(vectorcalc_tests
   PRIVATE nimblecas_vectorcalc nimblecas_diff nimblecas_simplify nimblecas_symbolic
           nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME vectorcalc_tests COMMAND vectorcalc_tests)
+
+add_executable(limits_tests tests/limits_tests.cpp)
+target_link_libraries(limits_tests
+  PRIVATE nimblecas_limits nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME limits_tests COMMAND limits_tests)
 
 add_executable(mechanics_tests tests/mechanics_tests.cpp)
 target_link_libraries(mechanics_tests

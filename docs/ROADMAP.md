@@ -10,7 +10,7 @@ This section tracks what is **built, tested, and adversarially reviewed** agains
 
 **Done (built on the `clang++-22` + libc++ server, `ctest` green, ASan/UBSan clean, per-module review):**
 
-- **Symbolic core & calculus** — `core`, `symbolic`, `simplify`, `cache`, `diff`, `series`, `laplace`, `vectorcalc`, `latex`; plus **`symconst`** (π/e/γ/φ as symbolic `Expr` leaves + numeric bridge to `constants`).
+- **Symbolic core & calculus** — `core`, `symbolic`, `simplify`, `cache`, `diff`, `series`, `laplace`, `vectorcalc`, `limits` (continuity/L'Hôpital/rational-at-∞, honest `MathError` off the decidable class), `latex`; plus **`symconst`** (π/e/γ/φ as symbolic `Expr` leaves + numeric bridge to `constants`).
 - **Polynomial / rational-function chain** — `polynomial`, `ratpoly`, `polyexpr`, `pfd`, `ratint`, `resultant`, `rothstein`, `integrate`, `roots`, `recurrence`, `pade`.
 - **Linear algebra** — `matrix`, `cmatrix`, `matdecomp`, `bandsolve` (tridiagonal/banded direct solvers), `matexp`, `eigen`; big-backed `bigmatrix` (Bareiss det) and `bigeigen` (Faddeev–LeVerrier char-poly + rational eigenvalues).
 - **Wide-arithmetic tower** — `int128`, `bigint`, `bigrational`, `bigfloat`, `doubledouble`, `bigcombinatorics`, `bigpowerseries`; `constants`; `numbertheory` (crypto primitives).
