@@ -10,7 +10,7 @@ This section tracks what is **built, tested, and adversarially reviewed** agains
 
 **Done (built on the `clang++-22` + libc++ server, `ctest` green, ASan/UBSan clean, per-module review):**
 
-- **Symbolic core & calculus** — `core`, `symbolic`, `simplify`, `cache`, `diff`, `series`, `laplace`, `vectorcalc`, `limits` (continuity/L'Hôpital/rational-at-∞, honest `MathError` off the decidable class), `latex`; plus **`symconst`** (π/e/γ/φ as symbolic `Expr` leaves + numeric bridge to `constants`).
+- **Symbolic core & calculus** — `core`, `symbolic`, `simplify`, `cache`, `diff`, `series`, `laplace`, `vectorcalc`, `limits` (continuity/L'Hôpital/rational-at-∞, honest `MathError` off the decidable class), `tensor` (Christoffel/Riemann/Ricci/Einstein/geodesics/Laplace–Beltrami — differential geometry over `Q`), `forms` (exterior calculus: wedge/`d`/Hodge), `reader` (text→`Expr` eval surface), `latex`; plus **`symconst`** (π/e/γ/φ as symbolic `Expr` leaves + numeric bridge to `constants`).
 - **Polynomial / rational-function chain** — `polynomial`, `ratpoly`, `polyexpr`, `pfd`, `ratint`, `resultant`, `rothstein`, `integrate`, `roots`, `recurrence`, `pade`.
 - **Linear algebra** — `matrix`, `cmatrix`, `matdecomp`, `bandsolve` (tridiagonal/banded direct solvers), `matexp`, `eigen`; big-backed `bigmatrix` (Bareiss det) and `bigeigen` (Faddeev–LeVerrier char-poly + rational eigenvalues).
 - **Wide-arithmetic tower** — `int128`, `bigint`, `bigrational`, `bigfloat`, `doubledouble`, `bigcombinatorics`, `bigpowerseries`; `constants`; `numbertheory` (crypto primitives).
@@ -22,7 +22,7 @@ This section tracks what is **built, tested, and adversarially reviewed** agains
 - **Variational & analytical mechanics** — `calcvar` (Euler–Lagrange, constraints, Lagrange multipliers), `mechanics` (Hamiltonian/Legendre/Poisson/action-angle).
 - **Numerical methods & solvers** — `interpolation`, `splines` (exact cubic/Hermite/PCHIP/Bézier/B-spline/NURBS over Q), `optimize` (+ Kelley implicit filtering), `nlsolve` (Kelley Newton/Broyden/JFNK/Anderson/LM), `extrapolation` (Richardson/Romberg/Aitken/Wynn), `pdenum` (FDM/FEM/FVM), `spectral` (Galerkin/collocation/Fourier/DG).
 - **Signals & uncertainty** — `wavelets` (Haar exact + modern families), `qmc` (low-discrepancy + RQMC), `compsense` (exact basis pursuit via LP dual + OMP).
-- **Analysis, control & stochastics** — `analysis` (conditioning/convergence/Lyapunov), `control` (TF/SS + Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability + Bode), `inteq` (Fredholm/Volterra + ADM/HPM/HAM), `stochastic` (Markov chains, WSS, Yule–Walker, PSD), `hmm` (Forward/Backward/Viterbi/Baum–Welch, exact over Q).
+- **Analysis, control & stochastics** — `analysis` (conditioning/convergence/Lyapunov), `control` (TF/SS + Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability + Bode), `inteq` (Fredholm/Volterra + ADM/HPM/HAM), `stochastic` (Markov chains, WSS, Yule–Walker, PSD), `hmm` (Forward/Backward/Viterbi/Baum–Welch, exact over Q), `smc` (numerical sequential Monte Carlo: bootstrap particle filters, resampling, variance reduction).
 
 Every module above is honest about its exact-over-`Q` vs numerical boundary, built on the mgpu gate (tests + ASan + adversarial review) and documented under [Module reference](Index.md#module-reference).
 

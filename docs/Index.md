@@ -46,6 +46,9 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff → vector
 | `nimblecas.laplace` | [laplace.md](reference/laplace.md) | Table-driven symbolic Laplace transform `L{f(t)} = F(s)` by linearity over the elementary forms, simplified; `not_implemented` off-table. |
 | `nimblecas.vectorcalc` | [vectorcalc.md](reference/vectorcalc.md) | Vector calculus over `diff`: gradient, divergence, curl, Laplacian, Jacobian, Hessian, directional / total derivatives. |
 | `nimblecas.limits` | [limits.md](reference/limits.md) | Symbolic limits over `diff` + `simplify`: continuity substitution, iterated L'Hôpital for `0/0`, rational functions at `±∞`; a narrow decidable class — anything undecidable returns an honest `MathError`. |
+| `nimblecas.tensor` | [tensor.md](reference/tensor.md) | Tensor calculus / differential geometry over `Q`: Christoffel symbols, covariant derivative, Riemann/Ricci/Einstein tensors, scalar curvature, geodesics, Laplace–Beltrami — exact symbolic via `diff`+`simplify`. |
+| `nimblecas.forms` | [forms.md](reference/forms.md) | Exterior calculus over `Q`: p-forms, wedge `∧`, exterior derivative `d` (with `d²=0`), Hodge star `⋆` (Euclidean; `not_implemented` off it), interior product, closed/exact. |
+| `nimblecas.reader` | [reader.md](reference/reader.md) | Text → `Expr` parser (the eval surface): precedence-climbing, exact-only (rationals never reals), round-trips `to_string`; malformed input → honest `MathError::syntax_error`. |
 | `nimblecas.latex` | [latex.md](reference/latex.md) | Precedence-aware LaTeX math export: `to_latex(Expr)` rendering `\frac`/`\sqrt`, Greek letters, and function control words. |
 
 The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein} → integrate}}`; `parallel`):
@@ -174,6 +177,7 @@ Analysis, control & stochastic processes:
 | `nimblecas.control` | [control.md](reference/control.md) | Control systems: transfer-function/state-space, controllability/observability, Routh/Hurwitz/Kharitonov/Nyquist/Lyapunov stability, Bode. |
 | `nimblecas.inteq` | [inteq.md](reference/inteq.md) | Integral equations: Fredholm/Volterra (linear + nonlinear), separable-kernel exact reduction, Neumann/Picard, ADM/HPM/HAM. |
 | `nimblecas.stochastic` | [stochastic.md](reference/stochastic.md) | Stochastic processes: Markov-chain stationary distribution + hitting times (exact), WSS autocovariance, Yule–Walker, PSD. |
+| `nimblecas.smc` | [smc.md](reference/smc.md) | Sequential Monte Carlo (numerical): bootstrap particle filters, multinomial/systematic/stratified/residual resampling, ESS, variance reduction — deterministic via counter-based RNG, honest statistical estimates. |
 
 Tooling, front-end & integration:
 
@@ -181,6 +185,7 @@ Tooling, front-end & integration:
 | :--- | :--- | :--- |
 | `nimblecas.testing` | [testing.md](reference/testing.md) | Internal, dependency-free test framework (`TestSuite`/`TestContext`) wired to ctest. |
 | `nimblecas.webexport` | [webexport.md](reference/webexport.md) | JSON export bridge — serializes plot data + documents to the contract the `web/` front-end renders (the JSON analogue of `svgplot`). |
+| `nimblecas.execdoc` | [execdoc.md](reference/execdoc.md) | Executable document engine (§7.13): runs ` ```nimblecas ` cells over `reader`+`simplify`+`diff`, incremental cache, HTML/MathJax render — a data bridge, honest exact results with captured cell errors. |
 | `nimblecas.webkernel` | [webkernel.md](reference/webkernel.md) | Freestanding `wasm32` compute kernel (clang, no Emscripten) the browser front-end loads for live in-page sampling. See also [WASM build](architecture/wasm-build.md). |
 | `nimblecas_ext` (Python) | [python-bindings.md](reference/python-bindings.md) | nanobind bindings: the `Expr` API, module functions, and `MathError`→exception translation. |
 

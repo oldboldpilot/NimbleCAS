@@ -598,6 +598,42 @@ target_sources(nimblecas_limits PUBLIC
 target_link_libraries(nimblecas_limits
   PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.tensor : tensor calculus / differential geometry (§7, extends 7.19) ----
+add_library(nimblecas_tensor STATIC)
+target_sources(nimblecas_tensor PUBLIC
+  FILE_SET CXX_MODULES FILES src/tensor/tensor.cppm)
+target_link_libraries(nimblecas_tensor
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
+# ---- nimblecas.forms : differential forms / exterior calculus (wedge/d/hodge) ----
+add_library(nimblecas_forms STATIC)
+target_sources(nimblecas_forms PUBLIC
+  FILE_SET CXX_MODULES FILES src/forms/forms.cppm)
+target_link_libraries(nimblecas_forms
+  PUBLIC nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
+# ---- nimblecas.smc : Sequential Monte Carlo / particle filtering (§7.8, numerical) ----
+add_library(nimblecas_smc STATIC)
+target_sources(nimblecas_smc PUBLIC
+  FILE_SET CXX_MODULES FILES src/smc/smc.cppm)
+target_link_libraries(nimblecas_smc
+  PUBLIC nimblecas_rng nimblecas_core std_module)
+
+# ---- nimblecas.reader : text -> Expr parser (eval surface for REPL / execdoc) ----
+add_library(nimblecas_reader STATIC)
+target_sources(nimblecas_reader PUBLIC
+  FILE_SET CXX_MODULES FILES src/reader/reader.cppm)
+target_link_libraries(nimblecas_reader
+  PUBLIC nimblecas_symbolic nimblecas_core std_module)
+
+# ---- nimblecas.execdoc : executable document engine / live notebooks (§7.13) ----
+add_library(nimblecas_execdoc STATIC)
+target_sources(nimblecas_execdoc PUBLIC
+  FILE_SET CXX_MODULES FILES src/execdoc/execdoc.cppm)
+target_link_libraries(nimblecas_execdoc
+  PUBLIC nimblecas_reader nimblecas_latex nimblecas_diff nimblecas_simplify
+         nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.mechanics : Hamiltonian mechanics, phase space, action-angle ----
 add_library(nimblecas_mechanics STATIC)
 target_sources(nimblecas_mechanics PUBLIC
@@ -1070,6 +1106,35 @@ target_link_libraries(limits_tests
   PRIVATE nimblecas_limits nimblecas_diff nimblecas_simplify nimblecas_symbolic
           nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME limits_tests COMMAND limits_tests)
+
+add_executable(tensor_tests tests/tensor_tests.cpp)
+target_link_libraries(tensor_tests
+  PRIVATE nimblecas_tensor nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME tensor_tests COMMAND tensor_tests)
+
+add_executable(forms_tests tests/forms_tests.cpp)
+target_link_libraries(forms_tests
+  PRIVATE nimblecas_forms nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_cache nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME forms_tests COMMAND forms_tests)
+
+add_executable(smc_tests tests/smc_tests.cpp)
+target_link_libraries(smc_tests
+  PRIVATE nimblecas_smc nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME smc_tests COMMAND smc_tests)
+
+add_executable(reader_tests tests/reader_tests.cpp)
+target_link_libraries(reader_tests
+  PRIVATE nimblecas_reader nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
+add_test(NAME reader_tests COMMAND reader_tests)
+
+add_executable(execdoc_tests tests/execdoc_tests.cpp)
+target_link_libraries(execdoc_tests
+  PRIVATE nimblecas_execdoc nimblecas_reader nimblecas_latex nimblecas_diff
+          nimblecas_simplify nimblecas_symbolic nimblecas_cache nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME execdoc_tests COMMAND execdoc_tests)
 
 add_executable(mechanics_tests tests/mechanics_tests.cpp)
 target_link_libraries(mechanics_tests
