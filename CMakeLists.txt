@@ -273,6 +273,13 @@ target_sources(nimblecas_constants PUBLIC
 target_link_libraries(nimblecas_constants
   PUBLIC nimblecas_bigfloat nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigrational : exact unbounded rational on BigInt (no overflow ceiling) ----
+add_library(nimblecas_bigrational STATIC)
+target_sources(nimblecas_bigrational PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigrational/bigrational.cppm)
+target_link_libraries(nimblecas_bigrational
+  PUBLIC nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.int128 : native 128-bit integer & rational (overflow-checked middle tier) ----
 add_library(nimblecas_int128 STATIC)
 target_sources(nimblecas_int128 PUBLIC
@@ -563,6 +570,12 @@ add_executable(bigint_tests tests/bigint_tests.cpp)
 target_link_libraries(bigint_tests
   PRIVATE nimblecas_bigint nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigint_tests COMMAND bigint_tests)
+
+add_executable(bigrational_tests tests/bigrational_tests.cpp)
+target_link_libraries(bigrational_tests
+  PRIVATE nimblecas_bigrational nimblecas_bigint nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigrational_tests COMMAND bigrational_tests)
 
 add_executable(numbertheory_tests tests/numbertheory_tests.cpp)
 target_link_libraries(numbertheory_tests
