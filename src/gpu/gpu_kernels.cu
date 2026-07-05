@@ -318,6 +318,38 @@ __global__ void haar_dwt_batch_kernel(const double* __restrict__ in, int batch, 
     }
 }
 
+// Batched dense double matrix multiply, one thread per output element (b, i, j). The layout is
+// row-major throughout: A_b is m x k, B_b is k x n, C_b is m x n, and the `batch` problems are
+// stored contiguously back to back. Each thread computes a single output scalar
+// C_b[i,j] = sum_{l=0..k-1} A_b[i,l] * B_b[l,j] with a plain global-memory accumulation loop over
+// the shared dimension k — the simple, provably-correct formulation (no shared-memory tiling).
+// Grid-stride over the batch*m*n independent output elements keeps the launch device-sized. The
+// host wrapper guarantees each flattened count (batch*m*k, batch*k*n, batch*m*n) fits in int, so
+// every index below stays within int range.
+__global__ void batched_matmul_kernel(const double* __restrict__ a, const double* __restrict__ b,
+                                      double* __restrict__ c, int batch, int m, int k, int n) {
+    const int total = batch * m * n;  // number of output scalars across all problems
+    const int mn = m * n;             // elements per C_b block
+    const int mk = m * k;             // elements per A_b block
+    const int kn = k * n;             // elements per B_b block
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    for (int idx = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                   static_cast<int>(threadIdx.x);
+         idx < total; idx += stride) {
+        const int bi = idx / mn;          // which problem in the batch
+        const int rem = idx - bi * mn;    // linear offset within this C_b block
+        const int row = rem / n;          // output row i
+        const int col = rem - row * n;    // output column j
+        const int a_off = bi * mk + row * k;  // start of A_b row i
+        const int b_off = bi * kn + col;      // start of B_b column j (stride n down the column)
+        double acc = 0.0;
+        for (int l = 0; l < k; ++l) {
+            acc += a[a_off + l] * b[b_off + l * n];
+        }
+        c[idx] = acc;
+    }
+}
+
 }  // namespace
 
 extern "C" int nimblecas_gpu_device_count(void) {
@@ -810,5 +842,66 @@ extern "C" int nimblecas_gpu_haar_dwt_batch(const double* data, int batch, int l
     }
     host_unregister(pin_out);
     host_unregister(pin_in);
+    return rc;
+}
+
+extern "C" int nimblecas_gpu_batched_matmul(const double* a, const double* b, double* c, int batch,
+                                            int m, int k, int n) {
+    // The C++ wrapper rejects non-positive dimensions up front; guard here too so the sizes below
+    // and the launch bound are well defined. Nothing to compute means success with no writes.
+    if (batch <= 0 || m <= 0 || k <= 0 || n <= 0) {
+        return 0;
+    }
+    const size_t a_count =
+        static_cast<size_t>(batch) * static_cast<size_t>(m) * static_cast<size_t>(k);
+    const size_t b_count =
+        static_cast<size_t>(batch) * static_cast<size_t>(k) * static_cast<size_t>(n);
+    const size_t c_count =
+        static_cast<size_t>(batch) * static_cast<size_t>(m) * static_cast<size_t>(n);
+    const size_t a_bytes = a_count * sizeof(double);
+    const size_t b_bytes = b_count * sizeof(double);
+    const size_t c_bytes = c_count * sizeof(double);
+    double* dev_a = nullptr;
+    double* dev_b = nullptr;
+    double* dev_c = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    PinnedScope pin_a = host_register(a, a_bytes);
+    PinnedScope pin_b = host_register(b, b_bytes);
+    PinnedScope pin_c = host_register(c, c_bytes);
+    if ((err = cudaMalloc(&dev_a, a_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_b, b_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_c, c_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_a, a, a_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_b, b, b_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        const int threads = 256;
+        const int blocks = choose_blocks(batch * m * n, threads);
+        batched_matmul_kernel<<<blocks, threads>>>(dev_a, dev_b, dev_c, batch, m, k, n);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(c, dev_c, c_bytes, cudaMemcpyDeviceToHost)) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        }
+    }
+    if (dev_a != nullptr) {
+        cudaFree(dev_a);
+    }
+    if (dev_b != nullptr) {
+        cudaFree(dev_b);
+    }
+    if (dev_c != nullptr) {
+        cudaFree(dev_c);
+    }
+    host_unregister(pin_c);
+    host_unregister(pin_b);
+    host_unregister(pin_a);
     return rc;
 }

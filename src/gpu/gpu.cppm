@@ -228,4 +228,57 @@ export namespace nimblecas::gpu {
     return out;
 }
 
+// Batched dense double matrix multiply over `batch` independent problems, each C_b = A_b * B_b
+// with A_b an m x k and B_b a k x n row-major double matrix; returns all `batch` products C_b
+// (each m x n) packed contiguously in the same block layout. The inputs are the concatenated
+// A and B blocks, so a.size() must equal batch*m*k and b.size() must equal batch*k*n.
+//
+// HONESTY: a REGULAR, DATA-PARALLEL numerical routine (double) — one independent dot product per
+// output scalar — which is the workload shape the GPU accelerates. It is NOT a symbolic/exact
+// operation; the exact-rational / CAS matrix paths cannot run on the device. DETERMINISM: each
+// output element is an independent length-k accumulation with no cross-element reduction, so the
+// result matches a CPU reference to within FMA-contraction last bits.
+//
+// Fails with MathError::gpu_error when no device is present or a CUDA call fails;
+// MathError::domain_error when any dimension is non-positive or a span size disagrees with the
+// dimensions; and MathError::overflow when a flattened element count exceeds the int kernel bound.
+[[nodiscard]] auto batched_matmul(std::span<const double> a, std::span<const double> b, int batch,
+                                  int m, int k, int n) -> Result<std::vector<double>> {
+    if (!available()) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    if (batch <= 0 || m <= 0 || k <= 0 || n <= 0) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    // Every flattened count must fit the int kernel bound; check the three-factor products without
+    // overflowing size_t (each dimension is already a positive int, so <= INT_MAX).
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    const auto sb = static_cast<std::size_t>(batch);
+    const auto sm = static_cast<std::size_t>(m);
+    const auto sk = static_cast<std::size_t>(k);
+    const auto sn = static_cast<std::size_t>(n);
+    const auto fits = [](std::size_t x, std::size_t y, std::size_t z, std::size_t limit) -> bool {
+        // x, y, z are all > 0 here, so the divisions below are well defined.
+        if (x > limit / y) {
+            return false;
+        }
+        return (x * y) <= limit / z;
+    };
+    if (!fits(sb, sm, sk, int_max) || !fits(sb, sk, sn, int_max) || !fits(sb, sm, sn, int_max)) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    const std::size_t a_count = sb * sm * sk;  // proven <= int_max above, so no overflow
+    const std::size_t b_count = sb * sk * sn;
+    const std::size_t c_count = sb * sm * sn;
+    if (a.size() != a_count || b.size() != b_count) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    std::vector<double> out(c_count);
+    const int rc = nimblecas_gpu_batched_matmul(a.data(), b.data(), out.data(), batch, m, k, n);
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    return out;
+}
+
 }  // namespace nimblecas::gpu

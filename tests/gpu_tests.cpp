@@ -66,6 +66,28 @@ namespace {
     return out;
 }
 
+// CPU reference batched matmul over row-major blocks, matching the kernel's accumulation order:
+// C_b[i,j] = sum_l A_b[i,l] * B_b[l,j], with the `batch` problems packed contiguously.
+[[nodiscard]] auto cpu_batched_matmul(std::span<const double> a, std::span<const double> b,
+                                      int batch, int m, int k, int n) -> std::vector<double> {
+    std::vector<double> c(static_cast<std::size_t>(batch) * static_cast<std::size_t>(m) *
+                              static_cast<std::size_t>(n),
+                          0.0);
+    for (int bi = 0; bi < batch; ++bi) {
+        for (int i = 0; i < m; ++i) {
+            for (int j = 0; j < n; ++j) {
+                double acc = 0.0;
+                for (int l = 0; l < k; ++l) {
+                    acc += a[static_cast<std::size_t>(bi * m * k + i * k + l)] *
+                           b[static_cast<std::size_t>(bi * k * n + l * n + j)];
+                }
+                c[static_cast<std::size_t>(bi * m * n + i * n + j)] = acc;
+            }
+        }
+    }
+    return c;
+}
+
 // Convert a string to a vector of int code points, matching how the batch test flattens input.
 [[nodiscard]] auto code_points(std::string_view s) -> std::vector<int> {
     std::vector<int> out;
@@ -282,6 +304,52 @@ auto main() -> int {
                       // CUDA-disabled path returns the documented error (checked first, before the
                       // device-independent argument validation), so the default build passes.
                       auto got = gpu::haar_dwt_batch(data, batch, len);
+                      t.expect(!got.has_value() && got.error() == MathError::gpu_error,
+                               "CUDA-disabled path returns the documented gpu_error");
+                  }
+              })
+        .test("batched_matmul_matches_cpu",
+              [](TestContext& t) {
+                  // Three independent problems of uniform shape (m x k) * (k x n), packed as one
+                  // batch: A blocks are 2x3, B blocks are 3x2, so each product C_b is 2x2.
+                  const int batch = 3;
+                  const int m = 2;
+                  const int k = 3;
+                  const int n = 2;
+                  const std::vector<double> a = {
+                      1.0, 2.0, 3.0,  4.0, 5.0, 6.0,   // A0
+                      1.0, 0.0, 0.0,  0.0, 1.0, 0.0,   // A1
+                      2.0, -1.0, 0.0, 0.0, 3.0, 1.0};  // A2
+                  const std::vector<double> b = {
+                      7.0, 8.0, 9.0, 10.0, 11.0, 12.0,  // B0
+                      1.0, 2.0, 3.0, 4.0, 5.0, 6.0,     // B1
+                      1.0, 0.0, 2.0, 1.0, 0.0, 4.0};    // B2
+                  if (gpu::available()) {
+                      auto got = gpu::batched_matmul(a, b, batch, m, k, n);
+                      t.expect(got.has_value(), "batched matmul computed on the device");
+                      const auto ref = cpu_batched_matmul(a, b, batch, m, k, n);
+                      bool all = got.has_value() && got->size() == ref.size();
+                      for (std::size_t i = 0; i < ref.size() && all; ++i) {
+                          if (!approx((*got)[i], ref[i])) {
+                              all = false;
+                          }
+                      }
+                      t.expect(all, "GPU batched matmul matches the CPU reference block by block");
+                      // Hand-checked C0 = A0 * B0 first row:
+                      //   C0[0,0] = 1*7 + 2*9 + 3*11 = 58; C0[0,1] = 1*8 + 2*10 + 3*12 = 64.
+                      t.expect(got && approx((*got)[0], 58.0) && approx((*got)[1], 64.0),
+                               "hand-checked C0 first row is [58, 64]");
+                      // Non-positive dimension is rejected up front.
+                      auto baddim = gpu::batched_matmul(a, b, batch, m, 0, n);
+                      t.expect(!baddim.has_value() && baddim.error() == MathError::domain_error,
+                               "k = 0 yields domain_error");
+                      // Span size disagreeing with the dimensions fails on the railway.
+                      auto badsize = gpu::batched_matmul(a, b, batch, m, k, n + 1);
+                      t.expect(!badsize.has_value() && badsize.error() == MathError::domain_error,
+                               "size mismatch yields domain_error");
+                  } else {
+                      // CUDA-disabled path returns the documented error so the default build passes.
+                      auto got = gpu::batched_matmul(a, b, batch, m, k, n);
                       t.expect(!got.has_value() && got.error() == MathError::gpu_error,
                                "CUDA-disabled path returns the documented gpu_error");
                   }

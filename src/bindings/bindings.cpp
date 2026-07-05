@@ -12,16 +12,31 @@
 // for every Result<T> (Expr, Rational, Matrix, vectors, pairs, ...).
 //
 // Surface exposed (see tests/test_bindings.py for a worked example of each):
-//   Value types : Expr, Rational, RationalPoly, Matrix, Complex.
-//   Small POD   : Root, TestStatistic, PeriodicCF, MleModel (read-only fields).
+//   Value types : Expr, Rational, RationalPoly, Matrix, Complex, ComplexMatrix, Laurent.
+//   Small POD   : Root, TestStatistic, PeriodicCF, MleModel, ExactOrthogonalQr,
+//                 NumericQr, NumericSchur, SeriesCF (read-only fields).
 //   Symbolic    : free_of, substitute, simplify, differentiate, polynomial_gcd,
 //                 square_free_factor, expand, integrate, integrate_definite.
 //   Polynomial  : solve_poly, factor_over_Q, companion_eigenvalues, eigenvalues_qr.
-//   Linear alg. : kronecker_product / _sum, direct_sum, hadamard_product, vec, unvec.
-//   Number thy. : from_rational, convergents, reconstruct, quadratic_irrational_cf.
-//   Statistics  : mean, variance, median, covariance, chi_squared_goodness_of_fit,
-//                 variance_ratio_f, one_way_anova_f, bernoulli/poisson/exponential MLE
-//                 (both the symbolic model and the exact point estimate from data).
+//   Linear alg. : kronecker_product / _sum, direct_sum, hadamard_product, vec, unvec,
+//                 exact_orthogonal_qr, numeric_qr, real_schur, schur_eigenvalues,
+//                 hermitian_eigenvalues, complex_eigenvalues.
+//   Number thy. : from_rational, convergents, reconstruct, quadratic_irrational_cf,
+//                 viskovatov (SeriesCF), and the Laurent series (from_rational_function,
+//                 valuation, residue, principal/regular part).
+//   Statistics  : mean, variance, median, covariance, weighted_mean, raw_moment,
+//                 central_moment, mode, quantile, data_range, iqr, skewness_squared,
+//                 excess_kurtosis, pearson_correlation_squared,
+//                 coefficient_of_variation_squared; the hypothesis-test family
+//                 (one/two-sample & paired t^2, z^2, chi-squared GoF / independence,
+//                 variance-ratio F, one-way ANOVA F, exceeds), Wald / score statistics,
+//                 and the Bernoulli/Poisson/Exponential/Normal/Geometric MLE (both the
+//                 symbolic model and the exact point estimate from data).
+//   Prob. dist. : probdist submodule — an exact symbolic distribution catalog (DistInfo
+//                 with mgf/pgf/mean/variance) plus raw_moment / cumulant from an MGF.
+//   GPU         : gpu submodule (present iff HAS_GPU) — device_count, available, and the
+//                 poly_eval / edit_distance_batch / bfs / nqueens_count /
+//                 qmc_poly_integrate / haar_dwt_batch kernels.
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -38,26 +53,44 @@ import nimblecas.polyexpr;
 import nimblecas.ratpoly;
 import nimblecas.matrix;
 import nimblecas.complex;
+import nimblecas.cmatrix;
 import nimblecas.solve;
 import nimblecas.factor;
 import nimblecas.expand;
 import nimblecas.symint;
 import nimblecas.numeigen;
+import nimblecas.qrschur;
+import nimblecas.cheigen;
+import nimblecas.laurent;
 import nimblecas.stats;
+import nimblecas.probdist;
 import nimblecas.kronprod;
 import nimblecas.contfrac;
 import nimblecas.hyptest;
+// The GPU module is bound only when the binding TU is compiled with
+// -DNIMBLECAS_EXT_WITH_GPU (and nimblecas_ext is linked against nimblecas_gpu +
+// the CUDA runtime). This keeps the default CPU-only Python build importable.
+#ifdef NIMBLECAS_EXT_WITH_GPU
+import nimblecas.gpu;
+#endif
 
 namespace nb = nanobind;
 using nimblecas::Complex;
+using nimblecas::ComplexMatrix;
+using nimblecas::DistInfo;
+using nimblecas::ExactOrthogonalQr;
 using nimblecas::Expr;
+using nimblecas::Laurent;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::MleModel;
+using nimblecas::NumericQr;
+using nimblecas::NumericSchur;
 using nimblecas::PeriodicCF;
 using nimblecas::Rational;
 using nimblecas::RationalPoly;
 using nimblecas::Root;
+using nimblecas::SeriesCF;
 using nimblecas::TestStatistic;
 
 namespace {
@@ -380,6 +413,166 @@ NB_MODULE(nimblecas_ext, m) {
         });
 
     // =======================================================================
+    // ComplexMatrix — dense rows x cols grid of exact Gaussian-rational Complex
+    // entries (the input type of the complex eigensolver, cheigen).
+    // =======================================================================
+    nb::class_<ComplexMatrix>(m, "ComplexMatrix")
+        .def(nb::init<>())  // the empty 0x0 matrix
+        .def_static(
+            "from_rows",
+            [](std::vector<std::vector<Complex>> rows) {
+                return unwrap(ComplexMatrix::from_rows(std::move(rows)));
+            },
+            nb::arg("rows"),
+            "Build from a list of equal-length rows of Complex; raises on a ragged or empty list.")
+        .def_static("identity", &ComplexMatrix::identity, nb::arg("n"))
+        .def_static("zero", &ComplexMatrix::zero, nb::arg("rows"), nb::arg("cols"))
+        .def("rows", &ComplexMatrix::rows)
+        .def("cols", &ComplexMatrix::cols)
+        .def("is_square", &ComplexMatrix::is_square)
+        .def(
+            "at",
+            [](const ComplexMatrix& mat, std::size_t i, std::size_t j) -> Complex {
+                if (i >= mat.rows() || j >= mat.cols()) {
+                    throw nb::index_error("ComplexMatrix index out of range");
+                }
+                return mat.at(i, j);
+            },
+            nb::arg("i"), nb::arg("j"))
+        .def("add", [](const ComplexMatrix& a, const ComplexMatrix& b) { return unwrap(a.add(b)); },
+             nb::arg("other"))
+        .def("subtract",
+             [](const ComplexMatrix& a, const ComplexMatrix& b) { return unwrap(a.subtract(b)); },
+             nb::arg("other"))
+        .def("scale", [](const ComplexMatrix& a, const Complex& s) { return unwrap(a.scale(s)); },
+             nb::arg("s"))
+        .def("multiply",
+             [](const ComplexMatrix& a, const ComplexMatrix& b) { return unwrap(a.multiply(b)); },
+             nb::arg("other"))
+        .def("transpose", [](const ComplexMatrix& a) { return unwrap(a.transpose()); })
+        .def("conjugate", [](const ComplexMatrix& a) { return unwrap(a.conjugate()); })
+        .def("adjoint", [](const ComplexMatrix& a) { return unwrap(a.adjoint()); },
+             "The conjugate transpose A^H (the map defining Hermitian / unitary / normal).")
+        .def("is_hermitian", [](const ComplexMatrix& a) { return unwrap(a.is_hermitian()); })
+        .def("is_skew_hermitian",
+             [](const ComplexMatrix& a) { return unwrap(a.is_skew_hermitian()); })
+        .def("is_unitary", [](const ComplexMatrix& a) { return unwrap(a.is_unitary()); })
+        .def("is_normal", [](const ComplexMatrix& a) { return unwrap(a.is_normal()); })
+        .def("to_string", &ComplexMatrix::to_string)
+        .def("__repr__", &ComplexMatrix::to_string)
+        .def("__mul__",
+             [](const ComplexMatrix& a, const ComplexMatrix& b) { return unwrap(a.multiply(b)); })
+        .def("__add__",
+             [](const ComplexMatrix& a, const ComplexMatrix& b) { return unwrap(a.add(b)); })
+        .def("__sub__",
+             [](const ComplexMatrix& a, const ComplexMatrix& b) { return unwrap(a.subtract(b)); })
+        .def("__eq__",
+             [](const ComplexMatrix& a, nb::handle other) -> nb::object {
+                 if (nb::isinstance<ComplexMatrix>(other)) {
+                     return nb::cast(a == nb::cast<ComplexMatrix>(other));
+                 }
+                 return nb::borrow(Py_NotImplemented);
+             })
+        .def("__ne__", [](const ComplexMatrix& a, nb::handle other) -> nb::object {
+            if (nb::isinstance<ComplexMatrix>(other)) {
+                return nb::cast(!(a == nb::cast<ComplexMatrix>(other)));
+            }
+            return nb::borrow(Py_NotImplemented);
+        });
+
+    // =======================================================================
+    // Laurent — truncated Laurent series over Q (a finite principal part plus a
+    // truncated Taylor tail): coefficients c_k for k in [order_min, truncation).
+    // =======================================================================
+    nb::class_<Laurent>(m, "Laurent")
+        .def_static(
+            "from_coeffs",
+            [](std::int64_t order_min, std::vector<Rational> coeffs) {
+                return unwrap(Laurent::from_coeffs(order_min, std::move(coeffs)));
+            },
+            nb::arg("order_min"), nb::arg("coeffs"),
+            "coeffs[i] is the coefficient of x^(order_min + i); the list must be non-empty.")
+        .def_static("zero",
+                    [](std::int64_t order_min, std::size_t size) {
+                        return unwrap(Laurent::zero(order_min, size));
+                    },
+                    nb::arg("order_min"), nb::arg("size"))
+        .def_static("constant",
+                    [](const Rational& c, std::size_t size) {
+                        return unwrap(Laurent::constant(c, size));
+                    },
+                    nb::arg("c"), nb::arg("size"))
+        .def_static("one", [](std::size_t size) { return unwrap(Laurent::one(size)); },
+                    nb::arg("size"))
+        .def_static("monomial",
+                    [](const Rational& c, std::int64_t exponent, std::int64_t order_min,
+                       std::size_t size) {
+                        return unwrap(Laurent::monomial(c, exponent, order_min, size));
+                    },
+                    nb::arg("c"), nb::arg("exponent"), nb::arg("order_min"), nb::arg("size"))
+        .def_static(
+            "from_rational_function",
+            [](const RationalPoly& num, const RationalPoly& den, const Rational& point,
+               std::size_t order) {
+                return unwrap(Laurent::from_rational_function(num, den, point, order));
+            },
+            nb::arg("num"), nb::arg("den"), nb::arg("point"), nb::arg("order"),
+            "Laurent-expand num/den about `point` in powers of (x - point), keeping `order` "
+            "coefficients; a pole yields a genuine negative principal part.")
+        .def("order_min", &Laurent::order_min)
+        .def("truncation_order", &Laurent::truncation_order)
+        .def("size", &Laurent::size)
+        .def("coefficient", &Laurent::coefficient, nb::arg("k"),
+             "Coefficient of x^k (a genuine 0 below order_min; a truncation 0 at/above "
+             "truncation_order).")
+        .def("coefficients",
+             [](const Laurent& p) {
+                 const auto span = p.coefficients();
+                 return std::vector<Rational>(span.begin(), span.end());
+             })
+        .def("valuation", [](const Laurent& p) { return unwrap(p.valuation()); },
+             "Exponent of the first nonzero tracked coefficient; raises when the tracked part "
+             "is entirely zero.")
+        .def("principal_part", [](const Laurent& p) { return unwrap(p.principal_part()); },
+             "The finite principal part (terms of exponent < 0).")
+        .def("regular_part", [](const Laurent& p) { return unwrap(p.regular_part()); },
+             "The regular (Taylor) part (terms of exponent >= 0).")
+        .def("residue", [](const Laurent& p) { return unwrap(p.residue()); },
+             "The residue c_{-1}; raises when x^{-1} lies beyond the tracked order.")
+        .def("add", [](const Laurent& a, const Laurent& b) { return unwrap(a.add(b)); },
+             nb::arg("other"))
+        .def("subtract", [](const Laurent& a, const Laurent& b) { return unwrap(a.subtract(b)); },
+             nb::arg("other"))
+        .def("scale", [](const Laurent& a, const Rational& s) { return unwrap(a.scale(s)); },
+             nb::arg("s"))
+        .def("multiply", [](const Laurent& a, const Laurent& b) { return unwrap(a.multiply(b)); },
+             nb::arg("other"))
+        .def("inverse", [](const Laurent& a) { return unwrap(a.inverse()); })
+        .def("divide", [](const Laurent& a, const Laurent& b) { return unwrap(a.divide(b)); },
+             nb::arg("other"))
+        .def("to_string", [](const Laurent& p) { return p.to_string(); })
+        .def("to_string", [](const Laurent& p, const std::string& var) { return p.to_string(var); },
+             nb::arg("var"))
+        .def("__repr__", [](const Laurent& p) { return "Laurent(" + p.to_string() + ")"; })
+        .def("__add__", [](const Laurent& a, const Laurent& b) { return unwrap(a.add(b)); })
+        .def("__sub__", [](const Laurent& a, const Laurent& b) { return unwrap(a.subtract(b)); })
+        .def("__mul__", [](const Laurent& a, const Laurent& b) { return unwrap(a.multiply(b)); })
+        .def("__truediv__", [](const Laurent& a, const Laurent& b) { return unwrap(a.divide(b)); })
+        .def("__eq__",
+             [](const Laurent& a, nb::handle other) -> nb::object {
+                 if (nb::isinstance<Laurent>(other)) {
+                     return nb::cast(a.is_equal(nb::cast<Laurent>(other)));
+                 }
+                 return nb::borrow(Py_NotImplemented);
+             })
+        .def("__ne__", [](const Laurent& a, nb::handle other) -> nb::object {
+            if (nb::isinstance<Laurent>(other)) {
+                return nb::cast(!a.is_equal(nb::cast<Laurent>(other)));
+            }
+            return nb::borrow(Py_NotImplemented);
+        });
+
+    // =======================================================================
     // Small read-only result records.
     // =======================================================================
     // Root: one root of a polynomial (value + exactness flag + optional multiplicity).
@@ -418,6 +611,35 @@ NB_MODULE(nimblecas_ext, m) {
         .def_ro("score", &MleModel::score)
         .def_ro("mle", &MleModel::mle)
         .def_ro("fisher_information", &MleModel::fisher_information);
+
+    // ExactOrthogonalQr: the exact-over-Q Gram-Schmidt factorization A = Q*R, with Q's
+    // columns mutually orthogonal (not orthonormal) and R upper-triangular unit-diagonal.
+    nb::class_<ExactOrthogonalQr>(m, "ExactOrthogonalQr")
+        .def_ro("q", &ExactOrthogonalQr::q,
+                "m x n Matrix with mutually orthogonal columns (Q^T Q is diagonal); Q*R == A "
+                "exactly.")
+        .def_ro("r", &ExactOrthogonalQr::r, "n x n upper-triangular Matrix with unit diagonal.");
+
+    // NumericQr: the numeric Householder QR, Q orthonormal, R upper-triangular (row-major
+    // double buffers exposed as Python lists).
+    nb::class_<NumericQr>(m, "NumericQr")
+        .def_ro("rows", &NumericQr::rows)
+        .def_ro("cols", &NumericQr::cols)
+        .def_ro("q", &NumericQr::q, "m x m orthonormal factor, row-major (length rows*rows).")
+        .def_ro("r", &NumericQr::r, "m x n upper-triangular factor, row-major (length rows*cols).");
+
+    // NumericSchur: the numeric real Schur form A = Q*T*Q^T, T quasi-upper-triangular
+    // (row-major double buffers exposed as Python lists).
+    nb::class_<NumericSchur>(m, "NumericSchur")
+        .def_ro("n", &NumericSchur::n)
+        .def_ro("q", &NumericSchur::q, "n x n orthogonal Schur vectors, row-major.")
+        .def_ro("t", &NumericSchur::t, "n x n quasi-upper-triangular real Schur form, row-major.");
+
+    // SeriesCF: a power series' corresponding continued fraction (C-fraction) b0 + a_1 x /
+    // (1 + a_2 x / (1 + ...)), from the Viskovatov algorithm.
+    nb::class_<SeriesCF>(m, "SeriesCF")
+        .def_ro("b0", &SeriesCF::b0, "The constant term b0 = c_0.")
+        .def_ro("a", &SeriesCF::a, "The partial numerators a_1, a_2, ... (stage k is a_k*x/(1+..)).");
 
     // =======================================================================
     // Symbolic free functions (original + expansion / integration).
@@ -539,6 +761,13 @@ NB_MODULE(nimblecas_ext, m) {
           [](std::int64_t d) { return unwrap(nimblecas::quadratic_irrational_cf(d)); },
           nb::arg("D"),
           "The periodic continued fraction of sqrt(D) for a positive non-square integer D.");
+    m.def("viskovatov",
+          [](const std::vector<Rational>& series_coeffs) {
+              return unwrap(nimblecas::viskovatov(std::span<const Rational>(series_coeffs)));
+          },
+          nb::arg("series_coeffs"),
+          "The corresponding continued fraction (C-fraction, SeriesCF) of a formal power series "
+          "c_0 + c_1 x + ...; raises not_implemented when the regular C-fraction does not exist.");
 
     // =======================================================================
     // Descriptive statistics (stats) — a useful cross-section.
@@ -565,6 +794,72 @@ NB_MODULE(nimblecas_ext, m) {
                                                   std::span<const Rational>(y), sample));
           },
           nb::arg("x"), nb::arg("y"), nb::arg("sample") = true, "The exact covariance of x and y.");
+    m.def("weighted_mean",
+          [](const std::vector<Rational>& data, const std::vector<Rational>& weights) {
+              return unwrap(nimblecas::weighted_mean(std::span<const Rational>(data),
+                                                     std::span<const Rational>(weights)));
+          },
+          nb::arg("data"), nb::arg("weights"),
+          "The exact weighted mean (sum w_i x_i)/(sum w_i); raises on a zero total weight.");
+    m.def("raw_moment",
+          [](const std::vector<Rational>& data, unsigned k) {
+              return unwrap(nimblecas::raw_moment(std::span<const Rational>(data), k));
+          },
+          nb::arg("data"), nb::arg("k"), "The exact k-th raw (about-zero) moment (1/n) sum x_i^k.");
+    m.def("central_moment",
+          [](const std::vector<Rational>& data, unsigned k) {
+              return unwrap(nimblecas::central_moment(std::span<const Rational>(data), k));
+          },
+          nb::arg("data"), nb::arg("k"),
+          "The exact k-th central moment (1/n) sum (x_i - mean)^k (population form).");
+    m.def("mode",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::mode(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "The most frequent value (ties broken toward the smallest).");
+    m.def("quantile",
+          [](const std::vector<Rational>& data, const Rational& p) {
+              return unwrap(nimblecas::quantile(std::span<const Rational>(data), p));
+          },
+          nb::arg("data"), nb::arg("p"),
+          "The exact type-7 (linear-interpolation) quantile at probability p in [0, 1].");
+    m.def("data_range",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::range(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "The exact range max - min.");
+    m.def("iqr",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::iqr(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "The exact interquartile range Q3 - Q1 (type-7 quantiles).");
+    m.def("pearson_correlation_squared",
+          [](const std::vector<Rational>& x, const std::vector<Rational>& y) {
+              return unwrap(nimblecas::pearson_correlation_squared(std::span<const Rational>(x),
+                                                                   std::span<const Rational>(y)));
+          },
+          nb::arg("x"), nb::arg("y"),
+          "The exact squared Pearson correlation r^2 = cov^2/(var_x var_y), a rational in [0,1] "
+          "(r itself is generally irrational; recover sign(r) = sign(covariance)).");
+    m.def("skewness_squared",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::skewness_squared(std::span<const Rational>(data)));
+          },
+          nb::arg("data"),
+          "The exact squared skewness m_3^2 / m_2^3, a rational (sign is sign of central_moment 3).");
+    m.def("excess_kurtosis",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::excess_kurtosis(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "The exact excess kurtosis m_4 / m_2^2 - 3, a rational.");
+    m.def("coefficient_of_variation_squared",
+          [](const std::vector<Rational>& data, bool sample) {
+              return unwrap(nimblecas::coefficient_of_variation_squared(
+                  std::span<const Rational>(data), sample));
+          },
+          nb::arg("data"), nb::arg("sample") = true,
+          "The exact squared coefficient of variation var/mean^2, a rational (cv itself is its "
+          "generally-irrational square root).");
 
     // =======================================================================
     // Hypothesis tests & maximum-likelihood estimation (hyptest).
@@ -576,6 +871,47 @@ NB_MODULE(nimblecas_ext, m) {
           },
           nb::arg("observed"), nb::arg("expected"),
           "Exact chi-squared goodness-of-fit statistic sum_i (O_i - E_i)^2 / E_i, df1 = k - 1.");
+    m.def("one_sample_t_squared",
+          [](const std::vector<Rational>& data, const Rational& mu0) {
+              return unwrap(
+                  nimblecas::one_sample_t_squared(std::span<const Rational>(data), mu0));
+          },
+          nb::arg("data"), nb::arg("mu0"),
+          "Exact rational t^2 = n (xbar - mu0)^2 / s^2, df1 = n - 1 (t is the irrational square "
+          "root; recover sign(t) = sign(xbar - mu0)).");
+    m.def("two_sample_t_squared",
+          [](const std::vector<Rational>& x, const std::vector<Rational>& y) {
+              return unwrap(nimblecas::two_sample_t_squared(std::span<const Rational>(x),
+                                                            std::span<const Rational>(y)));
+          },
+          nb::arg("x"), nb::arg("y"),
+          "Exact pooled two-sample t^2, df1 = n1 + n2 - 2.");
+    m.def("paired_t_squared",
+          [](const std::vector<Rational>& x, const std::vector<Rational>& y) {
+              return unwrap(nimblecas::paired_t_squared(std::span<const Rational>(x),
+                                                        std::span<const Rational>(y)));
+          },
+          nb::arg("x"), nb::arg("y"),
+          "Exact paired t^2 of the differences x_i - y_i against 0, df1 = n - 1.");
+    m.def("z_squared",
+          [](const std::vector<Rational>& data, const Rational& mu0, const Rational& pop_variance) {
+              return unwrap(
+                  nimblecas::z_squared(std::span<const Rational>(data), mu0, pop_variance));
+          },
+          nb::arg("data"), nb::arg("mu0"), nb::arg("pop_variance"),
+          "Exact rational z^2 = n (xbar - mu0)^2 / sigma2 for a known population variance, df1 = 1.");
+    m.def("chi_squared_independence",
+          [](const Matrix& table) { return unwrap(nimblecas::chi_squared_independence(table)); },
+          nb::arg("table"),
+          "Exact chi-squared test of independence on an r x c contingency table of counts, "
+          "df1 = (r - 1)(c - 1).");
+    m.def("exceeds",
+          [](const Rational& statistic, const Rational& critical) {
+              return unwrap(nimblecas::exceeds(statistic, critical));
+          },
+          nb::arg("statistic"), nb::arg("critical"),
+          "Exact decision rule: statistic > critical by cross-multiplied rational comparison "
+          "(pass the SQUARE of the critical value for a t^2 / z^2 statistic).");
     m.def("variance_ratio_f",
           [](const std::vector<Rational>& x, const std::vector<Rational>& y) {
               return unwrap(nimblecas::variance_ratio_f(std::span<const Rational>(x),
@@ -612,6 +948,52 @@ NB_MODULE(nimblecas_ext, m) {
           },
           nb::arg("data"), "Exponential MLE lambda-hat = 1 / sample mean (exact rational).");
 
+    m.def("normal_mean_mle",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::normal_mean_mle(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "Normal-mean MLE mu-hat = sample mean (exact rational).");
+    m.def("geometric_mle",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::geometric_mle(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "Geometric MLE p-hat = 1 / sample mean (exact rational).");
+    m.def("normal_variance_mle",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::normal_variance_mle(std::span<const Rational>(data)));
+          },
+          nb::arg("data"), "Normal-variance MLE = the population variance (divide by n).");
+
+    // Exact rational Wald / score statistics (closed forms are rational).
+    m.def("bernoulli_wald_statistic",
+          [](const std::vector<Rational>& data, const Rational& p0) {
+              return unwrap(
+                  nimblecas::bernoulli_wald_statistic(std::span<const Rational>(data), p0));
+          },
+          nb::arg("data"), nb::arg("p0"),
+          "Bernoulli Wald W = n (p-hat - p0)^2 / (p-hat (1 - p-hat)) (exact rational).");
+    m.def("bernoulli_score_statistic",
+          [](const std::vector<Rational>& data, const Rational& p0) {
+              return unwrap(
+                  nimblecas::bernoulli_score_statistic(std::span<const Rational>(data), p0));
+          },
+          nb::arg("data"), nb::arg("p0"),
+          "Bernoulli score (Rao) S = n (xbar - p0)^2 / (p0 (1 - p0)) (exact rational).");
+    m.def("poisson_wald_statistic",
+          [](const std::vector<Rational>& data, const Rational& lambda0) {
+              return unwrap(
+                  nimblecas::poisson_wald_statistic(std::span<const Rational>(data), lambda0));
+          },
+          nb::arg("data"), nb::arg("lambda0"),
+          "Poisson Wald W = n (lambda-hat - lambda0)^2 / lambda-hat (exact rational).");
+    m.def("poisson_score_statistic",
+          [](const std::vector<Rational>& data, const Rational& lambda0) {
+              return unwrap(
+                  nimblecas::poisson_score_statistic(std::span<const Rational>(data), lambda0));
+          },
+          nb::arg("data"), nb::arg("lambda0"),
+          "Poisson score (Rao) S = n (xbar - lambda0)^2 / lambda0 (exact rational).");
+
     // Symbolic MLE models (log-likelihood, score, estimator, Fisher information as Expr).
     m.def("bernoulli_mle_model", [] { return unwrap(nimblecas::bernoulli_mle_model()); },
           "The symbolic Bernoulli MLE model (MleModel).");
@@ -619,4 +1001,200 @@ NB_MODULE(nimblecas_ext, m) {
           "The symbolic Poisson MLE model (MleModel).");
     m.def("exponential_mle_model", [] { return unwrap(nimblecas::exponential_mle_model()); },
           "The symbolic Exponential MLE model (MleModel).");
+    m.def("normal_mean_mle_model", [] { return unwrap(nimblecas::normal_mean_mle_model()); },
+          "The symbolic Normal-mean (known variance) MLE model (MleModel).");
+    m.def("geometric_mle_model", [] { return unwrap(nimblecas::geometric_mle_model()); },
+          "The symbolic Geometric MLE model (MleModel).");
+    m.def(
+        "log_likelihood_ratio",
+        [](const MleModel& model, const Expr& theta_hat, const Expr& theta0) {
+            return unwrap(nimblecas::log_likelihood_ratio(model, theta_hat, theta0));
+        },
+        nb::arg("model"), nb::arg("theta_hat"), nb::arg("theta0"),
+        "The likelihood-ratio statistic G^2 = 2( ell(theta-hat) - ell(theta0) ), an exact "
+        "symbolic Expr (transcendental in general).");
+
+    // =======================================================================
+    // QR decomposition & real Schur form (qrschur).
+    // =======================================================================
+    m.def("exact_orthogonal_qr",
+          [](const Matrix& a) { return unwrap(nimblecas::exact_orthogonal_qr(a)); }, nb::arg("a"),
+          "Exact Gram-Schmidt A = Q*R over Q: Q's columns are mutually orthogonal (not "
+          "orthonormal), R upper-triangular with unit diagonal, Q*R == A exactly. Raises "
+          "domain_error on a rank-deficient A.");
+    m.def("numeric_qr",
+          [](const std::vector<double>& a, std::size_t rows, std::size_t cols) {
+              return unwrap(nimblecas::numeric_qr(std::span<const double>(a), rows, cols));
+          },
+          nb::arg("a"), nb::arg("rows"), nb::arg("cols"),
+          "Numeric Householder QR of the row-major rows x cols matrix `a`: orthonormal Q (m x m) "
+          "and upper-triangular R (m x n) with Q*R ~ A (NumericQr).");
+    m.def("real_schur",
+          [](const std::vector<double>& a, std::size_t n, double tol, std::size_t max_iter) {
+              return unwrap(nimblecas::real_schur(std::span<const double>(a), n, tol, max_iter));
+          },
+          nb::arg("a"), nb::arg("n"), nb::arg("tol") = 1e-12,
+          nb::arg("max_iter") = static_cast<std::size_t>(1000),
+          "Numeric real Schur form A = Q*T*Q^T of the row-major n x n matrix `a` (NumericSchur); "
+          "raises not_implemented on non-convergence.");
+    m.def("schur_eigenvalues",
+          [](const NumericSchur& s, double tol) {
+              return unwrap(nimblecas::schur_eigenvalues(s, tol));
+          },
+          nb::arg("s"), nb::arg("tol") = 1e-9,
+          "Eigenvalues read off the 1x1 / 2x2 diagonal blocks of a real Schur form (list of "
+          "complex).");
+    m.def("qr_residual",
+          [](const NumericQr& d, const std::vector<double>& a) {
+              return unwrap(nimblecas::qr_residual(d, std::span<const double>(a)));
+          },
+          nb::arg("d"), nb::arg("a"), "Frobenius residual ||Q*R - A||_F of a NumericQr.");
+    m.def("schur_residual",
+          [](const NumericSchur& s, const std::vector<double>& a) {
+              return unwrap(nimblecas::schur_residual(s, std::span<const double>(a)));
+          },
+          nb::arg("s"), nb::arg("a"), "Frobenius residual ||Q*T*Q^T - A||_F of a NumericSchur.");
+    m.def("orthonormality_defect",
+          [](const std::vector<double>& q, std::size_t rows, std::size_t cols) {
+              return unwrap(
+                  nimblecas::orthonormality_defect(std::span<const double>(q), rows, cols));
+          },
+          nb::arg("q"), nb::arg("rows"), nb::arg("cols"),
+          "Frobenius defect ||Q^T Q - I||_F of a row-major rows x cols matrix Q.");
+
+    // =======================================================================
+    // Numeric eigenvalues of a complex matrix (cheigen).
+    // =======================================================================
+    m.def("hermitian_eigenvalues",
+          [](const ComplexMatrix& mat, double tol, std::size_t max_iter) {
+              return unwrap(nimblecas::hermitian_eigenvalues(mat, tol, max_iter));
+          },
+          nb::arg("m"), nb::arg("tol") = 1e-12,
+          nb::arg("max_iter") = static_cast<std::size_t>(1000),
+          "All (numeric) eigenvalues of a Hermitian ComplexMatrix, returned REAL and ascending "
+          "(list of float). A non-Hermitian matrix is rejected with a ValueError.");
+    m.def("complex_eigenvalues",
+          [](const ComplexMatrix& mat, double tol, std::size_t max_iter) {
+              return unwrap(nimblecas::eigenvalues(mat, tol, max_iter));
+          },
+          nb::arg("m"), nb::arg("tol") = 1e-12,
+          nb::arg("max_iter") = static_cast<std::size_t>(1000),
+          "All (numeric) eigenvalues of a general ComplexMatrix as a list of complex (cheigen's "
+          "eigenvalues). Raises not_implemented for a spectrum closed under conjugation (e.g. a "
+          "real matrix with complex-conjugate eigenvalues — use eigenvalues_qr there).");
+
+    // =======================================================================
+    // Probability-distribution catalog (probdist) — exact symbolic MGF/PGF,
+    // mean, variance, and moments/cumulants as Expr trees. A submodule so the
+    // distribution constructors and moment extractors group cleanly.
+    // =======================================================================
+    nb::module_ probdist = m.def_submodule(
+        "probdist",
+        "Exact symbolic probability-distribution catalog: each constructor returns a DistInfo "
+        "carrying the moment generating function mgf (or None), the probability generating "
+        "function pgf (or None), and the mean / variance as Expr trees in the parameter symbols.");
+    nb::class_<DistInfo>(probdist, "DistInfo")
+        .def_ro("mgf", &DistInfo::mgf, "Moment generating function M_X(t) as an Expr, or None.")
+        .def_ro("pgf", &DistInfo::pgf, "Probability generating function G_X(z) as an Expr, or None.")
+        .def_ro("mean", &DistInfo::mean, "E[X] as an Expr.")
+        .def_ro("variance", &DistInfo::variance, "Var(X) as an Expr.");
+    probdist.def("bernoulli", &nimblecas::bernoulli, nb::arg("p"));
+    probdist.def("binomial", &nimblecas::binomial, nb::arg("n"), nb::arg("p"));
+    probdist.def("poisson", &nimblecas::poisson, nb::arg("lambda"));
+    probdist.def("geometric", &nimblecas::geometric, nb::arg("p"));
+    probdist.def("exponential", &nimblecas::exponential, nb::arg("lambda"));
+    probdist.def("normal", &nimblecas::normal, nb::arg("mu"), nb::arg("sigma2"),
+                 "Normal(mu, sigma2) where sigma2 is the variance.");
+    probdist.def("gamma", &nimblecas::gamma, nb::arg("alpha"), nb::arg("theta"),
+                 "Gamma(alpha, theta) with shape alpha and scale theta.");
+    probdist.def("discrete_uniform", &nimblecas::discrete_uniform, nb::arg("a"), nb::arg("b"));
+    probdist.def("negative_binomial", &nimblecas::negative_binomial, nb::arg("r"), nb::arg("p"));
+    probdist.def("hypergeometric", &nimblecas::hypergeometric, nb::arg("N"), nb::arg("K"),
+                 nb::arg("n"));
+    probdist.def("continuous_uniform", &nimblecas::continuous_uniform, nb::arg("a"), nb::arg("b"));
+    probdist.def("chi_squared", &nimblecas::chi_squared, nb::arg("k"));
+    probdist.def("student_t", &nimblecas::student_t, nb::arg("nu"));
+    probdist.def("beta", &nimblecas::beta, nb::arg("alpha"), nb::arg("beta"));
+    probdist.def("weibull", &nimblecas::weibull, nb::arg("k"), nb::arg("lambda"));
+    probdist.def("pareto", &nimblecas::pareto, nb::arg("xm"), nb::arg("alpha"));
+    probdist.def("lognormal", &nimblecas::lognormal, nb::arg("mu"), nb::arg("sigma2"));
+    probdist.def("raw_moment",
+                 [](const Expr& mgf, std::size_t k) {
+                     return unwrap(nimblecas::raw_moment(mgf, k));
+                 },
+                 nb::arg("mgf"), nb::arg("k"),
+                 "k-th raw moment E[X^k] = [d^k/dt^k M_X(t)]_{t=0} (exact; may be unsimplified).");
+    probdist.def("cumulant",
+                 [](const Expr& mgf, std::size_t k) {
+                     return unwrap(nimblecas::cumulant(mgf, k));
+                 },
+                 nb::arg("mgf"), nb::arg("k"),
+                 "k-th cumulant [d^k/dt^k log M_X(t)]_{t=0} (kappa_1 = mean, kappa_2 = variance).");
+    probdist.def("characteristic_function", &nimblecas::characteristic_function, nb::arg("mgf"),
+                 "phi_X(t) = M_X(i t) by the formal substitution t -> i*t.");
+    probdist.def("laplace_stieltjes", &nimblecas::laplace_stieltjes, nb::arg("mgf"),
+                 "LST_X(s) = M_X(-s) by the formal substitution t -> -s.");
+    probdist.def("markov_bound", &nimblecas::markov_bound, nb::arg("mean"), nb::arg("alpha"),
+                 "Markov tail bound E[X]/alpha (RHS of P(X >= alpha) <= E[X]/alpha).");
+    probdist.def("chebyshev_bound", &nimblecas::chebyshev_bound, nb::arg("variance"), nb::arg("k"),
+                 "Chebyshev tail bound sigma^2 / k^2.");
+
+    // =======================================================================
+    // GPU acceleration (gpu) — bound only when compiled with
+    // -DNIMBLECAS_EXT_WITH_GPU and linked against nimblecas_gpu + CUDA runtime.
+    // HAS_GPU tells Python whether the submodule is present.
+    // =======================================================================
+#ifdef NIMBLECAS_EXT_WITH_GPU
+    m.attr("HAS_GPU") = true;
+    nb::module_ gpu = m.def_submodule(
+        "gpu", "CUDA-accelerated kernels (present only in a CUDA-enabled build; see HAS_GPU).");
+    gpu.def("device_count", &nimblecas::gpu::device_count,
+            "Number of CUDA-capable devices detected (0 when no GPU is present).");
+    gpu.def("available", &nimblecas::gpu::available, "Whether at least one GPU is available.");
+    gpu.def("poly_eval",
+            [](const std::vector<double>& coeffs, const std::vector<double>& x) {
+                return unwrap(nimblecas::gpu::poly_eval(std::span<const double>(coeffs),
+                                                        std::span<const double>(x)));
+            },
+            nb::arg("coeffs"), nb::arg("x"),
+            "Evaluate the polynomial `coeffs` (low degree first) at every point of `x` on the GPU.");
+    gpu.def("edit_distance_batch",
+            [](const std::vector<int>& a_flat, const std::vector<int>& a_off,
+               const std::vector<int>& b_flat, const std::vector<int>& b_off) {
+                return unwrap(nimblecas::gpu::edit_distance_batch(
+                    std::span<const int>(a_flat), std::span<const int>(a_off),
+                    std::span<const int>(b_flat), std::span<const int>(b_off)));
+            },
+            nb::arg("a_flat"), nb::arg("a_off"), nb::arg("b_flat"), nb::arg("b_off"),
+            "Batched Levenshtein edit distance over flattened code-point arrays with prefix-offset "
+            "arrays (one distance per pair).");
+    gpu.def("bfs",
+            [](const std::vector<int>& row_offsets, const std::vector<int>& col_indices,
+               int source) {
+                return unwrap(nimblecas::gpu::bfs(std::span<const int>(row_offsets),
+                                                  std::span<const int>(col_indices), source));
+            },
+            nb::arg("row_offsets"), nb::arg("col_indices"), nb::arg("source"),
+            "Level-synchronous single-source BFS over a CSR graph (hop distance, -1 unreachable).");
+    gpu.def("nqueens_count",
+            [](int n) { return unwrap(nimblecas::gpu::nqueens_count(n)); }, nb::arg("n"),
+            "Count the solutions to the n-queens problem on the GPU.");
+    gpu.def("qmc_poly_integrate",
+            [](const std::vector<double>& coeffs, const std::vector<double>& points) {
+                return unwrap(nimblecas::gpu::qmc_poly_integrate(std::span<const double>(coeffs),
+                                                                 std::span<const double>(points)));
+            },
+            nb::arg("coeffs"), nb::arg("points"),
+            "Equal-weight average (1/N) sum_i p(points_i) of the polynomial integrand on the GPU.");
+    gpu.def("haar_dwt_batch",
+            [](const std::vector<double>& data, int batch, int len) {
+                return unwrap(nimblecas::gpu::haar_dwt_batch(std::span<const double>(data), batch,
+                                                             len));
+            },
+            nb::arg("data"), nb::arg("batch"), nb::arg("len"),
+            "One-level batched Haar DWT (orthonormal 1/sqrt(2)) over `batch` blocks of `len` "
+            "(even) samples each, row-major.");
+#else
+    m.attr("HAS_GPU") = false;
+#endif
 }

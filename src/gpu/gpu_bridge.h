@@ -61,6 +61,13 @@ int nimblecas_gpu_qmc_poly_integrate(const double* coeffs, int n_coeffs, const d
 // error code on failure.
 int nimblecas_gpu_haar_dwt_batch(const double* data, int batch, int len, double* out);
 
+// Batched dense double matrix multiply, one thread per output element. `a` holds `batch`
+// contiguous row-major A blocks (each m x k) and `b` holds `batch` contiguous row-major B blocks
+// (each k x n); writes the `batch` row-major products C_b = A_b * B_b (each m x n) to `c`, in the
+// same contiguous block layout. Returns 0 on success, or a non-zero CUDA error code on failure.
+int nimblecas_gpu_batched_matmul(const double* a, const double* b, double* c, int batch, int m,
+                                 int k, int n);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

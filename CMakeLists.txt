@@ -817,6 +817,13 @@ target_link_libraries(nimblecas_pdeham
   PUBLIC nimblecas_expand nimblecas_diff nimblecas_simplify nimblecas_symbolic
          nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.frobenius : rational (Frobenius) canonical form over Q (§7.2) ----
+add_library(nimblecas_frobenius STATIC)
+target_sources(nimblecas_frobenius PUBLIC
+  FILE_SET CXX_MODULES FILES src/frobenius/frobenius.cppm)
+target_link_libraries(nimblecas_frobenius
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -914,6 +921,12 @@ target_link_libraries(pdeham_tests
   PRIVATE nimblecas_pdeham nimblecas_pde nimblecas_expand nimblecas_diff nimblecas_simplify
           nimblecas_symbolic nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
 add_test(NAME pdeham_tests COMMAND pdeham_tests)
+
+add_executable(frobenius_tests tests/frobenius_tests.cpp)
+target_link_libraries(frobenius_tests
+  PRIVATE nimblecas_frobenius nimblecas_eigen nimblecas_matrix nimblecas_roots
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME frobenius_tests COMMAND frobenius_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
@@ -1627,9 +1640,17 @@ if(NIMBLECAS_PYTHON)
   target_link_libraries(nimblecas_ext
     PRIVATE nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_symint
             nimblecas_expand nimblecas_hyptest nimblecas_stats nimblecas_kronprod
-            nimblecas_contfrac nimblecas_matrix nimblecas_complex nimblecas_ratpoly
-            nimblecas_diff nimblecas_simplify nimblecas_polyexpr nimblecas_polynomial
-            nimblecas_symbolic nimblecas_simd nimblecas_core std_module)
+            nimblecas_contfrac nimblecas_probdist nimblecas_qrschur nimblecas_cheigen
+            nimblecas_cmatrix nimblecas_laurent nimblecas_matrix nimblecas_complex
+            nimblecas_ratpoly nimblecas_diff nimblecas_simplify nimblecas_polyexpr
+            nimblecas_polynomial nimblecas_symbolic nimblecas_simd nimblecas_core std_module)
+
+  # Expose the GPU submodule to Python only when the CUDA kernels are built.
+  if(NIMBLECAS_CUDA AND NOT WIN32)
+    add_dependencies(nimblecas_ext nimblecas_gpu_kernels)
+    target_link_libraries(nimblecas_ext PRIVATE nimblecas_gpu)
+    target_compile_definitions(nimblecas_ext PRIVATE NIMBLECAS_EXT_WITH_GPU)
+  endif()
 
   add_test(NAME python_bindings
            COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/test_bindings.py)
