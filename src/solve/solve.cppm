@@ -351,10 +351,10 @@ struct Consts {
         TRY(p_2_e, ex_rat(p_2));
         const Expr B0 = Expr::product({negq_2_e, Expr::power(A, Expr::integer(-1))});  // -q/(2A)
         const Expr M = Expr::sum({p_2_e, Expr::product({consts.half, y})});            // (p+y)/2
-        const std::array<Expr, 2> q1 =
+        const std::array<Expr, 2> quad1 =
             symbolic_quadratic(neg(A), Expr::sum({M, neg(B0)}), consts);
-        const std::array<Expr, 2> q2 = symbolic_quadratic(A, Expr::sum({M, B0}), consts);
-        ts = {q1[0], q1[1], q2[0], q2[1]};
+        const std::array<Expr, 2> quad2 = symbolic_quadratic(A, Expr::sum({M, B0}), consts);
+        ts = {quad1[0], quad1[1], quad2[0], quad2[1]};
     }
 
     if (shift.is_zero()) {
