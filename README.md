@@ -108,7 +108,7 @@ reviewed):
 - `nimblecas.testing` — internal test framework (no external test dependency).
 - **Python bindings** via nanobind (`nimblecas_ext`), dependencies managed with uv.
 
-The list above is the **foundational layer**. The engine has since grown to ~97
+The list above is the **foundational layer**. The engine has since grown to ~115
 modules; the complete, current catalog with a one-line summary and a reference doc
 per module is **[docs/Index.md](docs/Index.md)** (authoritative). The major
 capability areas built on top of the foundation:
@@ -124,6 +124,13 @@ capability areas built on top of the foundation:
 - **Applied numerics** — `interpolation`, `splines` (Bézier / B-spline / NURBS),
   `optimize`, `nlsolve`, `extrapolation`, `pdenum` (FDM / FEM / FVM), `spectral`,
   `krylov`, `matstruct`.
+- **Exact matrix canonical forms & decompositions** — `frobenius` (rational canonical
+  form over ℚ), `jordan` (`A = PJP⁻¹` with `P`, exact over ℚ and over a quadratic
+  extension `Q(α)` via `algnum`), `qrschur` (QR + real Schur), `cheigen` (complex/Hermitian
+  eigenvalues), `kronprod` (Kronecker / direct / Hadamard products).
+- **Probability & the Probabilistic Method** — `probdist`, `stats`, `statinfer`,
+  `hyptest` (χ²/F/ANOVA + MLE), and `probmethod` (Alon–Spencer existence proofs:
+  first/second-moment, Lovász Local Lemma, Ramsey bounds — sound over ℚ).
 - **Signals, control, stochastics** — `wavelets`, `qmc`, `compsense`, `control`,
   `analysis`, `stochastic`, `hmm`, and `smc` (numerical particle filters).
 - **Quantum & operators** — `quantum` (non-commutative operator algebra), `lie`,

@@ -387,7 +387,12 @@ auto lovasz_asymmetric(std::span<const Rational> probs,
             return make_error<LovaszAsymmetric>(MathError::domain_error);  // x_i ∉ (0,1)
         }
         for (const int j : dependency[i]) {
-            if (j < 0 || static_cast<std::size_t>(j) >= n) {
+            // Neighbours must be valid AND distinct from i (the dependency graph has no
+            // self-loops: A_i does not "depend on itself" in the LLL sense). A self-loop
+            // would inject a spurious (1 − x_i) factor and silently shrink rhs_i, weakening
+            // the certificate — reject it as malformed input rather than return a too-
+            // conservative (still sound, but contract-violating) verdict.
+            if (j < 0 || static_cast<std::size_t>(j) >= n || static_cast<std::size_t>(j) == i) {
                 return make_error<LovaszAsymmetric>(MathError::domain_error);
             }
         }
