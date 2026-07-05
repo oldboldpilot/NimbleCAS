@@ -832,6 +832,14 @@ target_link_libraries(nimblecas_algnum
   PUBLIC nimblecas_factor nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
          nimblecas_core std_module)
 
+# ---- nimblecas.jordan : Jordan canonical form A = P J P^-1, over Q and over Q(alpha) (§7.2) ----
+add_library(nimblecas_jordan STATIC)
+target_sources(nimblecas_jordan PUBLIC
+  FILE_SET CXX_MODULES FILES src/jordan/jordan.cppm)
+target_link_libraries(nimblecas_jordan
+  PUBLIC nimblecas_algnum nimblecas_eigen nimblecas_factor nimblecas_roots
+         nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -941,6 +949,13 @@ target_link_libraries(algnum_tests
   PRIVATE nimblecas_algnum nimblecas_factor nimblecas_matrix nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME algnum_tests COMMAND algnum_tests)
+
+add_executable(jordan_tests tests/jordan_tests.cpp)
+target_link_libraries(jordan_tests
+  PRIVATE nimblecas_jordan nimblecas_algnum nimblecas_eigen nimblecas_factor
+          nimblecas_roots nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME jordan_tests COMMAND jordan_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
