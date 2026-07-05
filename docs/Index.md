@@ -135,6 +135,7 @@ Additional linear algebra, numerics & simulation:
 | `nimblecas.bandsolve` | [bandsolve.md](reference/bandsolve.md) | Thomas + banded-LU direct solvers for tridiagonal/banded systems + parallel multi-RHS batch. |
 | `nimblecas.matexp` | [matexp.md](reference/matexp.md) | Matrix exponential via Taylor / Padé / scaling-and-squaring. |
 | `nimblecas.eigen` | [eigen.md](reference/eigen.md) | Characteristic polynomial + rational eigenvalues/eigenvectors over `Q` (the `int64` tier `bigeigen` big-backs). |
+| `nimblecas.frobenius` | [frobenius.md](reference/frobenius.md) | Rational (Frobenius) canonical form over `Q` (§7.2): invariant factors and minimal polynomial via the Smith normal form of `xI − A` over `Q[x]`, and the block-companion RCF — EXACT (needs no eigenvalues, unlike Jordan form); the transforming `P` is deliberately not returned. |
 | `nimblecas.numeigen` | [numeigen.md](reference/numeigen.md) | Numeric all-eigenvalue solver for real matrices: structure-aware dispatch (diagonal/triangular direct, Jacobi for symmetric, Francis double-shift real-Schur QR for general); `companion_eigenvalues` is the numeric polynomial root path under `solve`. |
 | `nimblecas.dynamics` | [dynamics.md](reference/dynamics.md) | Equilibria, exact Routh–Hurwitz asymptotic stability, and rational equilibrium classification. |
 | `nimblecas.powerseries` | [powerseries.md](reference/powerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `int64` `Rational`. |
