@@ -93,17 +93,25 @@ enum class Verdict : std::uint8_t { converges, diverges, inconclusive };
 // Result of the ratio (d'Alembert) test.
 struct RatioTest {
     Verdict verdict{Verdict::inconclusive};
-    bool exact{false};                      // true iff the limit was determined exactly over Q
-    std::optional<Rational> exact_limit{};  // L = lim |a_{n+1}/a_n| when `exact`
+    // `exact` == true means the decisive statistic was a CONSTANT RATIONAL across the
+    // sampled indices, and that constant is taken as the exact rational limit in
+    // `exact_limit`. This is a sampling determination, not a proof of constancy: it is
+    // correct for the intended inputs (geometric / bounded-degree rational-function ratios),
+    // but a pathological sequence engineered to match the statistic at every sampled index
+    // yet differ elsewhere could defeat it. The samples are spread widely enough that only a
+    // very-high-degree crafted sequence could do so; realistic inputs cannot.
+    bool exact{false};
+    std::optional<Rational> exact_limit{};  // the constant rational limit when `exact`
     double numeric_limit{0.0};              // a double view of the limit / finite-n estimate
 };
 
-// Ratio test on the exact rational term a_n. If |a_{n+1}/a_n| is a constant rational over
-// the sampled n (as for a geometric series a_n = c r^n, whose ratio is exactly |r|), that
-// constant is returned as the EXACT limit L and the verdict follows exactly: L < 1
-// converges, L > 1 diverges, L == 1 inconclusive. Otherwise the limit is not pinned down
-// exactly and a NUMERICAL finite-n estimate is reported with a heuristic verdict (a
-// documented approximation -- the ratio test is genuinely inconclusive when L -> 1).
+// Ratio test on the exact rational term a_n. If |a_{n+1}/a_n| is a CONSTANT RATIONAL across
+// the widely-spread sampled indices (as for a geometric series a_n = c r^n, whose ratio is
+// exactly |r| at every n), that constant is taken as the limit L and the verdict follows
+// from it: L < 1 converges, L > 1 diverges, L == 1 inconclusive. Otherwise the limit is not
+// pinned down and a NUMERICAL finite-n estimate is reported with an inconclusive verdict --
+// a few finite samples cannot distinguish a genuine L < 1 from L -> 1 (the harmonic series
+// has ratios n/(n+1) -> 1 yet diverges). See RatioTest::exact for the sampling caveat.
 [[nodiscard]] auto ratio_test(const RationalSequence& a) -> RatioTest;
 
 // Result of a numerical convergence test.
@@ -142,13 +150,15 @@ struct NumericTest {
 // condensation, Dirichlet, Abel, and the p-series / Bertrand threshold wrappers).
 // ---------------------------------------------------------------------------
 //
-// Each is as honest about exactness as ratio_test: when the test's decisive limit is a
-// CONSTANT RATIONAL over the sampled indices it is returned EXACTLY over Q (`exact` set,
-// `exact_limit` filled) and the verdict follows exactly -- including the boundary cases a
-// test is designed to resolve; otherwise a NUMERICAL finite-n estimate is reported and the
-// verdict is inconclusive whenever the estimate is too close to the test's threshold to
-// certify a strict inequality. Nothing here ever reports converges/diverges on a genuinely
-// inconclusive (boundary) limit.
+// Each is as honest about exactness as ratio_test: when the test's decisive statistic is a
+// CONSTANT RATIONAL across the widely-spread sampled indices it is TAKEN as the exact
+// rational limit (`exact` set, `exact_limit` filled) and the verdict follows from it --
+// including the boundary cases a test is designed to resolve; otherwise a NUMERICAL finite-n
+// estimate is reported and the verdict is inconclusive whenever the estimate is too close to
+// the test's threshold to certify a strict inequality. The constant-across-samples inference
+// is a sampling determination (see RatioTest::exact): correct for the intended bounded-degree
+// rational statistics, though a pathological high-degree crafted sequence could defeat it.
+// Nothing here ever reports converges/diverges on a genuinely inconclusive (boundary) limit.
 
 // Raabe's test: l = lim n (a_n/a_{n+1} - 1). l > 1 converges, l < 1 diverges, l == 1
 // INCONCLUSIVE (the boundary Raabe cannot resolve). Reuses the RatioTest carrier: `exact` /
@@ -179,20 +189,26 @@ struct NumericTest {
 [[nodiscard]] auto gauss_test(const RationalSequence& a) -> RatioTest;
 
 // Limit-comparison test (NUMERICAL): l = lim a_n/b_n. When 0 < l < infinity the series
-// Sum a_n shares the behaviour of the reference Sum b_n, so the verdict echoes
-// `b_behaviour`. If the sampled ratios are not all finite-and-positive, or do not settle to
-// a finite positive limit, the verdict is inconclusive. `numeric_limit` carries the
-// finite-n estimate of l. Sampled over n = 1..samples.
+// Sum a_n shares the behaviour of the reference Sum b_n, so the verdict echoes `b_behaviour`.
+// The hypothesis 0 < l < infinity must be EVIDENCED: the ratio is probed at geometrically
+// spaced indices and only a settled positive plateau (successive probe ratios near 1) echoes
+// b_behaviour. A ratio drifting to 0 or infinity -- which stays finite and positive over any
+// window (e.g. q_n = 1/(ln n)^2) -- is NOT accepted and yields inconclusive, as does a
+// non-finite/non-positive sampled ratio or samples < 8. `numeric_limit` carries the finite-n
+// estimate of l. Sampled over n = 1..samples plus the spaced probes.
 [[nodiscard]] auto limit_comparison_test(const RealSequence& a, const RealSequence& b,
                                          Verdict b_behaviour, std::int64_t samples = 200)
     -> NumericTest;
 
 // Cauchy condensation (NUMERICAL): for a_n >= 0 monotonically non-increasing, Sum a_n
-// converges iff the condensed series Sum 2^k a_{2^k} converges. The condensed series is
-// summed and its vanishing tail increment decides the verdict (the same tail heuristic as
-// integral_test). The monotonicity / non-negativity precondition is CHECKED on the sampled
-// range [1, samples]; a violation there yields domain_error (it is assumed, not checked,
-// beyond the sampled range).
+// converges iff the condensed series Sum 2^k a_{2^k} converges. The successive condensed-term
+// ratios are examined over an asymptotic window: clear geometric decay => converges; terms
+// not tending to 0 (flat/growing) => diverges (nth-term test); a SUB-GEOMETRIC decay that is
+// neither -- e.g. a logarithmic / Bertrand-rate condensed series like 1/(n (ln n)^p), whose
+// condensed terms decay like 1/k^p -- is genuinely undecidable on the sampled window and is
+// reported INCONCLUSIVE (never a wrong definite verdict). The monotonicity / non-negativity
+// precondition is CHECKED on [1, samples]; a violation there yields domain_error (it is
+// assumed, not checked, beyond the sampled range).
 [[nodiscard]] auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples = 1000)
     -> Result<Verdict>;
 
@@ -569,16 +585,21 @@ auto to_string_view(Verdict v) noexcept -> std::string_view {
 }
 
 auto ratio_test(const RationalSequence& a) -> RatioTest {
-    // Sample |a_{n+1}/a_n| at a few small indices (small keeps geometric r^n inside int64
-    // before it overflows). If every computable ratio is the SAME exact rational, that
-    // constant is the exact limit L; otherwise fall back to a numerical estimate.
+    // Sample |a_{n+1}/a_n| at WIDELY-SPREAD small indices (kept small so a geometric r^n
+    // stays inside int64; a sample that overflows the exact ratio is skipped). If every
+    // computable ratio is the SAME exact rational, that constant is taken as the limit L;
+    // otherwise fall back to a numerical estimate. Spreading the indices (rather than
+    // clustering them at 1..4) means a non-constant statistic that happens to agree on a few
+    // adjacent points is still caught: agreement across this spread pins a bounded-degree
+    // rational ratio, though a pathological high-degree sequence engineered to match at every
+    // sampled index could still defeat the constancy inference (documented on RatioTest).
     std::optional<Rational> constant{};
     bool constant_holds = true;
     std::size_t samples = 0;
     double last_numeric = 0.0;
     bool have_numeric = false;
 
-    for (std::int64_t k = 1; k <= 4; ++k) {
+    for (const std::int64_t k : {1, 2, 3, 4, 6, 8, 12, 16}) {
         const Rational ak = a(k);
         if (ak.is_zero()) {
             continue;
@@ -603,7 +624,8 @@ auto ratio_test(const RationalSequence& a) -> RatioTest {
     }
 
     RatioTest result;
-    if (samples >= 2 && constant_holds && constant.has_value()) {
+    // Require at least three agreeing spread samples before taking the ratio as a constant.
+    if (samples >= 3 && constant_holds && constant.has_value()) {
         result.exact = true;
         result.exact_limit = *constant;
         result.numeric_limit = to_double(*constant);
@@ -731,14 +753,16 @@ auto alternating_series_test(const RealSequence& magnitude, std::int64_t samples
 
 namespace {
 
-// The outcome of trying to pin down a series-test limit L from an exact rational
-// term(n): EXACT when term(n) is a constant rational over the small sample set (as for
-// a genuinely geometric ratio, or a ratio 1 + c/n whose Raabe/Kummer combination is
-// constant), otherwise a NUMERICAL estimate at the largest feasible index.
+// The outcome of trying to pin down a series-test limit L from an exact rational term(n).
+// `exact` means term(n) was a CONSTANT RATIONAL across the widely-spread sample set (as for
+// a ratio 1 + c/n whose Raabe/Kummer combination is constant), and that constant is taken as
+// the rational limit -- a sampling determination that is correct for the intended bounded-
+// degree rational statistics but that a pathological high-degree crafted sequence could
+// defeat. Otherwise a NUMERICAL estimate at the largest feasible index is reported.
 struct SeqLimit {
     bool exact{false};
-    Rational exact_value{};    // valid iff `exact`
-    double numeric{0.0};       // a double view of L (exact value or finite-n estimate)
+    Rational exact_value{};    // the constant rational limit, valid iff `exact`
+    double numeric{0.0};       // a double view of L (constant value or finite-n estimate)
     bool have_numeric{false};  // false only when every sample overflowed / was skipped
 };
 
@@ -750,7 +774,10 @@ template <typename Term>
     std::optional<Rational> constant{};
     bool constant_holds = true;
     int samples = 0;
-    for (std::int64_t n = 2; n <= 6; ++n) {
+    // Widely-spread indices: agreement here rejects a statistic that merely coincides on a
+    // few adjacent points (e.g. h_n = 1 + (n-2)(n-3)(n-4)(n-5)(n-6)/D(n), which equals 1 only
+    // on 2..6 -- it differs at 8, 12, 16, 24 and so is correctly NOT taken as constant).
+    for (const std::int64_t n : {2, 3, 4, 5, 6, 8, 12, 16, 24}) {
         auto g = term(n);
         if (!g) {
             continue;
@@ -762,9 +789,9 @@ template <typename Term>
             constant_holds = false;
         }
     }
-    // Three or more equal exact samples of a low-degree rational statistic pin the limit
-    // exactly (a ratio of bounded-degree polynomials equal at 3+ points is constant here).
-    if (samples >= 3 && constant_holds && constant.has_value()) {
+    // Four or more agreeing spread samples are taken as constant (correct for a bounded-degree
+    // rational statistic; a crafted sequence matching at all nine indices could still fool it).
+    if (samples >= 4 && constant_holds && constant.has_value()) {
         out.exact = true;
         out.exact_value = *constant;
         out.numeric = to_double(*constant);
@@ -928,10 +955,22 @@ auto limit_comparison_test(const RealSequence& a, const RealSequence& b, Verdict
     if (samples < 1) {
         return result;
     }
+    // The exact ratio q_n = a_n/b_n at index n, provided it is finite and strictly positive.
+    const auto ratio_at = [&a, &b](std::int64_t n) -> std::optional<double> {
+        const double bn = b(n);
+        if (bn == 0.0) {
+            return std::nullopt;
+        }
+        const double q = a(n) / bn;
+        if (!std::isfinite(q) || q <= 0.0) {
+            return std::nullopt;
+        }
+        return q;
+    };
+    // Scan n = 1..samples: any non-finite/non-positive ratio breaks the 0 < l < infinity
+    // hypothesis outright, and the last valid ratio is the reported finite-n estimate of l.
     double last = 0.0;
     bool have = false;
-    double lo = std::numeric_limits<double>::infinity();
-    double hi = 0.0;
     for (std::int64_t n = 1; n <= samples; ++n) {
         const double bn = b(n);
         if (bn == 0.0) {
@@ -939,25 +978,41 @@ auto limit_comparison_test(const RealSequence& a, const RealSequence& b, Verdict
         }
         const double q = a(n) / bn;
         if (!std::isfinite(q) || q <= 0.0) {
-            // A non-positive or non-finite ratio breaks the 0 < l < infinity hypothesis.
             result.numeric_limit = std::isfinite(q) ? q : 0.0;
             result.verdict = Verdict::inconclusive;
             return result;
         }
         last = q;
         have = true;
-        lo = std::min(lo, q);
-        hi = std::max(hi, q);
     }
     if (!have) {
         return result;  // inconclusive, statistic 0
     }
     result.numeric_limit = last;  // estimate of l at the largest sampled index
-    // 0 < l < infinity is read off a settled, positively-bounded ratio: finite last value
-    // and a bounded spread across the samples. Then Sum a_n mirrors Sum b_n's behaviour.
-    const bool settled = std::isfinite(last) && last > 0.0 && lo > 0.0 && hi / lo < 1e6;
+    // 0 < l < infinity must be EVIDENCED, not merely assumed from bounded spread: a ratio
+    // slowly decaying to 0 (e.g. q_n = 1/(ln n)^2) or growing to infinity stays finite and
+    // positive over any window, yet its limit is NOT in (0, infinity). Probe q_n at
+    // geometrically spaced indices and require the successive probe ratios to PLATEAU near 1
+    // (a settled positive limit); a persistent multiplicative trend (probe ratios staying off
+    // 1) signals q_n -> 0 or infinity, so the hypothesis fails and the verdict is inconclusive.
+    bool settled = false;
+    if (samples >= 8) {
+        const std::optional<double> p0 = ratio_at(samples);
+        const std::optional<double> p1 = ratio_at(samples / 2);
+        const std::optional<double> p2 = ratio_at(samples / 4);
+        const std::optional<double> p3 = ratio_at(samples / 8);
+        if (p0 && p1 && p2 && p3 && *p1 > 0.0 && *p2 > 0.0 && *p3 > 0.0) {
+            constexpr double plateau_lo = 0.85;
+            constexpr double plateau_hi = 1.15;
+            const double r0 = *p0 / *p1;
+            const double r1 = *p1 / *p2;
+            const double r2 = *p2 / *p3;
+            settled = r0 > plateau_lo && r0 < plateau_hi && r1 > plateau_lo && r1 < plateau_hi &&
+                      r2 > plateau_lo && r2 < plateau_hi;
+        }
+    }
     if (settled && (b_behaviour == Verdict::converges || b_behaviour == Verdict::diverges)) {
-        result.verdict = b_behaviour;
+        result.verdict = b_behaviour;  // 0 < l < infinity evidenced => mirror the reference
     } else {
         result.verdict = Verdict::inconclusive;
     }
@@ -984,22 +1039,59 @@ auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples) -> Re
         }
         prev = cur;
     }
-    // Condensed series c_k = 2^k a(2^k); Sum a_n and Sum c_k share convergence. Sum the
-    // condensed terms and infer convergence from a vanishing tail increment (as integral_test
-    // does). kbase = 25 keeps the doubled index 2^50 comfortably inside int64.
-    const auto condensed_partial = [&a](std::int64_t kmax) -> double {
-        double sum = 0.0;
-        for (std::int64_t k = 0; k <= kmax; ++k) {
-            const std::int64_t idx = static_cast<std::int64_t>(1) << k;  // 2^k
-            sum += static_cast<double>(idx) * a(idx);
-        }
-        return sum;
+    // Condensed series c_k = 2^k a(2^k); Sum a_n and Sum c_k share convergence. A finite
+    // sample can only certify the two DECISIVE regimes -- so we examine the successive
+    // condensed-term ratios r_k = c_{k+1}/c_k across an asymptotic window:
+    //
+    //   * every r_k <= conv_ratio (clear geometric decay, as for 1/n^p, p>1, whose condensed
+    //     ratio is the constant 2^{1-p} < 1)                                => converges;
+    //   * every r_k >= div_ratio  (condensed terms do NOT shrink to 0, as for the harmonic
+    //     1/n whose condensed terms are all 1, or a growing 1/n^p, p<1)     => diverges
+    //     (nth-term test on the condensed series);
+    //   * otherwise -- a SUB-GEOMETRIC decay (r_k -> 1 from below, as for the Bertrand series
+    //     1/(n (ln n)^p) whose condensed terms decay like 1/k^p) -- the sampled window cannot
+    //     certify either regime                                             => inconclusive.
+    //
+    // The window is asymptotic (k in [k_lo, k_hi]) so small-index transients don't mislead;
+    // 2^k stays inside int64 for k <= 50. This is a NUMERICAL (sampled) determination.
+    const auto condensed_term = [&a](std::int64_t k) -> double {
+        const std::int64_t idx = static_cast<std::int64_t>(1) << k;  // 2^k
+        return static_cast<double>(idx) * a(idx);
     };
-    constexpr std::int64_t kbase = 25;
-    const double s_n = condensed_partial(kbase);
-    const double s_2n = condensed_partial(2 * kbase);
-    const double tail = s_2n - s_n;
-    return (tail < 1e-3) ? Verdict::converges : Verdict::diverges;
+    constexpr std::int64_t k_lo = 16;
+    constexpr std::int64_t k_hi = 50;
+    constexpr double conv_ratio = 0.85;       // per-step decay this strong => geometric-like
+    constexpr double div_ratio = 1.0 - 1e-6;  // terms not shrinking => nth-term divergence
+    bool all_geometric = true;   // every window ratio <= conv_ratio (clear geometric decay)
+    bool none_shrinking = true;  // every window ratio >= div_ratio (terms do not tend to 0)
+    bool saw_ratio = false;
+    double prev_c = condensed_term(k_lo);
+    for (std::int64_t k = k_lo + 1; k <= k_hi; ++k) {
+        if (prev_c <= 0.0) {
+            // Condensed terms have vanished (rapid decay underflowing to 0) => summable.
+            return Verdict::converges;
+        }
+        const double c = condensed_term(k);
+        const double r = c / prev_c;
+        saw_ratio = true;
+        if (r > conv_ratio) {
+            all_geometric = false;
+        }
+        if (r < div_ratio) {
+            none_shrinking = false;
+        }
+        prev_c = c;
+    }
+    if (!saw_ratio) {
+        return Verdict::inconclusive;
+    }
+    if (all_geometric) {
+        return Verdict::converges;  // condensed terms decay at least geometrically
+    }
+    if (none_shrinking) {
+        return Verdict::diverges;  // condensed terms do not tend to 0 (nth-term test)
+    }
+    return Verdict::inconclusive;  // sub-geometric decay: undecidable on the sampled window
 }
 
 auto dirichlet_test(const RealSequence& a, const RealSequence& b, std::int64_t samples)

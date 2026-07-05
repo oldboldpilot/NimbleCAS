@@ -161,5 +161,29 @@ auto main() -> int {
                   t.expect(simplified.has_value() && once->is_equivalent_to(*simplified),
                            "expand of a flat expression equals simplify");
               })
+        .test("nested_sum_distribution_collapses_zero",
+              [&](TestContext& t) {
+                  // Direct regression guard for the as_terms fixpoint fix: a scalar (here
+                  // -1) multiplying a product-of-sums that only becomes a sum AFTER its own
+                  // distribution must be fully distributed, so a genuinely-zero difference
+                  // collapses to 0. Before the fix, expand_product left -1*(a*c+...) intact
+                  // (simplify never distributes a scalar over a sum) and this stayed nonzero.
+                  const Expr d = Expr::symbol("d");
+                  const Expr e = Expr::symbol("e");
+                  // ((a+b)*(c+d) + e) - (a*c + a*d + b*c + b*d + e)  ==  0
+                  const Expr lhs = Expr::sum(
+                      {Expr::product({a.add(b), c.add(d)}), e});
+                  const Expr rhs = Expr::sum({Expr::product({a, c}), Expr::product({a, d}),
+                                             Expr::product({b, c}), Expr::product({b, d}), e});
+                  const Expr diff =
+                      Expr::sum({lhs, Expr::product({Expr::integer(-1), rhs})});
+                  auto got = expand(diff);
+                  t.expect(got.has_value(), "nested-sum difference expands without error");
+                  if (got.has_value()) {
+                      t.expect(got->is_equivalent_to(Expr::integer(0)),
+                               std::format("nested-sum difference expands to 0, got {}",
+                                           got->to_string()));
+                  }
+              })
         .run();
 }

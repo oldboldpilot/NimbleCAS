@@ -24,27 +24,35 @@
 // downstream is floating point.
 //
 // STRUCTURE is exploited for BOTH correctness and honesty, decided on the EXACT matrix
-// before any float ever appears:
+// before any float ever appears, via three disjoint dispatch paths:
 //   * Hermitian (verified by ComplexMatrix::is_hermitian on the exact entries) => the
 //     spectrum is REAL. R is then symmetric, so numeigen's Jacobi path returns real
 //     eigenvalues with imaginary part EXACTLY 0.0 (not "≈ 0"), each doubled; we de-duplicate
 //     the doubled spectrum and return honest reals.
-//   * skew-Hermitian => the spectrum is purely IMAGINARY; the recovered real parts are
-//     snapped to EXACTLY 0.0 (justified because the structure was proven on the exact M).
-//   * unitary => the eigenvalues lie on the unit circle |λ| = 1 (documented; not faked —
-//     the magnitudes are the numeric ones the algorithm produced).
+//   * skew-Hermitian (is_skew_hermitian) => the spectrum is purely IMAGINARY, recovered
+//     EXACTLY: iM is Hermitian when M is skew-Hermitian ((iM)† = -i M† = -i(-M) = iM), so we
+//     run the Hermitian path on iM for its real eigenvalues μₖ and return λₖ = -iμₖ (real part
+//     EXACTLY 0.0). This is unambiguous — it never touches the general embedding recovery.
+//   * general (neither of the above; includes unitary and normal) => the eigenvalues are
+//     recovered from R's spectrum by selecting the candidates that satisfy M's characteristic
+//     equation, det(λI − M) ≈ 0. For a unitary M these additionally lie on the unit circle
+//     |λ| = 1 (documented; not faked — the magnitudes are the numeric ones produced).
 // A block that fails to converge surfaces as an honest MathError::not_implemented (inherited
 // from numeigen), never a partial or invented spectrum.
 //
-// RECOVERY of M's n eigenvalues from R's 2n. R is real, so its spectrum is closed under
-// conjugation: it is M's spectrum ⊎ conj(M's spectrum). To pick M's own half we pair each
-// candidate with its conjugate partner and keep, from each pair, the representative that
-// actually annihilates M's characteristic polynomial — the one minimizing |det(λI − M)|,
-// evaluated in complex double arithmetic on M itself. This is what makes every returned λ
-// satisfy det(λI − M) ≈ 0 (rather than det(λI − M̄) ≈ 0). The lone genuinely ambiguous case
-// is a matrix whose EXACT spectrum is itself closed under conjugation (e.g. a real-spectrum
-// or ±-pair spectrum): there both representatives are true eigenvalues, so any pick is a
-// valid eigenvalue — the returned set still satisfies the characteristic equation.
+// RECOVERY (general path) and its HONEST LIMIT. R is real, so spec(R) is closed under
+// conjugation: spec(R) = spec(M) ⊎ conj(spec(M)). M's own half is the subset annihilating
+// M's characteristic polynomial, so we select the R-eigenvalues with |det(λI − M)| ≈ 0. In
+// GENERAL POSITION exactly n of the 2n candidates qualify and none is the conjugate of
+// another — those n ARE spec(M), each satisfying det(λI − M) ≈ 0. But when M's EXACT spectrum
+// is itself CLOSED UNDER CONJUGATION, the embedding is genuinely lossy: diag(i,i) and
+// diag(i,−i) both produce R-spectrum {i,i,−i,−i}, so M is not recoverable from R alone. This
+// case — which includes EVERY real matrix that has complex-conjugate eigenvalues (e.g.
+// [[1,−2],[2,1]] with spectrum {1±2i}) — is detected (the selection has size ≠ n, or a
+// selected non-real λ has its conjugate also selected) and returns an honest
+// MathError::not_implemented. It NEVER returns a wrong multiset. For a REAL matrix with
+// complex eigenvalues, call nimblecas.numeigen::eigenvalues_qr directly, which solves the
+// real problem without the embedding's conjugate ambiguity.
 
 export module nimblecas.cheigen;
 
@@ -72,11 +80,15 @@ export namespace nimblecas {
 // All (numeric) eigenvalues of a general complex matrix, as std::complex<double>. Dispatches
 // on the exact structure for correctness and honesty: a Hermitian matrix returns a purely
 // real spectrum (imaginary part exactly 0.0); a skew-Hermitian matrix returns a purely
-// imaginary spectrum (real part exactly 0.0); every other matrix (unitary, normal, or wholly
-// unstructured) goes through the real-embedding + conjugate-recovery path, and each returned
-// λ satisfies det(λI − M) ≈ 0. A non-square matrix is domain_error; a 0x0 matrix yields an
-// empty vector. `tol` / `max_iter` are forwarded to nimblecas.numeigen; a non-converging
-// block surfaces as an honest not_implemented, never a partial spectrum.
+// imaginary spectrum (real part exactly 0.0, via the exact iM-Hermitian reduction); every
+// other matrix (unitary, normal, or wholly unstructured) is recovered from the real embedding
+// by selecting the R-eigenvalues satisfying det(λI − M) ≈ 0. When that spectrum is closed
+// under conjugation the embedding cannot distinguish M from M̄ — this INCLUDES every real
+// matrix with complex-conjugate eigenvalues — and the function returns an honest
+// MathError::not_implemented rather than a wrong multiset (use nimblecas.numeigen for real
+// matrices). A non-square matrix is domain_error; a 0x0 matrix yields an empty vector. `tol`
+// / `max_iter` are forwarded to nimblecas.numeigen; a non-converging block also surfaces as
+// not_implemented, never a partial spectrum.
 [[nodiscard]] auto eigenvalues(const ComplexMatrix& m, double tol = 1e-12,
                                std::size_t max_iter = 1000)
     -> Result<std::vector<std::complex<double>>>;
@@ -166,53 +178,70 @@ using cd = std::complex<double>;
     return r;
 }
 
-// From R's 2n eigenvalues, recover M's n by conjugate pairing + characteristic-residual
-// selection. `mc` is M as complex doubles (row-major, n x n).
-[[nodiscard]] auto recover_from_embedding(const std::vector<cd>& evs, std::size_t n,
-                                          const std::vector<cd>& mc) -> std::vector<cd> {
-    const std::size_t m = evs.size();  // == 2n
-    // |det(λI − M)|: how well λ satisfies M's characteristic equation.
-    auto residual = [&](cd lam) -> double {
-        std::vector<cd> a(n * n);
-        for (std::size_t i = 0; i < n; ++i) {
-            for (std::size_t j = 0; j < n; ++j) {
-                a[i * n + j] = (i == j ? lam : cd{0.0, 0.0}) - mc[i * n + j];
-            }
+// Scale-free characteristic residual of a candidate λ against M: |det(λI − M)| divided by
+// the Hadamard bound ∏ᵢ ‖rowᵢ(λI − M)‖₂ (which upper-bounds |det|). The quotient lies in
+// [0, 1] and is ~machine-eps precisely when λI − M is (numerically) singular — i.e. when λ
+// is a genuine eigenvalue of M — independent of the matrix's overall scale. `mc` is M as
+// complex doubles (row-major, n x n).
+[[nodiscard]] auto char_residual(cd lam, std::size_t n, const std::vector<cd>& mc) -> double {
+    std::vector<cd> b(n * n);
+    double hadamard = 1.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        double row_norm2 = 0.0;
+        for (std::size_t j = 0; j < n; ++j) {
+            const cd v = (i == j ? lam : cd{0.0, 0.0}) - mc[i * n + j];
+            b[i * n + j] = v;
+            row_norm2 += std::norm(v);  // |v|^2
         }
-        return std::abs(complex_det(std::move(a), n));
-    };
-
-    std::vector<cd> out;
-    out.reserve(n);
-    std::vector<char> used(m, 0);
-    for (std::size_t i = 0; i < m; ++i) {
-        if (used[i]) {
-            continue;
-        }
-        // Find i's conjugate partner: the unused candidate closest to conj(evs[i]).
-        const cd target = std::conj(evs[i]);
-        std::size_t partner = m;
-        double best = std::numeric_limits<double>::infinity();
-        for (std::size_t j = 0; j < m; ++j) {
-            if (used[j] || j == i) {
-                continue;
-            }
-            const double dist = std::abs(evs[j] - target);
-            if (dist < best) {
-                best = dist;
-                partner = j;
-            }
-        }
-        used[i] = 1;
-        if (partner == m) {  // no partner left (unreachable for even m); keep self
-            out.push_back(evs[i]);
-            continue;
-        }
-        used[partner] = 1;
-        // Keep the representative that best annihilates M's characteristic polynomial.
-        out.push_back(residual(evs[i]) <= residual(evs[partner]) ? evs[i] : evs[partner]);
+        hadamard *= std::sqrt(row_norm2);
     }
-    return out;
+    const double det = std::abs(complex_det(std::move(b), n));
+    if (hadamard == 0.0) {
+        return 0.0;  // a zero row of λI − M => exactly singular => λ is an eigenvalue
+    }
+    return det / hadamard;
+}
+
+// Recover M's n eigenvalues from R's 2n. R = [[A,−B],[B,A]] is real, so spec(R) is
+// spec(M) ⊎ conj(spec(M)); M's own half is the subset annihilating M's characteristic
+// polynomial. Select the candidates with normalized residual ≤ tol (counting multiplicity).
+//
+// Rule 32 honesty: the selection is trustworthy ONLY when it is unambiguous. Return the
+// selected set exactly when it has size n AND is not conjugate-closed (no selected non-real
+// λ has its conjugate also selected). Otherwise — the conjugate-closed case, in which R
+// genuinely cannot distinguish M from M̄ (e.g. diag(i,i) and diag(i,−i) share the R-spectrum
+// {i,i,−i,−i}), and which includes every real matrix with complex-conjugate eigenvalues —
+// return an honest MathError::not_implemented rather than a wrong multiset.
+[[nodiscard]] auto recover_general(const std::vector<cd>& evs, std::size_t n,
+                                   const std::vector<cd>& mc, double tol)
+    -> Result<std::vector<cd>> {
+    std::vector<cd> selected;
+    for (const cd& z : evs) {
+        if (char_residual(z, n, mc) <= tol) {
+            selected.push_back(z);
+        }
+    }
+    // In general position exactly n of the 2n candidates satisfy det(λI − M) ≈ 0; any other
+    // count is the ambiguous conjugate-closed situation (a real eigenvalue doubles, a
+    // conjugate pair in spec(M) is selected on both sides, etc.).
+    if (selected.size() != n) {
+        return make_error<std::vector<cd>>(MathError::not_implemented);
+    }
+    // Reject a spectrum that is closed under conjugation: a genuine non-real λ whose conjugate
+    // is also among the selected eigenvalues cannot be pinned to M rather than M̄.
+    for (std::size_t i = 0; i < selected.size(); ++i) {
+        const double mag = 1.0 + std::abs(selected[i]);
+        if (std::abs(selected[i].imag()) <= 1e-9 * mag) {
+            continue;  // real λ is its own conjugate; multiplicity is caught by the size test
+        }
+        const cd conj_i = std::conj(selected[i]);
+        for (std::size_t j = 0; j < selected.size(); ++j) {
+            if (j != i && std::abs(selected[j] - conj_i) <= 1e-9 * mag) {
+                return make_error<std::vector<cd>>(MathError::not_implemented);
+            }
+        }
+    }
+    return selected;
 }
 
 }  // namespace
@@ -287,7 +316,35 @@ auto eigenvalues(const ComplexMatrix& m, double tol, std::size_t max_iter)
         return out;
     }
 
+    // skew-Hermitian => purely imaginary spectrum, recovered EXACTLY (no ambiguous embedding).
+    // If M is skew-Hermitian then iM is Hermitian: (iM)† = -i M† = -i(-M) = iM. So the
+    // Hermitian path gives the real eigenvalues μₖ of iM, and M's eigenvalues are λₖ = -iμₖ
+    // (real part exactly 0). This sidesteps the conjugate-closed ambiguity of the general path
+    // — e.g. diag(i,−i) maps to the Hermitian diag(1,−1), μ = {1,−1}, λ = {−i, i}.
+    auto skew = m.is_skew_hermitian();
+    if (!skew) {
+        return make_error<std::vector<cd>>(skew.error());
+    }
+    if (*skew) {
+        auto im = m.scale(Complex::i());  // iM, which is Hermitian
+        if (!im) {
+            return make_error<std::vector<cd>>(im.error());
+        }
+        auto mu = hermitian_eigenvalues(*im, tol, max_iter);
+        if (!mu) {
+            return make_error<std::vector<cd>>(mu.error());
+        }
+        std::vector<cd> out;
+        out.reserve(mu->size());
+        for (double e : *mu) {
+            out.emplace_back(0.0, -e);  // λ = -i·μ : purely imaginary, real part exactly 0
+        }
+        return out;
+    }
+
     // General path: embed, solve the 2n x 2n real problem, recover M's own n eigenvalues.
+    // Recovery returns an honest not_implemented when the spectrum is conjugate-closed and
+    // therefore genuinely unrecoverable from the real embedding (see recover_general).
     auto r = real_embedding(m);
     if (!r) {
         return make_error<std::vector<cd>>(r.error());
@@ -302,20 +359,7 @@ auto eigenvalues(const ComplexMatrix& m, double tol, std::size_t max_iter)
             mc[i * n + j] = to_cd(m.at(i, j));
         }
     }
-    std::vector<cd> out = recover_from_embedding(*evs, n, mc);
-
-    // skew-Hermitian => purely imaginary spectrum: snap the real parts to exactly 0.0
-    // (justified: the structure was proven on the exact matrix, not merely observed).
-    auto skew = m.is_skew_hermitian();
-    if (!skew) {
-        return make_error<std::vector<cd>>(skew.error());
-    }
-    if (*skew) {
-        for (cd& z : out) {
-            z = cd{0.0, z.imag()};
-        }
-    }
-    return out;
+    return recover_general(*evs, n, mc, tol);
 }
 
 }  // namespace nimblecas

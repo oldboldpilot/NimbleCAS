@@ -169,7 +169,8 @@ auto main() -> int {
         .test("skew_hermitian_diagonal_purely_imaginary",
               [&](TestContext& t) {
                   // diag(2i, i) is skew-Hermitian; eigenvalues {2i, i} are purely imaginary
-                  // (not a +/- conjugate pair), and the real parts must snap to exactly 0.
+                  // (not a +/- conjugate pair), recovered exactly via the iM-Hermitian route,
+                  // and the real parts must be exactly 0.
                   const auto m = mat({{cx(0, 2), cx(0, 0)}, {cx(0, 0), cx(0, 1)}});
                   auto skew = m.is_skew_hermitian();
                   t.expect(skew.has_value() && *skew, "diag(2i, i) is skew-Hermitian (exact)");
@@ -183,19 +184,42 @@ auto main() -> int {
                   t.expect(max_abs_real(*e) == 0.0,
                            "skew-Hermitian => real part exactly zero");
               })
-        .test("unitary_2x2_on_unit_circle",
+        .test("skew_hermitian_conjugate_pair_recovered_exactly",
               [&](TestContext& t) {
-                  // diag(i, -1) is unitary; eigenvalues {i, -1} both lie on |lambda| = 1.
-                  const auto m = mat({{cx(0, 1), cx(0, 0)}, {cx(0, 0), cx(-1, 0)}});
-                  auto uni = m.is_unitary();
-                  t.expect(uni.has_value() && *uni, "diag(i, -1) is unitary (exact)");
+                  // diag(i, -i) is skew-Hermitian with a purely imaginary CONJUGATE pair
+                  // {i, -i}. The general embedding path cannot recover this (R-spectrum is
+                  // {i,i,-i,-i}, shared with diag(i,i)); the iM-Hermitian reduction can and must
+                  // — iM = diag(-1, 1), so mu = {-1, 1} and lambda = -i*mu = {i, -i}.
+                  const auto m = mat({{cx(0, 1), cx(0, 0)}, {cx(0, 0), cx(0, -1)}});
+                  auto skew = m.is_skew_hermitian();
+                  t.expect(skew.has_value() && *skew, "diag(i, -i) is skew-Hermitian (exact)");
                   auto e = eigenvalues(m);
-                  t.expect(e.has_value(), "eigenvalues(diag(i,-1)) succeeds");
+                  t.expect(e.has_value(), "eigenvalues(diag(i,-i)) succeeds");
                   if (!e) {
                       return;
                   }
-                  const std::vector<cd> expected = {{0, 1}, {-1, 0}};
-                  t.expect(approx_set(*e, expected, kTol), "eigenvalues {i, -1}");
+                  const std::vector<cd> expected = {{0, 1}, {0, -1}};
+                  t.expect(approx_set(*e, expected, kTol), "eigenvalues EXACTLY {i, -i}");
+                  t.expect(max_abs_real(*e) == 0.0,
+                           "skew-Hermitian => real part exactly zero");
+              })
+        .test("unitary_2x2_on_unit_circle",
+              [&](TestContext& t) {
+                  // diag(i, (3+4i)/5) is unitary (both diagonal entries have modulus 1). Its
+                  // spectrum {i, (3+4i)/5} has NO real eigenvalue and is not conjugate-closed, so
+                  // the general path recovers it cleanly; both eigenvalues lie on |lambda| = 1.
+                  const auto e35 =
+                      Complex::make(Rational::make(3, 5).value(), Rational::make(4, 5).value());
+                  const auto m = mat({{cx(0, 1), cx(0, 0)}, {cx(0, 0), e35}});
+                  auto uni = m.is_unitary();
+                  t.expect(uni.has_value() && *uni, "diag(i, (3+4i)/5) is unitary (exact)");
+                  auto e = eigenvalues(m);
+                  t.expect(e.has_value(), "eigenvalues(diag(i, (3+4i)/5)) succeeds");
+                  if (!e) {
+                      return;
+                  }
+                  const std::vector<cd> expected = {{0, 1}, {0.6, 0.8}};
+                  t.expect(approx_set(*e, expected, kTol), "eigenvalues {i, (3+4i)/5}");
                   for (const cd& z : *e) {
                       t.expect(std::fabs(std::abs(z) - 1.0) <= kTol, "|lambda| = 1 on the circle");
                   }
@@ -236,6 +260,24 @@ auto main() -> int {
                       t.expect(std::abs(det2_shift(mc, z)) <= 1e-6,
                                "det(M - lambda*I) ~ 0 for each returned eigenvalue");
                   }
+              })
+        .test("conjugate_closed_spectrum_is_not_implemented",
+              [&](TestContext& t) {
+                  // The real matrix [[1,-2],[2,1]] (as a ComplexMatrix) has the complex-conjugate
+                  // spectrum {1+2i, 1-2i}. Its real embedding R shares its spectrum with matrices
+                  // that are NOT M's conjugate, so M is unrecoverable from R alone. Rule 32: the
+                  // general path must return an honest not_implemented, never a wrong multiset
+                  // such as {1+2i, 1+2i}. (Real matrices belong to numeigen::eigenvalues_qr.)
+                  const auto m = mat({{cx(1, 0), cx(-2, 0)}, {cx(2, 0), cx(1, 0)}});
+                  // Not Hermitian and not skew-Hermitian => it takes the general path.
+                  auto herm = m.is_hermitian();
+                  auto skew = m.is_skew_hermitian();
+                  t.expect(herm.has_value() && !*herm, "[[1,-2],[2,1]] is not Hermitian");
+                  t.expect(skew.has_value() && !*skew, "[[1,-2],[2,1]] is not skew-Hermitian");
+                  auto e = eigenvalues(m);
+                  t.expect(!e.has_value(), "conjugate-closed spectrum is not fabricated");
+                  t.expect(!e && e.error() == MathError::not_implemented,
+                           "conjugate-closed spectrum surfaces as not_implemented");
               })
         .test("non_square_is_domain_error",
               [&](TestContext& t) {

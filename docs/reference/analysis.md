@@ -12,11 +12,14 @@ classical facilities — **condition numbers**, **series convergence tests**, an
 and it keeps the two kinds cleanly separated:
 
 - **Exact over `Q`.** The `1`- and `∞`-norms and their condition numbers
-  (`condition_1` / `condition_inf`); the ratio test's limit *when the ratio is a
-  constant rational*; the continuous Lyapunov and discrete Stein solves (by
-  Kronecker-sum vectorization); Sylvester positive-definiteness; the Lyapunov
-  stability verdict (`is_stable_lyapunov`) and its Routh–Hurwitz cross-check.
-  These never touch floating point.
+  (`condition_1` / `condition_inf`); the ratio / Raabe / Gauss / Kummer limit
+  *when the statistic is a constant rational across the sampled indices* (taken as
+  the exact limit — a sampling determination, see the caveat below); the sharp
+  `p`-series / Bertrand thresholds; the continuous Lyapunov and discrete Stein
+  solves (by Kronecker-sum vectorization); Sylvester positive-definiteness; the
+  Lyapunov stability verdict (`is_stable_lyapunov`) and its Routh–Hurwitz
+  cross-check. Apart from the sampling of the constant-ratio inference, these never
+  touch floating point.
 - **Numerical (double), an estimate.** The spectral condition number
   `condition_2_estimate` (power iteration on `AᵀA`); the root / comparison /
   integral / alternating-series tests; the ratio test's *finite-`n` fallback*;
@@ -70,30 +73,35 @@ Both sequence aliases are **total by signature** (`n ≥ 0`) and never fail.
 `to_string_view` renders a `Verdict` as `"converges"`, `"diverges"`, or
 `"inconclusive"`.
 
-### Ratio (d'Alembert) test — exact when the ratio is a constant rational
+### Ratio (d'Alembert) test — constant across the sampled indices
 
 ```cpp
 struct RatioTest {
     Verdict verdict{Verdict::inconclusive};
-    bool exact{false};                      // true iff L was determined exactly over Q
-    std::optional<Rational> exact_limit{};  // L = lim |a_{n+1}/a_n| when `exact`
+    bool exact{false};                      // constant statistic across the sampled indices,
+                                            //   taken as the exact rational limit (see caveat)
+    std::optional<Rational> exact_limit{};  // the constant rational limit when `exact`
     double numeric_limit{0.0};              // a double view of the limit / finite-n estimate
 };
 
 [[nodiscard]] auto ratio_test(const RationalSequence& a) -> RatioTest;
 ```
 
-`ratio_test` samples `|a_{n+1}/aₙ|` at a few small indices (small keeps a
-geometric `rⁿ` inside `int64` before it overflows). **If every computable ratio
-is the same exact rational** — as for a geometric series `aₙ = c·rⁿ`, whose ratio
-is exactly `|r|` — that constant is returned as the **EXACT limit `L`**
-(`exact = true`, `exact_limit = L`) and the verdict follows exactly: `L < 1`
-converges, `L > 1` diverges, `L == 1` inconclusive. **Otherwise** the limit is
-not pinned down exactly and a **NUMERICAL** finite-`n` estimate at the largest
-sampled index is reported (`exact = false`) with a heuristic verdict — a
-documented approximation, since the ratio test is genuinely inconclusive as
-`L → 1`. Zero terms are skipped, and an overflow in a single exact ratio drops
-that one sample rather than failing.
+`ratio_test` samples `|a_{n+1}/aₙ|` at **widely-spread small indices**
+(`1, 2, 3, 4, 6, 8, 12, 16`; small keeps a geometric `rⁿ` inside `int64` before
+it overflows). **If at least three computable ratios are the same exact
+rational** — as for a geometric series `aₙ = c·rⁿ`, whose ratio is exactly `|r|`
+at every `n` — that constant is **taken as the limit `L`** (`exact = true`,
+`exact_limit = L`) and the verdict follows: `L < 1` converges, `L > 1` diverges,
+`L == 1` inconclusive. **Otherwise** the limit is not pinned down and a
+**NUMERICAL** finite-`n` estimate at the largest sampled index is reported
+(`exact = false`) with an **inconclusive** verdict — a few samples cannot
+distinguish a genuine `L < 1` from `L → 1` (the harmonic series has ratios
+`n/(n+1) → 1` yet diverges). Zero terms are skipped, and an overflow in a single
+exact ratio drops that one sample rather than failing. The spread indices reject a
+non-constant ratio that merely agrees on adjacent points; the constant inference
+is nonetheless a *sampling determination* (see the sampling caveat under the
+extended battery), correct for bounded-degree rational ratios.
 
 ### Numerical tests
 
@@ -118,14 +126,23 @@ doubles, so it is reported under the numerical family.
 
 Raabe, Kummer, Gauss, limit-comparison, Cauchy condensation, Dirichlet, Abel,
 and the sharp `p`-series / Bertrand threshold wrappers. Each keeps the module's
-honesty discipline: when a test's decisive limit is a **constant rational over
-the sampled indices** it is returned **exactly over `Q`** (carried in the
-`RatioTest` `exact` / `exact_limit` fields) and the verdict follows exactly —
-*including* the boundary cases a test is designed to resolve; otherwise a
-**numerical** finite-`n` estimate is reported and the verdict is **inconclusive
-whenever the estimate is too close to the threshold to certify a strict
-inequality**. None of them ever reports converges/diverges on a genuinely
+honesty discipline: when a test's decisive statistic is a **constant rational
+across the widely-spread sampled indices** it is **taken as** the exact rational
+limit (carried in the `RatioTest` `exact` / `exact_limit` fields) and the verdict
+follows from it — *including* the boundary cases a test is designed to resolve;
+otherwise a **numerical** finite-`n` estimate is reported and the verdict is
+**inconclusive whenever the estimate is too close to the threshold to certify a
+strict inequality**. None of them ever reports converges/diverges on a genuinely
 inconclusive (boundary) limit.
+
+> **Sampling caveat (the `exact` flag).** "Constant across the sampled indices" is
+> a *sampling determination*, not a proof of constancy. The indices are spread
+> widely (e.g. `2, 3, 4, 5, 6, 8, 12, 16, 24`) so a statistic that merely agrees
+> on a few adjacent points — such as the crafted `hₙ = 1 + (n−2)(n−3)(n−4)(n−5)(n−6)/D(n)`,
+> which equals `1` only on `2..6` — is correctly rejected (it differs at `8, 12,
+> 16, 24`). The inference is correct for the intended bounded-degree
+> rational-function statistics, but a pathological high-degree sequence engineered
+> to match at *every* sampled index yet differ elsewhere could still defeat it.
 
 Raabe, Gauss, and Kummer reuse the `RatioTest` carrier (`verdict`, `exact`,
 `exact_limit`, `numeric_limit`) — but note the **comparison direction differs
@@ -138,8 +155,8 @@ compares its limit to `0`.
 | `raabe_test` | `[[nodiscard]] auto raabe_test(const RationalSequence& a) -> RatioTest` | Raabe's test: `l = lim n(aₙ/aₙ₊₁ − 1)`. `l > 1` **converges**, `l < 1` **diverges**, `l == 1` **inconclusive** (the boundary Raabe cannot resolve). Exact over `Q` when `l` is a constant rational on the samples (`aₙ = 1/(n(n+1)) ⇒ l = 2`; `aₙ = 1/n ⇒ l = 1`); else a numeric estimate with an inconclusive band of `0.1` about `1`. |
 | `gauss_test` | `[[nodiscard]] auto gauss_test(const RationalSequence& a) -> RatioTest` | Gauss's test. **Assumes** `aₙ/aₙ₊₁ = 1 + h/n + O(1/n^{1+r})`, `r > 0` (an unverifiable precondition), extracts `h = lim n(aₙ/aₙ₊₁ − 1)`, and concludes **converges iff `h > 1`, diverges iff `h ≤ 1`**. Unlike Raabe it **resolves the `h == 1` boundary (to diverges)** — but only on the exact path, where `h` is a constant rational (harmonic `aₙ = 1/n ⇒ h = 1 ⇒` diverges). On the numeric path a near-1 estimate cannot certify the boundary and is **inconclusive**. Shares the `h` extraction with `raabe_test`. |
 | `kummer_test` | `[[nodiscard]] auto kummer_test(const RationalSequence& a, const RationalSequence& b, bool one_over_b_diverges = false) -> RatioTest` | Kummer's general test with a positive auxiliary `bₙ`: `l = lim(bₙ·aₙ/aₙ₊₁ − bₙ₊₁)`. `l > 0` **converges**. `l < 0` **diverges only when `Σ 1/bₙ` diverges** — a side condition the caller certifies via `one_over_b_diverges`; without it a negative `l` is **inconclusive** (divergence not established). `l == 0` inconclusive. Exact when `l` is constant on the samples (`aₙ = 1/(n(n+1))`, `bₙ = n ⇒ l = 1`), else numeric with an inconclusive band about `0`. (`bₙ ≡ 1` recovers the d'Alembert ratio test as `l = lim(aₙ/aₙ₊₁ − 1)`.) |
-| `limit_comparison_test` | `[[nodiscard]] auto limit_comparison_test(const RealSequence& a, const RealSequence& b, Verdict b_behaviour, std::int64_t samples = 200) -> NumericTest` | Limit-comparison test (**numerical**): `l = lim aₙ/bₙ`. When `0 < l < ∞` the series `Σ aₙ` shares the reference's `b_behaviour`, so the verdict echoes it; `numeric_limit` carries the finite-`n` estimate of `l`. If the sampled ratios are not all finite-and-positive, or do not settle to a finite positive limit (bounded spread), the verdict is **inconclusive**. |
-| `cauchy_condensation_test` | `[[nodiscard]] auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples = 1000) -> Result<Verdict>` | Cauchy condensation (**numerical**): for `aₙ ≥ 0` monotonically non-increasing, `Σ aₙ` converges iff `Σ 2ᵏ a₍₂ᵏ₎` converges. The condensed series is summed and its vanishing tail increment decides the verdict (same tail heuristic as `integral_test`). The monotonicity / non-negativity precondition is **checked on `[1, samples]`** and yields `domain_error` if violated there (assumed, not checked, beyond that range). |
+| `limit_comparison_test` | `[[nodiscard]] auto limit_comparison_test(const RealSequence& a, const RealSequence& b, Verdict b_behaviour, std::int64_t samples = 200) -> NumericTest` | Limit-comparison test (**numerical**): `l = lim aₙ/bₙ`. When `0 < l < ∞` the series `Σ aₙ` shares the reference's `b_behaviour`, so the verdict echoes it; `numeric_limit` carries the finite-`n` estimate of `l`. **`0 < l < ∞` must be evidenced, not assumed:** the ratio is probed at geometrically spaced indices and only a settled positive **plateau** (successive probe ratios near `1`) echoes `b_behaviour`. A ratio drifting to `0` or `∞` — which stays finite and positive over any window (e.g. `qₙ = 1/(ln n)²`) — is **not** accepted and yields **inconclusive**, as does any non-finite/non-positive sampled ratio, or `samples < 8`. |
+| `cauchy_condensation_test` | `[[nodiscard]] auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples = 1000) -> Result<Verdict>` | Cauchy condensation (**numerical**): for `aₙ ≥ 0` monotonically non-increasing, `Σ aₙ` converges iff `Σ 2ᵏ a₍₂ᵏ₎` converges. The successive condensed-term ratios are examined over an asymptotic window: clear **geometric** decay ⇒ **converges**; terms **not tending to `0`** (flat/growing) ⇒ **diverges** (nth-term test); a **sub-geometric** decay that is neither — e.g. a logarithmic / Bertrand-rate condensed series `1/(n(ln n)ᵖ)`, whose condensed terms decay like `1/kᵖ` — is genuinely undecidable on the sampled window and is reported **inconclusive** (never a wrong definite verdict). The monotonicity / non-negativity precondition is **checked on `[1, samples]`** and yields `domain_error` if violated there (assumed, not checked, beyond that range). |
 | `dirichlet_test` | `[[nodiscard]] auto dirichlet_test(const RealSequence& a, const RealSequence& b, std::int64_t samples = 1000) -> Verdict` | Dirichlet's test for `Σ aₙbₙ` (**numerical**). Certifies **convergence** from two checkable hypotheses on the sampled range: the partial sums `A_N = Σ_{n≤N} aₙ` stay **bounded**, and `bₙ` is **monotone with `bₙ → 0`**. Both hold ⇒ converges; otherwise **inconclusive** — it never certifies divergence. |
 | `abel_test` | `[[nodiscard]] auto abel_test(const RealSequence& a, const RealSequence& b, std::int64_t samples = 1000) -> Verdict` | Abel's test for `Σ aₙbₙ` (**numerical**). Certifies **convergence** when `Σ aₙ` converges (checked via a vanishing partial-sum tail `A_{2N} − A_N`) and `bₙ` is **monotone and bounded** (convergent). Both hold ⇒ converges, otherwise **inconclusive**. Sampled over `n = 1..2·samples`. |
 | `p_series_test` | `[[nodiscard]] auto p_series_test(const Rational& p) -> Verdict` | `p`-series threshold, **exact over `Q`**: `Σ 1/nᵖ` **converges iff `p > 1`**, else diverges. A sharp, decidable threshold — **never inconclusive**. |
@@ -155,10 +172,14 @@ and go **inconclusive within a band of the threshold**. `raabe`/`gauss` differ
 *only* at the exact `l == 1` boundary — Raabe reports inconclusive, Gauss (whose
 `O(1/n^{1+r})` premise resolves it) reports diverges. The four sampled
 `RealSequence` tests (`limit_comparison`, `cauchy_condensation`, `dirichlet`,
-`abel`) are numerical: they read boundedness / monotonicity / vanishing tails off
-a finite sample and are honestly **inconclusive** whenever a hypothesis cannot be
-certified there. Dirichlet and Abel certify **only convergence**, never
-divergence.
+`abel`) are numerical: they read boundedness / monotonicity / trend off a finite
+sample and are honestly **inconclusive** whenever a hypothesis cannot be certified
+there. In particular, both `cauchy_condensation` and `limit_comparison` return
+**inconclusive on logarithmic / Bertrand-rate inputs** — a sub-geometric condensed
+decay `1/(n(ln n)ᵖ)`, or a comparison ratio drifting to `0`/`∞` like `1/(ln n)²` —
+rather than a wrong definite verdict, because a finite window cannot distinguish
+those from the neighbouring convergent/divergent cases. Dirichlet and Abel certify
+**only convergence**, never divergence.
 
 ## Lyapunov equations and stability
 
@@ -306,6 +327,10 @@ cauchy_condensation_test([](std::int64_t n) { return 1.0 / double(n); }).value()
                                                      // Verdict::diverges
 cauchy_condensation_test([](std::int64_t n) { return 1.0 / (double(n) * n); }).value();
                                                      // Verdict::converges
+// Bertrand 1/((n+1)(ln(n+1))²) converges, but sub-geometrically — honestly inconclusive.
+cauchy_condensation_test([](std::int64_t n) {
+    const double x = double(n) + 1.0, l = std::log(x); return 1.0 / (x * l * l);
+}).value();                                          // Verdict::inconclusive
 
 // Limit comparison of 1/(n²+1) against the convergent 1/n²: l → 1 in (0, ∞).
 limit_comparison_test([](std::int64_t n) { return 1.0 / (double(n) * n + 1.0); },

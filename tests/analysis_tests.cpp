@@ -271,6 +271,19 @@ auto main() -> int {
                   t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
                            "non-monotone / negative term => domain_error");
               })
+        .test("cauchy_condensation_bertrand_is_inconclusive",
+              [](TestContext& t) {
+                  // Bertrand a_n = 1/((n+1)(ln(n+1))^2) CONVERGES (p = 2), but its condensed
+                  // terms decay like 1/k^2 (sub-geometric, ratio -> 1), so a finite sampled
+                  // window CANNOT certify it. Honest verdict: inconclusive (NOT diverges).
+                  auto v = cauchy_condensation_test([](std::int64_t n) {
+                      const double x = static_cast<double>(n) + 1.0;
+                      const double l = std::log(x);
+                      return 1.0 / (x * l * l);
+                  });
+                  t.expect(v.has_value() && *v == Verdict::inconclusive,
+                           "Bertrand-rate condensed decay => inconclusive, not a wrong verdict");
+              })
         .test("limit_comparison_matches_reference",
               [](TestContext& t) {
                   // a_n = 1/(n^2+1), b_n = 1/n^2: a_n/b_n = n^2/(n^2+1) -> 1 in (0, inf).
@@ -283,6 +296,22 @@ auto main() -> int {
                            "limit-comparison ratio l ~ 1");
                   t.expect(lc.verdict == Verdict::converges,
                            "0 < l < inf => mirrors the convergent reference");
+              })
+        .test("limit_comparison_ratio_to_zero_is_inconclusive",
+              [](TestContext& t) {
+                  // a_n = 1/(n(ln(n+1))^2), b_n = 1/n: q_n = a_n/b_n = 1/(ln(n+1))^2 stays
+                  // positive and finite but DRIFTS TO 0, so l is not in (0, inf). The 0 < l <
+                  // inf hypothesis fails => inconclusive (NOT the reference's diverges verdict;
+                  // Sum a_n actually converges).
+                  auto lc = limit_comparison_test(
+                      [](std::int64_t n) {
+                          const double l = std::log(static_cast<double>(n) + 1.0);
+                          return 1.0 / (static_cast<double>(n) * l * l);
+                      },
+                      [](std::int64_t n) { return 1.0 / static_cast<double>(n); },
+                      Verdict::diverges);
+                  t.expect(lc.verdict == Verdict::inconclusive,
+                           "ratio drifting to 0 => 0<l<inf fails => inconclusive");
               })
         .test("dirichlet_bounded_partial_sums",
               [](TestContext& t) {

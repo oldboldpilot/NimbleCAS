@@ -1625,7 +1625,10 @@ if(NIMBLECAS_PYTHON)
 
   nanobind_add_module(nimblecas_ext src/bindings/bindings.cpp)
   target_link_libraries(nimblecas_ext
-    PRIVATE nimblecas_diff nimblecas_simplify nimblecas_polyexpr nimblecas_polynomial
+    PRIVATE nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_symint
+            nimblecas_expand nimblecas_hyptest nimblecas_stats nimblecas_kronprod
+            nimblecas_contfrac nimblecas_matrix nimblecas_complex nimblecas_ratpoly
+            nimblecas_diff nimblecas_simplify nimblecas_polyexpr nimblecas_polynomial
             nimblecas_symbolic nimblecas_simd nimblecas_core std_module)
 
   add_test(NAME python_bindings
