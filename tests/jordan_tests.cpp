@@ -97,6 +97,27 @@ using AlgMat = std::vector<std::vector<AlgebraicNumber>>;
     return true;
 }
 
+// Every column of a square AlgMat has at least one nonzero entry. For the columns of P this
+// is a P-invertibility certificate that does NOT pin the (non-canonical) scaling of the
+// eigenvectors: A*P == P*J makes each column an eigenvector of its block's eigenvalue, and a
+// set of nonzero eigenvectors for DISTINCT eigenvalues is automatically linearly independent.
+[[nodiscard]] auto columns_all_nonzero(const AlgMat& p) -> bool {
+    const std::size_t n = p.size();
+    for (std::size_t j = 0; j < n; ++j) {
+        bool nonzero = false;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!p[i][j].is_zero()) {
+                nonzero = true;
+                break;
+            }
+        }
+        if (!nonzero) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -110,11 +131,13 @@ auto main() -> int {
                   auto r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(2), ri(1)}, {ri(0), ri(2)}})),
                            "J = [[2,1],[0,2]]");
-                  t.expect(r.transform.is_equal(Matrix::identity(2)), "P = I_2");
-                  // The correctness property, re-derived: A*P == P*J.
+                  // The correctness property, re-derived: A*P == P*J. P itself is only
+                  // defined up to a valid change of Jordan basis, so we assert invertibility
+                  // rather than a specific representative.
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
                            "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
               })
         .test("defective_2x2_nontrivial_transform",
               [](TestContext& t) {
@@ -125,12 +148,12 @@ auto main() -> int {
                   auto r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(4), ri(1)}, {ri(0), ri(4)}})),
                            "J = [[4,1],[0,4]]");
-                  t.expect(r.transform.is_equal(mat({{ri(1), ri(0)}, {ri(-1), ri(1)}})),
-                           "P = [[1,0],[-1,1]]");
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
                            "A*P == P*J");
-                  // P^{-1} A P == J, an independent second check.
+                  // P^{-1} A P == J (basis-independent): requires P invertible and holds for
+                  // any valid Jordan basis, so it certifies correctness without pinning the
+                  // (non-canonical) generalized-eigenvector representative.
                   auto pinv = r.transform.inverse().value();
                   t.expect(pinv.multiply(A).value().multiply(r.transform).value().is_equal(
                                r.jordan),
@@ -146,26 +169,25 @@ auto main() -> int {
                                       {ri(0), ri(0), ri(3)}});
                   auto r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(A), "J == A (already Jordan)");
-                  t.expect(r.transform.is_equal(Matrix::identity(3)), "P == I_3");
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
                            "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
               })
         .test("diagonalizable_two_eigenvalues",
               [](TestContext& t) {
                   // A = [[1,2],[2,1]] is symmetric with eigenvalues -1 and 3 (discovered in
-                  // that order). Diagonalizable => J diagonal. Hand-derived eigenvectors:
-                  // for -1, [-1,1]; for 3, [1,1]. So P = [[-1,1],[1,1]], J = diag(-1,3).
+                  // that order, so J is canonical). Diagonalizable => J = diag(-1, 3). The
+                  // eigenvectors — hence P — are only defined up to a nonzero scale, so we
+                  // assert J and A*P == P*J and that P is invertible, not a specific P.
                   const auto A = mat({{ri(1), ri(2)}, {ri(2), ri(1)}});
                   auto r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(-1), ri(0)}, {ri(0), ri(3)}})),
                            "J = diag(-1, 3)");
-                  t.expect(r.transform.is_equal(mat({{ri(-1), ri(1)}, {ri(1), ri(1)}})),
-                           "P = [[-1,1],[1,1]]");
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
                            "A*P == P*J");
-                  t.expect(r.transform.determinant().value() == ri(-2), "det P = -2 (invertible)");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
               })
         .test("identity_is_its_own_jordan_form",
               [](TestContext& t) {
@@ -173,10 +195,80 @@ auto main() -> int {
                   const auto I = Matrix::identity(3);
                   auto r = nimblecas::rational_jordan_form(I).value();
                   t.expect(r.jordan.is_equal(I), "J == I_3");
-                  t.expect(r.transform.is_equal(I), "P == I_3");
                   t.expect(I.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
                            "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
+              })
+        .test("nilpotent_two_size2_blocks",
+              [](TestContext& t) {
+                  // A = [[0,0,1,0],[0,0,0,1],[0,0,0,0],[0,0,0,0]] is nilpotent (A^2 = 0) with
+                  // nullity sequence d1 = 2, d2 = 4 => two Jordan blocks of size 2 at
+                  // eigenvalue 0. The canonical J is block-diag( [[0,1],[0,0]], [[0,1],[0,0]] )
+                  // = [[0,1,0,0],[0,0,0,0],[0,0,0,1],[0,0,0,0]] (which is NOT A itself).
+                  const auto A = mat({{ri(0), ri(0), ri(1), ri(0)},
+                                      {ri(0), ri(0), ri(0), ri(1)},
+                                      {ri(0), ri(0), ri(0), ri(0)},
+                                      {ri(0), ri(0), ri(0), ri(0)}});
+                  auto r = nimblecas::rational_jordan_form(A).value();
+                  t.expect(r.jordan.is_equal(mat({{ri(0), ri(1), ri(0), ri(0)},
+                                                  {ri(0), ri(0), ri(0), ri(0)},
+                                                  {ri(0), ri(0), ri(0), ri(1)},
+                                                  {ri(0), ri(0), ri(0), ri(0)}})),
+                           "J = two size-2 blocks at 0");
+                  t.expect(A.multiply(r.transform).value().is_equal(
+                               r.transform.multiply(r.jordan).value()),
+                           "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
+              })
+        .test("nilpotent_block_sizes_3_and_1",
+              [](TestContext& t) {
+                  // A = J_3(0) (+) J_1(0) = [[0,1,0,0],[0,0,1,0],[0,0,0,0],[0,0,0,0]]:
+                  // nullity sequence d1 = 2, d2 = 3, d3 = 4 => one size-3 block and one size-1
+                  // block at eigenvalue 0. Largest-block-first ordering makes J == A.
+                  const auto A = mat({{ri(0), ri(1), ri(0), ri(0)},
+                                      {ri(0), ri(0), ri(1), ri(0)},
+                                      {ri(0), ri(0), ri(0), ri(0)},
+                                      {ri(0), ri(0), ri(0), ri(0)}});
+                  auto r = nimblecas::rational_jordan_form(A).value();
+                  t.expect(r.jordan.is_equal(A), "J = J_3(0) (+) J_1(0) == A");
+                  t.expect(A.multiply(r.transform).value().is_equal(
+                               r.transform.multiply(r.jordan).value()),
+                           "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
+              })
+        .test("nilpotent_2_1_non_axis_aligned",
+              [](TestContext& t) {
+                  // A = [[1,-1,0],[1,-1,0],[0,0,0]] has char poly x^3 and nullity sequence
+                  // d1 = 2, d2 = 3 (A^2 = 0) => blocks (2, 1) at eigenvalue 0. The generalized
+                  // eigenvectors are NOT standard basis vectors, so P is genuinely non-trivial;
+                  // we pin only the canonical J and the invariants, never P.
+                  const auto A = mat({{ri(1), ri(-1), ri(0)},
+                                      {ri(1), ri(-1), ri(0)},
+                                      {ri(0), ri(0), ri(0)}});
+                  auto r = nimblecas::rational_jordan_form(A).value();
+                  t.expect(r.jordan.is_equal(mat({{ri(0), ri(1), ri(0)},
+                                                  {ri(0), ri(0), ri(0)},
+                                                  {ri(0), ri(0), ri(0)}})),
+                           "J = one size-2 block + one size-1 block at 0");
+                  t.expect(A.multiply(r.transform).value().is_equal(
+                               r.transform.multiply(r.jordan).value()),
+                           "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
+              })
+        .test("single_size3_jordan_block",
+              [](TestContext& t) {
+                  // A = [[2,1,0],[0,2,1],[0,0,2]] is a single size-3 Jordan block at eigenvalue
+                  // 2 (nullity of A-2I stays 1 until (A-2I)^3): J == A.
+                  const auto A = mat({{ri(2), ri(1), ri(0)},
+                                      {ri(0), ri(2), ri(1)},
+                                      {ri(0), ri(0), ri(2)}});
+                  auto r = nimblecas::rational_jordan_form(A).value();
+                  t.expect(r.jordan.is_equal(A), "J = single size-3 block == A");
+                  t.expect(A.multiply(r.transform).value().is_equal(
+                               r.transform.multiply(r.jordan).value()),
+                           "A*P == P*J");
+                  t.expect(r.transform.determinant().value() != ri(0), "P invertible");
               })
         // ------------------------------------------------------- Tier 1 refusals ----
         .test("rational_form_refuses_nonsplitting_and_nonsquare",
@@ -204,23 +296,24 @@ auto main() -> int {
 
                   const AlgebraicNumber alpha = r.field.generator().value();  // i
                   const AlgebraicNumber conj = alpha.negate().value();        // -i
-                  const AlgebraicNumber one = r.field.one();
                   const AlgebraicNumber zero = r.field.zero();
 
-                  // J = diag(i, -i).
+                  // J = diag(i, -i) is canonical (the block order follows the eigenvalue
+                  // order alpha, conj). The eigenvectors that form P are only defined up to
+                  // a nonzero scale, so P itself is not pinned.
                   t.expect(r.jordan[0][0].is_equal(alpha) && r.jordan[1][1].is_equal(conj),
                            "J diagonal = (i, -i)");
                   t.expect(r.jordan[0][1].is_equal(zero) && r.jordan[1][0].is_equal(zero),
                            "J off-diagonal zero");
-                  // P = [[i,-i],[1,1]].
-                  t.expect(r.transform[0][0].is_equal(alpha) && r.transform[0][1].is_equal(conj),
-                           "P first row = (i, -i)");
-                  t.expect(r.transform[1][0].is_equal(one) && r.transform[1][1].is_equal(one),
-                           "P second row = (1, 1)");
                   // The correctness property over Q(i): A*P == P*J, re-derived here.
                   const AlgMat ap = alg_mul(embed(A, r.field), r.transform);
                   const AlgMat pj = alg_mul(r.transform, r.jordan);
                   t.expect(alg_eq(ap, pj), "A*P == P*J over Q(i)");
+                  // P invertible over Q(i): each column is a NONZERO eigenvector (A*P == P*J
+                  // gives the eigenvector relation), and nonzero eigenvectors for the distinct
+                  // eigenvalues i, -i are automatically independent.
+                  t.expect(columns_all_nonzero(r.transform),
+                           "P columns are nonzero eigenvectors (P invertible over Q(i))");
                   // alpha is genuinely i: alpha^2 == -1.
                   t.expect(alpha.multiply(alpha).value().is_equal(
                                r.field.from_rational(ri(-1))),
@@ -250,6 +343,10 @@ auto main() -> int {
                   const AlgMat ap = alg_mul(embed(A, r.field), r.transform);
                   const AlgMat pj = alg_mul(r.transform, r.jordan);
                   t.expect(alg_eq(ap, pj), "A*P == P*J over Q(alpha)");
+                  // P invertible: nonzero eigenvectors for the distinct eigenvalues
+                  // alpha, 4-alpha are automatically independent.
+                  t.expect(columns_all_nonzero(r.transform),
+                           "P columns are nonzero eigenvectors (P invertible)");
                   // alpha satisfies its minimal polynomial: alpha^2 - 4 alpha + 5 == 0.
                   auto a2 = alpha.multiply(alpha).value();
                   auto minus4a = alpha.multiply(r.field.from_rational(ri(-4))).value();
@@ -285,6 +382,62 @@ auto main() -> int {
                   const AlgMat ap = alg_mul(embed(A, r.field), r.transform);
                   const AlgMat pj = alg_mul(r.transform, r.jordan);
                   t.expect(alg_eq(ap, pj), "A*P == P*J over Q(i)");
+              })
+        .test("mixed_rational_and_complex_pair",
+              [](TestContext& t) {
+                  // A = [1] (+) [[0,-1],[1,0]] = [[1,0,0],[0,0,-1],[0,1,0]] has char poly
+                  // (x-1)(x^2+1): a RATIONAL eigenvalue 1 together with a conjugate pair i, -i,
+                  // all living in Q(i). Each eigenvalue is simple, so J = diag(1, i, -i) with
+                  // the rational eigenvalue embedded via from_rational. Hand-verified that
+                  // A*[1,0,0] = 1*[1,0,0], A*[0,i,1] = i*[0,i,1], A*[0,-i,1] = -i*[0,-i,1].
+                  const auto A = mat({{ri(1), ri(0), ri(0)},
+                                      {ri(0), ri(0), ri(-1)},
+                                      {ri(0), ri(1), ri(0)}});
+                  auto r = nimblecas::jordan_form(A).value();
+                  t.expect(r.field.degree() == 2, "extension degree 2");
+                  t.expect(r.field.modulus().is_equal(poly({1, 0, 1})), "field Q[x]/(x^2+1)");
+
+                  const AlgebraicNumber emb1 = r.field.from_rational(ri(1));  // 1
+                  const AlgebraicNumber alpha = r.field.generator().value();  // i
+                  const AlgebraicNumber conj = alpha.negate().value();        // -i
+
+                  // J is diagonal, and its diagonal is a permutation of { 1, i, -i } (checked
+                  // by membership, so the test does not depend on the block order).
+                  bool off_zero = true;
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      for (std::size_t j = 0; j < 3; ++j) {
+                          if (i != j && !r.jordan[i][j].is_zero()) {
+                              off_zero = false;
+                          }
+                      }
+                  }
+                  t.expect(off_zero, "J is diagonal (all eigenvalues simple)");
+                  int c1 = 0;
+                  int ci = 0;
+                  int cc = 0;
+                  int cother = 0;
+                  for (std::size_t k = 0; k < 3; ++k) {
+                      const AlgebraicNumber& d = r.jordan[k][k];
+                      if (d.is_equal(emb1)) {
+                          ++c1;
+                      } else if (d.is_equal(alpha)) {
+                          ++ci;
+                      } else if (d.is_equal(conj)) {
+                          ++cc;
+                      } else {
+                          ++cother;
+                      }
+                  }
+                  t.expect(c1 == 1 && ci == 1 && cc == 1 && cother == 0,
+                           "J diagonal multiset == { 1, i, -i }");
+
+                  const AlgMat ap = alg_mul(embed(A, r.field), r.transform);
+                  const AlgMat pj = alg_mul(r.transform, r.jordan);
+                  t.expect(alg_eq(ap, pj), "A*P == P*J over Q(i)");
+                  // P invertible: nonzero eigenvectors for the three DISTINCT eigenvalues
+                  // 1, i, -i are automatically independent.
+                  t.expect(columns_all_nonzero(r.transform),
+                           "P columns are nonzero eigenvectors (P invertible over Q(i))");
               })
         // ---------------------------------------------------------------- Tier 3 ----
         .test("degree_three_factor_not_implemented",

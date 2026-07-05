@@ -123,9 +123,10 @@ compare.
   exponent is `domain_error`.
 - **`norm`** and **`trace`** are the exact determinant and trace of the `Q`-linear
   *multiplication-by-`a`* map on the basis `{1, alpha, ..., alpha^(d-1)}` (built as a
-  `d x d` rational [`Matrix`](matrix.md)). For `a` in `Q(alpha)` these equal the
-  constant term and the negated subleading coefficient of that map's characteristic
-  polynomial.
+  `d x d` rational [`Matrix`](matrix.md)). For `a` in `Q(alpha)` of degree `d`, the norm
+  is `(-1)^d` times the constant term, and the trace is the negated subleading
+  coefficient, of that map's characteristic polynomial. (The `(-1)^d` sign matters for
+  odd `d`: e.g. `norm(cbrt2) = +2` while `x^3 - 2` has constant term `-2`.)
 
 > `minimal_polynomial(element)` is **not** provided in this module (it is optional
 > for the substrate); the multiplication-map matrix returned internally by norm/trace

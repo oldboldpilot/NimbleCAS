@@ -840,6 +840,13 @@ target_link_libraries(nimblecas_jordan
   PUBLIC nimblecas_algnum nimblecas_eigen nimblecas_factor nimblecas_roots
          nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
 
+# ---- nimblecas.probmethod : the Probabilistic Method — existence proofs, LLL, Ramsey (§7.18) ----
+add_library(nimblecas_probmethod STATIC)
+target_sources(nimblecas_probmethod PUBLIC
+  FILE_SET CXX_MODULES FILES src/probmethod/probmethod.cppm)
+target_link_libraries(nimblecas_probmethod
+  PUBLIC nimblecas_bigcombinatorics nimblecas_bigint nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -956,6 +963,12 @@ target_link_libraries(jordan_tests
           nimblecas_roots nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME jordan_tests COMMAND jordan_tests)
+
+add_executable(probmethod_tests tests/probmethod_tests.cpp)
+target_link_libraries(probmethod_tests
+  PRIVATE nimblecas_probmethod nimblecas_bigcombinatorics nimblecas_bigint
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME probmethod_tests COMMAND probmethod_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
@@ -1671,9 +1684,9 @@ if(NIMBLECAS_PYTHON)
             nimblecas_expand nimblecas_hyptest nimblecas_stats nimblecas_kronprod
             nimblecas_contfrac nimblecas_probdist nimblecas_qrschur nimblecas_cheigen
             nimblecas_cmatrix nimblecas_laurent nimblecas_frobenius nimblecas_dynamics
-            nimblecas_matrix nimblecas_complex nimblecas_ratpoly nimblecas_diff
-            nimblecas_simplify nimblecas_polyexpr nimblecas_polynomial nimblecas_symbolic
-            nimblecas_simd nimblecas_core std_module)
+            nimblecas_algnum nimblecas_jordan nimblecas_matrix nimblecas_complex
+            nimblecas_ratpoly nimblecas_diff nimblecas_simplify nimblecas_polyexpr
+            nimblecas_polynomial nimblecas_symbolic nimblecas_simd nimblecas_core std_module)
 
   # Expose the GPU submodule to Python only when the CUDA kernels are built.
   if(NIMBLECAS_CUDA AND NOT WIN32)

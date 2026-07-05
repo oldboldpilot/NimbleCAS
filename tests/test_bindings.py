@@ -78,6 +78,8 @@ def main() -> int:
     _test_stats_matrices()
     _test_frobenius()
     _test_dynamics()
+    _test_algnum()
+    _test_jordan()
     _test_gpu()
 
     print("python bindings OK:", r.to_string())
@@ -502,6 +504,69 @@ def _test_dynamics() -> None:
         pass
 
 
+def _test_algnum() -> None:
+    """Exact arithmetic in Q(sqrt(2)) = Q[x]/(x^2 - 2): conjugates, inverse, field norm."""
+    R = ncas.Rational
+    # The field Q[x]/(x^2 - 2); the generator alpha is sqrt(2).
+    minimal = ncas.RationalPoly.from_coeffs([R.from_int(-2), R.from_int(0), R.from_int(1)])
+    field = ncas.NumberField.create(minimal)
+    assert field.degree() == 2, field.to_string()
+    sqrt2 = field.generator()
+    one = field.one()
+
+    # (1 + sqrt(2))(1 - sqrt(2)) == 1 - 2 == -1, exactly.
+    a = one.add(sqrt2)       # 1 + sqrt(2)
+    b = one.subtract(sqrt2)  # 1 - sqrt(2)
+    prod = a.multiply(b)
+    assert prod == field.from_rational(R.from_int(-1)), prod.to_string()
+    # Operator sugar agrees with the named methods.
+    assert (one + sqrt2).multiply(one - sqrt2) == prod
+
+    # sqrt(2) has an exact inverse in the field, and it round-trips: alpha * alpha^{-1} == 1.
+    inv = sqrt2.inverse()
+    assert sqrt2.multiply(inv) == one, sqrt2.multiply(inv).to_string()
+
+    # The field norm N(1 + sqrt(2)) = (1 + sqrt(2))(1 - sqrt(2)) = -1 (an exact Rational).
+    assert a.norm() == R.from_int(-1), a.norm().to_string()
+
+    # A reducible / non-field minimal polynomial (x^2 - 1) is rejected at the boundary.
+    try:
+        ncas.NumberField.create(
+            ncas.RationalPoly.from_coeffs([R.from_int(-1), R.from_int(0), R.from_int(1)])
+        )
+        raise AssertionError("expected a reducible minimal polynomial to raise")
+    except ValueError:
+        pass
+
+
+def _test_jordan() -> None:
+    """Rational Jordan form over Q, and the quadratic-extension Jordan form over Q(i)."""
+    R = ncas.Rational
+    # A = [[2, 1], [0, 2]] is already a single Jordan block: J == A and the transform is I.
+    A = ncas.Matrix.from_rows(
+        [[R.from_int(2), R.from_int(1)], [R.from_int(0), R.from_int(2)]]
+    )
+    rj = ncas.rational_jordan_form(A)
+    assert rj.jordan == A, rj.jordan.to_string()
+    assert rj.transform == ncas.Matrix.identity(2), rj.transform.to_string()
+
+    # A rotation [[0, -1], [1, 0]] has char poly x^2 + 1, irreducible over Q -> no Jordan form
+    # over Q, so TIER 1 refuses; TIER 2 succeeds over Q(i) = Q[x]/(x^2 + 1).
+    rot = ncas.Matrix.from_rows(
+        [[R.from_int(0), R.from_int(-1)], [R.from_int(1), R.from_int(0)]]
+    )
+    try:
+        ncas.rational_jordan_form(rot)
+        raise AssertionError("expected a non-split char poly to raise over Q")
+    except ValueError:
+        pass
+
+    aj = ncas.jordan_form(rot)
+    assert aj.field.degree() == 2, aj.field.to_string()
+    # The eigenvalue on the diagonal is the generator i of Q[x]/(x^2 + 1).
+    assert aj.jordan[0][0] == aj.field.generator(), aj.field.to_string()
+
+
 def _test_gpu() -> None:
     """GPU submodule: present only in a CUDA build (HAS_GPU); kernels skipped CPU-only."""
     if not ncas.HAS_GPU:
@@ -518,6 +583,14 @@ def _test_gpu() -> None:
     c = ncas.gpu.batched_matmul(
         [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [7.0, 8.0, 9.0, 10.0, 11.0, 12.0], 1, 2, 3, 2)
     assert abs(c[0] - 58.0) < 1e-9 and abs(c[1] - 64.0) < 1e-9, str(c)
+    # FFT of the unit impulse [1, 0, 0, 0] (n = 4) is a flat spectrum: every bin is 1 + 0i,
+    # independent of the sign convention (only the DC sample is nonzero). The signal is passed
+    # as 2*n interleaved (real, imag) doubles: [1,0, 0,0, 0,0, 0,0].
+    spec = ncas.gpu.fft_batch([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1, 4)
+    assert len(spec) == 8, str(spec)
+    for i in range(4):
+        assert abs(spec[2 * i] - 1.0) < 1e-9, str(spec)   # real part of bin i == 1
+        assert abs(spec[2 * i + 1]) < 1e-9, str(spec)      # imag part of bin i == 0
 
 
 if __name__ == "__main__":

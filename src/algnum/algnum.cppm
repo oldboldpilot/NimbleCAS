@@ -131,8 +131,9 @@ public:
 
     // The field norm N(a) = det, and trace Tr(a) = trace, of the Q-linear
     // multiplication-by-a map on the basis {1, alpha, ..., alpha^(d-1)}. Both are exact
-    // rationals (for a in Q(alpha) of degree d over Q, N and Tr equal the constant term and
-    // the negated subleading coefficient of the characteristic polynomial of that map).
+    // rationals: N(a) = det(M_a) = (-1)^d * (constant term of that map's characteristic
+    // polynomial), and Tr(a) is its negated subleading coefficient. (The (-1)^d sign
+    // matters for odd d: e.g. N(cbrt2) = +2 while x^3-2 has constant term -2.)
     [[nodiscard]] auto norm() const -> Result<Rational>;
     [[nodiscard]] auto trace() const -> Result<Rational>;
 

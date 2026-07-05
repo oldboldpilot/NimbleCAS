@@ -30,6 +30,10 @@
 //                 Stability enums), classify_linear_stability (StabilityClassification +
 //                 LinearStability enum), fixed_point_affine, is_asymptotically_stable,
 //                 classify_equilibrium.
+//   Alg. number : NumberField (Q[x]/(m)) and AlgebraicNumber (exact arithmetic, norm/trace)
+//                 for a simple algebraic extension Q(alpha).
+//   Jordan      : rational_jordan_form (RationalJordan over Q) and jordan_form
+//                 (AlgebraicJordan over a quadratic extension Q(alpha)).
 //   Statistics  : mean, variance, median, covariance, covariance_matrix, weighted_mean,
 //                 raw_moment, central_moment, mode, modes, quantile, data_range, iqr,
 //                 skewness_squared, excess_kurtosis, pearson_correlation_squared,
@@ -46,7 +50,7 @@
 //                 McDiarmid, Azuma).
 //   GPU         : gpu submodule (present iff HAS_GPU) — device_count, available, and the
 //                 poly_eval / edit_distance_batch / bfs / nqueens_count /
-//                 qmc_poly_integrate / haar_dwt_batch kernels.
+//                 qmc_poly_integrate / haar_dwt_batch / batched_matmul / fft_batch kernels.
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -79,6 +83,8 @@ import nimblecas.contfrac;
 import nimblecas.hyptest;
 import nimblecas.frobenius;
 import nimblecas.dynamics;
+import nimblecas.algnum;
+import nimblecas.jordan;
 // The GPU module is bound only when the binding TU is compiled with
 // -DNIMBLECAS_EXT_WITH_GPU (and nimblecas_ext is linked against nimblecas_gpu +
 // the CUDA runtime). This keeps the default CPU-only Python build importable.
@@ -87,6 +93,8 @@ import nimblecas.gpu;
 #endif
 
 namespace nb = nanobind;
+using nimblecas::AlgebraicJordan;
+using nimblecas::AlgebraicNumber;
 using nimblecas::Complex;
 using nimblecas::ComplexMatrix;
 using nimblecas::DistInfo;
@@ -97,12 +105,14 @@ using nimblecas::LinearStability;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::MleModel;
+using nimblecas::NumberField;
 using nimblecas::NumericQr;
 using nimblecas::NumericSchur;
 using nimblecas::PeriodicCF;
 using nimblecas::PhasePortrait;
 using nimblecas::PhaseType;
 using nimblecas::Rational;
+using nimblecas::RationalJordan;
 using nimblecas::RationalPoly;
 using nimblecas::Root;
 using nimblecas::SeriesCF;
@@ -1243,6 +1253,144 @@ NB_MODULE(nimblecas_ext, m) {
           "A human-readable classification string of the origin of dx/dt = A x.");
 
     // =======================================================================
+    // Algebraic number fields Q(alpha) = Q[x]/(m) (algnum): exact arithmetic in
+    // a simple algebraic extension. NumberField is the factory; AlgebraicNumber
+    // is a field element carried as a canonical RationalPoly residue (degree < d).
+    // NumberField is registered before AlgebraicNumber, and both before jordan's
+    // AlgebraicJordan, which returns matrices of AlgebraicNumber.
+    // =======================================================================
+    nb::class_<NumberField>(m, "NumberField")
+        .def_static(
+            "create",
+            [](const RationalPoly& minimal) { return unwrap(NumberField::create(minimal)); },
+            nb::arg("minimal"),
+            "Build Q[x]/(m) from a minimal polynomial m of degree >= 1 (normalised to monic); a "
+            "reducible, constant, or zero m raises (irreducibility is verified over Q).")
+        .def("degree", &NumberField::degree, "The extension degree d = deg m = [Q(alpha):Q].")
+        .def("modulus", [](const NumberField& f) { return f.modulus(); },
+             "The monic irreducible minimal polynomial m as a RationalPoly.")
+        .def("is_same", &NumberField::is_same, nb::arg("other"),
+             "Whether two fields are equal (identical minimal polynomials).")
+        .def("zero", &NumberField::zero, "The field element 0.")
+        .def("one", &NumberField::one, "The field element 1.")
+        .def("from_rational", &NumberField::from_rational, nb::arg("c"),
+             "The constant element c in Q(alpha).")
+        .def("generator", [](const NumberField& f) { return unwrap(f.generator()); },
+             "The generator alpha = x mod m.")
+        .def("from_poly",
+             [](const NumberField& f, const RationalPoly& p) { return unwrap(f.from_poly(p)); },
+             nb::arg("p"), "The class of an arbitrary polynomial p in Q[x], i.e. p reduced mod m.")
+        .def("to_string", [](const NumberField& f) { return f.to_string(); })
+        .def("to_string", [](const NumberField& f, const std::string& var) {
+            return f.to_string(var);
+        }, nb::arg("var"))
+        .def("__repr__", [](const NumberField& f) { return f.to_string(); })
+        .def("__eq__",
+             [](const NumberField& a, nb::handle other) -> nb::object {
+                 if (nb::isinstance<NumberField>(other)) {
+                     return nb::cast(a.is_same(nb::cast<NumberField>(other)));
+                 }
+                 return nb::borrow(Py_NotImplemented);
+             })
+        .def("__ne__", [](const NumberField& a, nb::handle other) -> nb::object {
+            if (nb::isinstance<NumberField>(other)) {
+                return nb::cast(!a.is_same(nb::cast<NumberField>(other)));
+            }
+            return nb::borrow(Py_NotImplemented);
+        });
+
+    nb::class_<AlgebraicNumber>(m, "AlgebraicNumber")
+        .def("field", [](const AlgebraicNumber& a) { return a.field(); },
+             "The NumberField this element belongs to.")
+        .def("value", [](const AlgebraicNumber& a) { return a.value(); },
+             "The canonical residue: a RationalPoly of degree < d in the basis 1, alpha, ..., "
+             "alpha^(d-1).")
+        .def("is_zero", &AlgebraicNumber::is_zero)
+        .def("is_one", &AlgebraicNumber::is_one)
+        .def("is_equal", &AlgebraicNumber::is_equal, nb::arg("other"),
+             "Equality: same field AND same residue.")
+        .def("add", [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.add(b)); },
+             nb::arg("other"))
+        .def("subtract",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.subtract(b)); },
+             nb::arg("other"))
+        .def("negate", [](const AlgebraicNumber& a) { return unwrap(a.negate()); })
+        .def("multiply",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.multiply(b)); },
+             nb::arg("other"))
+        .def("inverse", [](const AlgebraicNumber& a) { return unwrap(a.inverse()); },
+             "The multiplicative inverse (raises division_by_zero on the zero element).")
+        .def("divide",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.divide(b)); },
+             nb::arg("other"))
+        .def("pow", [](const AlgebraicNumber& a, std::int64_t exponent) { return unwrap(a.pow(exponent)); },
+             nb::arg("exponent"),
+             "Non-negative integer power by repeated squaring (a negative exponent raises).")
+        .def("norm", [](const AlgebraicNumber& a) { return unwrap(a.norm()); },
+             "The field norm N(a), an exact Rational (the determinant of multiplication-by-a).")
+        .def("trace", [](const AlgebraicNumber& a) { return unwrap(a.trace()); },
+             "The field trace Tr(a), an exact Rational (the trace of multiplication-by-a).")
+        .def("to_string", [](const AlgebraicNumber& a) { return a.to_string(); })
+        .def("to_string", [](const AlgebraicNumber& a, const std::string& var) {
+            return a.to_string(var);
+        }, nb::arg("var"))
+        .def("__repr__", [](const AlgebraicNumber& a) { return a.to_string(); })
+        .def("__add__",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.add(b)); })
+        .def("__sub__",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.subtract(b)); })
+        .def("__mul__",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.multiply(b)); })
+        .def("__truediv__",
+             [](const AlgebraicNumber& a, const AlgebraicNumber& b) { return unwrap(a.divide(b)); })
+        .def("__neg__", [](const AlgebraicNumber& a) { return unwrap(a.negate()); })
+        .def("__eq__",
+             [](const AlgebraicNumber& a, nb::handle other) -> nb::object {
+                 if (nb::isinstance<AlgebraicNumber>(other)) {
+                     return nb::cast(a.is_equal(nb::cast<AlgebraicNumber>(other)));
+                 }
+                 return nb::borrow(Py_NotImplemented);
+             })
+        .def("__ne__", [](const AlgebraicNumber& a, nb::handle other) -> nb::object {
+            if (nb::isinstance<AlgebraicNumber>(other)) {
+                return nb::cast(!a.is_equal(nb::cast<AlgebraicNumber>(other)));
+            }
+            return nb::borrow(Py_NotImplemented);
+        });
+
+    // =======================================================================
+    // Jordan canonical form with transform (jordan). TIER 1 rational_jordan_form
+    // is exact over Q (char poly splits over Q); TIER 2 jordan_form works over a
+    // single quadratic extension Q(alpha), returning AlgebraicNumber matrices.
+    // =======================================================================
+    nb::class_<RationalJordan>(m, "RationalJordan")
+        .def_ro("jordan", &RationalJordan::jordan,
+                "The block-diagonal Jordan matrix J (exact Rational Matrix).")
+        .def_ro("transform", &RationalJordan::transform,
+                "The invertible P (Matrix) with A*P == P*J exactly.");
+    m.def("rational_jordan_form",
+          [](const Matrix& a) { return unwrap(nimblecas::rational_jordan_form(a)); }, nb::arg("a"),
+          "TIER 1 Jordan form over Q (RationalJordan {jordan, transform}), valid when the "
+          "characteristic polynomial splits over Q. A*P == P*J and P invertible are verified "
+          "exactly. Raises domain_error on a non-square A or a char poly that does not split "
+          "over Q (use jordan_form there).");
+
+    nb::class_<AlgebraicJordan>(m, "AlgebraicJordan")
+        .def_ro("field", &AlgebraicJordan::field,
+                "The simple quadratic extension Q(alpha) the eigenvalues live in (NumberField).")
+        .def_ro("jordan", &AlgebraicJordan::jordan,
+                "The Jordan matrix J as list[list[AlgebraicNumber]] over Q(alpha).")
+        .def_ro("transform", &AlgebraicJordan::transform,
+                "The transform P as list[list[AlgebraicNumber]] with A*P == P*J over Q(alpha).");
+    m.def("jordan_form",
+          [](const Matrix& a) { return unwrap(nimblecas::jordan_form(a)); }, nb::arg("a"),
+          "TIER 2 Jordan form over a single quadratic extension Q(alpha) (AlgebraicJordan "
+          "{field, jordan, transform}), valid when the char poly's only non-linear irreducible "
+          "factor is one quadratic. Raises domain_error when it splits over Q (use "
+          "rational_jordan_form) and not_implemented for degree>=3 or multiple distinct "
+          "quadratic factors.");
+
+    // =======================================================================
     // Probability-distribution catalog (probdist) — exact symbolic MGF/PGF,
     // mean, variance, and moments/cumulants as Expr trees. A submodule so the
     // distribution constructors and moment extractors group cleanly.
@@ -1383,6 +1531,14 @@ NB_MODULE(nimblecas_ext, m) {
             nb::arg("a"), nb::arg("b"), nb::arg("batch"), nb::arg("m"), nb::arg("k"), nb::arg("n"),
             "Batched double dense matrix multiply on the GPU: `batch` independent products "
             "C_b = A_b (m x k) * B_b (k x n), all row-major and contiguously packed. Numeric.");
+    gpu.def("fft_batch",
+            [](const std::vector<double>& in, int batch, int n) {
+                return unwrap(nimblecas::gpu::fft_batch(std::span<const double>(in), batch, n));
+            },
+            nb::arg("in"), nb::arg("batch"), nb::arg("n"),
+            "Batched radix-2 FFT of `batch` complex signals of length n (a power of two, "
+            "n <= 2048), each supplied as 2*n interleaved (real, imag) doubles contiguously "
+            "packed; returns the batch*2*n interleaved (real, imag) spectra.");
 #else
     m.attr("HAS_GPU") = false;
 #endif
