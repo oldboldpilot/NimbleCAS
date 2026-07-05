@@ -22,16 +22,21 @@ family of basis solutions `r^n, n r^n, …, n^{m-1} r^n` to the general closed f
 This module builds that characteristic polynomial over `Q[x]` and extracts its
 **rational** roots (with multiplicity) via [`rational_roots`](roots.md), reusing
 the exact `Q[x]` machinery of [`ratpoly`](ratpoly.md) and [`roots`](roots.md).
+Two consumers sit on top: `closed_form` assembles the explicit solution `a(n)` as
+a symbolic [`Expr`](symbolic.md), and `generating_function` returns the exact
+rational generating function `G(x) = P(x)/Q(x)`.
 
 ```cpp
 import nimblecas.recurrence;
 ```
 
-Depends on [`core`](core.md), [`ratpoly`](ratpoly.md), and [`roots`](roots.md).
+Depends on [`core`](core.md), [`ratpoly`](ratpoly.md), [`roots`](roots.md),
+[`symbolic`](symbolic.md) (the `Expr` closed form), and
+[`matrix`](matrix.md) (the exact linear solve for the constants).
 
-## Scope
+## Scope and the honesty boundary
 
-Only the **rational-characteristic-root** case is fully resolved. The rational
+Only the **rational-characteristic-root** case yields a `closed_form`. The rational
 roots are found exactly, and `all_roots_rational` reports whether the
 characteristic polynomial splits completely over `Q` (so the closed form is
 expressible with rational bases alone). When it does **not** — the Fibonacci
@@ -39,8 +44,21 @@ recurrence `x² − x − 1`, whose roots are the irrational golden-ratio conjug
 is the canonical example — the closed form requires irrational or complex roots.
 Radical / `RootOf` closed forms for that case are a **planned extension**
 (mirroring the same documented limitation in [`roots`](roots.md)) and are not
-produced here; `characteristic_roots` then returns only the rational roots
-(possibly none).
+produced here: `closed_form` returns **`MathError::not_implemented`** rather than
+emitting a wrong answer, and `characteristic_roots` returns only the rational
+roots (possibly none).
+
+The **generating function** carries no such restriction. `generating_function`
+is exact and needs no roots, so it is available for **every** linear homogeneous
+constant-coefficient recurrence — including Fibonacci, whose generating function
+`x / (1 − x − x²)` is exact even though its closed form is (for now) out of reach.
+This is the practical advantage of the rational generating form over the explicit
+solution.
+
+| Given | `closed_form` | `generating_function` |
+| :--- | :--- | :--- |
+| char. poly splits over `Q` (e.g. `x² − 5x + 6`) | exact `Expr` `a(n)` | exact `P/Q` |
+| char. poly does **not** split (e.g. Fibonacci `x² − x − 1`) | `not_implemented` | **exact `P/Q`** |
 
 ## The overflow contract
 
@@ -68,7 +86,25 @@ every function.
 
 [[nodiscard]] auto all_roots_rational(std::span<const Rational> coeffs)
     -> Result<bool>;
+
+[[nodiscard]] auto closed_form(std::span<const Rational> coeffs,
+                               std::span<const Rational> initial)
+    -> Result<Expr>;
+
+struct GeneratingFunction {
+    RationalPoly numerator;    // P(x)
+    RationalPoly denominator;  // Q(x) = 1 − c₀x − c₁x² − … − c_{k-1}x^k
+};
+
+[[nodiscard]] auto generating_function(std::span<const Rational> coeffs,
+                                       std::span<const Rational> initial)
+    -> Result<GeneratingFunction>;
 ```
+
+Both `closed_form` and `generating_function` take the same coefficient list as the
+spectral functions plus an `initial` list holding **exactly** `k = coeffs.size()`
+initial conditions `a₀, …, a_{k-1}` (`initial[i]` = `aᵢ`). A missing or extra
+initial value is a `MathError::domain_error`.
 
 ### `characteristic_polynomial`
 

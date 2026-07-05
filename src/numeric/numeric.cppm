@@ -144,4 +144,102 @@ export namespace nimblecas::numeric {
     return make_error<double>(MathError::not_implemented);  // exhausted iterations
 }
 
+// ---------------------------------------------------------------------------
+// Durand-Kerner (Weierstrass) simultaneous all-roots iteration.
+// ---------------------------------------------------------------------------
+// Finds ALL roots (real and complex) of a polynomial at once, rather than one
+// bracketed real root at a time. Given the same ascending double coefficients,
+// it normalizes to a monic polynomial, seeds `deg` distinct guesses on a circle
+// about the root centroid, and applies the Weierstrass correction
+//   z_k <- z_k - p(z_k) / prod_{j != k} (z_k - z_j)
+// simultaneously across all k until the largest correction falls below tol.
+//
+// HONESTY (this is a NUMERICAL, double-precision solver):
+//   * The returned roots are tol-accurate, NOT exact: convergence is declared
+//     when the max Weierstrass step magnitude <= tol, so each root carries an
+//     O(tol) error and the returned values are floating-point approximations.
+//   * The set is UNORDERED; a real polynomial's complex roots emerge in
+//     near-conjugate pairs but are not forced to be exact conjugates.
+//   * Plain Weierstrass assumes SIMPLE (distinct) roots. A genuine multiple root
+//     makes two iterates collide, the product denominator underflows to 0, and
+//     the honest result is not_implemented (never a fabricated value). Very
+//     clustered roots may likewise fail to reach tol within max_iter.
+//   * A non-finite intermediate (overflow/NaN) also yields not_implemented.
+// This complements the companion-matrix eigenvalue path in `numeigen`.
+[[nodiscard]] auto durand_kerner(std::span<const double> coeffs, double tol, int max_iter)
+    -> Result<std::vector<std::complex<double>>> {
+    using Roots = std::vector<std::complex<double>>;
+    if (coeffs.empty()) {
+        return make_error<Roots>(MathError::domain_error);  // zero-length: no polynomial
+    }
+    // Effective degree: strip leading (highest-index) zero coefficients.
+    std::size_t m = coeffs.size();
+    while (m > 0 && coeffs[m - 1] == 0.0) {
+        --m;
+    }
+    if (m == 0) {
+        return make_error<Roots>(MathError::domain_error);  // zero polynomial: roots undefined
+    }
+    const std::size_t deg = m - 1;
+    if (deg == 0) {
+        return Roots{};  // a non-zero constant has NO roots: the empty set is correct.
+    }
+    // Monic coefficients a[0..deg] with a[deg] == 1 (ascending, low degree first).
+    const double lead = coeffs[deg];
+    std::vector<std::complex<double>> a(deg + 1);
+    for (std::size_t k = 0; k <= deg; ++k) {
+        a[k] = std::complex<double>(coeffs[k] / lead, 0.0);
+    }
+    // Horner evaluation of the monic polynomial at a complex argument.
+    const auto peval = [&](std::complex<double> z) noexcept -> std::complex<double> {
+        std::complex<double> acc{0.0, 0.0};
+        for (std::size_t k = deg + 1; k-- > 0;) {
+            acc = acc * z + a[k];
+        }
+        return acc;
+    };
+    // Standard initial guesses on a circle about the root centroid. For a monic
+    // polynomial the mean of the roots is -a[deg-1]/deg; the radius 1 + max|a_k|
+    // (a Cauchy-style bound) comfortably encloses every root, and a small angular
+    // offset avoids the real axis / symmetric traps.
+    const std::complex<double> center = -a[deg - 1] / static_cast<double>(deg);
+    double radius = 0.0;
+    for (std::size_t k = 0; k < deg; ++k) {
+        radius = std::max(radius, std::abs(a[k]));
+    }
+    radius += 1.0;
+    Roots roots(deg);
+    constexpr double offset = 0.4;  // radians, to break real-axis symmetry.
+    for (std::size_t k = 0; k < deg; ++k) {
+        const double theta =
+            2.0 * std::numbers::pi * static_cast<double>(k) / static_cast<double>(deg) + offset;
+        roots[k] = center + radius * std::complex<double>(std::cos(theta), std::sin(theta));
+    }
+    // Weierstrass simultaneous iteration (in-place / Gauss-Seidel update).
+    for (int iter = 0; iter < max_iter; ++iter) {
+        double max_step = 0.0;
+        for (std::size_t k = 0; k < deg; ++k) {
+            std::complex<double> denom{1.0, 0.0};
+            for (std::size_t j = 0; j < deg; ++j) {
+                if (j != k) {
+                    denom *= (roots[k] - roots[j]);
+                }
+            }
+            if (std::abs(denom) == 0.0) {
+                return make_error<Roots>(MathError::not_implemented);  // collided (multiple) roots
+            }
+            const std::complex<double> corr = peval(roots[k]) / denom;
+            if (!std::isfinite(corr.real()) || !std::isfinite(corr.imag())) {
+                return make_error<Roots>(MathError::not_implemented);  // overflow / NaN: honest fail
+            }
+            roots[k] -= corr;
+            max_step = std::max(max_step, std::abs(corr));
+        }
+        if (max_step <= tol) {
+            return roots;  // all corrections within tolerance
+        }
+    }
+    return make_error<Roots>(MathError::not_implemented);  // exhausted iterations
+}
+
 }  // namespace nimblecas::numeric

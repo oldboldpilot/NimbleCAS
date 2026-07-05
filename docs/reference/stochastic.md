@@ -90,6 +90,39 @@ off-diagonals `>= 0`).
 | `is_generator` | `true` iff `Q` is square, every off-diagonal entry `>= 0`, and every row sums **exactly** to `0` (each diagonal is minus its off-diagonal row sum). A non-square matrix yields `false`. Propagates overflow from the exact row sums. |
 | `ctmc_stationary_distribution` | The probability row vector `π` with `π Q = 0` and `Σ π_i = 1`, solved **exactly** as the left null space of `Q` with the last equation replaced by the normalisation. `domain_error` when `Q` is not a generator or the system is singular. |
 
+## Absorbing chains, random walks, resolvent, birth–death (exact over Q)
+
+These are exact-`Rational` closed forms and matrix inverses for the classical
+absorbing / hitting analyses.
+
+```cpp
+struct AbsorbingChain {
+    std::vector<std::size_t> transient;    // original indices of the transient states
+    std::vector<std::size_t> absorbing;    // original indices of the absorbing states
+    Matrix fundamental;                    // N = (I − Q)^{-1}
+    std::vector<Rational> expected_steps;  // t = N 1
+    Matrix absorption_probabilities;       // B = N R
+};
+
+[[nodiscard]] auto absorbing_analysis(const Matrix& p) -> Result<AbsorbingChain>;
+[[nodiscard]] auto resolvent(const Matrix& q, const Rational& s) -> Result<Matrix>;
+[[nodiscard]] auto gamblers_ruin_probability(std::size_t n, std::size_t k, const Rational& p)
+    -> Result<Rational>;
+[[nodiscard]] auto gamblers_ruin_duration(std::size_t n, std::size_t k, const Rational& p)
+    -> Result<Rational>;
+[[nodiscard]] auto birth_death_stationary(std::span<const Rational> birth,
+                                          std::span<const Rational> death)
+    -> Result<std::vector<Rational>>;
+```
+
+| Function | Behavior |
+| :--- | :--- |
+| `absorbing_analysis` | The canonical-form analysis of a row-stochastic `P`. A state `i` is **absorbing** iff `P(i, i) = 1` (row-stochasticity then zeroes the rest of the row); the others are **transient**. Relabelling transient-first exposes `P = [[Q, R], [0, I]]`: `fundamental` is `N = (I − Q)^{-1}` (`t × t`), `expected_steps[a] = (N 1)_a` is the expected steps to absorption from `transient[a]`, and `absorption_probabilities = N R` (`t × r`) gives `P(absorbed in absorbing[c] | start transient[a])`. All **exact over Q**. `domain_error` when `P` is not row-stochastic, has no absorbing state, or `I − Q` is singular (a transient class that never absorbs). |
+| `resolvent` | `(s I − Q)^{-1}` evaluated **exactly** at a given rational `s` (`Q` any square rational matrix — a CTMC generator, or an absorbing chain's transient block). `domain_error` when `Q` is not square, or `s I − Q` is singular (`s` an eigenvalue of `Q` — a pole of the resolvent). This is the resolvent **at a point**; the fully symbolic matrix of rational functions of `s` is not formed. |
+| `gamblers_ruin_probability` | The **exact** probability that a biased ±1 walk on `{0, …, n}` with up-probability `p` reaches `0` before `n`, started from `k`. For `p ≠ 1/2` with `r = (1 − p)/p` it is `(r^k − r^n)/(1 − r^n)`; for `p = 1/2` it is `(n − k)/n`. Boundaries `k = 0 → 1`, `k = n → 0`. `domain_error` when `n = 0`, `k > n`, or `p ∉ (0, 1)`. |
+| `gamblers_ruin_duration` | The **exact** expected number of steps to absorption of the same walk from `k`. For `p = 1/2` it is `k(n − k)`; for `p ≠ 1/2` (`q = 1 − p`, `r = q/p`) it is `(1/(q − p)) [k − n (1 − r^k)/(1 − r^n)]`. Boundaries `k = 0, n → 0`. `domain_error` as `gamblers_ruin_probability`. |
+| `birth_death_stationary` | The **exact** stationary law of a birth–death chain on `{0, …, n−1}` from birth rates `birth[i]` (rate `i → i+1`) and death rates `death[i]` (rate `(i+1) → i`), via detailed balance `π_i ∝ Π_{j=1}^{i} λ_{j−1}/μ_j`, normalised. `birth` and `death` must have equal length `L = n − 1` (empty ⇒ single state `[1]`). `domain_error` on unequal lengths or a negative rate; `division_by_zero` if an interior death rate is `0`. |
+
 ## Wide-sense-stationary (WSS) sample analysis
 
 For a finite record of rational samples the mean, the autocovariance, the

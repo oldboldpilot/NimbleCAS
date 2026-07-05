@@ -60,14 +60,36 @@ single value. So `B_0 = 1`, `B_1 = -1/2`, `B_2 = 1/6`, and `B_{2k+1} = 0` for
 `k >= 1`. Returns `domain_error` for `n < 0`; `overflow` if any intermediate
 `Rational` exceeds `int64`.
 
+## Harmonic numbers — `harmonic`, `generalized_harmonic`
+
+```cpp
+[[nodiscard]] auto harmonic(std::int64_t n) -> Result<Rational>;
+[[nodiscard]] auto generalized_harmonic(std::int64_t n, std::int64_t r) -> Result<Rational>;
+```
+
+The `n`-th **harmonic number** `H_n = Σ_{k=1}^n 1/k` and its **generalized**
+form `H_{n,r} = Σ_{k=1}^n 1/k^r`, both returned as exact reduced
+[`Rational`](ratpoly.md)s (`H_0 = 0`, `H_{0,r} = 0`, the empty sum). Each term
+is accumulated with the overflow-checked `Rational::add`, so the value stays
+exact until — and only until — the reduced fraction leaves `int64`. Because the
+denominator grows like `lcm(1..n)`, that overflow arrives well before `n = 50`;
+this is the honest `int64`-precision counterpart, not an unbounded one.
+`generalized_harmonic` forms `k^r` in `int64` with an overflow check first, so a
+large `r` that pushes `k^r` past `INT64_MAX` also surfaces as `overflow`.
+
+`harmonic` returns `domain_error` for `n < 0`. `generalized_harmonic` requires
+`n >= 0` **and** `r >= 1`, else `domain_error`.
+
 ## Error model
 
 | Condition | Error |
 | :--- | :--- |
-| Negative `n` (`factorial`, `binomial`, `permutations`, `catalan`, `fibonacci`, `bernoulli`) | `MathError::domain_error` |
+| Negative `n` (`factorial`, `binomial`, `permutations`, `catalan`, `fibonacci`, `bernoulli`, `harmonic`, `generalized_harmonic`) | `MathError::domain_error` |
 | Negative `n` or `k` (`stirling_second`, `stirling_first`) | `MathError::domain_error` |
+| `r < 1` (`generalized_harmonic`) | `MathError::domain_error` |
 | Exact result exceeds `INT64_MAX` (integer sequences) | `MathError::overflow` |
-| An intermediate `Rational` exceeds `int64` (`bernoulli`) | `MathError::overflow` |
+| An intermediate `Rational` exceeds `int64` (`bernoulli`, `harmonic`, `generalized_harmonic`) | `MathError::overflow` |
+| `k^r` exceeds `INT64_MAX` (`generalized_harmonic`) | `MathError::overflow` |
 
 Out-of-range-but-defined counts are **not** errors: `binomial`, `permutations`,
 `stirling_second`, and `stirling_first` return `0` for `k < 0` or `k > n` (the

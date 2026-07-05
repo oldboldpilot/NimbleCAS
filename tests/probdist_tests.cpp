@@ -43,6 +43,17 @@ namespace {
 [[nodiscard]] auto geom_denom(const Expr& p, const Expr& x) -> Expr {
     return sub(i(1), Expr::product({one_minus(p), x}));
 }
+[[nodiscard]] auto add(const Expr& a, const Expr& b) -> Expr { return Expr::sum({a, b}); }
+[[nodiscard]] auto square(const Expr& a) -> Expr { return Expr::power(a, i(2)); }
+[[nodiscard]] auto imag_unit() -> Expr { return Expr::power(i(-1), recip(i(2))); }
+[[nodiscard]] auto gammaf(const Expr& u) -> Expr { return Expr::apply("gamma", {u}); }
+[[nodiscard]] auto sum_of_squares(const std::vector<Expr>& xs) -> Expr {
+    std::vector<Expr> terms;
+    for (const Expr& x : xs) {
+        terms.push_back(square(x));
+    }
+    return Expr::sum(std::move(terms));
+}
 
 // Canonical (simplified) form of an expected Expr — moment results come back
 // simplified, so comparisons are made against the simplified expectation.
@@ -72,7 +83,7 @@ auto main() -> int {
         .test("bernoulli_catalog",
               [&](TestContext& tc) {
                   const auto d = nimblecas::bernoulli(p);
-                  tc.expect(d.mgf.is_equivalent_to(affine_p(p, expf(t))),
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(affine_p(p, expf(t))),
                             "Bernoulli MGF = 1 - p + p e^t");
                   tc.expect(d.pgf.has_value() && d.pgf->is_equivalent_to(affine_p(p, z)),
                             "Bernoulli PGF = 1 - p + p z");
@@ -83,7 +94,7 @@ auto main() -> int {
         .test("binomial_catalog",
               [&](TestContext& tc) {
                   const auto d = nimblecas::binomial(n, p);
-                  tc.expect(d.mgf.is_equivalent_to(Expr::power(affine_p(p, expf(t)), n)),
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(Expr::power(affine_p(p, expf(t)), n)),
                             "Binomial MGF = (1 - p + p e^t)^n");
                   tc.expect(d.pgf.has_value() &&
                                 d.pgf->is_equivalent_to(Expr::power(affine_p(p, z), n)),
@@ -95,7 +106,7 @@ auto main() -> int {
         .test("poisson_catalog",
               [&](TestContext& tc) {
                   const auto d = nimblecas::poisson(lambda);
-                  tc.expect(d.mgf.is_equivalent_to(expf(Expr::product({lambda, sub(expf(t), i(1))}))),
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(expf(Expr::product({lambda, sub(expf(t), i(1))}))),
                             "Poisson MGF = exp(lambda(e^t - 1))");
                   tc.expect(d.pgf.has_value() &&
                                 d.pgf->is_equivalent_to(expf(Expr::product({lambda, sub(z, i(1))}))),
@@ -110,7 +121,7 @@ auto main() -> int {
                                 d.pgf->is_equivalent_to(
                                     ratio(Expr::product({p, z}), geom_denom(p, z))),
                             "Geometric PGF = p z / (1 - (1-p) z)");
-                  tc.expect(d.mgf.is_equivalent_to(
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(
                                 ratio(Expr::product({p, expf(t)}), geom_denom(p, expf(t)))),
                             "Geometric MGF = p e^t / (1 - (1-p) e^t)");
                   tc.expect(d.mean.is_equivalent_to(recip(p)), "Geometric mean = 1/p");
@@ -121,7 +132,7 @@ auto main() -> int {
         .test("exponential_catalog",
               [&](TestContext& tc) {
                   const auto d = nimblecas::exponential(lambda);
-                  tc.expect(d.mgf.is_equivalent_to(ratio(lambda, sub(lambda, t))),
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(ratio(lambda, sub(lambda, t))),
                             "Exponential MGF = lambda/(lambda - t)");
                   tc.expect(!d.pgf.has_value(), "Exponential has no PGF (continuous)");
                   tc.expect(d.mean.is_equivalent_to(recip(lambda)), "Exponential mean = 1/lambda");
@@ -135,7 +146,7 @@ auto main() -> int {
                       Expr::product({mu, t}),
                       Expr::product({sigma2, Expr::power(t, i(2)), Expr::power(i(2), i(-1))}),
                   }));
-                  tc.expect(d.mgf.is_equivalent_to(expected_mgf),
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(expected_mgf),
                             "Normal MGF = exp(mu t + sigma^2 t^2 / 2)");
                   tc.expect(!d.pgf.has_value(), "Normal has no PGF (continuous)");
                   tc.expect(d.mean.is_equivalent_to(mu), "Normal mean = mu");
@@ -144,7 +155,7 @@ auto main() -> int {
         .test("gamma_catalog",
               [&](TestContext& tc) {
                   const auto d = nimblecas::gamma(alpha, theta);
-                  tc.expect(d.mgf.is_equivalent_to(
+                  tc.expect(d.mgf.has_value() && d.mgf->is_equivalent_to(
                                 Expr::power(sub(i(1), Expr::product({theta, t})), neg(alpha))),
                             "Gamma MGF = (1 - theta t)^(-alpha)");
                   tc.expect(!d.pgf.has_value(), "Gamma has no PGF (continuous)");
@@ -158,13 +169,13 @@ auto main() -> int {
         .test("raw_moment_exponential",
               [&](TestContext& tc) {
                   const auto d = nimblecas::exponential(lambda);
-                  const auto m0 = nimblecas::raw_moment(d.mgf, 0);
+                  const auto m0 = nimblecas::raw_moment(*d.mgf, 0);
                   tc.expect(m0.has_value() && m0->is_equivalent_to(i(1)),
                             "M_X(0) = 1 (0th raw moment)");
-                  const auto m1 = nimblecas::raw_moment(d.mgf, 1);
+                  const auto m1 = nimblecas::raw_moment(*d.mgf, 1);
                   tc.expect(m1.has_value() && m1->is_equivalent_to(simp(recip(lambda))),
                             "E[X] = 1/lambda (d/dt M at 0)");
-                  const auto m2 = nimblecas::raw_moment(d.mgf, 2);
+                  const auto m2 = nimblecas::raw_moment(*d.mgf, 2);
                   tc.expect(m2.has_value() &&
                                 m2->is_equivalent_to(simp(Expr::product({i(2), Expr::power(lambda, i(-2))}))),
                             "E[X^2] = 2/lambda^2 (d^2/dt^2 M at 0)");
@@ -172,9 +183,9 @@ auto main() -> int {
         .test("raw_moment_gamma",
               [&](TestContext& tc) {
                   const auto d = nimblecas::gamma(alpha, theta);
-                  const auto m0 = nimblecas::raw_moment(d.mgf, 0);
+                  const auto m0 = nimblecas::raw_moment(*d.mgf, 0);
                   tc.expect(m0.has_value() && m0->is_equivalent_to(i(1)), "M_X(0) = 1");
-                  const auto m1 = nimblecas::raw_moment(d.mgf, 1);
+                  const auto m1 = nimblecas::raw_moment(*d.mgf, 1);
                   tc.expect(m1.has_value() && m1->is_equivalent_to(simp(Expr::product({alpha, theta}))),
                             "Gamma E[X] = alpha theta (matches closed-form mean)");
                   // The mean recovered from the MGF equals the catalog mean.
@@ -185,10 +196,10 @@ auto main() -> int {
         .test("cumulant_normal",
               [&](TestContext& tc) {
                   const auto d = nimblecas::normal(mu, sigma2);
-                  const auto k1 = nimblecas::cumulant(d.mgf, 1);
+                  const auto k1 = nimblecas::cumulant(*d.mgf, 1);
                   tc.expect(k1.has_value() && k1->is_equivalent_to(mu),
                             "kappa_1 = mu (= mean)");
-                  const auto k2 = nimblecas::cumulant(d.mgf, 2);
+                  const auto k2 = nimblecas::cumulant(*d.mgf, 2);
                   tc.expect(k2.has_value() && k2->is_equivalent_to(sigma2),
                             "kappa_2 = sigma^2 (= variance)");
                   tc.expect(k1.has_value() && k1->is_equivalent_to(d.mean),
@@ -203,8 +214,8 @@ auto main() -> int {
                   // kappa_1 and kappa_2 are the same exact expression (the engine
                   // leaves the residual exp(0) unevaluated — still exact).
                   const auto d = nimblecas::poisson(lambda);
-                  const auto k1 = nimblecas::cumulant(d.mgf, 1);
-                  const auto k2 = nimblecas::cumulant(d.mgf, 2);
+                  const auto k1 = nimblecas::cumulant(*d.mgf, 1);
+                  const auto k2 = nimblecas::cumulant(*d.mgf, 2);
                   tc.expect(k1.has_value() && k2.has_value(), "Poisson cumulants computed");
                   tc.expect(k1.has_value() && k2.has_value() && k1->is_equivalent_to(*k2),
                             "kappa_1 == kappa_2 for Poisson (all cumulants coincide)");
@@ -241,8 +252,8 @@ auto main() -> int {
                   tc.expect(nimblecas::cantelli_bound(var, k).is_equivalent_to(
                                 ratio(var, Expr::sum({var, Expr::power(k, i(2))}))),
                             "Cantelli bound = sigma^2/(sigma^2 + k^2)");
-                  tc.expect(nimblecas::chernoff_bound(d.mgf, a).is_equivalent_to(
-                                Expr::product({expf(neg(Expr::product({t, a}))), d.mgf})),
+                  tc.expect(nimblecas::chernoff_bound(*d.mgf, a).is_equivalent_to(
+                                Expr::product({expf(neg(Expr::product({t, a}))), *d.mgf})),
                             "Chernoff bound = e^{-t alpha} M_X(t)");
               })
         .run();

@@ -146,6 +146,68 @@ export namespace nimblecas {
 [[nodiscard]] auto ctmc_stationary_distribution(const Matrix& q) -> Result<std::vector<Rational>>;
 
 // ===========================================================================
+// Absorbing chains, random walks, the resolvent, birth-death (EXACT over Q).
+// ===========================================================================
+
+// The exact canonical-form analysis of an absorbing Markov chain. A state i is ABSORBING
+// iff P(i, i) = 1 (row-stochasticity then forces the rest of that row to 0); every other
+// state is TRANSIENT. `absorbing` and `transient` list the original state indices in each
+// class (ascending). Relabelling the transient states first exposes the canonical blocks
+// P = [[Q, R], [0, I]]: `fundamental` is N = (I - Q)^{-1} (t x t, rows/cols indexed by
+// `transient`), `expected_steps[a]` = (N 1)_a is the expected number of steps to
+// absorption starting from transient state `transient[a]`, and `absorption_probabilities`
+// is B = N R (t x r, rows indexed by `transient`, columns by `absorbing`) whose (a, c)
+// entry is the probability of being absorbed in `absorbing[c]` starting from
+// `transient[a]`. All EXACT over Q.
+struct AbsorbingChain {
+    std::vector<std::size_t> transient;    // original indices of the transient states
+    std::vector<std::size_t> absorbing;    // original indices of the absorbing states
+    Matrix fundamental;                    // N = (I - Q)^{-1}
+    std::vector<Rational> expected_steps;  // t = N 1
+    Matrix absorption_probabilities;       // B = N R
+};
+
+// The absorbing-chain analysis of a row-stochastic P (see AbsorbingChain). EXACT over Q via
+// Matrix::inverse. Fails with domain_error when P is not row-stochastic, has no absorbing
+// state (not an absorbing chain), or when I - Q is singular (a transient class that never
+// reaches absorption -- no finite expected absorption time).
+[[nodiscard]] auto absorbing_analysis(const Matrix& p) -> Result<AbsorbingChain>;
+
+// The resolvent (s I - Q)^{-1} evaluated EXACTLY at a given rational s. Q is any square
+// rational matrix (a CTMC generator, or the transient block of an absorbing chain). Fails
+// with domain_error when Q is not square, or when s I - Q is singular (s is an eigenvalue
+// of Q -- the resolvent has a pole there). This is the numeric resolvent at a point; the
+// fully symbolic (s I - Q)^{-1} as a matrix of rational functions of s is not formed here.
+[[nodiscard]] auto resolvent(const Matrix& q, const Rational& s) -> Result<Matrix>;
+
+// The EXACT ruin probability of a simple biased random walk on the states {0, 1, ..., n}
+// with up-probability p (down-probability 1 - p): starting from state k, the probability of
+// reaching the absorbing barrier 0 before the absorbing barrier n. For p != 1/2 with
+// r = (1 - p)/p, it is (r^k - r^n)/(1 - r^n); for p = 1/2 it is the limit (n - k)/n. EXACT
+// over Q. Boundaries: k = 0 gives 1, k = n gives 0. Fails with domain_error when n = 0,
+// k > n, or p is not strictly inside (0, 1).
+[[nodiscard]] auto gamblers_ruin_probability(std::size_t n, std::size_t k, const Rational& p)
+    -> Result<Rational>;
+
+// The EXACT expected duration (mean number of steps to absorption at 0 or n) of the same
+// biased random walk started from state k. For p = 1/2 it is k(n - k); for p != 1/2 with
+// r = (1 - p)/p and q = 1 - p it is (1/(q - p)) [k - n (1 - r^k)/(1 - r^n)]. EXACT over Q.
+// Boundaries k = 0 and k = n give 0. Fails with domain_error as gamblers_ruin_probability.
+[[nodiscard]] auto gamblers_ruin_duration(std::size_t n, std::size_t k, const Rational& p)
+    -> Result<Rational>;
+
+// The EXACT stationary distribution of a birth-death chain on states {0, ..., n-1} from its
+// birth rates lambda_0..lambda_{n-2} (`birth[i]` = rate i -> i+1) and death rates
+// mu_1..mu_{n-1} (`death[i]` = rate (i+1) -> i). By detailed balance pi_i is proportional to
+// prod_{j=1}^{i} lambda_{j-1}/mu_j (pi_0 proportional to 1), normalised to sum 1. `birth`
+// and `death` must have equal length L (= n - 1); an empty pair is the single state
+// pi = [1]. EXACT over Q. Fails with domain_error on unequal lengths or a negative rate, and
+// with division_by_zero if an interior death rate is 0.
+[[nodiscard]] auto birth_death_stationary(std::span<const Rational> birth,
+                                          std::span<const Rational> death)
+    -> Result<std::vector<Rational>>;
+
+// ===========================================================================
 // Wide-sense-stationary (WSS) sample analysis (EXACT over Q; is_wss is diagnostic).
 // ===========================================================================
 
@@ -239,6 +301,39 @@ enum class StabilityCertificate : std::uint8_t {
 // theta_k z^k against the unit circle, with the same exact-rational / indeterminate
 // contract as ar_is_stationary. `ma` holds theta_1..theta_q.
 [[nodiscard]] auto ma_is_invertible(std::span<const Rational> ma) -> Result<StabilityCertificate>;
+
+// ===========================================================================
+// ARIMA differencing & partial autocorrelation (EXACT over Q).
+// ===========================================================================
+
+// The d-th backshift difference nabla^d x of a rational series (EXACT). One difference maps
+// x_0..x_{N-1} to (x_1 - x_0), ..., (x_{N-1} - x_{N-2}) (length N - 1); nabla^d applies this
+// d times, shortening the series by d. nabla^0 x is a copy. Fails with domain_error if a
+// difference is requested of an empty series (d > N).
+[[nodiscard]] auto difference(std::span<const Rational> x, std::size_t d)
+    -> Result<std::vector<Rational>>;
+
+// The EXACT inverse of nabla^d: integrate (cumulatively sum) the d-th difference `y` back to
+// the original series, using the d constants of integration `initial` = [x_0, (nabla x)_0,
+// ..., (nabla^{d-1} x)_0] -- the leading value dropped at each differencing level, outermost
+// first. Reconstructs a series of length y.size() + d. With initial = difference-level
+// leading values, integrate(difference(x, d), initial) == x. An empty `initial` (d = 0) is a
+// copy of y. Fails only with overflow from the running sums.
+[[nodiscard]] auto integrate(std::span<const Rational> y, std::span<const Rational> initial)
+    -> Result<std::vector<Rational>>;
+
+// The EXACT partial autocorrelation sequence (PACF) phi_{1,1}, ..., phi_{m,m} from the
+// autocovariances gamma(0..m) via the Durbin-Levinson recursion (m = autocov.size() - 1).
+// phi_{k,k} is the correlation between x_t and x_{t+k} with the intervening k-1 lags
+// regressed out; each is a rational function of the (rational) autocovariances, hence EXACT
+// over Q. Because the recursion uses only ratios, feeding a rational autocorrelation
+// sequence (gamma(0) = 1, e.g. from yule_walker_autocorrelation) yields the same PACF. An
+// AR(p) process has phi_{k,k} = 0 for k > p. Returns an empty sequence when only gamma(0) is
+// supplied. Fails with domain_error on an empty input, and with division_by_zero when
+// gamma(0) = 0 or a prediction-error variance vanishes (a deterministic partial correlation
+// of magnitude 1).
+[[nodiscard]] auto partial_autocorrelation(std::span<const Rational> autocov)
+    -> Result<std::vector<Rational>>;
 
 // ===========================================================================
 // Power spectral density (NUMERICAL, double -- the Fourier boundary).
@@ -391,6 +486,42 @@ using BMat = std::vector<std::vector<bool>>;
         }
     }
     return true;
+}
+
+// --- small exact helpers for the random-walk / birth-death / resolvent additions ---
+
+// base^exp over Q by exact binary exponentiation (exp == 0 => 1). Propagates overflow.
+[[nodiscard]] auto rat_pow(const Rational& base, std::size_t exp) -> Result<Rational> {
+    Rational result = one_rat();
+    Rational b = base;
+    std::size_t e = exp;
+    while (e > 0) {
+        if ((e & 1U) != 0U) {
+            auto prod = result.multiply(b);
+            if (!prod) {
+                return prod;
+            }
+            result = *prod;
+        }
+        e >>= 1U;
+        if (e > 0) {
+            auto sq = b.multiply(b);
+            if (!sq) {
+                return sq;
+            }
+            b = *sq;
+        }
+    }
+    return result;
+}
+
+// A std::size_t as an exact Rational; overflow if it exceeds INT64_MAX (the state counts /
+// walk lengths here are tiny in practice, so this only guards a pathological input).
+[[nodiscard]] auto size_to_rat(std::size_t v) -> Result<Rational> {
+    if (v > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+        return make_error<Rational>(MathError::overflow);
+    }
+    return Rational::from_int(static_cast<std::int64_t>(v));
 }
 
 }  // namespace
@@ -647,6 +778,287 @@ auto ctmc_stationary_distribution(const Matrix& q) -> Result<std::vector<Rationa
         }
     }
     return solve_stationary(std::move(a));
+}
+
+// --- absorbing chains / random walks / resolvent / birth-death --------------
+
+auto absorbing_analysis(const Matrix& p) -> Result<AbsorbingChain> {
+    auto stoch = is_stochastic(p);
+    if (!stoch) {
+        return make_error<AbsorbingChain>(stoch.error());
+    }
+    if (!*stoch) {
+        return make_error<AbsorbingChain>(MathError::domain_error);
+    }
+    const std::size_t n = p.rows();
+    const Rational one = one_rat();
+    AbsorbingChain out;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (p.at(i, i) == one) {
+            out.absorbing.push_back(i);  // P(i, i) = 1 => row is e_i => absorbing
+        } else {
+            out.transient.push_back(i);
+        }
+    }
+    if (out.absorbing.empty()) {
+        return make_error<AbsorbingChain>(MathError::domain_error);  // not an absorbing chain
+    }
+    const std::size_t t = out.transient.size();
+    const std::size_t r = out.absorbing.size();
+    // Build I - Q directly:  (I - Q)(a, b) = [a == b] - P(transient[a], transient[b]).
+    std::vector<std::vector<Rational>> iq(t, std::vector<Rational>(t));
+    for (std::size_t a = 0; a < t; ++a) {
+        for (std::size_t b = 0; b < t; ++b) {
+            const Rational& qab = p.at(out.transient[a], out.transient[b]);
+            if (a == b) {
+                auto d = one.subtract(qab);
+                if (!d) {
+                    return make_error<AbsorbingChain>(d.error());
+                }
+                iq[a][b] = *d;
+            } else {
+                auto neg = qab.negate();
+                if (!neg) {
+                    return make_error<AbsorbingChain>(neg.error());
+                }
+                iq[a][b] = *neg;
+            }
+        }
+    }
+    auto iqmat = Matrix::from_rows(std::move(iq));
+    if (!iqmat) {
+        return make_error<AbsorbingChain>(iqmat.error());
+    }
+    auto nmat = iqmat->inverse();  // singular => domain_error (no finite absorption)
+    if (!nmat) {
+        return make_error<AbsorbingChain>(nmat.error());
+    }
+    // expected steps to absorption t = N 1 (row sums of N).
+    out.expected_steps.assign(t, Rational{});
+    for (std::size_t a = 0; a < t; ++a) {
+        Rational acc;  // 0/1
+        for (std::size_t b = 0; b < t; ++b) {
+            auto next = acc.add(nmat->at(a, b));
+            if (!next) {
+                return make_error<AbsorbingChain>(next.error());
+            }
+            acc = *next;
+        }
+        out.expected_steps[a] = acc;
+    }
+    // R block (t x r):  R(a, c) = P(transient[a], absorbing[c]).
+    std::vector<std::vector<Rational>> rrows(t, std::vector<Rational>(r));
+    for (std::size_t a = 0; a < t; ++a) {
+        for (std::size_t c = 0; c < r; ++c) {
+            rrows[a][c] = p.at(out.transient[a], out.absorbing[c]);
+        }
+    }
+    auto rmat = Matrix::from_rows(std::move(rrows));
+    if (!rmat) {
+        return make_error<AbsorbingChain>(rmat.error());
+    }
+    auto bmat = nmat->multiply(*rmat);  // B = N R
+    if (!bmat) {
+        return make_error<AbsorbingChain>(bmat.error());
+    }
+    out.fundamental = std::move(*nmat);
+    out.absorption_probabilities = std::move(*bmat);
+    return out;
+}
+
+auto resolvent(const Matrix& q, const Rational& s) -> Result<Matrix> {
+    if (!q.is_square()) {
+        return make_error<Matrix>(MathError::domain_error);
+    }
+    auto si = Matrix::identity(q.rows()).scale(s);  // s I
+    if (!si) {
+        return si;
+    }
+    auto m = si->subtract(q);  // s I - Q
+    if (!m) {
+        return m;
+    }
+    return m->inverse();  // s an eigenvalue of Q => singular => domain_error
+}
+
+namespace {
+
+// Validate the random-walk parameters shared by the two gambler's-ruin routines and, on
+// success, hand back q = 1 - p. Requires n >= 1, k <= n, and p strictly inside (0, 1).
+[[nodiscard]] auto ruin_setup(std::size_t n, std::size_t k, const Rational& p) -> Result<Rational> {
+    if (n == 0 || k > n) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    if (p.numerator() <= 0) {  // canonical den > 0, so this is p <= 0
+        return make_error<Rational>(MathError::domain_error);
+    }
+    auto pm1 = p.subtract(one_rat());
+    if (!pm1) {
+        return make_error<Rational>(pm1.error());
+    }
+    if (pm1->numerator() >= 0) {  // p >= 1
+        return make_error<Rational>(MathError::domain_error);
+    }
+    return one_rat().subtract(p);  // q = 1 - p
+}
+
+}  // namespace
+
+auto gamblers_ruin_probability(std::size_t n, std::size_t k, const Rational& p) -> Result<Rational> {
+    auto q = ruin_setup(n, k, p);
+    if (!q) {
+        return q;
+    }
+    if (k == 0) {
+        return one_rat();  // already at the ruin barrier
+    }
+    if (k == n) {
+        return Rational{};  // already at the winning barrier
+    }
+    if (p == *q) {  // symmetric p = 1/2: ruin probability (n - k)/n
+        auto num = size_to_rat(n - k);
+        if (!num) {
+            return num;
+        }
+        auto den = size_to_rat(n);
+        if (!den) {
+            return den;
+        }
+        return num->divide(*den);
+    }
+    // p != 1/2:  (r^k - r^n)/(1 - r^n),  r = q/p.
+    auto r = q->divide(p);
+    if (!r) {
+        return r;
+    }
+    auto rk = rat_pow(*r, k);
+    if (!rk) {
+        return rk;
+    }
+    auto rn = rat_pow(*r, n);
+    if (!rn) {
+        return rn;
+    }
+    auto num = rk->subtract(*rn);
+    if (!num) {
+        return num;
+    }
+    auto den = one_rat().subtract(*rn);
+    if (!den) {
+        return den;
+    }
+    return num->divide(*den);  // den != 0 since r != 1 (p != 1/2)
+}
+
+auto gamblers_ruin_duration(std::size_t n, std::size_t k, const Rational& p) -> Result<Rational> {
+    auto q = ruin_setup(n, k, p);
+    if (!q) {
+        return q;
+    }
+    if (k == 0 || k == n) {
+        return Rational{};  // already absorbed
+    }
+    auto kr = size_to_rat(k);
+    if (!kr) {
+        return kr;
+    }
+    auto nr = size_to_rat(n);
+    if (!nr) {
+        return nr;
+    }
+    if (p == *q) {  // symmetric p = 1/2: duration k(n - k)
+        auto nmk = nr->subtract(*kr);
+        if (!nmk) {
+            return nmk;
+        }
+        return kr->multiply(*nmk);
+    }
+    // p != 1/2:  (1/(q - p)) [ k - n (1 - r^k)/(1 - r^n) ],  r = q/p.
+    auto qmp = q->subtract(p);
+    if (!qmp) {
+        return qmp;
+    }
+    auto r = q->divide(p);
+    if (!r) {
+        return r;
+    }
+    auto rk = rat_pow(*r, k);
+    if (!rk) {
+        return rk;
+    }
+    auto rn = rat_pow(*r, n);
+    if (!rn) {
+        return rn;
+    }
+    auto one_minus_rk = one_rat().subtract(*rk);
+    if (!one_minus_rk) {
+        return one_minus_rk;
+    }
+    auto one_minus_rn = one_rat().subtract(*rn);
+    if (!one_minus_rn) {
+        return one_minus_rn;
+    }
+    auto ratio = one_minus_rk->divide(*one_minus_rn);  // (1 - r^k)/(1 - r^n)
+    if (!ratio) {
+        return ratio;
+    }
+    auto scaled = nr->multiply(*ratio);  // n (1 - r^k)/(1 - r^n)
+    if (!scaled) {
+        return scaled;
+    }
+    auto inner = kr->subtract(*scaled);  // k - n(...)
+    if (!inner) {
+        return inner;
+    }
+    return inner->divide(*qmp);  // qmp != 0 since p != 1/2
+}
+
+auto birth_death_stationary(std::span<const Rational> birth, std::span<const Rational> death)
+    -> Result<std::vector<Rational>> {
+    if (birth.size() != death.size()) {
+        return make_error<std::vector<Rational>>(MathError::domain_error);
+    }
+    for (const Rational& b : birth) {
+        if (b.numerator() < 0) {  // canonical den > 0
+            return make_error<std::vector<Rational>>(MathError::domain_error);
+        }
+    }
+    for (const Rational& d : death) {
+        if (d.numerator() < 0) {
+            return make_error<std::vector<Rational>>(MathError::domain_error);
+        }
+    }
+    const std::size_t l = birth.size();
+    std::vector<Rational> pi(l + 1);
+    pi[0] = one_rat();  // unnormalised pi_0 = 1
+    for (std::size_t i = 1; i <= l; ++i) {
+        auto ratio = birth[i - 1].divide(death[i - 1]);  // lambda_{i-1}/mu_i; mu_i = 0 => div0
+        if (!ratio) {
+            return make_error<std::vector<Rational>>(ratio.error());
+        }
+        auto next = pi[i - 1].multiply(*ratio);
+        if (!next) {
+            return make_error<std::vector<Rational>>(next.error());
+        }
+        pi[i] = *next;
+    }
+    // Normalise by the total (>= pi_0 = 1 > 0, since every term is non-negative).
+    Rational total;  // 0/1
+    for (const Rational& v : pi) {
+        auto next = total.add(v);
+        if (!next) {
+            return make_error<std::vector<Rational>>(next.error());
+        }
+        total = *next;
+    }
+    for (Rational& v : pi) {
+        auto norm = v.divide(total);
+        if (!norm) {
+            return make_error<std::vector<Rational>>(norm.error());
+        }
+        v = *norm;
+    }
+    return pi;
 }
 
 // --- WSS sample analysis ----------------------------------------------------
@@ -1018,6 +1430,129 @@ auto ma_is_invertible(std::span<const Rational> ma) -> Result<StabilityCertifica
         c[k + 1] = ma[k];
     }
     return certify_outside_unit_circle(RationalPoly::from_coeffs(std::move(c)));
+}
+
+// --- ARIMA differencing & partial autocorrelation ---------------------------
+
+auto difference(std::span<const Rational> x, std::size_t d) -> Result<std::vector<Rational>> {
+    std::vector<Rational> cur(x.begin(), x.end());
+    for (std::size_t step = 0; step < d; ++step) {
+        if (cur.empty()) {
+            return make_error<std::vector<Rational>>(MathError::domain_error);  // d > N
+        }
+        std::vector<Rational> next(cur.size() - 1);
+        for (std::size_t t = 1; t < cur.size(); ++t) {
+            auto diff = cur[t].subtract(cur[t - 1]);
+            if (!diff) {
+                return make_error<std::vector<Rational>>(diff.error());
+            }
+            next[t - 1] = *diff;
+        }
+        cur = std::move(next);
+    }
+    return cur;
+}
+
+auto integrate(std::span<const Rational> y, std::span<const Rational> initial)
+    -> Result<std::vector<Rational>> {
+    std::vector<Rational> cur(y.begin(), y.end());
+    // Integrate from the innermost difference outward: level d-1 (constant initial[d-1])
+    // reconstructs nabla^{d-1} x from nabla^d x, ..., level 0 (initial[0]) reconstructs x.
+    const std::size_t d = initial.size();
+    for (std::size_t lvl = d; lvl-- > 0;) {
+        std::vector<Rational> next(cur.size() + 1);
+        next[0] = initial[lvl];  // constant of integration = dropped leading value
+        for (std::size_t t = 0; t < cur.size(); ++t) {
+            auto sum = next[t].add(cur[t]);  // running cumulative sum
+            if (!sum) {
+                return make_error<std::vector<Rational>>(sum.error());
+            }
+            next[t + 1] = *sum;
+        }
+        cur = std::move(next);
+    }
+    return cur;
+}
+
+auto partial_autocorrelation(std::span<const Rational> autocov)
+    -> Result<std::vector<Rational>> {
+    if (autocov.empty()) {
+        return make_error<std::vector<Rational>>(MathError::domain_error);
+    }
+    const std::size_t m = autocov.size() - 1;  // number of lags 1..m
+    std::vector<Rational> pacf(m);
+    if (m == 0) {
+        return pacf;  // only gamma(0): no partial autocorrelations to report
+    }
+    // Durbin-Levinson recursion. v is the prediction-error variance v_{k-1}; phi holds the
+    // order-(k-1) coefficients phi_{k-1,1..k-1}.
+    Rational v = autocov[0];  // v_0 = gamma(0)
+    if (v.is_zero()) {
+        return make_error<std::vector<Rational>>(MathError::division_by_zero);  // constant series
+    }
+    auto phi11 = autocov[1].divide(v);  // phi_{1,1} = gamma(1)/gamma(0)
+    if (!phi11) {
+        return make_error<std::vector<Rational>>(phi11.error());
+    }
+    pacf[0] = *phi11;
+    std::vector<Rational> phi{*phi11};
+    for (std::size_t k = 2; k <= m; ++k) {
+        // v_{k-1} = v_{k-2} (1 - phi_{k-1,k-1}^2).
+        auto sq = phi.back().multiply(phi.back());
+        if (!sq) {
+            return make_error<std::vector<Rational>>(sq.error());
+        }
+        auto factor = one_rat().subtract(*sq);
+        if (!factor) {
+            return make_error<std::vector<Rational>>(factor.error());
+        }
+        auto vnext = v.multiply(*factor);
+        if (!vnext) {
+            return make_error<std::vector<Rational>>(vnext.error());
+        }
+        v = *vnext;
+        if (v.is_zero()) {
+            return make_error<std::vector<Rational>>(MathError::division_by_zero);  // deterministic
+        }
+        // numerator = gamma(k) - sum_{j=1}^{k-1} phi_{k-1,j} gamma(k-j).
+        Rational acc;  // 0/1
+        for (std::size_t j = 1; j < k; ++j) {
+            auto term = phi[j - 1].multiply(autocov[k - j]);
+            if (!term) {
+                return make_error<std::vector<Rational>>(term.error());
+            }
+            auto next = acc.add(*term);
+            if (!next) {
+                return make_error<std::vector<Rational>>(next.error());
+            }
+            acc = *next;
+        }
+        auto num = autocov[k].subtract(acc);
+        if (!num) {
+            return make_error<std::vector<Rational>>(num.error());
+        }
+        auto phikk = num->divide(v);  // v = v_{k-1} != 0 (checked above)
+        if (!phikk) {
+            return make_error<std::vector<Rational>>(phikk.error());
+        }
+        // phi_{k,j} = phi_{k-1,j} - phi_{k,k} phi_{k-1,k-j}, j = 1..k-1; phi_{k,k} last.
+        std::vector<Rational> newphi(k);
+        for (std::size_t j = 1; j < k; ++j) {
+            auto cross = phikk->multiply(phi[k - 1 - j]);
+            if (!cross) {
+                return make_error<std::vector<Rational>>(cross.error());
+            }
+            auto upd = phi[j - 1].subtract(*cross);
+            if (!upd) {
+                return make_error<std::vector<Rational>>(upd.error());
+            }
+            newphi[j - 1] = *upd;
+        }
+        newphi[k - 1] = *phikk;
+        pacf[k - 1] = *phikk;
+        phi = std::move(newphi);
+    }
+    return pacf;
 }
 
 // --- power spectral density (numerical) -------------------------------------

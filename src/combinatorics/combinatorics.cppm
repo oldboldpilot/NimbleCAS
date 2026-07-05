@@ -68,6 +68,16 @@ export namespace nimblecas {
 // domain_error for n < 0; overflow if any intermediate Rational exceeds int64.
 [[nodiscard]] auto bernoulli(std::int64_t n) -> Result<Rational>;
 
+// The n-th harmonic number H_n = sum_{k=1}^n 1/k as an exact reduced Rational (H_0 = 0).
+// domain_error for n < 0; overflow if the exact reduced fraction leaves int64 — the
+// denominator grows like lcm(1..n), so this happens well before n = 50.
+[[nodiscard]] auto harmonic(std::int64_t n) -> Result<Rational>;
+
+// The generalized harmonic number H_{n,r} = sum_{k=1}^n 1/k^r as an exact reduced Rational
+// (H_{0,r} = 0). Requires n >= 0 and r >= 1, else domain_error; overflow if any k^r or the
+// running reduced fraction leaves int64.
+[[nodiscard]] auto generalized_harmonic(std::int64_t n, std::int64_t r) -> Result<Rational>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -269,6 +279,53 @@ auto bernoulli(std::int64_t n) -> Result<Rational> {
         return a[0].negate();
     }
     return a[0];
+}
+
+auto harmonic(std::int64_t n) -> Result<Rational> {
+    if (n < 0) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    // H_n = sum_{k=1}^n 1/k, accumulated as an exact reduced Rational; H_0 = 0.
+    Rational sum{};  // 0/1
+    for (std::int64_t k = 1; k <= n; ++k) {
+        auto term = Rational::make(1, k);
+        if (!term) {
+            return make_error<Rational>(term.error());
+        }
+        auto next = sum.add(*term);
+        if (!next) {
+            return make_error<Rational>(next.error());  // reduced fraction left int64
+        }
+        sum = *next;
+    }
+    return sum;
+}
+
+auto generalized_harmonic(std::int64_t n, std::int64_t r) -> Result<Rational> {
+    if (n < 0 || r < 1) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    // H_{n,r} = sum_{k=1}^n 1/k^r. Form k^r in int64 with an overflow check, then add its
+    // reciprocal as an exact reduced Rational; H_{0,r} = 0.
+    Rational sum{};  // 0/1
+    for (std::int64_t k = 1; k <= n; ++k) {
+        std::int64_t denom = 1;
+        for (std::int64_t j = 0; j < r; ++j) {
+            if (mul_ov(denom, k, denom)) {
+                return make_error<Rational>(MathError::overflow);
+            }
+        }
+        auto term = Rational::make(1, denom);
+        if (!term) {
+            return make_error<Rational>(term.error());
+        }
+        auto next = sum.add(*term);
+        if (!next) {
+            return make_error<Rational>(next.error());  // reduced fraction left int64
+        }
+        sum = *next;
+    }
+    return sum;
 }
 
 }  // namespace nimblecas

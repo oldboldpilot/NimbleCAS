@@ -22,11 +22,15 @@ using nimblecas::testing::TestSuite;
 // Non-clashing unbounded functions (names unique to nimblecas.bigcombinatorics).
 using nimblecas::bell;
 using nimblecas::double_factorial;
+using nimblecas::eulerian_number;
+using nimblecas::euler_number;
 using nimblecas::falling_factorial;
 using nimblecas::lucas;
 using nimblecas::multinomial;
+using nimblecas::partition_count;
 using nimblecas::rising_factorial;
 using nimblecas::stirling_first_unsigned;
+using nimblecas::subfactorial;
 
 // Non-clashing int64 functions used for cross-checking (names unique to
 // nimblecas.combinatorics).
@@ -286,6 +290,86 @@ auto main() -> int {
                   t.expect(big_is(bell(10), "115975"), "Bell(10) = 115975");
                   t.expect(bell(-1).error() == MathError::domain_error,
                            "negative index is a domain error");
+              })
+        .test("partition_count",
+              [](TestContext& t) {
+                  const std::array<const char*, 11> expected{
+                      "1", "1", "2", "3", "5", "7", "11", "15", "22", "30", "42"};
+                  for (std::int64_t n = 0; n <= 10; ++n) {
+                      t.expect(big_is(partition_count(n),
+                                      expected[static_cast<std::size_t>(n)]),
+                               "p(0..10) = 1,1,2,3,5,7,11,15,22,30,42");
+                  }
+                  t.expect(big_is(partition_count(50), "204226"), "p(50) = 204226");
+                  t.expect(big_is(partition_count(100), "190569292"),
+                           "p(100) = 190569292");
+                  t.expect(partition_count(-1).error() == MathError::domain_error,
+                           "negative n is a domain error");
+              })
+        .test("euler_number",
+              [](TestContext& t) {
+                  t.expect(big_is(euler_number(0), "1"), "E_0 = 1");
+                  t.expect(big_is(euler_number(1), "0"), "E_1 = 0 (odd index)");
+                  t.expect(big_is(euler_number(2), "-1"), "E_2 = -1");
+                  t.expect(big_is(euler_number(3), "0"), "E_3 = 0 (odd index)");
+                  t.expect(big_is(euler_number(4), "5"), "E_4 = 5");
+                  t.expect(big_is(euler_number(6), "-61"), "E_6 = -61");
+                  t.expect(big_is(euler_number(8), "1385"), "E_8 = 1385");
+                  t.expect(big_is(euler_number(10), "-50521"), "E_10 = -50521");
+                  t.expect(euler_number(-1).error() == MathError::domain_error,
+                           "negative index is a domain error");
+              })
+        .test("subfactorial",
+              [](TestContext& t) {
+                  const std::array<const char*, 6> expected{"1", "0", "1", "2", "9", "44"};
+                  for (std::int64_t n = 0; n <= 5; ++n) {
+                      t.expect(big_is(subfactorial(n),
+                                      expected[static_cast<std::size_t>(n)]),
+                               "!0..!5 = 1,0,1,2,9,44");
+                  }
+                  t.expect(big_is(subfactorial(10), "1334961"), "!10 = 1334961");
+                  // Identity n! == sum_k C(n,k) !k, exercised at n = 25 (25! is beyond int64).
+                  BigInt s{};
+                  for (std::int64_t k = 0; k <= 25; ++k) {
+                      s = s.add(bg_binomial(25, k).value().multiply(
+                          subfactorial(k).value()));
+                  }
+                  t.expect(s == bg_factorial(25).value(),
+                           "sum_k C(25,k) !k == 25! (exact beyond int64)");
+                  t.expect(subfactorial(-1).error() == MathError::domain_error,
+                           "negative index is a domain error");
+              })
+        .test("eulerian_number",
+              [](TestContext& t) {
+                  t.expect(big_is(eulerian_number(0, 0), "1"), "<0,0> = 1");
+                  t.expect(big_is(eulerian_number(1, 0), "1"), "<1,0> = 1");
+                  const std::array<const char*, 3> row3{"1", "4", "1"};
+                  for (std::int64_t k = 0; k < 3; ++k) {
+                      t.expect(big_is(eulerian_number(3, k),
+                                      row3[static_cast<std::size_t>(k)]),
+                               "<3,0..2> = 1,4,1");
+                  }
+                  const std::array<const char*, 4> row4{"1", "11", "11", "1"};
+                  for (std::int64_t k = 0; k < 4; ++k) {
+                      t.expect(big_is(eulerian_number(4, k),
+                                      row4[static_cast<std::size_t>(k)]),
+                               "<4,0..3> = 1,11,11,1");
+                  }
+                  // Symmetry <n,k> == <n,n-1-k>.
+                  t.expect(eulerian_number(5, 1).value() == eulerian_number(5, 3).value(),
+                           "<5,1> == <5,3> (symmetry)");
+                  // Row sum: sum_k <n,k> == n!.
+                  BigInt row_sum{};
+                  for (std::int64_t k = 0; k <= 5; ++k) {
+                      row_sum = row_sum.add(eulerian_number(6, k).value());
+                  }
+                  t.expect(row_sum == bg_factorial(6).value(),
+                           "sum_k <6,k> == 6! = 720");
+                  t.expect(big_is(eulerian_number(3, 5), "0"), "<3,5> = 0 (k >= n)");
+                  t.expect(eulerian_number(-1, 0).error() == MathError::domain_error,
+                           "negative n is a domain error");
+                  t.expect(eulerian_number(2, -1).error() == MathError::domain_error,
+                           "negative k is a domain error");
               })
         .test("cross_check_against_int64_combinatorics",
               [](TestContext& t) {

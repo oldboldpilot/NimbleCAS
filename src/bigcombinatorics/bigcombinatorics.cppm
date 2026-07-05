@@ -95,6 +95,29 @@ export namespace nimblecas {
 // the Bell triangle. domain_error for n < 0. Exact and unbounded.
 [[nodiscard]] auto bell(std::int64_t n) -> Result<BigInt>;
 
+// The number of integer partitions p(n): the count of ways to write n as an unordered sum
+// of positive integers (p(0) = 1, p(5) = 7, p(10) = 42), via Euler's pentagonal-number
+// recurrence p(m) = sum_{j>=1} (-1)^{j-1} [p(m - j(3j-1)/2) + p(m - j(3j+1)/2)].
+// domain_error for n < 0. Exact and unbounded — p(n) grows super-polynomially.
+[[nodiscard]] auto partition_count(std::int64_t n) -> Result<BigInt>;
+
+// The n-th Euler number E_n — the SECANT numbers, sec x = sum_n E_{2n} x^{2n}/(2n)!, a
+// SIGNED integer. Convention: E_0 = 1, E_2 = -1, E_4 = 5, E_6 = -61, ..., with every
+// odd-index E_{2k+1} = 0. Computed from the boustrophedon (Seidel/Entringer) triangle of
+// zigzag numbers A_n, then E_n = (-1)^{n/2} A_n for even n. domain_error for n < 0.
+[[nodiscard]] auto euler_number(std::int64_t n) -> Result<BigInt>;
+
+// The subfactorial !n — the number of derangements of n elements (permutations with no
+// fixed point) — via the recurrence !n = n * !(n-1) + (-1)^n seeded at !0 = 1 (so !1 = 0,
+// !2 = 1, !3 = 2, !4 = 9). domain_error for n < 0. Exact and unbounded (!n ~ n!/e).
+[[nodiscard]] auto subfactorial(std::int64_t n) -> Result<BigInt>;
+
+// The Eulerian number <n, k>: the number of permutations of {1..n} with exactly k ascents,
+// via <n, k> = (k+1) <n-1, k> + (n-k) <n-1, k-1> with <0, 0> = 1. Returns 0 when k >= n
+// (a permutation of n >= 1 elements has at most n-1 ascents); domain_error for n < 0 or
+// k < 0. Exact and unbounded (the row sum sum_k <n, k> is n!, which overflows int64 fast).
+[[nodiscard]] auto eulerian_number(std::int64_t n, std::int64_t k) -> Result<BigInt>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -341,6 +364,111 @@ auto bell(std::int64_t n) -> Result<BigInt> {
         row = std::move(next);
     }
     return row[0];
+}
+
+auto partition_count(std::int64_t n) -> Result<BigInt> {
+    if (n < 0) {
+        return make_error<BigInt>(MathError::domain_error);
+    }
+    // Euler's pentagonal-number recurrence:
+    //   p(m) = sum_{j>=1} (-1)^{j-1} [ p(m - g_j) + p(m - g'_j) ],
+    // where g_j = j(3j-1)/2 and g'_j = j(3j+1)/2 are the generalized pentagonal numbers.
+    // Build p[0..n] bottom-up; every p[m] is an exact BigInt. Each generalized pentagonal
+    // number g <= m fits int64 for any n whose p-table fits in memory.
+    std::vector<BigInt> p(static_cast<std::size_t>(n) + 1);
+    p[0] = BigInt::from_u64(1);  // p(0) = 1 (the empty partition)
+    for (std::int64_t m = 1; m <= n; ++m) {
+        BigInt sum{};
+        for (std::int64_t j = 1;; ++j) {
+            const std::int64_t g1 = j * (3 * j - 1) / 2;
+            if (g1 > m) {
+                break;
+            }
+            const std::int64_t g2 = j * (3 * j + 1) / 2;
+            // (-1)^{j-1}: add the pair for odd j, subtract it for even j.
+            if ((j & 1) != 0) {
+                sum = sum.add(p[static_cast<std::size_t>(m - g1)]);
+                if (g2 <= m) {
+                    sum = sum.add(p[static_cast<std::size_t>(m - g2)]);
+                }
+            } else {
+                sum = sum.subtract(p[static_cast<std::size_t>(m - g1)]);
+                if (g2 <= m) {
+                    sum = sum.subtract(p[static_cast<std::size_t>(m - g2)]);
+                }
+            }
+        }
+        p[static_cast<std::size_t>(m)] = std::move(sum);
+    }
+    return std::move(p[static_cast<std::size_t>(n)]);
+}
+
+auto euler_number(std::int64_t n) -> Result<BigInt> {
+    if (n < 0) {
+        return make_error<BigInt>(MathError::domain_error);
+    }
+    if ((n & 1) != 0) {
+        return BigInt{};  // every odd-index Euler (secant) number is 0
+    }
+    // Boustrophedon (Seidel/Entringer) triangle: E(0,0) = 1, E(i,0) = 0 for i >= 1, and
+    // E(i,k) = E(i,k-1) + E(i-1,i-k). The zigzag number A_i is the diagonal entry E(i,i)
+    // (1, 1, 1, 2, 5, 16, 61, 272, 1385, ...); the signed Euler number is (-1)^{i/2} A_i.
+    std::vector<BigInt> prev;
+    prev.push_back(BigInt::from_u64(1));  // row 0: [E(0,0)] = [1]
+    for (std::int64_t i = 1; i <= n; ++i) {
+        std::vector<BigInt> cur(static_cast<std::size_t>(i) + 1);
+        cur[0] = BigInt{};  // E(i,0) = 0
+        for (std::int64_t k = 1; k <= i; ++k) {
+            const auto u = static_cast<std::size_t>(k);
+            cur[u] = cur[u - 1].add(prev[static_cast<std::size_t>(i - k)]);
+        }
+        prev = std::move(cur);
+    }
+    BigInt zig = std::move(prev[static_cast<std::size_t>(n)]);  // A_n = E(n,n)
+    if (((n / 2) & 1) != 0) {
+        return zig.negate();  // (-1)^{n/2} == -1
+    }
+    return zig;
+}
+
+auto subfactorial(std::int64_t n) -> Result<BigInt> {
+    if (n < 0) {
+        return make_error<BigInt>(MathError::domain_error);
+    }
+    // !n = n * !(n-1) + (-1)^n, seeded at !0 = 1; iterate up carrying the exact BigInt.
+    BigInt prev = BigInt::from_u64(1);  // !0 = 1
+    const BigInt one = BigInt::from_u64(1);
+    for (std::int64_t i = 1; i <= n; ++i) {
+        BigInt term = BigInt::from_i64(i).multiply(prev);
+        // + (-1)^i: subtract one for odd i, add one for even i.
+        prev = ((i & 1) != 0) ? term.subtract(one) : term.add(one);
+    }
+    return prev;
+}
+
+auto eulerian_number(std::int64_t n, std::int64_t k) -> Result<BigInt> {
+    if (n < 0 || k < 0) {
+        return make_error<BigInt>(MathError::domain_error);
+    }
+    if (n == 0) {
+        return k == 0 ? BigInt::from_u64(1) : BigInt{};  // <0,0> = 1, else 0
+    }
+    if (k >= n) {
+        return BigInt{};  // a permutation of n >= 1 elements has at most n-1 ascents
+    }
+    // <i,j> = (j+1) <i-1,j> + (i-j) <i-1,j-1>. One row of length k+1 updated in descending
+    // j so each read sees the previous row's value; <i,0> = 1 is left untouched throughout.
+    std::vector<BigInt> dp(static_cast<std::size_t>(k) + 1);
+    dp[0] = BigInt::from_u64(1);  // <0,0> = 1, and <i,0> = 1 for all i
+    for (std::int64_t i = 1; i <= n; ++i) {
+        const std::int64_t top = std::min(i - 1, k);
+        for (std::int64_t j = top; j >= 1; --j) {
+            const auto u = static_cast<std::size_t>(j);
+            dp[u] = BigInt::from_i64(j + 1).multiply(dp[u]).add(
+                BigInt::from_i64(i - j).multiply(dp[u - 1]));
+        }
+    }
+    return dp[static_cast<std::size_t>(k)];
 }
 
 }  // namespace nimblecas

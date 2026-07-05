@@ -45,6 +45,10 @@ using Objective = std::function<double(std::span<const double>)>;
 using Gradient  = std::function<std::vector<double>(std::span<const double>)>;
 using HessianFn = std::function<std::vector<double>(std::span<const double>)>;
 
+// Univariate scalar objective for the 1-D line minimizers (golden_section /
+// brent_minimize): t -> f(t). Distinct from Objective, which takes an R^n view.
+using ScalarObjective = std::function<double(double)>;
+
 // Nonlinear-CG update rule for the conjugate direction coefficient beta.
 enum class CGVariant : std::uint8_t {
     fletcher_reeves,  // beta = (g'.g') / (g.g)
@@ -92,6 +96,12 @@ struct OptimizeResult {
     std::size_t iterations = 0;   // iterations actually performed.
     bool converged = false;       // true iff a stopping tolerance was met (NOT max-iter).
     double grad_norm = 0.0;       // ||grad f(x)||_2 (approx; 0 reported for derivative-free).
+};
+
+// Outcome of a univariate (1-D) minimization over a bracket [a, b].
+struct ScalarMinimum {
+    double x = 0.0;   // minimizer x* within [a, b].
+    double fx = 0.0;  // objective value f(x*).
 };
 
 // ===========================================================================
@@ -179,6 +189,35 @@ struct OptimizeResult {
                                       std::span<const double> lo = {},
                                       std::span<const double> hi = {}, Options opts = {})
     -> Result<OptimizeResult>;
+
+// ===========================================================================
+// Univariate (1-D) minimizers over a bracket [a, b]  (ROADMAP §7.14).
+// ===========================================================================
+// These minimize a UNIMODAL scalar f : [a, b] -> R. Note the DIFFERENT
+// non-convergence contract from the R^n optimizers above: where those treat an
+// exhausted max_iterations as a normal converged==false outcome, these
+// bracketing searches follow the numeric-solver convention — a run that fails to
+// shrink the bracket to `tol` within max_iter is an honest
+// MathError::not_implemented, never a wrong minimizer.
+//
+// HONESTY: numerical, IEEE-754 double, LOCAL. They ASSUME f is unimodal on
+// [a, b]; on a multimodal f they return one local minimizer with no global
+// guarantee. Accuracy is tol-limited — the minimizer is bracketed to ~tol in x,
+// so near a smooth minimum f is pinned only to ~tol^2. Genuinely invalid input
+// (a / b / tol non-finite, tol <= 0, or a non-finite f at a bracket endpoint) is
+// MathError::domain_error.
+
+// Golden-section search: shrink [a, b] by the golden ratio each step, retaining
+// the interior point with the smaller value. Guaranteed (but only linear)
+// reduction; one new objective evaluation per iteration.
+[[nodiscard]] auto golden_section(ScalarObjective f, double a, double b, double tol = 1e-8,
+                                  std::size_t max_iter = 1000) -> Result<ScalarMinimum>;
+
+// Brent's method: successive parabolic interpolation through the three best
+// points where it makes progress, with a golden-section fallback that guarantees
+// convergence. Superlinear on a smooth f near the minimum, robust elsewhere.
+[[nodiscard]] auto brent_minimize(ScalarObjective f, double a, double b, double tol = 1e-8,
+                                  std::size_t max_iter = 1000) -> Result<ScalarMinimum>;
 
 // ===========================================================================
 // PARALLEL + DISTRIBUTED multistart (built on nimblecas.parallel).
@@ -1314,6 +1353,155 @@ auto implicit_filtering(Objective f, std::span<const double> x0, std::span<const
     const double final_crit =
         projected_grad_norm(x, simplex_gradient(f, x, std::max(h, h_min), lo, hi), lo, hi);
     return finish(std::move(x), fx, iter, converged, final_crit);
+}
+
+// --- univariate (1-D) minimizers --------------------------------------------
+
+auto golden_section(ScalarObjective f, double a, double b, double tol, std::size_t max_iter)
+    -> Result<ScalarMinimum> {
+    if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(tol) || !(tol > 0.0)) {
+        return make_error<ScalarMinimum>(MathError::domain_error);
+    }
+    double lo = std::min(a, b);
+    double hi = std::max(a, b);
+    const double fa = f(lo);
+    const double fb = f(hi);
+    if (!std::isfinite(fa) || !std::isfinite(fb)) {
+        return make_error<ScalarMinimum>(MathError::domain_error);
+    }
+    const double invphi = (std::sqrt(5.0) - 1.0) / 2.0;   // 1/phi   ~ 0.6180339887
+    const double invphi2 = (3.0 - std::sqrt(5.0)) / 2.0;  // 1/phi^2 ~ 0.3819660113
+    double h = hi - lo;
+    if (h <= tol) {
+        const double xm = 0.5 * (lo + hi);
+        return ScalarMinimum{xm, f(xm)};  // bracket already within tolerance.
+    }
+    double c = lo + invphi2 * h;
+    double d = lo + invphi * h;
+    double fc = f(c);
+    double fd = f(d);
+    for (std::size_t i = 0; i < max_iter; ++i) {
+        if (!std::isfinite(fc) || !std::isfinite(fd)) {
+            return make_error<ScalarMinimum>(MathError::not_implemented);  // f blew up mid-search.
+        }
+        if (fc < fd) {
+            hi = d;
+            d = c;
+            fd = fc;
+            h = invphi * h;
+            c = lo + invphi2 * h;
+            fc = f(c);
+        } else {
+            lo = c;
+            c = d;
+            fc = fd;
+            h = invphi * h;
+            d = lo + invphi * h;
+            fd = f(d);
+        }
+        if (h <= tol) {
+            // Bracket narrow enough: return the midpoint of the tighter sub-interval.
+            const double xm = (fc < fd) ? 0.5 * (lo + d) : 0.5 * (c + hi);
+            return ScalarMinimum{xm, f(xm)};
+        }
+    }
+    return make_error<ScalarMinimum>(MathError::not_implemented);  // did not reach tol in max_iter.
+}
+
+auto brent_minimize(ScalarObjective f, double a, double b, double tol, std::size_t max_iter)
+    -> Result<ScalarMinimum> {
+    if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(tol) || !(tol > 0.0)) {
+        return make_error<ScalarMinimum>(MathError::domain_error);
+    }
+    double sa = std::min(a, b);
+    double sb = std::max(a, b);
+    const double gold = (3.0 - std::sqrt(5.0)) / 2.0;  // golden-section complement ~0.381966.
+    constexpr double zeps = 1e-12;                      // guards the tolerance near x == 0.
+    if (sb - sa <= tol) {
+        const double xm = 0.5 * (sa + sb);
+        const double fm = f(xm);
+        if (!std::isfinite(fm)) {
+            return make_error<ScalarMinimum>(MathError::domain_error);
+        }
+        return ScalarMinimum{xm, fm};
+    }
+    double x = sa + gold * (sb - sa);  // best point so far.
+    double w = x;                      // second best.
+    double v = x;                      // previous second best.
+    double fx = f(x);
+    if (!std::isfinite(fx)) {
+        return make_error<ScalarMinimum>(MathError::domain_error);
+    }
+    double fw = fx;
+    double fv = fx;
+    double e = 0.0;  // movement on the step before last.
+    double d = 0.0;
+    for (std::size_t iter = 0; iter < max_iter; ++iter) {
+        const double m = 0.5 * (sa + sb);
+        const double tol1 = tol * std::abs(x) + zeps;
+        const double tol2 = 2.0 * tol1;
+        if (std::abs(x - m) <= tol2 - 0.5 * (sb - sa)) {
+            return ScalarMinimum{x, fx};  // bracket tight enough about x.
+        }
+        bool use_golden = true;
+        if (std::abs(e) > tol1) {
+            // Fit a parabola through (x, fx), (w, fw), (v, fv).
+            double r = (x - w) * (fx - fv);
+            double q = (x - v) * (fx - fw);
+            double p = (x - v) * q - (x - w) * r;
+            q = 2.0 * (q - r);
+            if (q > 0.0) {
+                p = -p;
+            }
+            q = std::abs(q);
+            const double e_prev = e;
+            e = d;
+            // Accept the parabolic step only if it lands strictly inside (sa, sb)
+            // and is smaller than half the step before last.
+            if (std::abs(p) < std::abs(0.5 * q * e_prev) && p > q * (sa - x) &&
+                p < q * (sb - x)) {
+                d = p / q;
+                const double u = x + d;
+                if (u - sa < tol2 || sb - u < tol2) {
+                    d = (x < m) ? tol1 : -tol1;  // keep away from the endpoints.
+                }
+                use_golden = false;
+            }
+        }
+        if (use_golden) {
+            e = (x < m) ? (sb - x) : (sa - x);  // golden-section fallback.
+            d = gold * e;
+        }
+        // Keep the new evaluation at least tol1 from x.
+        const double u = (std::abs(d) >= tol1) ? (x + d) : (x + ((d > 0.0) ? tol1 : -tol1));
+        const double fu = f(u);
+        if (!std::isfinite(fu)) {
+            return make_error<ScalarMinimum>(MathError::not_implemented);  // f blew up mid-search.
+        }
+        if (fu <= fx) {
+            if (u < x) {
+                sb = x;
+            } else {
+                sa = x;
+            }
+            v = w; fv = fw;
+            w = x; fw = fx;
+            x = u; fx = fu;
+        } else {
+            if (u < x) {
+                sa = u;
+            } else {
+                sb = u;
+            }
+            if (fu <= fw || w == x) {
+                v = w; fv = fw;
+                w = u; fw = fu;
+            } else if (fu <= fv || v == x || v == w) {
+                v = u; fv = fu;
+            }
+        }
+    }
+    return make_error<ScalarMinimum>(MathError::not_implemented);  // did not reach tol in max_iter.
 }
 
 // --- parallel + distributed multistart --------------------------------------

@@ -13,6 +13,8 @@ using nimblecas::binomial;
 using nimblecas::catalan;
 using nimblecas::factorial;
 using nimblecas::fibonacci;
+using nimblecas::generalized_harmonic;
+using nimblecas::harmonic;
 using nimblecas::MathError;
 using nimblecas::permutations;
 using nimblecas::Rational;
@@ -126,6 +128,34 @@ auto main() -> int {
                   t.expect(bernoulli(10).value() == rat(5, 66), "B_10 = 5/66");
                   t.expect(bernoulli(-1).error() == MathError::domain_error,
                            "negative index is a domain error");
+              })
+        .test("harmonic",
+              [](TestContext& t) {
+                  t.expect(harmonic(0).value() == Rational{}, "H_0 = 0");
+                  t.expect(harmonic(1).value() == Rational::from_int(1), "H_1 = 1");
+                  t.expect(harmonic(2).value() == rat(3, 2), "H_2 = 3/2");
+                  t.expect(harmonic(3).value() == rat(11, 6), "H_3 = 11/6");
+                  t.expect(harmonic(4).value() == rat(25, 12), "H_4 = 25/12");
+                  t.expect(harmonic(-1).error() == MathError::domain_error,
+                           "negative n is a domain error");
+              })
+        .test("generalized_harmonic",
+              [](TestContext& t) {
+                  // H_{n,1} coincides with the ordinary harmonic number H_n.
+                  t.expect(generalized_harmonic(4, 1).value() == harmonic(4).value(),
+                           "H_{4,1} == H_4 = 25/12");
+                  t.expect(generalized_harmonic(2, 2).value() == rat(5, 4),
+                           "H_{2,2} = 1 + 1/4 = 5/4");
+                  t.expect(generalized_harmonic(3, 2).value() == rat(49, 36),
+                           "H_{3,2} = 1 + 1/4 + 1/9 = 49/36");
+                  t.expect(generalized_harmonic(2, 3).value() == rat(9, 8),
+                           "H_{2,3} = 1 + 1/8 = 9/8");
+                  t.expect(generalized_harmonic(0, 2).value() == Rational{},
+                           "H_{0,2} = 0 (empty sum)");
+                  t.expect(generalized_harmonic(-1, 2).error() == MathError::domain_error,
+                           "negative n is a domain error");
+                  t.expect(generalized_harmonic(2, 0).error() == MathError::domain_error,
+                           "r < 1 is a domain error");
               })
         .run();
 }

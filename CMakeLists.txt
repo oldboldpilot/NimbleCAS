@@ -150,6 +150,13 @@ target_link_libraries(nimblecas_spectral
   PUBLIC nimblecas_orthopoly nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
          nimblecas_core std_module)
 
+# ---- nimblecas.fft : fast Fourier transform (numeric radix-2 CT + Bluestein) (§7.3) ----
+add_library(nimblecas_fft STATIC)
+target_sources(nimblecas_fft PUBLIC
+  FILE_SET CXX_MODULES FILES src/fft/fft.cppm)
+target_link_libraries(nimblecas_fft
+  PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.roots : rational-root finding over Q[x] (§7.21) ----
 add_library(nimblecas_roots STATIC)
 target_sources(nimblecas_roots PUBLIC
@@ -725,6 +732,27 @@ target_sources(nimblecas_probdist PUBLIC
 target_link_libraries(nimblecas_probdist
   PUBLIC nimblecas_simplify nimblecas_diff nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.expand : algebraic expansion of an Expr (distribute + multinomial) (§7.20) ----
+add_library(nimblecas_expand STATIC)
+target_sources(nimblecas_expand PUBLIC
+  FILE_SET CXX_MODULES FILES src/expand/expand.cppm)
+target_link_libraries(nimblecas_expand
+  PUBLIC nimblecas_simplify nimblecas_combinatorics nimblecas_symbolic nimblecas_core std_module)
+
+# ---- nimblecas.factor : exact factorization over Q (Yun + Kronecker) (§7.17/§7.21) ----
+add_library(nimblecas_factor STATIC)
+target_sources(nimblecas_factor PUBLIC
+  FILE_SET CXX_MODULES FILES src/factor/factor.cppm)
+target_link_libraries(nimblecas_factor
+  PUBLIC nimblecas_polynomial nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.statinfer : inferential statistics & regression (OLS/ridge/WLS, R²) (§7.7.5) ----
+add_library(nimblecas_statinfer STATIC)
+target_sources(nimblecas_statinfer PUBLIC
+  FILE_SET CXX_MODULES FILES src/statinfer/statinfer.cppm)
+target_link_libraries(nimblecas_statinfer
+  PUBLIC nimblecas_stats nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -755,6 +783,24 @@ target_link_libraries(probdist_tests
   PRIVATE nimblecas_probdist nimblecas_simplify nimblecas_diff nimblecas_symbolic
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME probdist_tests COMMAND probdist_tests)
+
+add_executable(expand_tests tests/expand_tests.cpp)
+target_link_libraries(expand_tests
+  PRIVATE nimblecas_expand nimblecas_simplify nimblecas_combinatorics nimblecas_symbolic
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME expand_tests COMMAND expand_tests)
+
+add_executable(factor_tests tests/factor_tests.cpp)
+target_link_libraries(factor_tests
+  PRIVATE nimblecas_factor nimblecas_polynomial nimblecas_ratpoly nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME factor_tests COMMAND factor_tests)
+
+add_executable(statinfer_tests tests/statinfer_tests.cpp)
+target_link_libraries(statinfer_tests
+  PRIVATE nimblecas_statinfer nimblecas_stats nimblecas_matrix nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME statinfer_tests COMMAND statinfer_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
@@ -807,6 +853,11 @@ target_link_libraries(spectral_tests
   PRIVATE nimblecas_spectral nimblecas_orthopoly nimblecas_matrix nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME spectral_tests COMMAND spectral_tests)
+
+add_executable(fft_tests tests/fft_tests.cpp)
+target_link_libraries(fft_tests
+  PRIVATE nimblecas_fft nimblecas_core nimblecas_testing std_module)
+add_test(NAME fft_tests COMMAND fft_tests)
 
 add_executable(semigroup_tests tests/semigroup_tests.cpp)
 target_link_libraries(semigroup_tests
