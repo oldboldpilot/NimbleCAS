@@ -62,11 +62,26 @@ inline constexpr std::int64_t max_expand_terms = 4096;
 
 // --- small helpers ---------------------------------------------------------
 
-// The additive operands of e: the terms of a sum, or {e} for anything else. Copies
-// the operands so callers can slice/rebuild freely (Expr copies are O(1) COW bumps).
+// The additive operands of e, FLATTENED: the terms of a sum (recursively splicing in
+// the terms of any nested sum), or {e} for anything else. Flattening is essential —
+// expand_raw rebuilds sums whose terms may themselves be sums (Expr::sum is the raw
+// constructor and does not flatten), and expand_product relies on every operand here
+// being a non-sum monomial. Without the recursion a term like (t^2 + x^3 t^2) would be
+// multiplied as a single opaque factor product{c, (t^2 + x^3 t^2)} and left
+// undistributed, so a genuinely-zero difference would fail to collapse to 0.
+// Copies the operands so callers can slice/rebuild freely (Expr copies are O(1) COW bumps).
 [[nodiscard]] auto as_terms(const Expr& e) -> std::vector<Expr> {
     if (auto a = as<AddNode>(e.node().value)) {
-        return (*a)->terms;
+        std::vector<Expr> out;
+        out.reserve((*a)->terms.size());
+        for (const Expr& t : (*a)->terms) {
+            // as_terms(t) is {t} when t is not itself a sum, so this both appends plain
+            // terms and recursively splices in the terms of any nested sum.
+            std::vector<Expr> sub = as_terms(t);
+            out.insert(out.end(), std::make_move_iterator(sub.begin()),
+                       std::make_move_iterator(sub.end()));
+        }
+        return out;
     }
     return {e};
 }
