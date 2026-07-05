@@ -41,6 +41,7 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff → vector
 | `nimblecas.core` | [core.md](reference/core.md) | `MathError`/`Result`, `make_error`, `CowPtr<T>`, `cache_line_size`. |
 | `nimblecas.symbolic` | [symbolic.md](reference/symbolic.md) | Immutable `Expr` trees, node kinds, structural equality/hashing, `free_of`, `substitute`. |
 | `nimblecas.simplify` | [simplify.md](reference/simplify.md) | Cohen automatic simplification (ASAE): folding, identities, canonical order, like-term combination. |
+| `nimblecas.expand` | [expand.md](reference/expand.md) | Algebraic expansion (§7.20): distribute products over sums and expand integer powers of sums via the multinomial theorem (capped), then simplify — the distributing companion `simplify` deliberately omits. |
 | `nimblecas.cache` | [cache.md](reference/cache.md) | `ExprMemo` sharded concurrent hash-consing / memoization. |
 | `nimblecas.diff` | [diff.md](reference/diff.md) | Symbolic differentiation with an elementary + special-function derivative table. |
 | `nimblecas.series` | [series.md](reference/series.md) | Taylor series over `diff` + `simplify`: `taylor_coefficients` (`c_k = f^(k)(point)/k!`) and the truncated `taylor_polynomial`, overflow-checked `k!`. |
@@ -67,17 +68,20 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.resultant` | [resultant.md](reference/resultant.md) | Resultant and discriminant over `Q[x]` via the Euclidean remainder sequence: common-factor / repeated-root detection. |
 | `nimblecas.rothstein` | [rothstein.md](reference/rothstein.md) | Rothstein–Trager logarithmic integration over `Q(x)`: the residue resultant `R(t) = res_x(D, A − t·D')`, rational-residue logarithms of a square-free-denominator integrand. |
 | `nimblecas.integrate` | [integrate.md](reference/integrate.md) | Rational-function integration capstone over `Q(x)`: Hermite reduction then Rothstein–Trager, assembling `int A/B dx = rational part + sum of residue-weighted logarithms`. |
+| `nimblecas.symint` | [symint.md](reference/symint.md) | Expr-level symbolic integration (§7.19): linearity, power rule, an elementary table (exp/sin/cos/atan/asin/…) with linear substitution, and a bridge to the exact rational integrator; every antiderivative differentiates back to the integrand, else `not_implemented`. |
 | `nimblecas.matrix` | [matrix.md](reference/matrix.md) | Dense matrices over exact `Rational`: add/multiply/transpose/trace, exact determinant, `A x = b` solve, inverse, and rank via Gaussian / Gauss-Jordan elimination over `Q`. |
 | `nimblecas.combinatorics` | [combinatorics.md](reference/combinatorics.md) | Overflow-checked `int64` counting — factorial, binomial, permutations, Catalan, Fibonacci, Stirling numbers — plus exact-`Rational` Bernoulli numbers (Akiyama–Tanigawa, `B_1 = -1/2`). |
 | `nimblecas.orthopoly` | [orthopoly.md](reference/orthopoly.md) | Classical orthogonal polynomials over `Q[x]` (Chebyshev T/U, Legendre, Laguerre, physicists'/probabilists' Hermite) via their three-term recurrences. |
 | `nimblecas.roots` | [roots.md](reference/roots.md) | Rational roots of a polynomial over `Q[x]` with multiplicity, via the rational root theorem plus deflation (the exact/closed-form layer beneath `solve`). |
-| `nimblecas.solve` | [solve.md](reference/solve.md) | Analytical equation solving (§7.21): exact closed-form roots by radicals for degree ≤ 4 (linear/quadratic/Cardano/Ferrari) after rational-root pre-factoring; the irreducible degree ≥ 5 remainder resolves to companion-matrix eigenvalues via `numeigen`, each root tagged exact vs numeric. |
+| `nimblecas.factor` | [factor.md](reference/factor.md) | Exact factorization of a polynomial over `Q` into irreducibles (§7.17): Yun square-free factorization then Kronecker's algorithm; feeds `solve` so reducible high-degree polynomials split into radical-solvable pieces. |
+| `nimblecas.solve` | [solve.md](reference/solve.md) | Analytical equation solving (§7.21): exact closed-form roots by radicals for degree ≤ 4 (linear/quadratic/Cardano/Ferrari) after rational-root peeling and `factor` factorization over `Q`; only genuinely irreducible degree ≥ 5 factors resolve to companion-matrix eigenvalues via `numeigen`, each root tagged exact vs numeric. |
 | `nimblecas.recurrence` | [recurrence.md](reference/recurrence.md) | Linear homogeneous constant-coefficient recurrences: characteristic polynomial over `Q[x]` and its rational roots via `roots` (rational-root case; irrational e.g. Fibonacci deferred). |
 | `nimblecas.complex` | [complex.md](reference/complex.md) | Exact complex numbers over `Q` — the Gaussian rationals `Q + Qi`: overflow-checked add/subtract/multiply/divide/conjugate/reciprocal and the exact squared modulus (modulus and argument omitted as irrational). |
 | `nimblecas.stats` | [stats.md](reference/stats.md) | Exact descriptive statistics over the rationals: mean, sample/population variance and covariance, and the symmetric covariance matrix `Σ` (returned as a `nimblecas.matrix` `Matrix`, its diagonal each variable's variance). |
 | `nimblecas.lp` | [lp.md](reference/lp.md) | Exact-rational linear programming via single-phase Simplex: `maximize(A, b, c)` for `max c·x s.t. A x <= b, x >= 0` (`b >= 0`), Bland's rule anti-cycling, exact optimum / unbounded detection. |
 | `nimblecas.ipm` | [ipm.md](reference/ipm.md) | Interior-point LP (§7.22): Mehrotra predictor–corrector primal–dual path-following for `min c·x s.t. A x = b, x >= 0` — the numerical (double-precision) companion to the exact Simplex, gap-certified to tolerance. |
 | `nimblecas.probdist` | [probdist.md](reference/probdist.md) | Probability distribution catalog (§7.7): exact symbolic MGF/PGF, mean, variance, moments and cumulants (via symbolic differentiation) for the standard families, plus Markov/Chebyshev/Cantelli/Chernoff tail inequalities. |
+| `nimblecas.statinfer` | [statinfer.md](reference/statinfer.md) | Inferential statistics & regression (§7.7.5): exact-rational OLS / ridge / weighted least squares via the normal equations, R², coefficient covariance, and a linear-fractional method of moments. |
 | `nimblecas.numeric` | [numeric.md](reference/numeric.md) | Floating-point polynomial root-finders (Newton, bisection, secant) with Horner `eval` / `eval_derivative`; standalone numeric solver depending only on `core`. |
 
 The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Rational → int128 → bigint → bigrational`; `bigfloat`/`doubledouble`; big-backed consumers):
@@ -166,6 +170,7 @@ Numerical methods & solvers:
 | `nimblecas.extrapolation` | [extrapolation.md](reference/extrapolation.md) | Sequence acceleration: Richardson, Romberg, Aitken Δ², Wynn ε — exact over `Q` for rational data, else numerical. |
 | `nimblecas.pdenum` | [pdenum.md](reference/pdenum.md) | Numerical PDEs: FDM/FEM/FVM exact-over-`Q` discretizations + solves; method-of-lines; Crank–Nicolson (numerical). |
 | `nimblecas.spectral` | [spectral.md](reference/spectral.md) | Spectral methods: exact Legendre/Chebyshev Galerkin + coefficient differentiation; numerical collocation/Fourier; DG/SEM. |
+| `nimblecas.fft` | [fft.md](reference/fft.md) | Numeric O(n log n) FFT (§7.3): radix-2 Cooley–Tukey + Bluestein chirp-z for arbitrary lengths, inverse FFT, and FFT-based convolution — the numeric transform companion to the exact `spectral` tooling. |
 
 Signal processing & uncertainty:
 
