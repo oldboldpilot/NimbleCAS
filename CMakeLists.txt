@@ -689,8 +689,72 @@ target_sources(nimblecas_testing PUBLIC
   FILE_SET CXX_MODULES FILES src/testing/testing.cppm)
 target_link_libraries(nimblecas_testing PUBLIC std_module)
 
+# ---- nimblecas.numeigen : numeric all-eigenvalue solver (structure-aware QR/Jacobi) (§7.2) ----
+add_library(nimblecas_numeigen STATIC)
+target_sources(nimblecas_numeigen PUBLIC
+  FILE_SET CXX_MODULES FILES src/numeigen/numeigen.cppm)
+target_link_libraries(nimblecas_numeigen
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.solve : exact closed-form roots (radicals ≤ quartic) + companion eigenvalues (§7.21) ----
+add_library(nimblecas_solve STATIC)
+target_sources(nimblecas_solve PUBLIC
+  FILE_SET CXX_MODULES FILES src/solve/solve.cppm)
+target_link_libraries(nimblecas_solve
+  PUBLIC nimblecas_numeigen nimblecas_roots nimblecas_symbolic nimblecas_ratpoly
+         nimblecas_core std_module)
+
+# ---- nimblecas.ipm : primal–dual interior-point LP (Mehrotra, numerical) (§7.22) ----
+add_library(nimblecas_ipm STATIC)
+target_sources(nimblecas_ipm PUBLIC
+  FILE_SET CXX_MODULES FILES src/ipm/ipm.cppm)
+target_link_libraries(nimblecas_ipm
+  PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.singpert : singular perturbation, matched asymptotic expansions (§7.4) ----
+add_library(nimblecas_singpert STATIC)
+target_sources(nimblecas_singpert PUBLIC
+  FILE_SET CXX_MODULES FILES src/singpert/singpert.cppm)
+target_link_libraries(nimblecas_singpert
+  PUBLIC nimblecas_symbolic nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.probdist : distribution catalog, MGF/PGF, moments, cumulants, tail bounds (§7.7) ----
+add_library(nimblecas_probdist STATIC)
+target_sources(nimblecas_probdist PUBLIC
+  FILE_SET CXX_MODULES FILES src/probdist/probdist.cppm)
+target_link_libraries(nimblecas_probdist
+  PUBLIC nimblecas_simplify nimblecas_diff nimblecas_symbolic nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
+
+add_executable(numeigen_tests tests/numeigen_tests.cpp)
+target_link_libraries(numeigen_tests
+  PRIVATE nimblecas_numeigen nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME numeigen_tests COMMAND numeigen_tests)
+
+add_executable(solve_tests tests/solve_tests.cpp)
+target_link_libraries(solve_tests
+  PRIVATE nimblecas_solve nimblecas_numeigen nimblecas_roots nimblecas_symbolic
+          nimblecas_polynomial nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME solve_tests COMMAND solve_tests)
+
+add_executable(ipm_tests tests/ipm_tests.cpp)
+target_link_libraries(ipm_tests
+  PRIVATE nimblecas_ipm nimblecas_core nimblecas_testing std_module)
+add_test(NAME ipm_tests COMMAND ipm_tests)
+
+add_executable(singpert_tests tests/singpert_tests.cpp)
+target_link_libraries(singpert_tests
+  PRIVATE nimblecas_singpert nimblecas_symbolic nimblecas_ratpoly nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME singpert_tests COMMAND singpert_tests)
+
+add_executable(probdist_tests tests/probdist_tests.cpp)
+target_link_libraries(probdist_tests
+  PRIVATE nimblecas_probdist nimblecas_simplify nimblecas_diff nimblecas_symbolic
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME probdist_tests COMMAND probdist_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
