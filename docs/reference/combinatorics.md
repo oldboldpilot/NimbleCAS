@@ -124,6 +124,12 @@ bernoulli(3).value();         // 0      (odd B_{2k+1} = 0)
 bernoulli(4).value();         // -1/30
 bernoulli(6).value();         // 1/42
 bernoulli(10).value();        // 5/66
+
+harmonic(4).value();                  // 25/12  (1 + 1/2 + 1/3 + 1/4)
+harmonic(0).value();                  // 0      (empty sum)
+generalized_harmonic(3, 2).value();   // 49/36  (1 + 1/4 + 1/9)
+generalized_harmonic(4, 1).value();   // 25/12  (== H_4)
+generalized_harmonic(2, 0).error();   // MathError::domain_error  (r < 1)
 ```
 
 ## See also

@@ -183,6 +183,23 @@ that cannot be enumerated exactly over Q.
 | `ar_is_stationary` | Stationarity from the roots of `Φ(z) = 1 − Σ_k φ_k z^k`: stationary iff every root lies strictly **outside** the unit circle. Rational roots are found and tested (`|num|` vs `den`); if every root of `Φ` is rational the verdict is definitive, otherwise unenumerated irrational/complex roots make it `indeterminate` (unless a rational root already proves it `unstable`). `ar` holds `φ_1..φ_p` (empty ⇒ white noise ⇒ `stable`). |
 | `ma_is_invertible` | Invertibility from the roots of `Θ(z) = 1 + Σ_k θ_k z^k` against the unit circle, with the same exact-rational / `indeterminate` contract as `ar_is_stationary`. `ma` holds `θ_1..θ_q`. |
 
+## ARIMA differencing & partial autocorrelation (exact over Q)
+
+```cpp
+[[nodiscard]] auto difference(std::span<const Rational> x, std::size_t d)
+    -> Result<std::vector<Rational>>;
+[[nodiscard]] auto integrate(std::span<const Rational> y, std::span<const Rational> initial)
+    -> Result<std::vector<Rational>>;
+[[nodiscard]] auto partial_autocorrelation(std::span<const Rational> autocov)
+    -> Result<std::vector<Rational>>;
+```
+
+| Function | Behavior |
+| :--- | :--- |
+| `difference` | The `d`-th backshift difference `∇^d x` (**exact**). One difference maps `x` of length `N` to `(x_1 − x_0), …, (x_{N−1} − x_{N−2})` (length `N − 1`); `∇^d` applies it `d` times. `∇^0 x` is a copy. `domain_error` if a difference is requested of an empty series (`d > N`). |
+| `integrate` | The **exact** inverse of `∇^d`: cumulatively sums `y` back to the original series using the `d` constants of integration `initial = [x_0, (∇x)_0, …, (∇^{d−1} x)_0]` (the leading value dropped at each level, **outermost first**). Reconstructs length `y.size() + d`, so `integrate(difference(x, d), initial) == x`. Empty `initial` (`d = 0`) copies `y`. Fails only with `overflow`. |
+| `partial_autocorrelation` | The **exact** PACF `φ_{1,1}, …, φ_{m,m}` from autocovariances `γ(0..m)` (`m = autocov.size() − 1`) via the **Durbin–Levinson** recursion. Each `φ_{k,k}` is a rational function of the (rational) autocovariances, hence exact over Q; because only ratios enter, a rational autocorrelation sequence (`γ(0) = 1`, e.g. from `yule_walker_autocorrelation`) yields the same PACF. An AR(p) process has `φ_{k,k} = 0` for `k > p`. Returns empty when only `γ(0)` is given. `domain_error` on empty input; `division_by_zero` when `γ(0) = 0` or a prediction-error variance vanishes (a deterministic partial correlation of magnitude 1). |
+
 ## Power spectral density (numerical — the Fourier boundary)
 
 `S(f)` is the Fourier transform of the autocovariance (Wiener–Khinchin). This is
@@ -221,6 +238,14 @@ struct Spectrum {
 | `fundamental_matrix` / `mean_first_passage_times` when `π` does not exist or the core matrix is singular | `MathError::domain_error` |
 | `ergodic_mean` with `values.size()` ≠ number of states | `MathError::domain_error` |
 | `ctmc_stationary_distribution` on a non-generator or singular system | `MathError::domain_error` |
+| `absorbing_analysis` on a non-stochastic `P`, one with no absorbing state, or a singular `I − Q` | `MathError::domain_error` |
+| `resolvent` on a non-square `Q`, or when `s I − Q` is singular (`s` an eigenvalue) | `MathError::domain_error` |
+| `gamblers_ruin_probability` / `gamblers_ruin_duration` with `n = 0`, `k > n`, or `p ∉ (0, 1)` | `MathError::domain_error` |
+| `birth_death_stationary` with unequal `birth`/`death` lengths or a negative rate | `MathError::domain_error` |
+| `birth_death_stationary` with an interior death rate of `0` | `MathError::division_by_zero` |
+| `difference` when `d` exceeds the record length | `MathError::domain_error` |
+| `partial_autocorrelation` on an empty input | `MathError::domain_error` |
+| `partial_autocorrelation` when `γ(0) = 0` or a prediction-error variance vanishes | `MathError::division_by_zero` |
 | `autocovariance(_at)` / `cross_covariance(_at)` with an empty record, unequal lengths, or `lag >= N` | `MathError::domain_error` |
 | `autocorrelation` on a constant record (`R(0) = 0`) | `MathError::division_by_zero` |
 | `is_wss` with an empty half or `max_lag` too large for a half | `MathError::domain_error` |
@@ -287,6 +312,42 @@ nimblecas::ergodic_mean(p, std::span<const Rational>{ints({3, 0})}).value();  //
 const auto q = mat({{rat(-1, 1), rat(1, 1)}, {rat(2, 1), rat(-2, 1)}});
 nimblecas::is_generator(q).value();                          // true
 nimblecas::ctmc_stationary_distribution(q).value();          // [2/3, 1/3]
+
+// The resolvent (sI - Q)^{-1} evaluated EXACTLY at s = 1.
+nimblecas::resolvent(q, Rational::from_int(1)).value();      // [[3/4, 1/4], [1/2, 1/2]]
+
+// --- Absorbing chain: {0,1} transient, {2} absorbing ---
+// P = [[0, 1/2, 1/2], [1/2, 0, 1/2], [0, 0, 1]].
+const auto pa = mat({{Rational{}, rat(1, 2), rat(1, 2)},
+                     {rat(1, 2), Rational{}, rat(1, 2)},
+                     {Rational{}, Rational{}, Rational::from_int(1)}});
+auto ac = nimblecas::absorbing_analysis(pa).value();
+// ac.transient == {0, 1}, ac.absorbing == {2}
+// ac.fundamental == [[4/3, 2/3], [2/3, 4/3]]   (N = (I - Q)^{-1})
+// ac.expected_steps == [2, 2]                  (t = N 1)
+// ac.absorption_probabilities == [[1], [1]]    (B = N R)
+
+// --- Gambler's ruin on {0..4}, p = 1/2 ---
+nimblecas::gamblers_ruin_probability(4, 1, rat(1, 2)).value();  // 3/4  (= (N - k)/N)
+nimblecas::gamblers_ruin_duration(4, 2, rat(1, 2)).value();     // 4    (= k(N - k))
+// Biased walk on {0,1,2}, p = 2/3 (r = 1/2), from k = 1.
+nimblecas::gamblers_ruin_probability(2, 1, rat(2, 3)).value();  // 1/3
+
+// --- Birth-death stationary law (detailed balance) ---
+// 3 states, birth = [1, 1], death = [2, 2] -> pi = [4/7, 2/7, 1/7].
+nimblecas::birth_death_stationary(std::span<const Rational>{ints({1, 1})},
+                                  std::span<const Rational>{ints({2, 2})}).value();
+
+// --- ARIMA differencing (exact, invertible) ---
+// nabla^1 {1,4,9,16} == {3,5,7}; integrate back with x_0 = 1.
+auto d1 = nimblecas::difference(std::span<const Rational>{ints({1, 4, 9, 16})}, 1).value();  // {3,5,7}
+nimblecas::integrate(std::span<const Rational>{d1},
+                     std::span<const Rational>{ints({1})}).value();  // {1,4,9,16}
+
+// --- PACF via Durbin-Levinson (AR(1) cuts off after lag 1) ---
+// autocov proportional to rho(k) = (1/2)^k -> PACF == [1/2, 0].
+nimblecas::partial_autocorrelation(
+    std::span<const Rational>{{Rational::from_int(1), rat(1, 2), rat(1, 4)}}).value();  // [1/2, 0]
 
 // --- WSS sample analysis (exact over Q) ---
 const auto x = ints({1, 2, 3});

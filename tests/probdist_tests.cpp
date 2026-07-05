@@ -256,5 +256,239 @@ auto main() -> int {
                                 Expr::product({expf(neg(Expr::product({t, a}))), *d.mgf})),
                             "Chernoff bound = e^{-t alpha} M_X(t)");
               })
+        // ---- extended catalog: discrete families with closed-form MGF/PGF ----
+        .test("discrete_uniform_catalog",
+              [&](TestContext& tc) {
+                  const Expr a = sym("a");
+                  const Expr b = sym("b");
+                  const auto d = nimblecas::discrete_uniform(a, b);
+                  const Expr nn = add(sub(b, a), i(1));  // b - a + 1
+                  const Expr b1 = add(b, i(1));          // b + 1
+                  tc.expect(
+                      d.mgf.has_value() &&
+                          d.mgf->is_equivalent_to(ratio(
+                              sub(expf(Expr::product({a, t})), expf(Expr::product({b1, t}))),
+                              Expr::product({nn, sub(i(1), expf(t))}))),
+                      "DiscreteUniform MGF = (e^{at} - e^{(b+1)t})/(n(1 - e^t))");
+                  tc.expect(d.pgf.has_value() &&
+                                d.pgf->is_equivalent_to(
+                                    ratio(sub(Expr::power(z, a), Expr::power(z, b1)),
+                                          Expr::product({nn, sub(i(1), z)}))),
+                            "DiscreteUniform PGF = (z^a - z^{b+1})/(n(1 - z))");
+                  tc.expect(d.mean.is_equivalent_to(ratio(add(a, b), i(2))),
+                            "DiscreteUniform mean = (a+b)/2");
+                  tc.expect(d.variance.is_equivalent_to(ratio(sub(square(nn), i(1)), i(12))),
+                            "DiscreteUniform var = (n^2 - 1)/12");
+              })
+        .test("negative_binomial_catalog",
+              [&](TestContext& tc) {
+                  const Expr r = sym("r");
+                  const auto d = nimblecas::negative_binomial(r, p);
+                  tc.expect(d.mgf.has_value() &&
+                                d.mgf->is_equivalent_to(
+                                    Expr::power(ratio(p, geom_denom(p, expf(t))), r)),
+                            "NegBinomial MGF = (p/(1-(1-p)e^t))^r");
+                  tc.expect(d.pgf.has_value() &&
+                                d.pgf->is_equivalent_to(
+                                    Expr::power(ratio(p, geom_denom(p, z)), r)),
+                            "NegBinomial PGF = (p/(1-(1-p)z))^r");
+                  tc.expect(d.mean.is_equivalent_to(Expr::product({r, one_minus(p), recip(p)})),
+                            "NegBinomial mean = r(1-p)/p");
+                  tc.expect(d.variance.is_equivalent_to(
+                                Expr::product({r, one_minus(p), Expr::power(p, i(-2))})),
+                            "NegBinomial var = r(1-p)/p^2");
+              })
+        // ---- extended catalog: continuous families with closed-form MGF ----
+        .test("continuous_uniform_catalog",
+              [&](TestContext& tc) {
+                  const Expr a = sym("a");
+                  const Expr b = sym("b");
+                  const auto d = nimblecas::continuous_uniform(a, b);
+                  tc.expect(
+                      d.mgf.has_value() &&
+                          d.mgf->is_equivalent_to(ratio(
+                              sub(expf(Expr::product({t, b})), expf(Expr::product({t, a}))),
+                              Expr::product({t, sub(b, a)}))),
+                      "ContinuousUniform MGF = (e^{tb} - e^{ta})/(t(b-a))");
+                  tc.expect(!d.pgf.has_value(), "ContinuousUniform has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(ratio(add(a, b), i(2))),
+                            "ContinuousUniform mean = (a+b)/2");
+                  tc.expect(d.variance.is_equivalent_to(ratio(square(sub(b, a)), i(12))),
+                            "ContinuousUniform var = (b-a)^2/12");
+              })
+        .test("chi_squared_catalog",
+              [&](TestContext& tc) {
+                  const Expr k = sym("k");
+                  const auto d = nimblecas::chi_squared(k);
+                  // Hand-verified: MGF of chi^2_k is (1 - 2t)^{-k/2}.
+                  tc.expect(d.mgf.has_value() &&
+                                d.mgf->is_equivalent_to(Expr::power(
+                                    sub(i(1), Expr::product({i(2), t})), neg(ratio(k, i(2))))),
+                            "ChiSquared MGF = (1 - 2t)^{-k/2}");
+                  tc.expect(!d.pgf.has_value(), "ChiSquared has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(k), "ChiSquared mean = k");
+                  tc.expect(d.variance.is_equivalent_to(Expr::product({i(2), k})),
+                            "ChiSquared var = 2k");
+              })
+        // ---- extended catalog: families with NO elementary MGF (honest nullopt) ----
+        .test("student_t_no_mgf",
+              [&](TestContext& tc) {
+                  const Expr nu = sym("nu");
+                  const auto d = nimblecas::student_t(nu);
+                  tc.expect(!d.mgf.has_value(),
+                            "Student-t MGF does not exist -> reported as std::nullopt");
+                  tc.expect(!d.pgf.has_value(), "Student-t has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(i(0)), "Student-t mean = 0 (nu > 1)");
+                  tc.expect(d.variance.is_equivalent_to(ratio(nu, sub(nu, i(2)))),
+                            "Student-t var = nu/(nu-2) (nu > 2)");
+              })
+        .test("hypergeometric_no_mgf",
+              [&](TestContext& tc) {
+                  const Expr N = sym("N");
+                  const Expr K = sym("K");
+                  const auto d = nimblecas::hypergeometric(N, K, n);
+                  tc.expect(!d.mgf.has_value(),
+                            "Hypergeometric MGF has no elementary form -> std::nullopt");
+                  tc.expect(!d.pgf.has_value(), "Hypergeometric PGF has no elementary form");
+                  tc.expect(d.mean.is_equivalent_to(Expr::product({n, K, recip(N)})),
+                            "Hypergeometric mean = nK/N");
+                  tc.expect(
+                      d.variance.is_equivalent_to(Expr::product(
+                          {n, K, sub(N, K), sub(N, n),
+                           recip(Expr::product({square(N), sub(N, i(1))}))})),
+                      "Hypergeometric var = n(K/N)((N-K)/N)((N-n)/(N-1))");
+              })
+        .test("beta_no_mgf",
+              [&](TestContext& tc) {
+                  const Expr beta = sym("beta");
+                  const auto d = nimblecas::beta(alpha, beta);
+                  const Expr apb = add(alpha, beta);
+                  tc.expect(!d.mgf.has_value(),
+                            "Beta MGF is confluent-hypergeometric -> std::nullopt");
+                  tc.expect(!d.pgf.has_value(), "Beta has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(ratio(alpha, apb)),
+                            "Beta mean = alpha/(alpha+beta)");
+                  tc.expect(d.variance.is_equivalent_to(Expr::product(
+                                {alpha, beta,
+                                 recip(Expr::product({square(apb), add(apb, i(1))}))})),
+                            "Beta var = alpha beta/((alpha+beta)^2 (alpha+beta+1))");
+              })
+        .test("weibull_no_mgf",
+              [&](TestContext& tc) {
+                  const Expr k = sym("k");
+                  const auto d = nimblecas::weibull(k, lambda);
+                  const Expr g1 = gammaf(add(i(1), recip(k)));                       // Gamma(1+1/k)
+                  const Expr g2 = gammaf(add(i(1), Expr::product({i(2), recip(k)})));  // Gamma(1+2/k)
+                  tc.expect(!d.mgf.has_value(),
+                            "Weibull MGF has no elementary form -> std::nullopt");
+                  tc.expect(!d.pgf.has_value(), "Weibull has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(Expr::product({lambda, g1})),
+                            "Weibull mean = lambda Gamma(1+1/k)");
+                  tc.expect(d.variance.is_equivalent_to(
+                                Expr::product({square(lambda), sub(g2, square(g1))})),
+                            "Weibull var = lambda^2 (Gamma(1+2/k) - Gamma(1+1/k)^2)");
+              })
+        .test("pareto_no_mgf",
+              [&](TestContext& tc) {
+                  const Expr xm = sym("xm");
+                  const auto d = nimblecas::pareto(xm, alpha);
+                  const Expr am1 = sub(alpha, i(1));
+                  tc.expect(!d.mgf.has_value(),
+                            "Pareto MGF does not exist for t>0 -> std::nullopt");
+                  tc.expect(!d.pgf.has_value(), "Pareto has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(Expr::product({alpha, xm, recip(am1)})),
+                            "Pareto mean = alpha xm/(alpha-1)");
+                  tc.expect(d.variance.is_equivalent_to(Expr::product(
+                                {square(xm), alpha,
+                                 recip(Expr::product({square(am1), sub(alpha, i(2))}))})),
+                            "Pareto var = xm^2 alpha/((alpha-1)^2 (alpha-2))");
+              })
+        .test("lognormal_no_mgf",
+              [&](TestContext& tc) {
+                  const auto d = nimblecas::lognormal(mu, sigma2);
+                  tc.expect(!d.mgf.has_value(),
+                            "Log-normal MGF diverges -> std::nullopt");
+                  tc.expect(!d.pgf.has_value(), "Log-normal has no PGF");
+                  tc.expect(d.mean.is_equivalent_to(expf(add(mu, ratio(sigma2, i(2))))),
+                            "Log-normal mean = exp(mu + sigma2/2)");
+                  tc.expect(d.variance.is_equivalent_to(Expr::product(
+                                {sub(expf(sigma2), i(1)),
+                                 expf(add(Expr::product({i(2), mu}), sigma2))})),
+                            "Log-normal var = (exp(sigma2)-1) exp(2mu+sigma2)");
+              })
+        // ---- integral transforms of the generating functions ----
+        .test("characteristic_function_normal",
+              [&](TestContext& tc) {
+                  // phi_X(t) = M_X(i t): the Normal MGF with t -> i*t, i = (-1)^{1/2}.
+                  const auto d = nimblecas::normal(mu, sigma2);
+                  const Expr cf = nimblecas::characteristic_function(*d.mgf);
+                  const Expr R = Expr::product({imag_unit(), t});  // i*t
+                  const Expr expected = expf(Expr::sum({
+                      Expr::product({mu, R}),
+                      Expr::product({sigma2, Expr::power(R, i(2)), Expr::power(i(2), i(-1))}),
+                  }));
+                  tc.expect(cf.is_equivalent_to(expected),
+                            "phi_Normal(t) = exp(mu (it) + sigma2 (it)^2 / 2)");
+              })
+        .test("factorial_moment_binomial_and_poisson",
+              [&](TestContext& tc) {
+                  // Binomial PGF is polynomial: the factorial moments reduce fully.
+                  const auto bin = nimblecas::binomial(n, p);
+                  const auto f0 = nimblecas::factorial_moment(*bin.pgf, 0);
+                  tc.expect(f0.has_value() && f0->is_equivalent_to(i(1)),
+                            "G(1) = 1 (0th factorial moment)");
+                  const auto f1 = nimblecas::factorial_moment(*bin.pgf, 1);
+                  tc.expect(f1.has_value() && f1->is_equivalent_to(simp(Expr::product({n, p}))),
+                            "Binomial 1st factorial moment = E[X] = n p");
+                  // Poisson PGF exp(lambda(z-1)): k-th factorial moment = lambda^k, returned
+                  // exactly as lambda^k * exp(0) (the simplifier leaves exp(0) unevaluated).
+                  const auto d = nimblecas::poisson(lambda);
+                  const auto p1 = nimblecas::factorial_moment(*d.pgf, 1);
+                  tc.expect(p1.has_value() &&
+                                p1->is_equivalent_to(simp(Expr::product({lambda, expf(i(0))}))),
+                            "Poisson 1st factorial moment = lambda (as lambda*exp(0))");
+                  const auto p2 = nimblecas::factorial_moment(*d.pgf, 2);
+                  tc.expect(p2.has_value() &&
+                                p2->is_equivalent_to(
+                                    simp(Expr::product({square(lambda), expf(i(0))}))),
+                            "Poisson 2nd factorial moment = lambda^2 (as lambda^2*exp(0))");
+              })
+        .test("laplace_stieltjes_exponential",
+              [&](TestContext& tc) {
+                  // LST_X(s) = M_X(-s): Exponential MGF with t -> -s, i.e. lambda/(lambda + s),
+                  // returned unsimplified as lambda/(lambda - (-s)).
+                  const auto d = nimblecas::exponential(lambda);
+                  const Expr lst = nimblecas::laplace_stieltjes(*d.mgf);
+                  const Expr s = sym("s");
+                  tc.expect(lst.is_equivalent_to(ratio(lambda, sub(lambda, neg(s)))),
+                            "LST_Exponential(s) = lambda/(lambda - (-s)) = lambda/(lambda + s)");
+              })
+        // ---- concentration inequalities (exact bounding expressions) ----
+        .test("concentration_bounds",
+              [&](TestContext& tc) {
+                  const Expr tt = sym("t");
+                  const Expr c1 = sym("c1");
+                  const Expr c2 = sym("c2");
+                  const Expr v = sym("v");
+                  const Expr M = sym("M");
+                  const std::vector<Expr> cs{c1, c2};
+                  const Expr ss = sum_of_squares(cs);  // c1^2 + c2^2
+
+                  tc.expect(nimblecas::hoeffding_bound(tt, cs).is_equivalent_to(
+                                expf(Expr::product({i(-2), square(tt), recip(ss)}))),
+                            "Hoeffding = exp(-2 t^2 / sum (b_i-a_i)^2)");
+                  tc.expect(nimblecas::mcdiarmid_bound(tt, cs).is_equivalent_to(
+                                expf(Expr::product({i(-2), square(tt), recip(ss)}))),
+                            "McDiarmid = exp(-2 t^2 / sum c_i^2)");
+                  tc.expect(nimblecas::azuma_bound(tt, cs).is_equivalent_to(expf(Expr::product(
+                                {i(-1), square(tt), recip(Expr::product({i(2), ss}))}))),
+                            "Azuma = exp(-t^2 / (2 sum c_i^2))");
+                  const Expr mt3 = Expr::product({M, tt, recip(i(3))});  // M t / 3
+                  tc.expect(
+                      nimblecas::bernstein_bound(tt, v, M).is_equivalent_to(expf(Expr::product(
+                          {i(-1), square(tt),
+                           recip(Expr::product({i(2), add(v, mt3)}))}))),
+                      "Bernstein = exp(-t^2 / (2(v + M t/3)))");
+              })
         .run();
 }

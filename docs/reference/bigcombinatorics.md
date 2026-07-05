@@ -54,6 +54,9 @@ Every function is a free function in `namespace nimblecas` returning
 | `fibonacci` | `[[nodiscard]] auto fibonacci(std::int64_t n) -> Result<BigInt>` | The `n`-th Fibonacci number (`F_0 = 0`, `F_1 = 1`) via the **fast-doubling** identities `F(2k) = F(k)(2F(k+1) - F(k))` and `F(2k+1) = F(k+1)² + F(k)²` — `O(log n)` `BigInt` multiplies, not `O(n)` additions. `domain_error` for `n < 0`. `F(93)` and beyond (which overflow `int64`) are exact here. |
 | `lucas` | `[[nodiscard]] auto lucas(std::int64_t n) -> Result<BigInt>` | The `n`-th Lucas number (`L_0 = 2`, `L_1 = 1`, `L_n = L_{n-1} + L_{n-2}`), iterative. `domain_error` for `n < 0`. Unbounded. |
 | `bell` | `[[nodiscard]] auto bell(std::int64_t n) -> Result<BigInt>` | The `n`-th Bell number `B_n` (number of set partitions of `n` elements), computed via the Bell triangle. `domain_error` for `n < 0`. Exact and unbounded. |
+| `partition_count` | `[[nodiscard]] auto partition_count(std::int64_t n) -> Result<BigInt>` | The number of **integer partitions** `p(n)` — ways to write `n` as an unordered sum of positive integers (`p(0) = 1`, `p(5) = 7`, `p(10) = 42`), via Euler's pentagonal-number recurrence `p(m) = Σ_{j≥1} (−1)^{j−1}[p(m − j(3j−1)/2) + p(m − j(3j+1)/2)]`. `domain_error` for `n < 0`. Exact, unbounded, super-polynomial growth. |
+| `euler_number` | `[[nodiscard]] auto euler_number(std::int64_t n) -> Result<BigInt>` | The `n`-th **Euler number** `E_n` — the **secant** numbers `sec x = Σ E_{2n} x^{2n}/(2n)!`, a **signed** integer: `E_0 = 1`, `E_2 = −1`, `E_4 = 5`, `E_6 = −61`, …, with every odd-index `E_{2k+1} = 0`. Built from the boustrophedon (Seidel/Entringer) triangle of zigzag numbers `A_n`, then `E_n = (−1)^{n/2} A_n` for even `n`. `domain_error` for `n < 0`. |
+| `subfactorial` | `[[nodiscard]] auto subfactorial(std::int64_t n) -> Result<BigInt>` | The **subfactorial** `!n` — the number of derangements of `n` elements (permutations with no fixed point) — via `!n = n·!(n−1) + (−1)^n` with `!0 = 1` (so `!1 = 0`, `!2 = 1`, `!3 = 2`, `!4 = 9`). `domain_error` for `n < 0`. Exact and unbounded (`!n ~ n!/e`). |
 
 ## Sequences of two indices
 
@@ -64,6 +67,7 @@ Every function is a free function in `namespace nimblecas` returning
 | `rising_factorial` | `[[nodiscard]] auto rising_factorial(std::int64_t n, std::int64_t k) -> Result<BigInt>` | The rising factorial `n^(k)- = n(n+1)…(n+k-1)`, a product of exactly `k` ascending factors (empty product `1` when `k = 0`). Requires `k >= 0`, else `domain_error`; `n` is unrestricted. |
 | `stirling_second` | `[[nodiscard]] auto stirling_second(std::int64_t n, std::int64_t k) -> Result<BigInt>` | Stirling number of the second kind `S(n, k)` — the number of partitions of `n` labelled elements into `k` non-empty unlabelled subsets, via `S(n, k) = k·S(n-1, k) + S(n-1, k-1)`. Returns `0` when `k > n`; `domain_error` for `n < 0` or `k < 0`. Exact and unbounded. |
 | `stirling_first_unsigned` | `[[nodiscard]] auto stirling_first_unsigned(std::int64_t n, std::int64_t k) -> Result<BigInt>` | Unsigned Stirling number of the first kind `c(n, k)` — the number of permutations of `n` elements with exactly `k` disjoint cycles, via `c(n, k) = (n-1)·c(n-1, k) + c(n-1, k-1)`. Returns `0` when `k > n`; `domain_error` for `n < 0` or `k < 0`. Exact and unbounded. |
+| `eulerian_number` | `[[nodiscard]] auto eulerian_number(std::int64_t n, std::int64_t k) -> Result<BigInt>` | The **Eulerian number** `⟨n, k⟩` — the number of permutations of `{1..n}` with exactly `k` ascents, via `⟨n, k⟩ = (k+1)⟨n-1, k⟩ + (n-k)⟨n-1, k-1⟩` with `⟨0, 0⟩ = 1`. Returns `0` when `k >= n` (a permutation of `n >= 1` elements has at most `n-1` ascents); `domain_error` for `n < 0` or `k < 0`. Exact and unbounded — the row sum `Σ_k ⟨n, k⟩` is `n!`. |
 
 ## Multinomial coefficient
 
@@ -80,9 +84,9 @@ then forms are, as everywhere in this module, unbounded.
 
 | Condition | Error |
 | :--- | :--- |
-| Negative index (`n < 0`) on `factorial`, `catalan`, `fibonacci`, `lucas`, `bell`, `binomial`, `stirling_second`, `stirling_first_unsigned` | `MathError::domain_error` |
+| Negative index (`n < 0`) on `factorial`, `catalan`, `fibonacci`, `lucas`, `bell`, `binomial`, `stirling_second`, `stirling_first_unsigned`, `partition_count`, `euler_number`, `subfactorial`, `eulerian_number` | `MathError::domain_error` |
 | `k < 0` on `falling_factorial` / `rising_factorial` | `MathError::domain_error` |
-| `k < 0` (either index) on `stirling_second` / `stirling_first_unsigned` | `MathError::domain_error` |
+| `k < 0` (either index) on `stirling_second` / `stirling_first_unsigned` / `eulerian_number` | `MathError::domain_error` |
 | `double_factorial` with `n < -1` | `MathError::domain_error` |
 | `multinomial` with any `k_i < 0` | `MathError::domain_error` |
 | `catalan` argument overflow (`2n`/`n+1` leaves `int64`) | `MathError::domain_error` |
@@ -165,6 +169,32 @@ for (std::int64_t k = 0; k <= 10; ++k) {
     row_sum = row_sum.add(stirling_second(10, k).value());
 }
 row_sum == bell(10).value();                         // true
+
+// Integer partitions p(n) via Euler's pentagonal recurrence.
+partition_count(10).value().to_string();   // "42"
+partition_count(100).value().to_string();  // "190569292"
+partition_count(-1).error();               // MathError::domain_error
+
+// Euler (secant) numbers: signed, odd-index entries vanish.
+euler_number(0).value().to_string();       // "1"
+euler_number(2).value().to_string();       // "-1"
+euler_number(4).value().to_string();       // "5"
+euler_number(6).value().to_string();       // "-61"
+euler_number(3).value().to_string();       // "0"   (odd index)
+
+// Subfactorial / derangements !n; the identity n! == sum_k C(n,k) !k holds beyond int64.
+subfactorial(4).value().to_string();       // "9"
+subfactorial(10).value().to_string();      // "1334961"
+
+// Eulerian numbers ⟨n,k⟩ and the row-sum identity sum_k ⟨n,k⟩ == n!.
+eulerian_number(3, 1).value().to_string();  // "4"    (⟨3,0..2⟩ = 1, 4, 1)
+eulerian_number(4, 1).value().to_string();  // "11"   (⟨4,0..3⟩ = 1, 11, 11, 1)
+eulerian_number(3, 5).value().to_string();  // "0"    (k >= n)
+BigInt euler_row{};
+for (std::int64_t k = 0; k <= 5; ++k) {
+    euler_row = euler_row.add(eulerian_number(6, k).value());
+}
+euler_row == factorial(6).value();          // true   (== 720)
 ```
 
 ## See also

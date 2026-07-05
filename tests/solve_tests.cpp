@@ -247,6 +247,23 @@ auto main() -> int {
                            "cube root power(2,1/3)");
                   t.expect(all_roots_vanish(p, roots, 1e-6), "all five satisfy the quintic");
               })
+        .test("reducible_quintic_factors_to_exact_radicals",
+              [](TestContext& t) {
+                  // (x^2-2)(x^3-2) = x^5 - 2x^3 - 2x^2 + 4: NO rational roots, yet reducible into
+                  // a quadratic and a cubic. The factor-over-Q pre-pass must split it so all five
+                  // roots come back EXACT (radicals), NOT numeric eigenvalues.
+                  const RationalPoly p = ipoly({4, 0, -2, -2, 0, 1});
+                  auto roots = solve_poly(p).value();
+                  t.expect(roots.size() == 5, "five roots");
+                  t.expect(std::ranges::all_of(roots, [](const Root& r) { return r.exact; }),
+                           "every root is exact (reducible into <= cubic pieces)");
+                  t.expect(has_value(roots, Expr::power(Expr::integer(2), rexpr(1, 2)), true),
+                           "sqrt(2) from the quadratic factor, exact");
+                  t.expect(has_value(roots, Expr::power(Expr::integer(2), rexpr(1, 3)), true),
+                           "cube root power(2,1/3) from the cubic factor, exact");
+                  t.expect(all_roots_vanish(p, roots, 1e-6), "all five satisfy the quintic");
+                  t.expect(roots_distinct(roots, 1e-6), "five distinct roots");
+              })
         .test("irreducible_quintic_numeric_eigenvalues",
               [](TestContext& t) {
                   // x^5 - x - 1: irreducible, not solvable in radicals -> five NUMERIC roots via

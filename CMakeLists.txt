@@ -183,7 +183,8 @@ add_library(nimblecas_recurrence STATIC)
 target_sources(nimblecas_recurrence PUBLIC
   FILE_SET CXX_MODULES FILES src/recurrence/recurrence.cppm)
 target_link_libraries(nimblecas_recurrence
-  PUBLIC nimblecas_roots nimblecas_ratpoly nimblecas_core std_module)
+  PUBLIC nimblecas_symbolic nimblecas_matrix nimblecas_roots nimblecas_ratpoly
+         nimblecas_core std_module)
 
 # ---- nimblecas.numeric : numeric root-finders (Newton/bisection/secant) (§7.14) ----
 add_library(nimblecas_numeric STATIC)
@@ -688,7 +689,8 @@ add_library(nimblecas_laplace STATIC)
 target_sources(nimblecas_laplace PUBLIC
   FILE_SET CXX_MODULES FILES src/laplace/laplace.cppm)
 target_link_libraries(nimblecas_laplace
-  PUBLIC nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+  PUBLIC nimblecas_pfd nimblecas_ratpoly nimblecas_simplify nimblecas_symbolic
+         nimblecas_core std_module)
 
 # ---- nimblecas.testing : internal test framework (Rule 39 — no GTest/Catch2) ----
 add_library(nimblecas_testing STATIC)
@@ -708,8 +710,8 @@ add_library(nimblecas_solve STATIC)
 target_sources(nimblecas_solve PUBLIC
   FILE_SET CXX_MODULES FILES src/solve/solve.cppm)
 target_link_libraries(nimblecas_solve
-  PUBLIC nimblecas_numeigen nimblecas_roots nimblecas_symbolic nimblecas_ratpoly
-         nimblecas_core std_module)
+  PUBLIC nimblecas_factor nimblecas_numeigen nimblecas_roots nimblecas_symbolic
+         nimblecas_ratpoly nimblecas_core std_module)
 
 # ---- nimblecas.ipm : primal–dual interior-point LP (Mehrotra, numerical) (§7.22) ----
 add_library(nimblecas_ipm STATIC)
@@ -753,6 +755,15 @@ target_sources(nimblecas_statinfer PUBLIC
 target_link_libraries(nimblecas_statinfer
   PUBLIC nimblecas_stats nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.symint : Expr-level symbolic integration (§7.19) ----
+add_library(nimblecas_symint STATIC)
+target_sources(nimblecas_symint PUBLIC
+  FILE_SET CXX_MODULES FILES src/symint/symint.cppm)
+target_link_libraries(nimblecas_symint
+  PUBLIC nimblecas_integrate nimblecas_rothstein nimblecas_polyexpr nimblecas_polynomial
+         nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_ratpoly
+         nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -763,7 +774,7 @@ add_test(NAME numeigen_tests COMMAND numeigen_tests)
 
 add_executable(solve_tests tests/solve_tests.cpp)
 target_link_libraries(solve_tests
-  PRIVATE nimblecas_solve nimblecas_numeigen nimblecas_roots nimblecas_symbolic
+  PRIVATE nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_roots nimblecas_symbolic
           nimblecas_polynomial nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
 add_test(NAME solve_tests COMMAND solve_tests)
 
@@ -801,6 +812,13 @@ target_link_libraries(statinfer_tests
   PRIVATE nimblecas_statinfer nimblecas_stats nimblecas_matrix nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME statinfer_tests COMMAND statinfer_tests)
+
+add_executable(symint_tests tests/symint_tests.cpp)
+target_link_libraries(symint_tests
+  PRIVATE nimblecas_symint nimblecas_integrate nimblecas_rothstein nimblecas_polyexpr
+          nimblecas_polynomial nimblecas_diff nimblecas_simplify nimblecas_symbolic
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME symint_tests COMMAND symint_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
@@ -886,7 +904,8 @@ add_test(NAME quantum_tests COMMAND quantum_tests)
 
 add_executable(recurrence_tests tests/recurrence_tests.cpp)
 target_link_libraries(recurrence_tests
-  PRIVATE nimblecas_recurrence nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
+  PRIVATE nimblecas_recurrence nimblecas_symbolic nimblecas_simplify nimblecas_matrix
+          nimblecas_roots nimblecas_ratpoly nimblecas_polynomial
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME recurrence_tests COMMAND recurrence_tests)
 

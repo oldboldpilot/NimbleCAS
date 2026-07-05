@@ -516,5 +516,59 @@ auto main() -> int {
                   t.expect(!rr.has_value() && rr.error() == MathError::domain_error,
                            "reduce over zero shards -> domain_error");
               })
+        // --- univariate (1-D) minimizers: golden-section & Brent ---------------
+        .test("golden_section_parabola",
+              [&](TestContext& t) {
+                  // (x - 2)^2 on [0, 5]: unimodal, minimizer x* = 2, f* = 0.
+                  auto f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
+                  auto r = opt::golden_section(f, 0.0, 5.0, 1e-8, 1000);
+                  t.expect(r.has_value(), "golden_section: returns a value");
+                  t.expect(r.has_value() && close(r->x, 2.0, 1e-5), "golden_section: x* ~ 2");
+                  t.expect(r.has_value() && close(r->fx, 0.0, 1e-9), "golden_section: f(x*) ~ 0");
+              })
+        .test("brent_minimize_parabola",
+              [&](TestContext& t) {
+                  auto f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
+                  auto r = opt::brent_minimize(f, 0.0, 5.0, 1e-10, 200);
+                  t.expect(r.has_value(), "brent_minimize: returns a value");
+                  t.expect(r.has_value() && close(r->x, 2.0, 1e-6), "brent_minimize: x* ~ 2");
+                  t.expect(r.has_value() && close(r->fx, 0.0, 1e-10), "brent_minimize: f(x*) ~ 0");
+              })
+        .test("univariate_minimizers_quartic",
+              [&](TestContext& t) {
+                  // x^4 - 3x^2 + 2 on [0, 2]: unimodal with the minimum at x = sqrt(1.5),
+                  // where f = -0.25 (the other stationary point x = 0 is a local maximum).
+                  auto quartic = [](double x) -> double {
+                      return x * x * x * x - 3.0 * x * x + 2.0;
+                  };
+                  const double xstar = std::sqrt(1.5);  // ~1.2247449
+                  auto g = opt::golden_section(quartic, 0.0, 2.0, 1e-9, 2000);
+                  t.expect(g.has_value() && close(g->x, xstar, 1e-4),
+                           "golden_section quartic: x* ~ sqrt(1.5)");
+                  auto br = opt::brent_minimize(quartic, 0.0, 2.0, 1e-10, 200);
+                  t.expect(br.has_value() && close(br->x, xstar, 1e-5),
+                           "brent quartic: x* ~ sqrt(1.5)");
+                  t.expect(br.has_value() && close(br->fx, -0.25, 1e-6),
+                           "brent quartic: f(x*) ~ -0.25");
+              })
+        .test("univariate_minimizers_domain_and_nonconvergence",
+              [&](TestContext& t) {
+                  auto f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
+                  // Non-finite bound / non-positive tol -> domain_error.
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  auto dn = opt::golden_section(f, nan, 5.0, 1e-8, 1000);
+                  t.expect(!dn.has_value() && dn.error() == MathError::domain_error,
+                           "golden_section NaN bound -> domain_error");
+                  auto db = opt::brent_minimize(f, 0.0, 5.0, 0.0, 100);
+                  t.expect(!db.has_value() && db.error() == MathError::domain_error,
+                           "brent tol <= 0 -> domain_error");
+                  // Too few iterations to shrink a wide bracket to a tiny tol.
+                  auto ng = opt::golden_section(f, 0.0, 5.0, 1e-12, 3);
+                  t.expect(!ng.has_value() && ng.error() == MathError::not_implemented,
+                           "golden_section starved iters -> not_implemented");
+                  auto nb = opt::brent_minimize(f, 0.0, 5.0, 1e-14, 2);
+                  t.expect(!nb.has_value() && nb.error() == MathError::not_implemented,
+                           "brent starved iters -> not_implemented");
+              })
         .run();
 }

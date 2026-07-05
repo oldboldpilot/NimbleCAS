@@ -126,7 +126,7 @@ namespace {
     if (!aff) {
         return make_error<Expr>(MathError::not_implemented);
     }
-    const auto& [a, b] = *aff;
+    const Expr& a = aff->first;  // slope; the offset b is not needed for the power rule
     auto next_exp = simplify(Expr::sum({exp, Expr::integer(1)}));
     if (!next_exp) {
         return make_error<Expr>(next_exp.error());
@@ -155,7 +155,7 @@ namespace {
     if (!aff) {
         return make_error<Expr>(MathError::not_implemented);
     }
-    const auto& [a, b] = *aff;
+    const Expr& a = aff->first;  // slope of the affine argument; divide the result by it
 
     std::optional<Expr> antideriv;  // F(inner) with F' == fn
     if (fn.name == "exp") {

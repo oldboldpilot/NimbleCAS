@@ -28,14 +28,15 @@
 // presented as exact. deg <= 4 factors, and any rational or <= quartic factor peeled off a
 // higher-degree polynomial, stay EXACT.
 //
-// Note on the boundary: the numeric path is chosen purely on the DEGREE of the factor left
-// after rational-root extraction, NOT on a proof of irreducibility. By Abel-Ruffini a general
-// quintic-or-higher has no radical solution, but a PARTICULAR degree >= 5 factor may still be
-// reducible and radical-solvable (e.g. (x^2-2)(x^3-2), which has no rational roots yet exact
-// radicals). Such a factor is currently returned numerically: the pre-factoring stops at
-// rational roots and does NOT attempt square-free / higher-degree factorization to recover
-// those radicals. So "returned numerically" means "not extracted exactly here", not "proven
-// to have no closed form". Extending the pre-factoring is future work.
+// Note on the boundary: after peeling rational roots, the remaining polynomial is FACTORED
+// into irreducibles over Q (nimblecas.factor: Yun square-free + Kronecker). Each irreducible
+// factor of degree <= 4 is then solved EXACTLY by radicals, so a reducible high-degree
+// polynomial that happens to split into small pieces (e.g. (x^2-2)(x^3-2), which has no
+// rational roots yet exact radicals) is returned EXACTLY, not numerically. Only a genuinely
+// IRREDUCIBLE factor of degree >= 5 (no radical solution by Abel-Ruffini) is sent to the
+// numeric companion-eigenvalue path. If factorisation exhausts its search budget
+// (not_implemented), the code falls back to a degree-directed dispatch on the whole remainder
+// so a result is still produced (radicals if <= quartic, else numeric).
 //
 // HONESTY (Rule 32): every operation returns Result<T>; nothing throws, and no
 // plausible-but-wrong value is ever presented as exact — numeric eigenvalue roots carry
@@ -52,6 +53,7 @@ import nimblecas.ratpoly;
 import nimblecas.roots;
 import nimblecas.symbolic;
 import nimblecas.numeigen;
+import nimblecas.factor;
 
 export namespace nimblecas {
 
@@ -426,34 +428,59 @@ auto solve_poly(const RationalPoly& p, double tol, std::size_t max_iter)
         }
     }
 
-    const std::int64_t d = work.degree();
-    if (d <= 0) {  // fully split into rational roots
+    if (work.degree() <= 0) {  // fully split into rational roots
         return roots;
     }
 
-    if (d <= 4) {  // exact radicals for the remaining linear/quadratic/cubic/quartic factor
-        TRY(closed, solve_remaining(work));
-        for (Expr& e : closed) {
-            roots.push_back(
-                Root{.value = std::move(e), .exact = true, .multiplicity = std::nullopt});
-        }
-        return roots;
-    }
-
-    // Degree >= 5 factor (after rational-root peeling): numeric companion-matrix eigenvalues.
-    // Chosen on degree, not on a proof of irreducibility (see the header note). Each root is
-    // an approximation (exact = false). A near-real eigenvalue (|imag| < tol) becomes a real
-    // leaf; otherwise re + im*i in the module's imaginary convention (i = power(-1, 1/2)).
+    // Factor the remaining (rational-root-free) polynomial into irreducibles over Q. This is
+    // the richer pre-factoring: a REDUCIBLE high-degree factor (e.g. (x^2-2)(x^3-2), which has
+    // no rational roots yet exact radicals) is split, and each irreducible piece of degree <= 4
+    // is solved EXACTLY by radicals; only a genuinely irreducible degree >= 5 factor falls
+    // through to numeric companion-matrix eigenvalues. If factorisation gives up (its
+    // divisor-tuple budget is exhausted -> not_implemented), fall back to a degree-directed
+    // dispatch on the whole remainder so a result is still produced.
     TRY(consts, make_consts());
-    TRY(evals, companion_eigenvalues(work, tol, max_iter));
-    for (const std::complex<double>& z : evals) {
-        Expr value =
-            std::abs(z.imag()) < tol
-                ? Expr::real(z.real())
-                : Expr::sum({Expr::real(z.real()),
-                             Expr::product({Expr::real(z.imag()), consts.i_unit})});
-        roots.push_back(
-            Root{.value = std::move(value), .exact = false, .multiplicity = std::nullopt});
+    std::vector<std::pair<RationalPoly, std::int64_t>> factors;
+    auto factored = factor_over_Q(work);
+    if (factored) {
+        factors = std::move(*factored);
+    } else if (factored.error() == MathError::not_implemented) {
+        factors.emplace_back(work, std::int64_t{1});  // unfactored fallback: treat as one piece
+    } else {
+        return make_error<std::vector<Root>>(factored.error());
+    }
+
+    for (const auto& [fac, mult] : factors) {
+        const std::int64_t fd = fac.degree();
+        if (fd <= 0) {
+            continue;  // a constant factor contributes no roots
+        }
+        if (fd <= 4) {
+            // Exact radicals for a linear/quadratic/cubic/quartic irreducible factor.
+            TRY(closed, solve_remaining(fac));
+            for (std::int64_t k = 0; k < mult; ++k) {
+                for (const Expr& e : closed) {
+                    roots.push_back(
+                        Root{.value = e, .exact = true, .multiplicity = std::nullopt});
+                }
+            }
+        } else {
+            // Genuinely irreducible degree >= 5: numeric companion-matrix eigenvalues. Each
+            // root is an approximation (exact = false). A near-real eigenvalue (|imag| < tol)
+            // becomes a real leaf; otherwise re + im*i (i = power(-1, 1/2)).
+            TRY(evals, companion_eigenvalues(fac, tol, max_iter));
+            for (std::int64_t k = 0; k < mult; ++k) {
+                for (const std::complex<double>& z : evals) {
+                    Expr value =
+                        std::abs(z.imag()) < tol
+                            ? Expr::real(z.real())
+                            : Expr::sum({Expr::real(z.real()),
+                                         Expr::product({Expr::real(z.imag()), consts.i_unit})});
+                    roots.push_back(
+                        Root{.value = std::move(value), .exact = false, .multiplicity = std::nullopt});
+                }
+            }
+        }
     }
     return roots;
 }

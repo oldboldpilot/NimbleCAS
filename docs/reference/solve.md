@@ -69,16 +69,17 @@ as exact.**
   **iterative numerical approximations** to the tolerance `tol` (default
   `1e-12`), each tagged `exact = false`. They are honest approximations, clearly
   distinguished from the exact algebraic roots on the same result.
-- **Scope caveat (no overclaim of irreducibility).** The numeric path is selected
-  purely on the **degree** of the factor remaining after rational-root
-  extraction — *not* on a proof that it is irreducible or non-radical. A
-  particular degree ≥ 5 factor may well be reducible and radical-solvable (e.g.
-  `(x²−2)(x³−2)`, which has no rational roots yet exact radicals `±√2`, `∛2·ωᵏ`);
-  because the pre-factoring stops at rational roots and does **not** perform
-  square-free / higher-degree factorization, such a factor is returned
-  numerically here. "Returned numerically" therefore means "not extracted exactly
-  by this module", **not** "proven to have no closed form". Richer pre-factoring
-  is future work.
+- **Factorisation before the numeric fallback.** After rational-root peeling the
+  remainder is **factored into irreducibles over ℚ** ([`factor`](factor.md): Yun
+  square-free + Kronecker). Each irreducible factor of degree ≤ 4 is solved
+  **exactly by radicals**, so a *reducible* high-degree polynomial that splits
+  into small pieces (e.g. `(x²−2)(x³−2)`, which has no rational roots yet exact
+  radicals `±√2`, `∛2·ωᵏ`) is returned **exactly**. Only a **genuinely
+  irreducible** factor of degree ≥ 5 (no radical solution by Abel–Ruffini) is sent
+  to the numeric companion-eigenvalue path. If factorisation exhausts its search
+  budget (`not_implemented`), the solver falls back to a degree-directed dispatch
+  on the whole remainder (radicals if ≤ quartic, else numeric), so a result is
+  always produced.
 
 ## API
 

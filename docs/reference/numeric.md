@@ -6,10 +6,12 @@ Source: `src/numeric/numeric.cppm`
 
 **Numeric root-finders** for polynomials (ROADMAP §7.14). Given a polynomial by
 its **double-precision** coefficients in ascending order (low degree first), the
-module locates a real root by Newton–Raphson, bisection, or the secant method,
-with Horner evaluation of the polynomial and its derivative underneath. It is
-deliberately self-contained: this is the **floating-point** solver, so it does
-**not** depend on the exact `nimblecas.polynomial` / `ratpoly` layers.
+module locates a **single real** root by Newton–Raphson, bisection, or the secant
+method, or **all** roots (real and complex) **simultaneously** by the
+Durand–Kerner (Weierstrass) iteration — with Horner evaluation of the polynomial
+and its derivative underneath. It is deliberately self-contained: this is the
+**floating-point** solver, so it does **not** depend on the exact
+`nimblecas.polynomial` / `ratpoly` layers.
 
 ```cpp
 import nimblecas.numeric;   // namespace nimblecas::numeric
@@ -38,6 +40,9 @@ differentiated on the fly so no temporary buffer is allocated.
                              double tol) -> Result<double>;
 [[nodiscard]] auto secant(std::span<const double> coeffs, double x0, double x1,
                           double tol, int max_iter) -> Result<double>;
+
+[[nodiscard]] auto durand_kerner(std::span<const double> coeffs, double tol, int max_iter)
+    -> Result<std::vector<std::complex<double>>>;
 ```
 
 ### `eval` / `eval_derivative`
@@ -71,14 +76,47 @@ two most recent iterates, from seeds `x0` and `x1`. Same convergence and failure
 contract as `newton`; the collapsed-slope case (`|p(x_curr) − p(x_prev)| <= tol`)
 fails `not_implemented` rather than dividing by ~0.
 
+### `durand_kerner`
+
+**Durand–Kerner (Weierstrass) simultaneous all-roots.** Where `newton` /
+`bisection` / `secant` each locate a **single real** root, `durand_kerner` finds
+**every** root — real and complex — of the polynomial at once. It normalizes the
+coefficients to a **monic** polynomial, seeds `deg` distinct guesses on a circle
+about the root centroid (`center = −a[deg−1]/deg`, radius `1 + max|a_k|`, with a
+small angular offset), and applies the Weierstrass correction
+
+```
+z_k  ←  z_k − p(z_k) / Π_{j ≠ k} (z_k − z_j)
+```
+
+across all `k` until the **largest correction magnitude** falls at or below
+`tol`, returning the `deg` roots as a `std::vector<std::complex<double>>`.
+
+The result set is **unordered**; a real polynomial's complex roots emerge in
+near-conjugate pairs but are not forced to be exact conjugates. Leading
+(highest-degree) zero coefficients are stripped first, so the returned count is
+the polynomial's true degree; a non-zero **constant** correctly returns the
+**empty** root set.
+
+**Honesty boundary (numerical, tol-accurate).** The returned roots are
+**floating-point approximations**, each carrying an `O(tol)` error — never exact.
+Plain Weierstrass assumes **simple (distinct)** roots: a genuine **multiple root**
+collides two iterates, the product denominator underflows to `0`, and the honest
+outcome is `not_implemented` rather than a fabricated value. Very clustered
+roots, or an insufficient `max_iter`, likewise fail `not_implemented`; a
+non-finite intermediate (overflow / NaN) does too. This complements the
+companion-matrix eigenvalue path in `numeigen`.
+
 ## Error model
 
 | Condition | Error |
 | :--- | :--- |
 | Empty `coeffs` span (any solver) | `MathError::domain_error` |
+| `durand_kerner` on the zero polynomial (all coefficients zero) | `MathError::domain_error` |
 | `bisection` bracket with no sign change (`p(a)·p(b) > 0`) | `MathError::domain_error` |
 | `newton` / `secant` fail to converge within `max_iter` | `MathError::not_implemented` |
 | `newton` (near-)zero derivative, or `secant` collapsed slope | `MathError::not_implemented` |
+| `durand_kerner` fails to reach `tol` within `max_iter`, hits a multiple/clustered root (collided iterates), or overflows | `MathError::not_implemented` |
 
 `eval` and `eval_derivative` are `noexcept` and never fail.
 
@@ -113,6 +151,26 @@ std::span<const double> empty{};
 num::newton(empty, 1.0, 1e-9, 100).error();              // MathError::domain_error
 num::bisection(empty, 0.0, 1.0, 1e-9).error();           // MathError::domain_error
 num::secant(empty, 0.0, 1.0, 1e-9, 100).error();         // MathError::domain_error
+
+// Durand-Kerner: ALL roots at once (real + complex), returned unordered.
+// x^2 - 3x + 2 = (x-1)(x-2)                             coeffs {2, -3, 1}
+const std::array<double, 3> q{2.0, -3.0, 1.0};
+auto roots = num::durand_kerner(q, 1e-12, 200).value();  // { (1,0), (2,0) } (some order)
+
+// x^3 - 2: real cbrt(2) plus a complex-conjugate pair   coeffs {-2, 0, 0, 1}
+const std::array<double, 4> c{-2.0, 0.0, 0.0, 1.0};
+num::durand_kerner(c, 1e-12, 300).value().size();        // 3
+
+// x^5 - x - 1: five roots; verify each by residual |p(root)| < tol.
+const std::array<double, 6> p5{-1.0, -1.0, 0.0, 0.0, 0.0, 1.0};
+auto qroots = num::durand_kerner(p5, 1e-12, 500).value();
+// std::abs(<complex Horner of p5 at each root>) < 1e-6
+
+// A genuine multiple root (here (x-1)^2) makes two iterates collide toward 1;
+// plain Weierstrass cannot reach a tight tol and fails honestly rather than
+// returning a wrong value.
+const std::array<double, 3> dbl{1.0, -2.0, 1.0};         // x^2 - 2x + 1
+num::durand_kerner(dbl, 1e-12, 200).error();             // MathError::not_implemented
 ```
 
 ## See also

@@ -48,13 +48,16 @@ retain it.
 using Objective = std::function<double(std::span<const double>)>;
 using Gradient  = std::function<std::vector<double>(std::span<const double>)>;
 using HessianFn = std::function<std::vector<double>(std::span<const double>)>;
+
+using ScalarObjective = std::function<double(double)>;  // t -> f(t), for the 1-D minimizers
 ```
 
 | Alias | Contract |
 | :--- | :--- |
-| `Objective` | `x -> f(x)`, a scalar. Required by every optimizer. |
+| `Objective` | `x -> f(x)`, a scalar. Required by every R^n optimizer. |
 | `Gradient` | `x -> grad f(x)`, an `n`-vector (same length as `x`). **Optional**: a default-constructed (empty) `Gradient` selects a central **finite-difference** gradient over `f`. |
 | `HessianFn` | `x -> Hessian`, **ROW-MAJOR** `n*n` (`H[i*n+j]`). **Optional** (Newton only): when absent a finite-difference Hessian is used — a difference of the gradient if one is given, else a second difference of `f`. |
+| `ScalarObjective` | `t -> f(t)`, a scalar of a scalar. Required by the univariate `golden_section` / `brent_minimize` line minimizers. |
 
 ### `CGVariant` — nonlinear-CG update rule
 
@@ -122,6 +125,17 @@ struct OptimizeResult {
 `step_tol`) was met; hitting `max_iterations` leaves it `false`. `grad_norm` is
 approximate whenever it comes from finite differences, and is reported as `0` by
 Nelder–Mead (which uses no gradient).
+
+## `ScalarMinimum` — outcome of a univariate minimization
+
+```cpp
+struct ScalarMinimum {
+    double x = 0.0;   // minimizer x* within [a, b].
+    double fx = 0.0;  // objective value f(x*).
+};
+```
+
+Returned by the 1-D `golden_section` / `brent_minimize` line minimizers.
 
 ## Public finite-difference utilities
 
@@ -245,12 +259,57 @@ low-amplitude noise on a smooth trend and gives **no** global-optimality
 guarantee; convergence depends on the noise level relative to the scale schedule.
 Non-convergence returns `converged == false` (not an error).
 
+## Univariate (1-D) minimizers
+
+For minimizing a **unimodal** scalar function `f : [a, b] -> R` over a bracket —
+the classic line-search subproblem — the module offers golden-section search and
+Brent's method. Both return a [`ScalarMinimum`](#scalarminimum--outcome-of-a-univariate-minimization).
+
+```cpp
+[[nodiscard]] auto golden_section(ScalarObjective f, double a, double b, double tol = 1e-8,
+                                  std::size_t max_iter = 1000) -> Result<ScalarMinimum>;
+
+[[nodiscard]] auto brent_minimize(ScalarObjective f, double a, double b, double tol = 1e-8,
+                                  std::size_t max_iter = 1000) -> Result<ScalarMinimum>;
+```
+
+> **Different non-convergence contract.** Unlike the R^n optimizers above — where
+> exhausting `max_iterations` is a normal `converged == false` outcome — these
+> bracketing searches follow the **numeric-solver** convention: a run that fails
+> to shrink the bracket to `tol` within `max_iter` is an honest
+> `MathError::not_implemented`, **never** a wrong minimizer.
+
+### `golden_section`
+
+**Golden-section search.** Shrinks `[a, b]` by the golden ratio each step,
+keeping the interior point with the smaller value (one new objective evaluation
+per iteration). The reduction is **guaranteed but only linear** — the bracket
+width contracts by a constant factor `1/phi ≈ 0.618` each step.
+
+### `brent_minimize`
+
+**Brent's method.** Successive **parabolic interpolation** through the three best
+points where it makes progress, with a **golden-section fallback** that
+guarantees convergence when the parabolic step is unreliable (out of bracket or
+not shrinking fast enough). **Superlinear** on a smooth `f` near the minimum,
+robust elsewhere — the method of choice for a general 1-D minimization.
+
+**Honesty (both).** Numerical, IEEE-754 double, **LOCAL**, and they **assume `f`
+is unimodal** on `[a, b]`; on a multimodal `f` they return one local minimizer
+with no global guarantee. Accuracy is **tol-limited**: the minimizer is bracketed
+to `~tol` in `x`, so near a smooth minimum (where `f` is locally quadratic) the
+*value* `f(x*)` is pinned only to `~tol^2`. Invalid input — `a` / `b` / `tol`
+non-finite, `tol <= 0`, or a non-finite `f` at a bracket endpoint — is
+`MathError::domain_error`.
+
 ## Error model
 
-The **only** failure is `MathError::domain_error`, reserved for genuinely invalid
-input. Exhausting `max_iterations`, a stalled line search, or an
-indefinite/singular Hessian are all **normal outcomes** that return a value with
-`converged == false`.
+For the **R^n optimizers** the **only** failure is `MathError::domain_error`,
+reserved for genuinely invalid input. Exhausting `max_iterations`, a stalled line
+search, or an indefinite/singular Hessian are all **normal outcomes** that return
+a value with `converged == false`. The **univariate minimizers** differ: they
+have no `converged` flag and instead report `MathError::not_implemented` when they
+fail to bracket the minimum to `tol` within `max_iter`.
 
 | Condition | Result |
 | :--- | :--- |
@@ -259,8 +318,10 @@ indefinite/singular Hessian are all **normal outcomes** that return a value with
 | `f(x0)` is non-finite | `MathError::domain_error` |
 | A supplied gradient at `x0` has the wrong length or a non-finite entry | `MathError::domain_error` |
 | `implicit_filtering`: bounds length ≠ `x0` length, ragged/partial box, non-finite bound, or `lo[i] > hi[i]` | `MathError::domain_error` |
-| Reached `max_iterations` without meeting a tolerance | value, `converged == false` |
+| Reached `max_iterations` without meeting a tolerance (R^n optimizers) | value, `converged == false` |
 | Line search stalled / Hessian unusable | value, `converged == false` (best iterate so far) |
+| `golden_section` / `brent_minimize`: `a` / `b` / `tol` non-finite, `tol <= 0`, or non-finite `f` at a bracket endpoint | `MathError::domain_error` |
+| `golden_section` / `brent_minimize`: bracket not shrunk to `tol` within `max_iter` (or `f` non-finite mid-search) | `MathError::not_implemented` |
 
 `finite_difference_gradient` and `finite_difference_hessian` return a plain
 `std::vector<double>` and do not signal errors.
@@ -361,6 +422,19 @@ const std::array<double, 2> bad_lo{2.0, 0.0};   // bad_lo[0] > bad_hi[0]
 const std::array<double, 2> bad_hi{1.0, 1.0};
 const std::array<double, 2> s{1.0, 1.0};
 opt::implicit_filtering(quad_f, s, bad_lo, bad_hi, opt::Options{}).error(); // MathError::domain_error
+
+// Univariate (1-D) minimizers over a bracket [a, b].
+auto sq = [](double x) -> double { return (x - 2.0) * (x - 2.0); };  // min at x = 2
+opt::golden_section(sq, 0.0, 5.0, 1e-8, 1000).value().x;   // ~ 2
+opt::brent_minimize(sq, 0.0, 5.0, 1e-10, 200).value().x;   // ~ 2  (superlinear on a smooth f)
+
+// x^4 - 3x^2 + 2 on [0, 2] is unimodal with its minimum at sqrt(1.5), f* = -0.25.
+auto quartic = [](double x) -> double { return x * x * x * x - 3.0 * x * x + 2.0; };
+opt::brent_minimize(quartic, 0.0, 2.0, 1e-10, 200).value().x;   // ~ 1.2247449 = sqrt(1.5)
+
+// Honest non-convergence: a starved iteration budget cannot reach a tiny tol.
+opt::golden_section(sq, 0.0, 5.0, 1e-12, 3).error();       // MathError::not_implemented
+opt::brent_minimize(sq, 0.0, 5.0, 0.0, 100).error();       // MathError::domain_error (tol <= 0)
 ```
 
 ## See also
