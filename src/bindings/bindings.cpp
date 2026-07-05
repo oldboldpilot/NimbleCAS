@@ -24,16 +24,26 @@
 //   Number thy. : from_rational, convergents, reconstruct, quadratic_irrational_cf,
 //                 viskovatov (SeriesCF), and the Laurent series (from_rational_function,
 //                 valuation, residue, principal/regular part).
-//   Statistics  : mean, variance, median, covariance, weighted_mean, raw_moment,
-//                 central_moment, mode, quantile, data_range, iqr, skewness_squared,
-//                 excess_kurtosis, pearson_correlation_squared,
-//                 coefficient_of_variation_squared; the hypothesis-test family
+//   Canonical   : invariant_factors, minimal_polynomial, companion_matrix,
+//                 rational_canonical_form (Frobenius form, exact over Q).
+//   Dynamics    : is_perfect_square, classify_phase_portrait (PhasePortrait + PhaseType /
+//                 Stability enums), classify_linear_stability (StabilityClassification +
+//                 LinearStability enum), fixed_point_affine, is_asymptotically_stable,
+//                 classify_equilibrium.
+//   Statistics  : mean, variance, median, covariance, covariance_matrix, weighted_mean,
+//                 raw_moment, central_moment, mode, modes, quantile, data_range, iqr,
+//                 skewness_squared, excess_kurtosis, pearson_correlation_squared,
+//                 correlation_squared_matrix, coefficient_of_variation_squared; the
+//                 hypothesis-test family
 //                 (one/two-sample & paired t^2, z^2, chi-squared GoF / independence,
 //                 variance-ratio F, one-way ANOVA F, exceeds), Wald / score statistics,
 //                 and the Bernoulli/Poisson/Exponential/Normal/Geometric MLE (both the
 //                 symbolic model and the exact point estimate from data).
 //   Prob. dist. : probdist submodule — an exact symbolic distribution catalog (DistInfo
-//                 with mgf/pgf/mean/variance) plus raw_moment / cumulant from an MGF.
+//                 with mgf/pgf/mean/variance) plus raw_moment / cumulant / factorial_moment,
+//                 characteristic_function / laplace_stieltjes, and the tail / concentration
+//                 bounds (Markov, Chebyshev, Cantelli, Chernoff, Hoeffding, Bernstein,
+//                 McDiarmid, Azuma).
 //   GPU         : gpu submodule (present iff HAS_GPU) — device_count, available, and the
 //                 poly_eval / edit_distance_batch / bfs / nqueens_count /
 //                 qmc_poly_integrate / haar_dwt_batch kernels.
@@ -67,6 +77,8 @@ import nimblecas.probdist;
 import nimblecas.kronprod;
 import nimblecas.contfrac;
 import nimblecas.hyptest;
+import nimblecas.frobenius;
+import nimblecas.dynamics;
 // The GPU module is bound only when the binding TU is compiled with
 // -DNIMBLECAS_EXT_WITH_GPU (and nimblecas_ext is linked against nimblecas_gpu +
 // the CUDA runtime). This keeps the default CPU-only Python build importable.
@@ -81,16 +93,21 @@ using nimblecas::DistInfo;
 using nimblecas::ExactOrthogonalQr;
 using nimblecas::Expr;
 using nimblecas::Laurent;
+using nimblecas::LinearStability;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::MleModel;
 using nimblecas::NumericQr;
 using nimblecas::NumericSchur;
 using nimblecas::PeriodicCF;
+using nimblecas::PhasePortrait;
+using nimblecas::PhaseType;
 using nimblecas::Rational;
 using nimblecas::RationalPoly;
 using nimblecas::Root;
 using nimblecas::SeriesCF;
+using nimblecas::Stability;
+using nimblecas::StabilityClassification;
 using nimblecas::TestStatistic;
 
 namespace {
@@ -860,6 +877,39 @@ NB_MODULE(nimblecas_ext, m) {
           nb::arg("data"), nb::arg("sample") = true,
           "The exact squared coefficient of variation var/mean^2, a rational (cv itself is its "
           "generally-irrational square root).");
+    m.def("modes",
+          [](const std::vector<Rational>& data) {
+              return unwrap(nimblecas::modes(std::span<const Rational>(data)));
+          },
+          nb::arg("data"),
+          "Every value attaining the maximum frequency, ascending (a single-element list when "
+          "the mode is unique).");
+    m.def("covariance_matrix",
+          [](const std::vector<std::vector<Rational>>& variables, bool sample) {
+              std::vector<std::span<const Rational>> spans;
+              spans.reserve(variables.size());
+              for (const auto& v : variables) {
+                  spans.emplace_back(v);
+              }
+              return unwrap(nimblecas::covariance_matrix(spans, sample));
+          },
+          nb::arg("variables"), nb::arg("sample") = true,
+          "The exact symmetric d x d covariance Matrix Sigma_{jk} = covariance(variables[j], "
+          "variables[k], sample); every variable must share the common sample length. The "
+          "diagonal holds the per-variable variances.");
+    m.def("correlation_squared_matrix",
+          [](const std::vector<std::vector<Rational>>& variables) {
+              std::vector<std::span<const Rational>> spans;
+              spans.reserve(variables.size());
+              for (const auto& v : variables) {
+                  spans.emplace_back(v);
+              }
+              return unwrap(nimblecas::correlation_squared_matrix(spans));
+          },
+          nb::arg("variables"),
+          "The exact symmetric d x d matrix of squared Pearson correlations "
+          "R^2_{jk} = pearson_correlation_squared(variables[j], variables[k]); the diagonal is 1 "
+          "(the signed r is omitted, being generally irrational).");
 
     // =======================================================================
     // Hypothesis tests & maximum-likelihood estimation (hyptest).
@@ -1084,6 +1134,115 @@ NB_MODULE(nimblecas_ext, m) {
           "real matrix with complex-conjugate eigenvalues — use eigenvalues_qr there).");
 
     // =======================================================================
+    // Frobenius / rational canonical form over Q (frobenius). Exact: never needs
+    // eigenvalues, stays entirely inside Q[x] via the Smith normal form of x*I - A.
+    // =======================================================================
+    m.def("invariant_factors",
+          [](const Matrix& a) { return unwrap(nimblecas::invariant_factors(a)); }, nb::arg("a"),
+          "The invariant factors f_1 | f_2 | ... | f_k of a square Matrix A: a list of monic "
+          "RationalPoly, each dividing the next, whose product is the characteristic polynomial "
+          "and whose last is the minimal polynomial. Exact over Q. Raises on a non-square A.");
+    m.def("minimal_polynomial",
+          [](const Matrix& a) { return unwrap(nimblecas::minimal_polynomial(a)); }, nb::arg("a"),
+          "The minimal polynomial of A (its largest invariant factor) as a monic RationalPoly; "
+          "the 0x0 matrix yields the constant 1. Raises on a non-square A.");
+    m.def("companion_matrix",
+          [](const RationalPoly& p) { return unwrap(nimblecas::companion_matrix(p)); },
+          nb::arg("p"),
+          "The companion Matrix C(p) of a degree>=1 polynomial (normalised monic first); its "
+          "characteristic polynomial is the monic form of p. Raises on a zero/constant p.");
+    m.def("rational_canonical_form",
+          [](const Matrix& a) { return unwrap(nimblecas::rational_canonical_form(a)); },
+          nb::arg("a"),
+          "The rational canonical (Frobenius) form diag(C(f_1), ..., C(f_k)) of A, exact over Q. "
+          "The transforming P with RCF(A) = P^{-1} A P is NOT computed. Raises on a non-square A.");
+
+    // =======================================================================
+    // Dynamical-systems stability (dynamics): exact phase-portrait and linear-
+    // stability classification of dx/dt = A x, decided over Q with no root finding.
+    // =======================================================================
+    nb::enum_<PhaseType>(m, "PhaseType", "The qualitative 2x2 phase-portrait type.")
+        .value("saddle", PhaseType::saddle)
+        .value("node", PhaseType::node)
+        .value("spiral", PhaseType::spiral)
+        .value("center", PhaseType::center)
+        .value("star", PhaseType::star)
+        .value("degenerate_node", PhaseType::degenerate_node)
+        .value("non_isolated", PhaseType::non_isolated);
+    nb::enum_<Stability>(m, "Stability", "The stability verdict attached to a classification.")
+        .value("stable", Stability::stable)
+        .value("unstable", Stability::unstable)
+        .value("neutrally_stable", Stability::neutrally_stable)
+        .value("marginal", Stability::marginal);
+    nb::enum_<LinearStability>(m, "LinearStability",
+                              "The coarse nD Routh-Hurwitz linear-stability class.")
+        .value("sink", LinearStability::sink)
+        .value("source", LinearStability::source)
+        .value("saddle", LinearStability::saddle)
+        .value("borderline", LinearStability::borderline);
+
+    // PhasePortrait: the full exact 2x2 trace-determinant verdict. Rational eigenvalue fields
+    // are present only when exact (delta / -delta a perfect rational square), else None.
+    nb::class_<PhasePortrait>(m, "PhasePortrait")
+        .def_ro("type", &PhasePortrait::type)
+        .def_ro("stability", &PhasePortrait::stability)
+        .def_ro("trace", &PhasePortrait::trace, "T = tr(A).")
+        .def_ro("determinant", &PhasePortrait::determinant, "D = det(A).")
+        .def_ro("discriminant", &PhasePortrait::discriminant, "delta = T^2 - 4 D.")
+        .def_ro("complex_eigenvalues", &PhasePortrait::complex_eigenvalues, "delta < 0.")
+        .def_ro("repeated_eigenvalue", &PhasePortrait::repeated_eigenvalue, "delta == 0.")
+        .def_ro("eigenvalues_rational", &PhasePortrait::eigenvalues_rational,
+                "True when the exact rational eigenvalue fields below are complete.")
+        .def_ro("lambda1", &PhasePortrait::lambda1,
+                "Real case (T - sqrt(delta))/2 as a Rational, else None.")
+        .def_ro("lambda2", &PhasePortrait::lambda2,
+                "Real case (T + sqrt(delta))/2 as a Rational, else None.")
+        .def_ro("real_part", &PhasePortrait::real_part,
+                "Complex case T/2 as a Rational (always exact when complex), else None.")
+        .def_ro("imag_part", &PhasePortrait::imag_part,
+                "Complex case sqrt(-delta)/2 as a Rational when rational, else None.")
+        .def_ro("description", &PhasePortrait::description)
+        .def("__repr__",
+             [](const PhasePortrait& p) { return "PhasePortrait(" + p.description + ")"; });
+
+    // StabilityClassification: the coarse nD verdict from the Routh-Hurwitz sign-change count.
+    nb::class_<StabilityClassification>(m, "StabilityClassification")
+        .def_ro("dimension", &StabilityClassification::dimension)
+        .def_ro("verdict", &StabilityClassification::verdict)
+        .def_ro("rhp_count", &StabilityClassification::rhp_count,
+                "# eigenvalues with Re > 0 when known, else -1 (borderline).")
+        .def_ro("asymptotically_stable", &StabilityClassification::asymptotically_stable);
+
+    m.def("is_perfect_square", &nimblecas::is_perfect_square, nb::arg("r"),
+          "Whether the Rational r is the exact square of a rational (exact over Q; a negative r "
+          "is never a real square).");
+    m.def("classify_phase_portrait",
+          [](const Matrix& a) { return unwrap(nimblecas::classify_phase_portrait(a)); },
+          nb::arg("a"),
+          "The exact 2x2 trace-determinant phase-portrait verdict (PhasePortrait). Requires a "
+          "2x2 Matrix, else raises.");
+    m.def("classify_linear_stability",
+          [](const Matrix& a) { return unwrap(nimblecas::classify_linear_stability(a)); },
+          nb::arg("a"),
+          "The coarse nD Routh-Hurwitz stability class (StabilityClassification). Requires a "
+          "square Matrix with n >= 1.");
+    m.def("fixed_point_affine",
+          [](const Matrix& a, const Matrix& b) {
+              return unwrap(nimblecas::fixed_point_affine(a, b));
+          },
+          nb::arg("a"), nb::arg("b"),
+          "The equilibrium of x |-> A x + b: the exact solution of (I - A) x = b over Q (A "
+          "square n x n, b an n x 1 column). Raises on a non-isolated equilibrium.");
+    m.def("is_asymptotically_stable",
+          [](const Matrix& a) { return unwrap(nimblecas::is_asymptotically_stable(a)); },
+          nb::arg("a"),
+          "Whether dx/dt = A x is asymptotically stable, decided exactly by the Routh-Hurwitz "
+          "criterion on the characteristic polynomial (no root finding). Requires n >= 1.");
+    m.def("classify_equilibrium",
+          [](const Matrix& a) { return unwrap(nimblecas::classify_equilibrium(a)); }, nb::arg("a"),
+          "A human-readable classification string of the origin of dx/dt = A x.");
+
+    // =======================================================================
     // Probability-distribution catalog (probdist) — exact symbolic MGF/PGF,
     // mean, variance, and moments/cumulants as Expr trees. A submodule so the
     // distribution constructors and moment extractors group cleanly.
@@ -1138,6 +1297,26 @@ NB_MODULE(nimblecas_ext, m) {
                  "Markov tail bound E[X]/alpha (RHS of P(X >= alpha) <= E[X]/alpha).");
     probdist.def("chebyshev_bound", &nimblecas::chebyshev_bound, nb::arg("variance"), nb::arg("k"),
                  "Chebyshev tail bound sigma^2 / k^2.");
+    probdist.def("factorial_moment",
+                 [](const Expr& pgf, std::size_t k) {
+                     return unwrap(nimblecas::factorial_moment(pgf, k));
+                 },
+                 nb::arg("pgf"), nb::arg("k"),
+                 "k-th factorial moment E[X(X-1)...(X-k+1)] = [d^k/dz^k G_X(z)]_{z=1} from a PGF "
+                 "(exact; may be unsimplified).");
+    probdist.def("cantelli_bound", &nimblecas::cantelli_bound, nb::arg("variance"), nb::arg("k"),
+                 "Cantelli one-sided tail bound sigma^2 / (sigma^2 + k^2).");
+    probdist.def("chernoff_bound", &nimblecas::chernoff_bound, nb::arg("mgf"), nb::arg("alpha"),
+                 "Chernoff bound e^{-t alpha} M_X(t), for every t > 0 (minimise over t externally).");
+    probdist.def("hoeffding_bound", &nimblecas::hoeffding_bound, nb::arg("t"), nb::arg("widths"),
+                 "Hoeffding bound exp(-2 t^2 / sum_i widths_i^2); widths are the ranges b_i - a_i.");
+    probdist.def("bernstein_bound", &nimblecas::bernstein_bound, nb::arg("t"), nb::arg("variance"),
+                 nb::arg("bound"),
+                 "Bernstein bound exp(-t^2 / (2 (v + M t / 3))) with total variance v and |X_i| <= M.");
+    probdist.def("mcdiarmid_bound", &nimblecas::mcdiarmid_bound, nb::arg("t"), nb::arg("diffs"),
+                 "McDiarmid bounded-differences bound exp(-2 t^2 / sum_i diffs_i^2).");
+    probdist.def("azuma_bound", &nimblecas::azuma_bound, nb::arg("t"), nb::arg("diffs"),
+                 "Azuma-Hoeffding martingale bound exp(-t^2 / (2 sum_i diffs_i^2)).");
 
     // =======================================================================
     // GPU acceleration (gpu) — bound only when compiled with

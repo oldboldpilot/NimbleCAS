@@ -68,6 +68,14 @@ int nimblecas_gpu_haar_dwt_batch(const double* data, int batch, int len, double*
 int nimblecas_gpu_batched_matmul(const double* a, const double* b, double* c, int batch, int m,
                                  int k, int n);
 
+// Batched radix-2 forward FFT (Cooley-Tukey, decimation-in-time), one CUDA block per signal.
+// `in` holds `batch` complex signals of length `n` (n a power of two), each stored as 2*n
+// interleaved doubles (re, im, re, im, ...) contiguously; writes the DFT of each signal
+// X_k = sum_j x_j e^{-2*pi*i*k*j/n} (FORWARD, negative exponent) to `out` in the same interleaved
+// layout. n must be a power of two with 1 <= n <= 2048 (the shared-memory length cap). Returns 0
+// on success, or a non-zero CUDA error code on failure (cudaErrorInvalidValue for a bad shape).
+int nimblecas_gpu_fft_batch(const double* in, double* out, int batch, int n);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

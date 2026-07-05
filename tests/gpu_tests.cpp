@@ -88,6 +88,32 @@ namespace {
     return c;
 }
 
+// CPU reference forward DFT, direct O(n^2): X_k = sum_j x_j e^{-2*pi*i*k*j/n}. Self-contained
+// (no dependency on the fft module) so it independently pins the GPU kernel's twiddle sign and
+// bit-reversal. `sig` is one signal of n complex samples as 2*n interleaved doubles (re, im, ...);
+// returns the transform in the same interleaved layout.
+[[nodiscard]] auto cpu_dft(std::span<const double> sig, int n) -> std::vector<double> {
+    std::vector<double> out(static_cast<std::size_t>(2 * n), 0.0);
+    for (int k = 0; k < n; ++k) {
+        double re = 0.0;
+        double im = 0.0;
+        for (int j = 0; j < n; ++j) {
+            const double ang = -2.0 * std::numbers::pi * static_cast<double>(k) *
+                               static_cast<double>(j) / static_cast<double>(n);
+            const double c = std::cos(ang);
+            const double s = std::sin(ang);
+            const double xr = sig[static_cast<std::size_t>(2 * j)];
+            const double xi = sig[static_cast<std::size_t>(2 * j + 1)];
+            // (xr + i*xi) * (c + i*s) = (xr*c - xi*s) + i*(xr*s + xi*c)
+            re += xr * c - xi * s;
+            im += xr * s + xi * c;
+        }
+        out[static_cast<std::size_t>(2 * k)] = re;
+        out[static_cast<std::size_t>(2 * k + 1)] = im;
+    }
+    return out;
+}
+
 // Convert a string to a vector of int code points, matching how the batch test flattens input.
 [[nodiscard]] auto code_points(std::string_view s) -> std::vector<int> {
     std::vector<int> out;
@@ -350,6 +376,97 @@ auto main() -> int {
                   } else {
                       // CUDA-disabled path returns the documented error so the default build passes.
                       auto got = gpu::batched_matmul(a, b, batch, m, k, n);
+                      t.expect(!got.has_value() && got.error() == MathError::gpu_error,
+                               "CUDA-disabled path returns the documented gpu_error");
+                  }
+              })
+        .test("fft_batch_matches_cpu_dft",
+              [](TestContext& t) {
+                  // Two length-4 signals, interleaved (re, im) per sample:
+                  //   signal 0 = unit impulse [1,0,0,0]  -> DFT is all ones  [1,1,1,1]
+                  //   signal 1 = constant     [1,1,1,1]  -> DFT is [4,0,0,0]
+                  const int batch = 2;
+                  const int n = 4;
+                  const std::vector<double> in = {
+                      1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   // signal 0: impulse
+                      1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0};  // signal 1: constant 1
+                  if (gpu::available()) {
+                      auto got = gpu::fft_batch(in, batch, n);
+                      t.expect(got.has_value(), "batch FFT computed on the device");
+                      // Cross-check every element against the direct CPU DFT, signal by signal.
+                      bool all = got.has_value() && got->size() == in.size();
+                      for (int b = 0; b < batch && all; ++b) {
+                          const std::span<const double> sig{
+                              in.data() + static_cast<std::size_t>(b * 2 * n),
+                              static_cast<std::size_t>(2 * n)};
+                          const auto ref = cpu_dft(sig, n);
+                          for (int i = 0; i < 2 * n; ++i) {
+                              if (!approx((*got)[static_cast<std::size_t>(b * 2 * n + i)],
+                                          ref[static_cast<std::size_t>(i)])) {
+                                  all = false;
+                              }
+                          }
+                      }
+                      t.expect(all, "GPU FFT matches the CPU O(n^2) DFT block by block");
+                      // Hand-checkable: FFT of the impulse [1,0,0,0] is [1,1,1,1] (all ones).
+                      bool impulse_ok = got.has_value();
+                      for (int k = 0; k < n && impulse_ok; ++k) {
+                          impulse_ok = approx((*got)[static_cast<std::size_t>(2 * k)], 1.0) &&
+                                       approx((*got)[static_cast<std::size_t>(2 * k + 1)], 0.0);
+                      }
+                      t.expect(impulse_ok, "FFT of [1,0,0,0] is [1,1,1,1]");
+                      // Hand-checkable: FFT of the constant [1,1,1,1] is [4,0,0,0].
+                      bool const_ok = got.has_value();
+                      if (const_ok) {
+                          const auto* s1 = got->data() + static_cast<std::size_t>(2 * n);
+                          const_ok = approx(s1[0], 4.0) && approx(s1[1], 0.0);
+                          for (int k = 1; k < n && const_ok; ++k) {
+                              const_ok = approx(s1[static_cast<std::size_t>(2 * k)], 0.0) &&
+                                         approx(s1[static_cast<std::size_t>(2 * k + 1)], 0.0);
+                          }
+                      }
+                      t.expect(const_ok, "FFT of constant [1,1,1,1] is [4,0,0,0]");
+
+                      // General n=8, batch=2 with arbitrary complex samples, cross-checked
+                      // against the direct DFT to ~1e-9.
+                      const int n8 = 8;
+                      std::vector<double> in8(static_cast<std::size_t>(2 * 2 * n8));
+                      for (int j = 0; j < n8; ++j) {
+                          in8[static_cast<std::size_t>(2 * j)] = std::cos(0.7 * j) - 0.3 * j;
+                          in8[static_cast<std::size_t>(2 * j + 1)] = std::sin(1.1 * j) + 0.2;
+                          in8[static_cast<std::size_t>(2 * n8 + 2 * j)] = (j % 3 == 0) ? 2.0 : -1.0;
+                          in8[static_cast<std::size_t>(2 * n8 + 2 * j + 1)] = 0.5 * j - 1.0;
+                      }
+                      auto got8 = gpu::fft_batch(in8, 2, n8);
+                      t.expect(got8.has_value(), "n=8 batch FFT computed on the device");
+                      bool all8 = got8.has_value() && got8->size() == in8.size();
+                      for (int b = 0; b < 2 && all8; ++b) {
+                          const std::span<const double> sig{
+                              in8.data() + static_cast<std::size_t>(b * 2 * n8),
+                              static_cast<std::size_t>(2 * n8)};
+                          const auto ref = cpu_dft(sig, n8);
+                          for (int i = 0; i < 2 * n8; ++i) {
+                              if (!approx((*got8)[static_cast<std::size_t>(b * 2 * n8 + i)],
+                                          ref[static_cast<std::size_t>(i)])) {
+                                  all8 = false;
+                              }
+                          }
+                      }
+                      t.expect(all8, "GPU FFT (n=8) matches the CPU O(n^2) DFT block by block");
+
+                      // Non-power-of-two length is rejected with domain_error (n=3, size 2*3).
+                      const std::vector<double> in3(6, 0.0);
+                      auto bad = gpu::fft_batch(in3, 1, 3);
+                      t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
+                               "non-power-of-two n yields domain_error");
+                      // Size mismatch (in.size() != batch*2*n) also fails on the railway.
+                      auto mism = gpu::fft_batch(in, batch, 8);
+                      t.expect(!mism.has_value() && mism.error() == MathError::domain_error,
+                               "size mismatch yields domain_error");
+                  } else {
+                      // CUDA-disabled path returns the documented error so the default build passes
+                      // without a device.
+                      auto got = gpu::fft_batch(in, batch, n);
                       t.expect(!got.has_value() && got.error() == MathError::gpu_error,
                                "CUDA-disabled path returns the documented gpu_error");
                   }

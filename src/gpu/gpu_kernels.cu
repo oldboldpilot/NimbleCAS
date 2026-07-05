@@ -350,6 +350,90 @@ __global__ void batched_matmul_kernel(const double* __restrict__ a, const double
     }
 }
 
+// Upper bound on the FFT length one block can hold in dynamic shared memory. Each of the n
+// complex samples is two interleaved doubles, so one signal needs 2*n*sizeof(double) = 16*n
+// bytes of shared memory; 2048 samples occupy 32 KiB, comfortably inside the 48 KiB per-block
+// default without an opt-in carveout. Signals longer than this are rejected (honest error) by
+// both the host wrapper here and the C++ module wrapper — the CPU fft module (Bluestein) covers
+// arbitrary lengths; this GPU kernel stays power-of-two and length-capped.
+constexpr int kMaxFftLen = 2048;
+
+// Reverse the low `bits` bits of x — the index permutation of a decimation-in-time FFT, which
+// consumes its input in bit-reversed order and produces the transform in natural order.
+__device__ inline unsigned int fft_bit_reverse(unsigned int x, int bits) {
+    unsigned int r = 0u;
+    for (int i = 0; i < bits; ++i) {
+        r = (r << 1) | (x & 1u);
+        x >>= 1;
+    }
+    return r;
+}
+
+// Batched radix-2 forward DFT (Cooley-Tukey, decimation-in-time), ONE CUDA BLOCK PER SIGNAL
+// (blockIdx.x = signal index). Each signal is n complex samples stored as 2*n interleaved doubles
+// (re, im, re, im, ...); `in` and `out` hold `batch` such signals contiguously. The block's
+// threads first scatter the samples into shared memory in bit-reversed order, then run log2(n)
+// butterfly stages in place, __syncthreads() between stages so every thread sees the previous
+// stage's writes. The FORWARD transform uses the twiddle w = e^{-2*pi*i/len} (NEGATIVE exponent):
+// X_k = sum_j x_j e^{-2*pi*i*k*j/n}. Threads grid-stride over the n/2 butterflies of each stage
+// and over the n samples of the load/store passes, so any blockDim.x (even < n/2) is correct.
+// The host wrapper guarantees n is a power of two with 1 <= n <= kMaxFftLen, so the 2*n-double
+// shared tile fits and log2(n) is exact.
+__global__ void fft_batch_kernel(const double* __restrict__ in, double* __restrict__ out,
+                                 int batch, int n) {
+    extern __shared__ double s[];  // 2*n doubles: s[2k] = Re(sample k), s[2k+1] = Im(sample k)
+    const int sig = static_cast<int>(blockIdx.x);
+    if (sig >= batch) {
+        return;  // defensive: grid is launched with exactly `batch` blocks
+    }
+    const int tid = static_cast<int>(threadIdx.x);
+    const int nthreads = static_cast<int>(blockDim.x);
+    // Base offset (in doubles) of this signal; long long so the product cannot overflow int even
+    // though the host wrapper guarantees the total element count fits in int.
+    const long long base = static_cast<long long>(sig) * (2LL * static_cast<long long>(n));
+    int logn = 0;
+    while ((1 << logn) < n) {
+        ++logn;  // n is a power of two (guaranteed by the wrapper), so 1<<logn == n on exit
+    }
+    // Bit-reversal permutation: sample k of the input lands at index rev(k) in shared memory.
+    for (int k = tid; k < n; k += nthreads) {
+        const unsigned int j = fft_bit_reverse(static_cast<unsigned int>(k), logn);
+        s[2 * j] = in[base + 2 * k];
+        s[2 * j + 1] = in[base + 2 * k + 1];
+    }
+    __syncthreads();
+    const double two_pi = 6.28318530717958647692;
+    // Butterfly stages: transform length doubles each stage (2, 4, ..., n). Each stage has n/2
+    // independent butterflies; thread `tid` owns butterflies tid, tid+nthreads, ... .
+    const int nhalf = n >> 1;
+    for (int len = 2; len <= n; len <<= 1) {
+        const int half = len >> 1;
+        for (int b = tid; b < nhalf; b += nthreads) {
+            const int group = b / half;             // which length-`len` block
+            const int k = b - group * half;         // position within the block's first half
+            const int i = group * len + k;          // top index of the butterfly pair
+            const double ang = -two_pi * static_cast<double>(k) / static_cast<double>(len);
+            const double wr = cos(ang);             // forward twiddle e^{-2*pi*i*k/len}
+            const double wi = sin(ang);             // sin is negative here (negative exponent)
+            const double ur = s[2 * i];
+            const double ui = s[2 * i + 1];
+            const double vr = s[2 * (i + half)];
+            const double vi = s[2 * (i + half) + 1];
+            const double tr = wr * vr - wi * vi;    // t = w * lower sample
+            const double ti = wr * vi + wi * vr;
+            s[2 * i] = ur + tr;                      // butterfly: top = u + t
+            s[2 * i + 1] = ui + ti;
+            s[2 * (i + half)] = ur - tr;             // bottom = u - t
+            s[2 * (i + half) + 1] = ui - ti;
+        }
+        __syncthreads();  // publish this stage's writes before the next stage reads them
+    }
+    for (int k = tid; k < n; k += nthreads) {
+        out[base + 2 * k] = s[2 * k];  // transform is now in natural order
+        out[base + 2 * k + 1] = s[2 * k + 1];
+    }
+}
+
 }  // namespace
 
 extern "C" int nimblecas_gpu_device_count(void) {
@@ -903,5 +987,57 @@ extern "C" int nimblecas_gpu_batched_matmul(const double* a, const double* b, do
     host_unregister(pin_c);
     host_unregister(pin_b);
     host_unregister(pin_a);
+    return rc;
+}
+
+extern "C" int nimblecas_gpu_fft_batch(const double* in, double* out, int batch, int n) {
+    // The C++ wrapper rejects these up front; guard here too so the sizes and launch are well
+    // defined. Nothing to transform means success with no writes.
+    if (batch <= 0 || n <= 0) {
+        return 0;
+    }
+    // n must be a power of two (radix-2) and within the shared-memory length cap. Both are honest
+    // preconditions; a violation is a bad shape, reported to the wrapper as an invalid value.
+    if ((n & (n - 1)) != 0 || n > kMaxFftLen) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    // Total interleaved-double count = batch * 2 * n; the C++ wrapper proves this fits in int.
+    const size_t total =
+        static_cast<size_t>(batch) * 2u * static_cast<size_t>(n);
+    const size_t bytes = total * sizeof(double);
+    double* dev_in = nullptr;
+    double* dev_out = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    PinnedScope pin_in = host_register(in, bytes);
+    PinnedScope pin_out = host_register(out, bytes);
+    if ((err = cudaMalloc(&dev_in, bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_out, bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_in, in, bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        const int threads = 256;  // more threads than butterflies is fine (grid-stride in-block)
+        // One block per signal; each block needs a 2*n-double shared tile for its samples.
+        const size_t shmem = static_cast<size_t>(2 * n) * sizeof(double);
+        fft_batch_kernel<<<batch, threads, shmem>>>(dev_in, dev_out, batch, n);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(out, dev_out, bytes, cudaMemcpyDeviceToHost)) !=
+                   cudaSuccess) {
+            rc = static_cast<int>(err);
+        }
+    }
+    if (dev_in != nullptr) {
+        cudaFree(dev_in);
+    }
+    if (dev_out != nullptr) {
+        cudaFree(dev_out);
+    }
+    host_unregister(pin_out);
+    host_unregister(pin_in);
     return rc;
 }

@@ -23,6 +23,13 @@ export namespace nimblecas::gpu {
 // Whether at least one GPU is available for computation.
 [[nodiscard]] auto available() -> bool { return device_count() > 0; }
 
+// Maximum FFT length the GPU kernel supports (must match kMaxFftLen in gpu_kernels.cu): each
+// signal's 2*n interleaved doubles must fit one block's dynamic shared-memory tile.
+inline constexpr int kGpuFftMaxLen = 2048;
+
+// Whether v is a (positive) power of two — the radix-2 FFT precondition. v <= 0 is not.
+[[nodiscard]] auto is_power_of_two(int v) -> bool { return v > 0 && (v & (v - 1)) == 0; }
+
 // Evaluate the polynomial `coeffs` (low degree first) at every point in `x` on the GPU,
 // returning the vector of p(x_i). Fails with MathError::gpu_error when no device is present
 // or a CUDA call fails, and MathError::overflow when a size exceeds the int kernel bound.
@@ -275,6 +282,47 @@ export namespace nimblecas::gpu {
     }
     std::vector<double> out(c_count);
     const int rc = nimblecas_gpu_batched_matmul(a.data(), b.data(), out.data(), batch, m, k, n);
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    return out;
+}
+
+// Batched radix-2 forward FFT over `batch` independent complex signals, each of length `n` (n a
+// power of two). Each signal is supplied as 2*n interleaved doubles (re, im, re, im, ...) and the
+// `batch` signals are packed contiguously, so in.size() must equal batch*2*n. Returns the DFT of
+// each signal in the same interleaved layout, computed FORWARD as X_k = sum_j x_j e^{-2*pi*i*k*j/n}
+// (negative exponent). One CUDA block transforms one signal.
+//
+// HONESTY: a NUMERICAL (double) transform. The GPU kernel is radix-2 only and length-capped at
+// kGpuFftMaxLen; arbitrary (non-power-of-two) lengths are the domain of the CPU fft module
+// (Bluestein), not this device path. DETERMINISM: the device evaluates the butterfly network in a
+// fixed order, matching a same-order CPU FFT to within floating-point last bits.
+//
+// Fails with MathError::domain_error when batch <= 0, n is not a power of two, n exceeds
+// kGpuFftMaxLen, or in.size() != batch*2*n; MathError::gpu_error when no device is present or a
+// CUDA call fails; and MathError::overflow when the flat element count exceeds the int kernel bound.
+[[nodiscard]] auto fft_batch(std::span<const double> in, int batch, int n)
+    -> Result<std::vector<double>> {
+    if (!available()) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    if (batch <= 0 || !is_power_of_two(n) || n > kGpuFftMaxLen) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    // Flattened count = batch * 2 * n must fit the int kernel bound. n <= kGpuFftMaxLen makes
+    // 2*n small, so only the batch factor can overflow; check it without overflowing size_t.
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    const auto two_n = static_cast<std::size_t>(2) * static_cast<std::size_t>(n);
+    if (static_cast<std::size_t>(batch) > int_max / two_n) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    const std::size_t total = static_cast<std::size_t>(batch) * two_n;  // proven <= int_max
+    if (in.size() != total) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    std::vector<double> out(total);
+    const int rc = nimblecas_gpu_fft_batch(in.data(), out.data(), batch, n);
     if (rc != 0) {
         return make_error<std::vector<double>>(MathError::gpu_error);
     }

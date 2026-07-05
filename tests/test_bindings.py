@@ -75,6 +75,9 @@ def main() -> int:
     _test_cheigen()
     _test_laurent()
     _test_hyptest_widened()
+    _test_stats_matrices()
+    _test_frobenius()
+    _test_dynamics()
     _test_gpu()
 
     print("python bindings OK:", r.to_string())
@@ -302,6 +305,21 @@ def _test_probdist() -> None:
     assert ncas.probdist.exponential(lam).pgf is None
     assert ncas.probdist.student_t(ncas.Expr.symbol("nu")).mgf is None
 
+    # Factorial moments from the Bernoulli PGF G(z) = (1-p) + p*z (an affine polynomial, so it
+    # folds cleanly): E[X] = G'(1) = p, and the 0-th factorial moment G(1) collapses to 1.
+    bern_pgf = ncas.probdist.bernoulli(p).pgf
+    assert bern_pgf is not None
+    assert ncas.probdist.factorial_moment(bern_pgf, 1).is_equivalent_to(p)
+    assert ncas.probdist.factorial_moment(bern_pgf, 0).is_equivalent_to(ncas.Expr.integer(1))
+
+    # The concentration bounds return an exact Expr; Hoeffding of widths {1,1} at t is
+    # exp(-2 t^2 / 2) = exp(-t^2) — here we only smoke-test that an Expr comes back.
+    t = ncas.Expr.symbol("t")
+    hb = ncas.probdist.hoeffding_bound(t, [ncas.Expr.integer(1), ncas.Expr.integer(1)])
+    assert isinstance(hb.to_string(), str) and len(hb.to_string()) > 0
+    cb = ncas.probdist.cantelli_bound(lam, ncas.Expr.symbol("k"))
+    assert isinstance(cb.to_string(), str)
+
 
 def _test_qrschur() -> None:
     """Exact orthogonal QR reconstructs A = Q*R exactly over Q."""
@@ -381,6 +399,105 @@ def _test_hyptest_widened() -> None:
             [R.from_int(1), R.from_int(2), R.from_int(3)],
         )
         raise AssertionError("expected zero-variance paired t^2 to raise")
+    except ValueError:
+        pass
+
+
+def _test_stats_matrices() -> None:
+    """The multivariate stats: modes, covariance matrix, squared-correlation matrix."""
+    R = ncas.Rational
+    # modes of {1,2,2,3,3}: 2 and 3 both attain frequency 2, returned ascending.
+    ms = ncas.modes([R.from_int(1), R.from_int(2), R.from_int(2), R.from_int(3), R.from_int(3)])
+    assert list(ms) == [R.from_int(2), R.from_int(3)], str([m.to_string() for m in ms])
+
+    # x = {1,2,3}, y = 2x = {2,4,6}: sample var(x)=1, var(y)=4, cov=2.
+    x = [R.from_int(1), R.from_int(2), R.from_int(3)]
+    y = [R.from_int(2), R.from_int(4), R.from_int(6)]
+    sigma = ncas.covariance_matrix([x, y], True)
+    assert sigma.rows() == 2 and sigma.cols() == 2, sigma.to_string()
+    assert sigma.at(0, 0) == R.from_int(1) and sigma.at(1, 1) == R.from_int(4), sigma.to_string()
+    assert sigma.at(0, 1) == R.from_int(2) and sigma.at(1, 0) == R.from_int(2), sigma.to_string()
+
+    # Perfectly (anti-)correlated columns give an all-ones squared-correlation matrix.
+    r2 = ncas.correlation_squared_matrix([x, y])
+    assert r2.at(0, 0) == R.from_int(1) and r2.at(1, 1) == R.from_int(1)
+    assert r2.at(0, 1) == R.from_int(1) and r2.at(1, 0) == R.from_int(1), r2.to_string()
+
+
+def _test_frobenius() -> None:
+    """Invariant factors, minimal polynomial and RCF of a diagonal matrix (exact over Q)."""
+    R = ncas.Rational
+    # diag(2, 3) is non-derogatory (distinct eigenvalues), so it has a single invariant factor
+    # equal to its characteristic polynomial (x - 2)(x - 3) = x^2 - 5x + 6.
+    diag = ncas.Matrix.from_rows(
+        [[R.from_int(2), R.from_int(0)], [R.from_int(0), R.from_int(3)]]
+    )
+    factors = ncas.invariant_factors(diag)
+    assert len(factors) == 1, str([f.to_string() for f in factors])
+    f = factors[0]
+    assert f.degree() == 2, f.to_string()
+    assert f.coefficient(0) == R.from_int(6), f.to_string()   # constant term
+    assert f.coefficient(1) == R.from_int(-5), f.to_string()  # x^1 coefficient
+    assert f.leading_coefficient() == R.from_int(1), f.to_string()  # monic
+
+    # The minimal polynomial equals that single (largest) invariant factor.
+    assert ncas.minimal_polynomial(diag) == f, ncas.minimal_polynomial(diag).to_string()
+
+    # The RCF is the companion block of x^2 - 5x + 6: [[0, -6], [1, 5]] (right-column form).
+    rcf = ncas.rational_canonical_form(diag)
+    assert rcf.at(0, 0) == R.from_int(0) and rcf.at(0, 1) == R.from_int(-6), rcf.to_string()
+    assert rcf.at(1, 0) == R.from_int(1) and rcf.at(1, 1) == R.from_int(5), rcf.to_string()
+
+    # companion_matrix of the same polynomial reproduces the RCF exactly.
+    poly = ncas.RationalPoly.from_coeffs([R.from_int(6), R.from_int(-5), R.from_int(1)])
+    assert ncas.companion_matrix(poly) == rcf, ncas.companion_matrix(poly).to_string()
+
+    # A non-square matrix has no invariant factors -> ValueError at the boundary.
+    try:
+        ncas.invariant_factors(ncas.Matrix.from_rows([[R.from_int(1), R.from_int(2)]]))
+        raise AssertionError("expected a non-square matrix to raise")
+    except ValueError:
+        pass
+
+
+def _test_dynamics() -> None:
+    """Phase-portrait and linear-stability classification; the exact rational-square test."""
+    R = ncas.Rational
+    # A = [[0, -1], [1, 0]] is a rotation: T = 0, D = 1, delta = -4 -> a center (neutrally stable).
+    rot = ncas.Matrix.from_rows(
+        [[R.from_int(0), R.from_int(-1)], [R.from_int(1), R.from_int(0)]]
+    )
+    pp = ncas.classify_phase_portrait(rot)
+    assert pp.type == ncas.PhaseType.center, str(pp.type)
+    assert pp.stability == ncas.Stability.neutrally_stable, str(pp.stability)
+    assert pp.trace == R.from_int(0) and pp.determinant == R.from_int(1), pp.description
+    assert pp.discriminant == R.from_int(-4), pp.discriminant.to_string()
+    assert pp.complex_eigenvalues and not pp.repeated_eigenvalue
+    # The eigenvalues are 0 +/- 1*i: real part 0 (exact), imag part sqrt(4)/2 = 1 (rational).
+    assert pp.eigenvalues_rational, pp.description
+    assert pp.real_part == R.from_int(0), str(pp.real_part)
+    assert pp.imag_part == R.from_int(1), str(pp.imag_part)
+    assert pp.lambda1 is None and pp.lambda2 is None  # not real eigenvalues
+
+    # is_perfect_square is exact over Q: 4/9 = (2/3)^2, but 2 and -1 are not real squares.
+    assert ncas.is_perfect_square(R.make(4, 9)) is True
+    assert ncas.is_perfect_square(R.from_int(2)) is False
+    assert ncas.is_perfect_square(R.from_int(-1)) is False
+
+    # diag(-1, -2) has both eigenvalues in the left half-plane -> a sink (asymptotically stable).
+    stable = ncas.Matrix.from_rows(
+        [[R.from_int(-1), R.from_int(0)], [R.from_int(0), R.from_int(-2)]]
+    )
+    sc = ncas.classify_linear_stability(stable)
+    assert sc.verdict == ncas.LinearStability.sink, str(sc.verdict)
+    assert sc.dimension == 2 and sc.rhp_count == 0, str((sc.dimension, sc.rhp_count))
+    assert sc.asymptotically_stable is True
+    assert ncas.is_asymptotically_stable(stable) is True
+
+    # A non-2x2 matrix has no phase portrait -> ValueError.
+    try:
+        ncas.classify_phase_portrait(ncas.Matrix.identity(3))
+        raise AssertionError("expected a non-2x2 matrix to raise")
     except ValueError:
         pass
 
