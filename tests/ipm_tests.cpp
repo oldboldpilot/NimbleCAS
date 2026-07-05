@@ -118,9 +118,10 @@ auto main() -> int {
                   // primal iterate diverges, so it is classified unbounded.
                   t.expect(!r.has_value() || r->status != IpmStatus::optimal,
                            "unbounded LP is never reported optimal");
-                  if (r.has_value()) {
-                      t.expect(r->status == IpmStatus::unbounded, "status is unbounded");
-                  }
+                  // Stronger: the solver actually detects and classifies this as unbounded
+                  // (not merely a non-optimal/not_implemented fallthrough).
+                  t.expect(r.has_value() && r->status == IpmStatus::unbounded,
+                           "status is detected as unbounded");
               })
         .test("infeasible",
               [](TestContext& t) {
@@ -136,9 +137,10 @@ auto main() -> int {
                   // is not.
                   t.expect(!r.has_value() || r->status != IpmStatus::optimal,
                            "infeasible LP is never reported optimal");
-                  if (r.has_value()) {
-                      t.expect(r->status == IpmStatus::infeasible, "status is infeasible");
-                  }
+                  // Stronger: the solver actually detects and classifies this as infeasible
+                  // (not merely a non-optimal/not_implemented fallthrough).
+                  t.expect(r.has_value() && r->status == IpmStatus::infeasible,
+                           "status is detected as infeasible");
               })
         .test("domain_errors",
               [](TestContext& t) {

@@ -70,11 +70,14 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.matrix` | [matrix.md](reference/matrix.md) | Dense matrices over exact `Rational`: add/multiply/transpose/trace, exact determinant, `A x = b` solve, inverse, and rank via Gaussian / Gauss-Jordan elimination over `Q`. |
 | `nimblecas.combinatorics` | [combinatorics.md](reference/combinatorics.md) | Overflow-checked `int64` counting — factorial, binomial, permutations, Catalan, Fibonacci, Stirling numbers — plus exact-`Rational` Bernoulli numbers (Akiyama–Tanigawa, `B_1 = -1/2`). |
 | `nimblecas.orthopoly` | [orthopoly.md](reference/orthopoly.md) | Classical orthogonal polynomials over `Q[x]` (Chebyshev T/U, Legendre, Laguerre, physicists'/probabilists' Hermite) via their three-term recurrences. |
-| `nimblecas.roots` | [roots.md](reference/roots.md) | Rational roots of a polynomial over `Q[x]` with multiplicity, via the rational root theorem plus deflation (analytical equation solving; radical/Cardano/RootOf are a planned extension). |
+| `nimblecas.roots` | [roots.md](reference/roots.md) | Rational roots of a polynomial over `Q[x]` with multiplicity, via the rational root theorem plus deflation (the exact/closed-form layer beneath `solve`). |
+| `nimblecas.solve` | [solve.md](reference/solve.md) | Analytical equation solving (§7.21): exact closed-form roots by radicals for degree ≤ 4 (linear/quadratic/Cardano/Ferrari) after rational-root pre-factoring; the irreducible degree ≥ 5 remainder resolves to companion-matrix eigenvalues via `numeigen`, each root tagged exact vs numeric. |
 | `nimblecas.recurrence` | [recurrence.md](reference/recurrence.md) | Linear homogeneous constant-coefficient recurrences: characteristic polynomial over `Q[x]` and its rational roots via `roots` (rational-root case; irrational e.g. Fibonacci deferred). |
 | `nimblecas.complex` | [complex.md](reference/complex.md) | Exact complex numbers over `Q` — the Gaussian rationals `Q + Qi`: overflow-checked add/subtract/multiply/divide/conjugate/reciprocal and the exact squared modulus (modulus and argument omitted as irrational). |
 | `nimblecas.stats` | [stats.md](reference/stats.md) | Exact descriptive statistics over the rationals: mean, sample/population variance and covariance, and the symmetric covariance matrix `Σ` (returned as a `nimblecas.matrix` `Matrix`, its diagonal each variable's variance). |
 | `nimblecas.lp` | [lp.md](reference/lp.md) | Exact-rational linear programming via single-phase Simplex: `maximize(A, b, c)` for `max c·x s.t. A x <= b, x >= 0` (`b >= 0`), Bland's rule anti-cycling, exact optimum / unbounded detection. |
+| `nimblecas.ipm` | [ipm.md](reference/ipm.md) | Interior-point LP (§7.22): Mehrotra predictor–corrector primal–dual path-following for `min c·x s.t. A x = b, x >= 0` — the numerical (double-precision) companion to the exact Simplex, gap-certified to tolerance. |
+| `nimblecas.probdist` | [probdist.md](reference/probdist.md) | Probability distribution catalog (§7.7): exact symbolic MGF/PGF, mean, variance, moments and cumulants (via symbolic differentiation) for the standard families, plus Markov/Chebyshev/Cantelli/Chernoff tail inequalities. |
 | `nimblecas.numeric` | [numeric.md](reference/numeric.md) | Floating-point polynomial root-finders (Newton, bisection, secant) with Horner `eval` / `eval_derivative`; standalone numeric solver depending only on `core`. |
 
 The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Rational → int128 → bigint → bigrational`; `bigfloat`/`doubledouble`; big-backed consumers):
@@ -112,6 +115,7 @@ Differential equations (exact power-series over `Q`, except `sde` which is numer
 | `nimblecas.dae` | [dae.md](reference/dae.md) | Linear DAEs: index-1 semi-explicit + arbitrary-index via shuffle-algorithm index reduction, reduced onto `ode`. Exact over `Q`. |
 | `nimblecas.pde` | [pde.md](reference/pde.md) | Linear (Cauchy–Kovalevskaya) + nonlinear (Adomian time-series) evolution PDEs + an exact 1-D Poisson/Dirichlet BVP. |
 | `nimblecas.perturbation` | [perturbation.md](reference/perturbation.md) | ADM / HPM / HAM perturbation methods, exact in `Q[[x]]/(xᴺ)` on the `powerseries` substrate. |
+| `nimblecas.singpert` | [singpert.md](reference/singpert.md) | Singular perturbation (§7.4): leading-order matched asymptotic expansion (outer/inner/uniform composite) for the constant-coefficient boundary-layer problem `ε y'' + a y' + b y = 0`, `a > 0`. |
 
 Additional linear algebra, numerics & simulation:
 
@@ -122,6 +126,7 @@ Additional linear algebra, numerics & simulation:
 | `nimblecas.bandsolve` | [bandsolve.md](reference/bandsolve.md) | Thomas + banded-LU direct solvers for tridiagonal/banded systems + parallel multi-RHS batch. |
 | `nimblecas.matexp` | [matexp.md](reference/matexp.md) | Matrix exponential via Taylor / Padé / scaling-and-squaring. |
 | `nimblecas.eigen` | [eigen.md](reference/eigen.md) | Characteristic polynomial + rational eigenvalues/eigenvectors over `Q` (the `int64` tier `bigeigen` big-backs). |
+| `nimblecas.numeigen` | [numeigen.md](reference/numeigen.md) | Numeric all-eigenvalue solver for real matrices: structure-aware dispatch (diagonal/triangular direct, Jacobi for symmetric, Francis double-shift real-Schur QR for general); `companion_eigenvalues` is the numeric polynomial root path under `solve`. |
 | `nimblecas.dynamics` | [dynamics.md](reference/dynamics.md) | Equilibria, exact Routh–Hurwitz asymptotic stability, and rational equilibrium classification. |
 | `nimblecas.powerseries` | [powerseries.md](reference/powerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `int64` `Rational`. |
 | `nimblecas.pade` | [pade.md](reference/pade.md) | Padé `[m/n]` rational approximant of a power series (exact-rational Toeplitz solve). |

@@ -39,7 +39,7 @@ struct Root {
 | remaining **quadratic** | `(-b ± √(b²−4ac)) / (2a)` | `true` |
 | remaining **cubic** | Cardano (depress, cube-root radicals, cube roots of unity) | `true` |
 | remaining **quartic** | Ferrari (depress, resolvent cubic, two quadratics) | `true` |
-| remaining **degree ≥ 5** (irreducible past quartic) | companion-matrix eigenvalues, in `double` | **`false`** |
+| remaining **degree ≥ 5** (after rational-root peeling) | companion-matrix eigenvalues, in `double` | **`false`** |
 
 Rational roots are listed **once**, carrying their `multiplicity`. Radical and
 numeric roots are **flattened** (one entry per root, `multiplicity` = `nullopt`),
@@ -62,14 +62,23 @@ as exact.**
   **nested imaginary radicals** symbolically rather than switching to a
   trigonometric form: the result stays exact and algebraic. `i·k` is written
   `re + im · power(-1, 1/2)` in the numeric path.
-- **Numeric for the non-radical degree ≥ 5 remainder.** By Abel–Ruffini the
-  general quintic and higher has no radical solution. Rather than refuse, the
-  roots of that leftover factor are computed as the **eigenvalues of its
-  companion matrix** in double precision, via
-  [`companion_eigenvalues`](numeigen.md). These are **iterative numerical
-  approximations** to the tolerance `tol` (default `1e-12`), each tagged
-  `exact = false`. They are honest approximations, clearly distinguished from the
-  exact algebraic roots on the same result.
+- **Numeric for the degree ≥ 5 remainder.** By Abel–Ruffini the *general*
+  quintic and higher has no radical solution. Rather than refuse, the roots of
+  the leftover factor are computed as the **eigenvalues of its companion matrix**
+  in double precision, via [`companion_eigenvalues`](numeigen.md). These are
+  **iterative numerical approximations** to the tolerance `tol` (default
+  `1e-12`), each tagged `exact = false`. They are honest approximations, clearly
+  distinguished from the exact algebraic roots on the same result.
+- **Scope caveat (no overclaim of irreducibility).** The numeric path is selected
+  purely on the **degree** of the factor remaining after rational-root
+  extraction — *not* on a proof that it is irreducible or non-radical. A
+  particular degree ≥ 5 factor may well be reducible and radical-solvable (e.g.
+  `(x²−2)(x³−2)`, which has no rational roots yet exact radicals `±√2`, `∛2·ωᵏ`);
+  because the pre-factoring stops at rational roots and does **not** perform
+  square-free / higher-degree factorization, such a factor is returned
+  numerically here. "Returned numerically" therefore means "not extracted exactly
+  by this module", **not** "proven to have no closed form". Richer pre-factoring
+  is future work.
 
 ## API
 

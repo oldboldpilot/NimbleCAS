@@ -269,6 +269,9 @@ struct StartPoint {
     const std::vector<double> ones_d(n, 1.0);
     auto L = factor_normal(A, ones_d, kRegular);
     if (!L) {
+        // Defensive fallback only. With finite, validated inputs A A^T + kRegular*I is SPD, so
+        // this rarely triggers; when it does (e.g. a non-finite slip past validation) we start
+        // from the neutral interior point x=s=1, y=0 rather than fail the whole solve here.
         return StartPoint{std::vector<double>(n, 1.0), std::vector<double>(m, 0.0),
                           std::vector<double>(n, 1.0)};
     }
@@ -414,7 +417,12 @@ auto solve_ipm(const std::vector<std::vector<double>>& A, const std::vector<doub
         }
         auto L = factor_normal(A, d, kRegular);
         if (!L) {
-            return make_error<IpmSolution>(MathError::not_implemented);  // not SPD / rank loss
+            // Cholesky breakdown: a non-positive/non-finite pivot. Because factor_normal adds
+            // the kRegular jitter to each diagonal, an ordinarily rank-deficient (PSD) A D A^T
+            // is nudged strictly positive-definite and still factors; this branch therefore
+            // fires on genuine numerical breakdown (negative pivot from a non-finite/degenerate
+            // scaling), NOT on mere rank loss. Either way the failure is surfaced honestly.
+            return make_error<IpmSolution>(MathError::not_implemented);
         }
 
         // --- Predictor (affine) step: complementarity target 0 ------------------------

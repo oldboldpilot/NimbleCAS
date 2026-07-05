@@ -21,12 +21,21 @@
 // symbolically rather than switching to trigonometric form — the result stays exact and
 // algebraic. This is documented in docs/reference/solve.md.
 //
-// Degree >= 5 remainder (Abel-Ruffini: no general radical solution): rather than refuse, the
-// roots of the leftover factor are computed as the eigenvalues of its companion matrix, in
-// double precision, via nimblecas.numeigen's companion_eigenvalues. These are NUMERICAL
-// approximations, NOT exact algebraic values, and every result is tagged accordingly (see
-// Root::exact below) so an approximation is never presented as exact. deg <= 4 factors, and
-// any rational or <= quartic factor peeled off a higher-degree polynomial, stay EXACT.
+// Degree >= 5 remainder: rather than refuse, the roots of the leftover factor are computed as
+// the eigenvalues of its companion matrix, in double precision, via nimblecas.numeigen's
+// companion_eigenvalues. These are NUMERICAL approximations, NOT exact algebraic values, and
+// every result is tagged accordingly (see Root::exact below) so an approximation is never
+// presented as exact. deg <= 4 factors, and any rational or <= quartic factor peeled off a
+// higher-degree polynomial, stay EXACT.
+//
+// Note on the boundary: the numeric path is chosen purely on the DEGREE of the factor left
+// after rational-root extraction, NOT on a proof of irreducibility. By Abel-Ruffini a general
+// quintic-or-higher has no radical solution, but a PARTICULAR degree >= 5 factor may still be
+// reducible and radical-solvable (e.g. (x^2-2)(x^3-2), which has no rational roots yet exact
+// radicals). Such a factor is currently returned numerically: the pre-factoring stops at
+// rational roots and does NOT attempt square-free / higher-degree factorization to recover
+// those radicals. So "returned numerically" means "not extracted exactly here", not "proven
+// to have no closed form". Extending the pre-factoring is future work.
 //
 // HONESTY (Rule 32): every operation returns Result<T>; nothing throws, and no
 // plausible-but-wrong value is ever presented as exact — numeric eigenvalue roots carry
@@ -431,7 +440,8 @@ auto solve_poly(const RationalPoly& p, double tol, std::size_t max_iter)
         return roots;
     }
 
-    // Degree >= 5, not solvable in radicals: numeric companion-matrix eigenvalues. Each root is
+    // Degree >= 5 factor (after rational-root peeling): numeric companion-matrix eigenvalues.
+    // Chosen on degree, not on a proof of irreducibility (see the header note). Each root is
     // an approximation (exact = false). A near-real eigenvalue (|imag| < tol) becomes a real
     // leaf; otherwise re + im*i in the module's imaginary convention (i = power(-1, 1/2)).
     TRY(consts, make_consts());

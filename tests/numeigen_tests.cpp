@@ -80,6 +80,18 @@ auto eval_poly(const RationalPoly& p, const cd& z) -> cd {
     return acc;
 }
 
+// det(A - lambda*I) for a row-major 3x3 real matrix `a` at complex `lambda`. Used as an
+// independent residual check on the general (raw-matrix) eigenvalue path: every returned
+// eigenvalue must annihilate the characteristic polynomial, det(A - lambda*I) ~ 0, without
+// the test hard-coding the (irrational) eigenvalues themselves.
+auto det3_shift(std::span<const double> a, const cd& lambda) -> cd {
+    const cd m00 = cd{a[0], 0.0} - lambda, m01{a[1], 0.0}, m02{a[2], 0.0};
+    const cd m10{a[3], 0.0}, m11 = cd{a[4], 0.0} - lambda, m12{a[5], 0.0};
+    const cd m20{a[6], 0.0}, m21{a[7], 0.0}, m22 = cd{a[8], 0.0} - lambda;
+    return m00 * (m11 * m22 - m12 * m21) - m01 * (m10 * m22 - m12 * m20) +
+           m02 * (m10 * m21 - m11 * m20);
+}
+
 constexpr double kTol = 1e-6;
 
 }  // namespace
@@ -246,6 +258,67 @@ auto main() -> int {
                   auto e = companion_eigenvalues(poly({5}));  // constant 5
                   t.expect(e.has_value(), "non-zero constant succeeds");
                   t.expect(e && e->empty(), "a non-zero constant has no roots");
+              })
+        .test("symmetric_3x3_cyclic_jacobi_real_spectrum",
+              [&](TestContext& t) {
+                  // 1-D Laplacian [[2,-1,0],[-1,2,-1],[0,-1,2]] -> eigenvalues {2-sqrt2, 2, 2+sqrt2}.
+                  // n>=3 exercises the multi-pair CYCLIC Jacobi sweep (not just one rotation),
+                  // and the symmetric branch must return a purely real spectrum.
+                  const std::vector<double> a = {2, -1, 0, -1, 2, -1, 0, -1, 2};
+                  auto e = eigenvalues_qr(a, 3);
+                  t.expect(e.has_value(), "eigenvalues_qr(symmetric 3x3) succeeds");
+                  if (!e) {
+                      return;
+                  }
+                  const double s2 = std::sqrt(2.0);
+                  const std::vector<cd> expected = {{2.0 - s2, 0}, {2.0, 0}, {2.0 + s2, 0}};
+                  t.expect(approx_set(*e, expected, kTol), "eigenvalues {2-sqrt2, 2, 2+sqrt2}");
+                  t.expect(max_abs_imag(*e) == 0.0, "symmetric path yields no imaginary part");
+              })
+        .test("skew_symmetric_3x3_odd_zero_and_imaginary_pair",
+              [&](TestContext& t) {
+                  // Odd-n skew-symmetric [[0,-1,-1],[1,0,-1],[1,1,0]]: characteristic polynomial
+                  // -lambda(lambda^2+3), so eigenvalues are {0, +i*sqrt3, -i*sqrt3} — the
+                  // documented "purely imaginary pair plus a 0 for odd n".
+                  const std::vector<double> a = {0, -1, -1, 1, 0, -1, 1, 1, 0};
+                  auto e = eigenvalues_qr(a, 3);
+                  t.expect(e.has_value(), "eigenvalues_qr(skew 3x3) succeeds");
+                  if (!e) {
+                      return;
+                  }
+                  const double s3 = std::sqrt(3.0);
+                  const std::vector<cd> expected = {{0, 0}, {0, s3}, {0, -s3}};
+                  t.expect(approx_set(*e, expected, kTol), "eigenvalues {0, +/- i*sqrt3}");
+              })
+        .test("general_3x3_residual_check",
+              [&](TestContext& t) {
+                  // A genuinely nonsymmetric, non-triangular 3x3 (general Francis path). Rather
+                  // than hard-code its irrational eigenvalues, verify each returned eigenvalue
+                  // independently via det(A - lambda*I) ~ 0 (a real check on the raw-matrix path,
+                  // which the other general tests only pin against precomputed values).
+                  const std::vector<double> a = {1, 2, 0, 0, 3, 1, 2, 0, 4};
+                  auto e = eigenvalues_qr(a, 3);
+                  t.expect(e.has_value(), "eigenvalues_qr(general 3x3) succeeds");
+                  if (!e) {
+                      return;
+                  }
+                  t.expect_eq(e->size(), std::size_t{3}, "three eigenvalues");
+                  for (const cd& z : *e) {
+                      t.expect(std::abs(det3_shift(a, z)) <= 1e-6,
+                               "det(A - lambda*I) ~ 0 for each returned eigenvalue");
+                  }
+              })
+        .test("nonconvergence_within_cap_is_not_implemented",
+              [&](TestContext& t) {
+                  // The Rule-32 honesty claim: a block that fails to reach tolerance within
+                  // max_iter returns an honest MathError, never a partial/garbage spectrum.
+                  // A degree-5 companion (general Francis path) with a max_iter of 1 cannot
+                  // deflate all blocks, so it must report not_implemented.
+                  const auto p = poly({-1, -1, 0, 0, 0, 1});  // x^5 - x - 1
+                  auto e = companion_eigenvalues(p, 1e-12, 1);
+                  t.expect(!e.has_value(), "does not fabricate a converged spectrum");
+                  t.expect(!e && e.error() == MathError::not_implemented,
+                           "non-convergence surfaces as not_implemented");
               })
         .run();
 }

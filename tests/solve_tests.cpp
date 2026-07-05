@@ -90,6 +90,26 @@ namespace {
         roots, [&](const Root& r) { return residual(p, eval_expr(r.value)) < tol; });
 }
 
+// Are the returned roots pairwise distinct (numerically)? Together with a correct count and
+// all_roots_vanish, this certifies the multiset is exactly the polynomial's simple roots —
+// it rules out the "one root duplicated, another dropped" failure that per-root
+// back-substitution alone cannot detect.
+[[nodiscard]] auto roots_distinct(const std::vector<Root>& roots, double tol) -> bool {
+    std::vector<std::complex<double>> zs;
+    zs.reserve(roots.size());
+    for (const Root& r : roots) {
+        zs.push_back(eval_expr(r.value));
+    }
+    for (std::size_t i = 0; i < zs.size(); ++i) {
+        for (std::size_t j = i + 1; j < zs.size(); ++j) {
+            if (std::abs(zs[i] - zs[j]) < tol) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // Is there a root structurally equal to `want` (used for the clean radical/rational forms)?
 [[nodiscard]] auto has_value(const std::vector<Root>& roots, const Expr& want, bool exact)
     -> bool {
@@ -179,6 +199,7 @@ auto main() -> int {
                   t.expect(std::ranges::all_of(roots, [](const Root& r) { return r.exact; }),
                            "all exact (radical) roots");
                   t.expect(all_roots_vanish(p, roots, 1e-6), "Cardano radicals satisfy the cubic");
+                  t.expect(roots_distinct(roots, 1e-6), "three distinct roots (no dup/drop)");
               })
         .test("quartic_pure_fourth_roots",
               [](TestContext& t) {
@@ -199,6 +220,7 @@ auto main() -> int {
                   t.expect(std::ranges::all_of(roots, [](const Root& r) { return r.exact; }),
                            "all exact (radical) roots");
                   t.expect(all_roots_vanish(p, roots, 1e-9), "all four satisfy the biquadratic");
+                  t.expect(roots_distinct(roots, 1e-6), "four distinct roots (no dup/drop)");
               })
         .test("quartic_general_ferrari",
               [](TestContext& t) {
@@ -209,6 +231,7 @@ auto main() -> int {
                   t.expect(std::ranges::all_of(roots, [](const Root& r) { return r.exact; }),
                            "all exact (radical) roots");
                   t.expect(all_roots_vanish(p, roots, 1e-6), "Ferrari roots satisfy the quartic");
+                  t.expect(roots_distinct(roots, 1e-6), "four distinct roots (no dup/drop)");
               })
         .test("factorable_quintic_all_exact",
               [](TestContext& t) {

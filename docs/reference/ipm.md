@@ -64,8 +64,10 @@ same `not_implemented` is returned.
   inline in this module** — `nimblecas.matdecomp` offers only exact-`Rational` LU,
   so no external `double` Cholesky is assumed. A tiny `1e-12` diagonal
   regularization keeps the factorization robust as `D` stretches toward the
-  boundary; a genuine non-positive pivot (numerically rank-deficient `A`) surfaces
-  as `MathError::not_implemented`.
+  boundary. Because that jitter nudges an ordinarily rank-deficient (PSD) `A D Aᵀ`
+  strictly positive-definite, mild rank loss is *absorbed* rather than rejected;
+  the Cholesky-breakdown path fires on a genuine non-positive/non-finite pivot
+  (a degenerate or non-finite scaling), surfacing as `MathError::not_implemented`.
 - **Mehrotra predictor–corrector.** An affine (predictor) step with
   complementarity target `0` yields step lengths `α_aff`; from them the centering
   parameter `σ = (mu_aff / mu)³`. The corrector step retargets complementarity to
@@ -136,7 +138,7 @@ inf-norm and is best-effort; it is exercised by the tests but is not a proof.
 | `b.size()` disagrees with the number of constraints `m` | `MathError::domain_error` |
 | A ragged `A` — some row's width `!= n` | `MathError::domain_error` |
 | A non-finite (`NaN`/`Inf`) entry in `A`, `b`, or `c` | `MathError::domain_error` |
-| Normal matrix `A D Aᵀ` not SPD (numerically rank-deficient `A`) | `MathError::not_implemented` |
+| Cholesky breakdown of `A D Aᵀ` — a non-positive/non-finite pivot (degenerate scaling; mild rank loss is absorbed by the `1e-12` regularization, not rejected) | `MathError::not_implemented` |
 | Iteration cap reached without convergence or a divergence verdict | `MathError::not_implemented` |
 | Numerical blow-up to non-finite iterates | `MathError::not_implemented` |
 
