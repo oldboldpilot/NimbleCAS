@@ -1194,6 +1194,16 @@ NB_MODULE(nimblecas_ext, m) {
             nb::arg("data"), nb::arg("batch"), nb::arg("len"),
             "One-level batched Haar DWT (orthonormal 1/sqrt(2)) over `batch` blocks of `len` "
             "(even) samples each, row-major.");
+    gpu.def("batched_matmul",
+            [](const std::vector<double>& a, const std::vector<double>& b, int batch, int m,
+               int k, int n) {
+                return unwrap(nimblecas::gpu::batched_matmul(std::span<const double>(a),
+                                                             std::span<const double>(b), batch, m,
+                                                             k, n));
+            },
+            nb::arg("a"), nb::arg("b"), nb::arg("batch"), nb::arg("m"), nb::arg("k"), nb::arg("n"),
+            "Batched double dense matrix multiply on the GPU: `batch` independent products "
+            "C_b = A_b (m x k) * B_b (k x n), all row-major and contiguously packed. Numeric.");
 #else
     m.attr("HAS_GPU") = false;
 #endif

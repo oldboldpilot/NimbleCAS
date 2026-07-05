@@ -397,6 +397,10 @@ def _test_gpu() -> None:
     # p(x) = 1 + 2x evaluated at x = 3 is 7.
     out = ncas.gpu.poly_eval([1.0, 2.0], [3.0])
     assert abs(out[0] - 7.0) < 1e-9, str(out)
+    # Batched matmul: one 2x3 * 3x2 product; C first row = [58, 64].
+    c = ncas.gpu.batched_matmul(
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [7.0, 8.0, 9.0, 10.0, 11.0, 12.0], 1, 2, 3, 2)
+    assert abs(c[0] - 58.0) < 1e-9 and abs(c[1] - 64.0) < 1e-9, str(c)
 
 
 if __name__ == "__main__":

@@ -160,6 +160,84 @@ auto main() -> int {
                   t.expect(jf.size() == 1, "Jordan block has a single invariant factor");
                   t.expect(jf[0].is_equal(poly({4, -4, 1})), "invariant factor = (x-2)^2");
               })
+        .test("non_diagonal_nilpotent_retains_polynomial_pivots",
+              [](TestContext& t) {
+                  // A = J_2(0) (+) J_1(0) = [[0,1,0],[0,0,0],[0,0,0]] is NON-diagonal and
+                  // nilpotent (A^2 = 0, A != 0). This is the path where the SNF carries a
+                  // genuine polynomial pivot through the divisibility fold rather than a
+                  // scalar. Invariant factors x | x^2 (product x^3 = char poly), min poly x^2.
+                  const auto A = mat({{ri(0), ri(1), ri(0)},
+                                      {ri(0), ri(0), ri(0)},
+                                      {ri(0), ri(0), ri(0)}});
+                  auto factors = nimblecas::invariant_factors(A).value();
+                  t.expect(factors.size() == 2, "two invariant factors for J2(0)+J1(0)");
+                  t.expect(factors[0].is_equal(poly({0, 1})), "f_1 = x");
+                  t.expect(factors[1].is_equal(poly({0, 0, 1})), "f_2 = x^2 (chain x | x^2)");
+                  t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({0, 0, 1})),
+                           "minimal polynomial = x^2");
+                  // Product of invariant factors == characteristic polynomial x^3.
+                  auto charpoly = nimblecas::characteristic_polynomial(A).value();
+                  t.expect(product(factors).is_equal(charpoly),
+                           "x * x^2 = x^3 = characteristic polynomial");
+                  t.expect(charpoly.is_equal(poly({0, 0, 0, 1})), "characteristic polynomial = x^3");
+                  // RCF = diag( C(x), C(x^2) ). C(x) = [[0]] (1x1); C(x^2) = [[0,0],[1,0]].
+                  // Block diagonal => [[0,0,0],[0,0,0],[0,1,0]].
+                  auto rcf = nimblecas::rational_canonical_form(A).value();
+                  t.expect(rcf.is_equal(mat({{ri(0), ri(0), ri(0)},
+                                             {ri(0), ri(0), ri(0)},
+                                             {ri(0), ri(1), ri(0)}})),
+                           "RCF(J2(0)+J1(0)) = [[0,0,0],[0,0,0],[0,1,0]]");
+              })
+        .test("one_by_one_matrix",
+              [](TestContext& t) {
+                  // A = [[5]]: a single 1x1 companion of x - 5.
+                  const auto A = mat({{ri(5)}});
+                  auto factors = nimblecas::invariant_factors(A).value();
+                  t.expect(factors.size() == 1, "one invariant factor for a 1x1 matrix");
+                  t.expect(factors[0].is_equal(poly({-5, 1})), "invariant factor = x - 5");
+                  t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({-5, 1})),
+                           "minimal polynomial = x - 5");
+                  t.expect(nimblecas::rational_canonical_form(A).value().is_equal(mat({{ri(5)}})),
+                           "RCF([[5]]) = [[5]]");
+              })
+        .test("empty_matrix_conventions",
+              [](TestContext& t) {
+                  // The 0x0 (empty) operator: no invariant factors, minimal polynomial 1
+                  // (empty product), and a 0x0 rational canonical form.
+                  const Matrix empty{};
+                  t.expect(empty.rows() == 0 && empty.cols() == 0, "empty matrix is 0x0");
+                  t.expect(nimblecas::invariant_factors(empty).value().empty(),
+                           "0x0 has no invariant factors");
+                  t.expect(nimblecas::minimal_polynomial(empty).value().is_equal(poly({1})),
+                           "minimal polynomial of 0x0 = constant 1");
+                  auto rcf = nimblecas::rational_canonical_form(empty).value();
+                  t.expect(rcf.rows() == 0 && rcf.cols() == 0, "RCF of 0x0 is 0x0");
+                  t.expect(rcf.is_equal(Matrix{}), "RCF(0x0) == the empty matrix");
+              })
+        .test("non_diagonal_two_nontrivial_factors",
+              [](TestContext& t) {
+                  // A = C(x^2+1) (+) C(x^2+1): a 4x4 direct sum of two companion blocks, NON
+                  // -diagonal, with two equal degree-2 invariant factors (chain (x^2+1) |
+                  // (x^2+1)). Both blocks share minimal polynomial x^2+1, so the invariant
+                  // factors are [x^2+1, x^2+1], product (x^2+1)^2, and RCF == A itself.
+                  const auto A = mat({{ri(0), ri(-1), ri(0), ri(0)},
+                                      {ri(1), ri(0), ri(0), ri(0)},
+                                      {ri(0), ri(0), ri(0), ri(-1)},
+                                      {ri(0), ri(0), ri(1), ri(0)}});
+                  auto factors = nimblecas::invariant_factors(A).value();
+                  t.expect(factors.size() == 2, "two invariant factors for C(x^2+1)+C(x^2+1)");
+                  t.expect(factors[0].is_equal(poly({1, 0, 1})), "f_1 = x^2 + 1");
+                  t.expect(factors[1].is_equal(poly({1, 0, 1})), "f_2 = x^2 + 1");
+                  t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({1, 0, 1})),
+                           "minimal polynomial = x^2 + 1");
+                  auto charpoly = nimblecas::characteristic_polynomial(A).value();
+                  t.expect(product(factors).is_equal(charpoly),
+                           "(x^2+1)^2 = characteristic polynomial");
+                  t.expect(charpoly.is_equal(poly({1, 0, 2, 0, 1})),
+                           "characteristic polynomial = x^4 + 2x^2 + 1");
+                  t.expect(nimblecas::rational_canonical_form(A).value().is_equal(A),
+                           "RCF(C(x^2+1)+C(x^2+1)) = A itself");
+              })
         .test("non_square_is_domain_error",
               [](TestContext& t) {
                   const auto rect = mat({{ri(1), ri(2), ri(3)}, {ri(4), ri(5), ri(6)}});

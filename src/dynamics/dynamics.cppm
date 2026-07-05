@@ -616,11 +616,28 @@ auto classify_phase_portrait(const Matrix& a) -> Result<PhasePortrait> {
         p.type = PhaseType::saddle;
         p.stability = Stability::unstable;
     } else if (s_d == 0) {
-        // det A == 0: a zero eigenvalue, so the equilibrium is non-isolated. The other
-        // eigenvalue equals t: a positive t gives a genuine growing direction (unstable),
-        // otherwise the motion is bounded but not asymptotically stable (marginal).
+        // det A == 0: a zero eigenvalue, so the equilibrium is non-isolated (a line, or a
+        // plane when A == 0). The eigenvalues are 0 and t; the stability of the line splits
+        // three ways, all decided exactly over Q:
+        //   - t > 0: a genuinely growing direction (the eigenvalue t > 0) -- UNSTABLE.
+        //   - t < 0: eigenvalues 0 and t are distinct, so A is diagonalizable; solutions are
+        //            bounded and relax onto the line of equilibria -- MARGINAL.
+        //   - t == 0: both eigenvalues are 0. If A == 0 every point is a fixed point and the
+        //            flow is trivially bounded (MARGINAL). Otherwise A is a defective
+        //            nilpotent Jordan block: the flow is x(t) = x0 + t*(A x0), which grows
+        //            linearly WITHOUT BOUND for any A x0 != 0, so the origin is Lyapunov
+        //            UNSTABLE. Reporting "bounded/marginal" here would be a claim the
+        //            classifier cannot justify (Rule 32), so a defective nilpotent is unstable.
         p.type = PhaseType::non_isolated;
-        p.stability = (s_t > 0) ? Stability::unstable : Stability::marginal;
+        if (s_t > 0) {
+            p.stability = Stability::unstable;
+        } else if (s_t < 0) {
+            p.stability = Stability::marginal;
+        } else {
+            const bool zero_matrix = a.at(0, 0).is_zero() && a.at(0, 1).is_zero() &&
+                                     a.at(1, 0).is_zero() && a.at(1, 1).is_zero();
+            p.stability = zero_matrix ? Stability::marginal : Stability::unstable;
+        }
     } else if (s_delta > 0) {
         // det A > 0, delta > 0: real distinct eigenvalues of a common sign (that of t,
         // which cannot be zero here since t^2 > 4d > 0).
@@ -656,8 +673,8 @@ auto classify_phase_portrait(const Matrix& a) -> Result<PhasePortrait> {
             break;
         case PhaseType::non_isolated:
             p.description = (p.stability == Stability::unstable)
-                                ? "non-isolated equilibrium (unstable direction)"
-                                : "non-isolated equilibrium (marginal)";
+                                ? "non-isolated equilibrium (unbounded growth, unstable)"
+                                : "non-isolated equilibrium (bounded, marginal)";
             break;
         default:
             p.description = std::string(to_string(p.stability)) + " " +

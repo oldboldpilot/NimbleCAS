@@ -138,7 +138,10 @@ floating point is involved.
 | `D > 0`, `Δ < 0`, `T = 0` | `center` | purely imaginary `±(√(−Δ)/2)·i` | `neutrally_stable` |
 | `D > 0`, `Δ = 0`, `A = λI` | `star` (proper node) | repeated `T/2`, diagonalizable | `stable` if `T < 0`, else `unstable` |
 | `D > 0`, `Δ = 0`, `A` defective | `degenerate_node` (improper) | repeated `T/2`, one eigenvector | `stable` if `T < 0`, else `unstable` |
-| `D = 0` | `non_isolated` | a `0` eigenvalue; the other is `T` | `unstable` if `T > 0`, else `marginal` |
+| `D = 0`, `T > 0` | `non_isolated` | eigenvalues `0` and `T > 0` | `unstable` (a growing direction) |
+| `D = 0`, `T < 0` | `non_isolated` | eigenvalues `0` and `T < 0`, distinct ⇒ diagonalizable | `marginal` (bounded, relaxes onto the line) |
+| `D = 0`, `T = 0`, `A = 0` | `non_isolated` | both `0`; every point is a fixed point | `marginal` (trivially bounded) |
+| `D = 0`, `T = 0`, `A ≠ 0` | `non_isolated` | both `0`, **defective nilpotent** Jordan block | `unstable` (`x(t) = x₀ + t·A x₀` grows unboundedly) |
 
 The `star` vs `degenerate_node` split (both are `D > 0, Δ = 0`) is decided
 structurally: the equilibrium is a **star** exactly when `A` is the scalar

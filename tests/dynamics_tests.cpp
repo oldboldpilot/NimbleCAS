@@ -335,6 +335,47 @@ auto main() -> int {
                       t.expect(p->determinant == ri(0), "D=0");
                   }
               })
+        .test("phase_non_isolated_negative_trace_marginal",
+              [](TestContext& t) {
+                  // [[-1,0],[0,0]]: T=-1, D=0 => eigenvalues 0 and -1, distinct/diagonalizable
+                  // => bounded, marginal (relaxes onto the line of equilibria).
+                  auto p = classify_phase_portrait(mat({{-1, 0}, {0, 0}}));
+                  t.expect(p.has_value(), "classify succeeds");
+                  if (p) {
+                      t.expect(p->type == PhaseType::non_isolated, "non-isolated");
+                      t.expect(p->stability == Stability::marginal, "marginal (bounded)");
+                  }
+              })
+        .test("phase_defective_nilpotent_is_unstable",
+              [](TestContext& t) {
+                  // [[0,1],[0,0]]: T=0, D=0, A!=0 -- a DEFECTIVE NILPOTENT Jordan block. Both
+                  // eigenvalues are 0 but x(t) = x0 + t*(A x0) grows without bound, so the
+                  // origin is Lyapunov UNSTABLE -- NOT the "marginal/bounded" the naive
+                  // T<=0 rule would give. This is the Rule-32 regression case.
+                  for (const auto& m : {mat({{0, 1}, {0, 0}}), mat({{0, 0}, {1, 0}}),
+                                        mat({{1, -1}, {1, -1}}), mat({{2, 4}, {-1, -2}})}) {
+                      auto p = classify_phase_portrait(m);
+                      t.expect(p.has_value(), "classify succeeds");
+                      if (p) {
+                          t.expect(p->trace == ri(0) && p->determinant == ri(0),
+                                   "T=0, D=0 (nilpotent)");
+                          t.expect(p->type == PhaseType::non_isolated, "non-isolated");
+                          t.expect(p->stability == Stability::unstable,
+                                   "defective nilpotent => unbounded, unstable");
+                      }
+                  }
+              })
+        .test("phase_zero_matrix_is_marginal",
+              [](TestContext& t) {
+                  // [[0,0],[0,0]]: A == 0 -- x'=0, every point is a fixed point, trivially
+                  // bounded => marginal. Pins the A==0 boundary of the T=0,D=0 sub-case.
+                  auto p = classify_phase_portrait(mat({{0, 0}, {0, 0}}));
+                  t.expect(p.has_value(), "classify succeeds");
+                  if (p) {
+                      t.expect(p->type == PhaseType::non_isolated, "non-isolated");
+                      t.expect(p->stability == Stability::marginal, "zero matrix => marginal");
+                  }
+              })
         .test("phase_irrational_node_no_decimal",
               [](TestContext& t) {
                   // [[0,1],[1,1]]: T=1, D=-1 => saddle with delta=5 (not a perfect square).
