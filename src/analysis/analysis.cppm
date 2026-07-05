@@ -137,6 +137,86 @@ struct NumericTest {
 [[nodiscard]] auto alternating_series_test(const RealSequence& magnitude,
                                            std::int64_t samples = 1000) -> Verdict;
 
+// ---------------------------------------------------------------------------
+// Extended classical battery (Raabe, Kummer, Gauss, limit-comparison, Cauchy
+// condensation, Dirichlet, Abel, and the p-series / Bertrand threshold wrappers).
+// ---------------------------------------------------------------------------
+//
+// Each is as honest about exactness as ratio_test: when the test's decisive limit is a
+// CONSTANT RATIONAL over the sampled indices it is returned EXACTLY over Q (`exact` set,
+// `exact_limit` filled) and the verdict follows exactly -- including the boundary cases a
+// test is designed to resolve; otherwise a NUMERICAL finite-n estimate is reported and the
+// verdict is inconclusive whenever the estimate is too close to the test's threshold to
+// certify a strict inequality. Nothing here ever reports converges/diverges on a genuinely
+// inconclusive (boundary) limit.
+
+// Raabe's test: l = lim n (a_n/a_{n+1} - 1). l > 1 converges, l < 1 diverges, l == 1
+// INCONCLUSIVE (the boundary Raabe cannot resolve). Reuses the RatioTest carrier: `exact` /
+// `exact_limit` hold l when it is a constant rational over the samples (e.g. a_n =
+// 1/(n(n+1)) gives l = 2 exactly => converges; a_n = 1/n gives l = 1 exactly =>
+// inconclusive), otherwise `numeric_limit` holds a finite-n estimate and the verdict is
+// inconclusive within a band of 1. NOTE: the RatioTest verdict here is compared to 1 with
+// Raabe's (reversed) direction, not the ratio test's L-vs-1 direction.
+[[nodiscard]] auto raabe_test(const RationalSequence& a) -> RatioTest;
+
+// Kummer's general test with a positive auxiliary sequence b_n: l = lim (b_n a_n/a_{n+1} -
+// b_{n+1}). l > 0 converges. l < 0 diverges ONLY when Sum 1/b_n diverges -- a side condition
+// the caller certifies via `one_over_b_diverges`; without it a negative l is reported
+// inconclusive (honest: divergence is not established). l == 0 is inconclusive. RatioTest
+// carrier: exact l over Q when it is constant on the samples (e.g. a_n = 1/(n(n+1)), b_n = n
+// gives l = 1 exactly => converges), otherwise a numeric estimate with an inconclusive band
+// about 0. (b_n == 1 recovers the d'Alembert ratio test in the form l = lim(a_n/a_{n+1}-1).)
+[[nodiscard]] auto kummer_test(const RationalSequence& a, const RationalSequence& b,
+                               bool one_over_b_diverges = false) -> RatioTest;
+
+// Gauss's test. ASSUMES the ratio has the asymptotic form a_n/a_{n+1} = 1 + h/n +
+// O(1/n^{1+r}) with r > 0 (an unverifiable precondition on the sequence); it extracts
+// h = lim n (a_n/a_{n+1} - 1) and concludes converges iff h > 1, diverges iff h <= 1.
+// Unlike Raabe it RESOLVES the boundary h == 1 (to diverges) -- but only on the EXACT path,
+// where h is a constant rational (e.g. the harmonic a_n = 1/n gives h = 1 exactly =>
+// diverges). On the numeric path a near-1 estimate cannot certify the boundary and is
+// reported inconclusive. Shares the RatioTest carrier and the h extraction with raabe_test.
+[[nodiscard]] auto gauss_test(const RationalSequence& a) -> RatioTest;
+
+// Limit-comparison test (NUMERICAL): l = lim a_n/b_n. When 0 < l < infinity the series
+// Sum a_n shares the behaviour of the reference Sum b_n, so the verdict echoes
+// `b_behaviour`. If the sampled ratios are not all finite-and-positive, or do not settle to
+// a finite positive limit, the verdict is inconclusive. `numeric_limit` carries the
+// finite-n estimate of l. Sampled over n = 1..samples.
+[[nodiscard]] auto limit_comparison_test(const RealSequence& a, const RealSequence& b,
+                                         Verdict b_behaviour, std::int64_t samples = 200)
+    -> NumericTest;
+
+// Cauchy condensation (NUMERICAL): for a_n >= 0 monotonically non-increasing, Sum a_n
+// converges iff the condensed series Sum 2^k a_{2^k} converges. The condensed series is
+// summed and its vanishing tail increment decides the verdict (the same tail heuristic as
+// integral_test). The monotonicity / non-negativity precondition is CHECKED on the sampled
+// range [1, samples]; a violation there yields domain_error (it is assumed, not checked,
+// beyond the sampled range).
+[[nodiscard]] auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples = 1000)
+    -> Result<Verdict>;
+
+// Dirichlet's test for Sum a_n b_n (NUMERICAL). Certifies CONVERGENCE from two checkable
+// hypotheses on the sampled range: the partial sums A_N = Sum_{n<=N} a_n stay bounded, and
+// b_n is monotone with b_n -> 0. Both hold => converges; otherwise inconclusive -- the test
+// never certifies divergence. Sampled over n = 1..samples.
+[[nodiscard]] auto dirichlet_test(const RealSequence& a, const RealSequence& b,
+                                  std::int64_t samples = 1000) -> Verdict;
+
+// Abel's test for Sum a_n b_n (NUMERICAL). Certifies CONVERGENCE when Sum a_n converges
+// (checkable via a vanishing partial-sum tail) and b_n is monotone and bounded (convergent);
+// both hold => converges, otherwise inconclusive. Sampled over n = 1..2*samples.
+[[nodiscard]] auto abel_test(const RealSequence& a, const RealSequence& b,
+                             std::int64_t samples = 1000) -> Verdict;
+
+// p-series threshold (EXACT over Q): Sum 1/n^p converges iff p > 1, else diverges. A sharp,
+// decidable threshold -- never inconclusive.
+[[nodiscard]] auto p_series_test(const Rational& p) -> Verdict;
+
+// Bertrand-series threshold (EXACT over Q): Sum_{n>=2} 1/(n (ln n)^p) converges iff p > 1,
+// else diverges. The known logarithmic-scale threshold -- sharp and decidable.
+[[nodiscard]] auto bertrand_test(const Rational& p) -> Verdict;
+
 // ===========================================================================
 // Lyapunov equations and stability.
 // ===========================================================================
@@ -645,6 +725,367 @@ auto alternating_series_test(const RealSequence& magnitude, std::int64_t samples
         return Verdict::diverges;
     }
     return Verdict::inconclusive;
+}
+
+// --- extended battery: shared exact/numeric limit extraction ----------------
+
+namespace {
+
+// The outcome of trying to pin down a series-test limit L from an exact rational
+// term(n): EXACT when term(n) is a constant rational over the small sample set (as for
+// a genuinely geometric ratio, or a ratio 1 + c/n whose Raabe/Kummer combination is
+// constant), otherwise a NUMERICAL estimate at the largest feasible index.
+struct SeqLimit {
+    bool exact{false};
+    Rational exact_value{};    // valid iff `exact`
+    double numeric{0.0};       // a double view of L (exact value or finite-n estimate)
+    bool have_numeric{false};  // false only when every sample overflowed / was skipped
+};
+
+// term: std::int64_t -> Result<Rational>, the exact test statistic at index n. A sample
+// that overflows or is undefined (an error) is dropped rather than failing the whole test.
+template <typename Term>
+[[nodiscard]] auto extract_limit(Term&& term) -> SeqLimit {
+    SeqLimit out;
+    std::optional<Rational> constant{};
+    bool constant_holds = true;
+    int samples = 0;
+    for (std::int64_t n = 2; n <= 6; ++n) {
+        auto g = term(n);
+        if (!g) {
+            continue;
+        }
+        ++samples;
+        if (!constant.has_value()) {
+            constant = *g;
+        } else if (!(*constant == *g)) {
+            constant_holds = false;
+        }
+    }
+    // Three or more equal exact samples of a low-degree rational statistic pin the limit
+    // exactly (a ratio of bounded-degree polynomials equal at 3+ points is constant here).
+    if (samples >= 3 && constant_holds && constant.has_value()) {
+        out.exact = true;
+        out.exact_value = *constant;
+        out.numeric = to_double(*constant);
+        out.have_numeric = true;
+        return out;
+    }
+    // NUMERICAL estimate: the largest index whose exact statistic stays inside int64.
+    for (const std::int64_t n : {256, 192, 128, 96, 64, 48, 32, 24, 16, 12, 8, 6, 4}) {
+        auto g = term(n);
+        if (g) {
+            out.numeric = to_double(*g);
+            out.have_numeric = true;
+            break;
+        }
+    }
+    return out;
+}
+
+// n (a_n/a_{n+1} - 1), the Raabe / Gauss statistic h_n, exact over Q. Undefined (error)
+// when a_{n+1} == 0 or an int64 boundary is crossed.
+[[nodiscard]] auto raabe_statistic(const RationalSequence& a, std::int64_t n) -> Result<Rational> {
+    const Rational an = a(n);
+    const Rational an1 = a(n + 1);
+    if (an1.is_zero()) {
+        return make_error<Rational>(MathError::domain_error);
+    }
+    auto ratio = an.divide(an1);  // a_n / a_{n+1}
+    if (!ratio) {
+        return make_error<Rational>(ratio.error());
+    }
+    auto shifted = ratio->subtract(Rational::from_int(1));  // - 1
+    if (!shifted) {
+        return make_error<Rational>(shifted.error());
+    }
+    return Rational::from_int(n).multiply(*shifted);  // n * (...)
+}
+
+// Verdict for a limit compared to 1 with Raabe's direction: l > 1 converges, l < 1
+// diverges, l == 1 inconclusive (den > 0 canonical, so the test is num vs den).
+[[nodiscard]] auto verdict_raabe(const Rational& l) -> Verdict {
+    if (l.numerator() > l.denominator()) {
+        return Verdict::converges;
+    }
+    if (l.numerator() < l.denominator()) {
+        return Verdict::diverges;
+    }
+    return Verdict::inconclusive;
+}
+
+// Numeric verdict for a statistic compared to `threshold` with a symmetric dead-band:
+// clearly above => `above`, clearly below => `below`, within the band => inconclusive.
+[[nodiscard]] auto verdict_banded(double value, double threshold, double band, Verdict above,
+                                  Verdict below) -> Verdict {
+    if (value > threshold + band) {
+        return above;
+    }
+    if (value < threshold - band) {
+        return below;
+    }
+    return Verdict::inconclusive;
+}
+
+}  // namespace
+
+auto raabe_test(const RationalSequence& a) -> RatioTest {
+    const SeqLimit lim =
+        extract_limit([&a](std::int64_t n) { return raabe_statistic(a, n); });
+    RatioTest result;
+    if (lim.exact) {
+        result.exact = true;
+        result.exact_limit = lim.exact_value;
+        result.numeric_limit = lim.numeric;
+        result.verdict = verdict_raabe(lim.exact_value);  // l>1 conv, l<1 div, l==1 inconc
+        return result;
+    }
+    result.numeric_limit = lim.have_numeric ? lim.numeric : 0.0;
+    // A non-constant statistic cannot certify the l == 1 boundary; conclude only when the
+    // estimate is clearly on one side of 1 (band 0.1), else honestly inconclusive.
+    result.verdict = lim.have_numeric
+                         ? verdict_banded(lim.numeric, 1.0, 0.1, Verdict::converges,
+                                          Verdict::diverges)
+                         : Verdict::inconclusive;
+    return result;
+}
+
+auto gauss_test(const RationalSequence& a) -> RatioTest {
+    const SeqLimit lim =
+        extract_limit([&a](std::int64_t n) { return raabe_statistic(a, n); });
+    RatioTest result;
+    if (lim.exact) {
+        result.exact = true;
+        result.exact_limit = lim.exact_value;
+        result.numeric_limit = lim.numeric;
+        // Gauss RESOLVES the boundary on the exact path: converges iff h > 1, else diverges
+        // (h == 1 and h < 1 both diverge -- the O(1/n^{1+r}) hypothesis decides h == 1).
+        const Rational& h = lim.exact_value;
+        result.verdict =
+            (h.numerator() > h.denominator()) ? Verdict::converges : Verdict::diverges;
+        return result;
+    }
+    result.numeric_limit = lim.have_numeric ? lim.numeric : 0.0;
+    // Numeric path: the h == 1 boundary is not certifiable, so a near-1 estimate stays
+    // inconclusive (only a clearly-off-1 estimate concludes).
+    result.verdict = lim.have_numeric
+                         ? verdict_banded(lim.numeric, 1.0, 0.1, Verdict::converges,
+                                          Verdict::diverges)
+                         : Verdict::inconclusive;
+    return result;
+}
+
+auto kummer_test(const RationalSequence& a, const RationalSequence& b,
+                 bool one_over_b_diverges) -> RatioTest {
+    // k_n = b_n (a_n/a_{n+1}) - b_{n+1}, exact over Q.
+    const auto kummer_statistic = [&a, &b](std::int64_t n) -> Result<Rational> {
+        const Rational an = a(n);
+        const Rational an1 = a(n + 1);
+        if (an1.is_zero()) {
+            return make_error<Rational>(MathError::domain_error);
+        }
+        auto ratio = an.divide(an1);  // a_n / a_{n+1}
+        if (!ratio) {
+            return make_error<Rational>(ratio.error());
+        }
+        auto scaled = b(n).multiply(*ratio);  // b_n * a_n/a_{n+1}
+        if (!scaled) {
+            return make_error<Rational>(scaled.error());
+        }
+        return scaled->subtract(b(n + 1));  // - b_{n+1}
+    };
+    const SeqLimit lim = extract_limit(kummer_statistic);
+    RatioTest result;
+    if (lim.exact) {
+        result.exact = true;
+        result.exact_limit = lim.exact_value;
+        result.numeric_limit = lim.numeric;
+        const std::int64_t sign = lim.exact_value.numerator();  // den > 0, so sign(l) = sign(num)
+        if (sign > 0) {
+            result.verdict = Verdict::converges;  // l > 0
+        } else if (sign < 0 && one_over_b_diverges) {
+            result.verdict = Verdict::diverges;  // l < 0 AND Sum 1/b_n diverges
+        } else {
+            result.verdict = Verdict::inconclusive;  // l == 0, or l < 0 without the side condition
+        }
+        return result;
+    }
+    result.numeric_limit = lim.have_numeric ? lim.numeric : 0.0;
+    constexpr double band = 1e-3;
+    if (lim.have_numeric && lim.numeric > band) {
+        result.verdict = Verdict::converges;
+    } else if (lim.have_numeric && lim.numeric < -band && one_over_b_diverges) {
+        result.verdict = Verdict::diverges;
+    } else {
+        result.verdict = Verdict::inconclusive;
+    }
+    return result;
+}
+
+auto limit_comparison_test(const RealSequence& a, const RealSequence& b, Verdict b_behaviour,
+                           std::int64_t samples) -> NumericTest {
+    NumericTest result;  // inconclusive, statistic 0
+    if (samples < 1) {
+        return result;
+    }
+    double last = 0.0;
+    bool have = false;
+    double lo = std::numeric_limits<double>::infinity();
+    double hi = 0.0;
+    for (std::int64_t n = 1; n <= samples; ++n) {
+        const double bn = b(n);
+        if (bn == 0.0) {
+            continue;
+        }
+        const double q = a(n) / bn;
+        if (!std::isfinite(q) || q <= 0.0) {
+            // A non-positive or non-finite ratio breaks the 0 < l < infinity hypothesis.
+            result.numeric_limit = std::isfinite(q) ? q : 0.0;
+            result.verdict = Verdict::inconclusive;
+            return result;
+        }
+        last = q;
+        have = true;
+        lo = std::min(lo, q);
+        hi = std::max(hi, q);
+    }
+    if (!have) {
+        return result;  // inconclusive, statistic 0
+    }
+    result.numeric_limit = last;  // estimate of l at the largest sampled index
+    // 0 < l < infinity is read off a settled, positively-bounded ratio: finite last value
+    // and a bounded spread across the samples. Then Sum a_n mirrors Sum b_n's behaviour.
+    const bool settled = std::isfinite(last) && last > 0.0 && lo > 0.0 && hi / lo < 1e6;
+    if (settled && (b_behaviour == Verdict::converges || b_behaviour == Verdict::diverges)) {
+        result.verdict = b_behaviour;
+    } else {
+        result.verdict = Verdict::inconclusive;
+    }
+    return result;
+}
+
+auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples) -> Result<Verdict> {
+    if (samples < 2) {
+        return make_error<Verdict>(MathError::domain_error);
+    }
+    // Precondition: a_n >= 0 and non-increasing on the sampled range [1, samples].
+    constexpr double mono_eps = 1e-12;
+    double prev = a(1);
+    if (!(prev >= 0.0)) {
+        return make_error<Verdict>(MathError::domain_error);
+    }
+    for (std::int64_t n = 2; n <= samples; ++n) {
+        const double cur = a(n);
+        if (!(cur >= 0.0)) {
+            return make_error<Verdict>(MathError::domain_error);  // negative term
+        }
+        if (cur > prev + mono_eps) {
+            return make_error<Verdict>(MathError::domain_error);  // not non-increasing
+        }
+        prev = cur;
+    }
+    // Condensed series c_k = 2^k a(2^k); Sum a_n and Sum c_k share convergence. Sum the
+    // condensed terms and infer convergence from a vanishing tail increment (as integral_test
+    // does). kbase = 25 keeps the doubled index 2^50 comfortably inside int64.
+    const auto condensed_partial = [&a](std::int64_t kmax) -> double {
+        double sum = 0.0;
+        for (std::int64_t k = 0; k <= kmax; ++k) {
+            const std::int64_t idx = static_cast<std::int64_t>(1) << k;  // 2^k
+            sum += static_cast<double>(idx) * a(idx);
+        }
+        return sum;
+    };
+    constexpr std::int64_t kbase = 25;
+    const double s_n = condensed_partial(kbase);
+    const double s_2n = condensed_partial(2 * kbase);
+    const double tail = s_2n - s_n;
+    return (tail < 1e-3) ? Verdict::converges : Verdict::diverges;
+}
+
+auto dirichlet_test(const RealSequence& a, const RealSequence& b, std::int64_t samples)
+    -> Verdict {
+    if (samples < 4) {
+        return Verdict::inconclusive;
+    }
+    // Hypothesis 1: partial sums A_N = Sum_{n<=N} a_n stay bounded. Read as the second-half
+    // running max not overshooting the first-half max (growing partials => not bounded).
+    double partial = 0.0;
+    double max_first = 0.0;
+    double max_second = 0.0;
+    const std::int64_t half = samples / 2;
+    for (std::int64_t n = 1; n <= samples; ++n) {
+        partial += a(n);
+        const double m = std::fabs(partial);
+        if (n <= half) {
+            max_first = std::max(max_first, m);
+        } else {
+            max_second = std::max(max_second, m);
+        }
+    }
+    // A bounded partial sum has comparable first-/second-half maxima (ratio ~ 1); linear
+    // growth (e.g. a_n = 1, A_N = N) doubles the max across halves. A 1.5x slack rejects the
+    // latter while tolerating a bounded sum that approaches its sup late.
+    const bool bounded = max_second <= 1.5 * max_first + 1e-9;
+    // Hypothesis 2: b_n monotone and b_n -> 0.
+    constexpr double eps = 1e-12;
+    const double dir = b(2) - b(1);
+    bool monotone = true;
+    for (std::int64_t n = 1; n < samples; ++n) {
+        const double d = b(n + 1) - b(n);
+        if (dir >= 0.0 ? (d < -eps) : (d > eps)) {
+            monotone = false;
+            break;
+        }
+    }
+    const bool to_zero = std::fabs(b(samples)) < 1e-3 * (1.0 + std::fabs(b(1)));
+    if (bounded && monotone && to_zero) {
+        return Verdict::converges;
+    }
+    return Verdict::inconclusive;  // hypotheses not certifiable; never certifies divergence
+}
+
+auto abel_test(const RealSequence& a, const RealSequence& b, std::int64_t samples) -> Verdict {
+    if (samples < 4) {
+        return Verdict::inconclusive;
+    }
+    // Hypothesis 1: Sum a_n converges (Cauchy: the tail A_{2N} - A_N -> 0).
+    double a_n = 0.0;
+    for (std::int64_t n = 1; n <= samples; ++n) {
+        a_n += a(n);
+    }
+    double a_2n = a_n;
+    for (std::int64_t n = samples + 1; n <= 2 * samples; ++n) {
+        a_2n += a(n);
+    }
+    const bool sum_converges = std::fabs(a_2n - a_n) < 1e-3 * (1.0 + std::fabs(a_n));
+    // Hypothesis 2: b_n monotone and bounded (convergent) over the sampled range.
+    constexpr double eps = 1e-12;
+    const double dir = b(2) - b(1);
+    bool monotone = true;
+    for (std::int64_t n = 1; n < 2 * samples; ++n) {
+        const double d = b(n + 1) - b(n);
+        if (dir >= 0.0 ? (d < -eps) : (d > eps)) {
+            monotone = false;
+            break;
+        }
+    }
+    const bool bounded = std::fabs(b(2 * samples) - b(samples)) < 1e-3 * (1.0 + std::fabs(b(1)));
+    if (sum_converges && monotone && bounded) {
+        return Verdict::converges;
+    }
+    return Verdict::inconclusive;
+}
+
+auto p_series_test(const Rational& p) -> Verdict {
+    // Sum 1/n^p converges iff p > 1 (den > 0 canonical, so p > 1 iff num > den), else
+    // diverges. Sharp threshold -- exact over Q, never inconclusive.
+    return (p.numerator() > p.denominator()) ? Verdict::converges : Verdict::diverges;
+}
+
+auto bertrand_test(const Rational& p) -> Verdict {
+    // Sum_{n>=2} 1/(n (ln n)^p) converges iff p > 1, else diverges (including p == 1, where
+    // Sum 1/(n ln n) diverges). The known logarithmic-scale threshold -- exact over Q.
+    return (p.numerator() > p.denominator()) ? Verdict::converges : Verdict::diverges;
 }
 
 // --- Lyapunov equations -----------------------------------------------------

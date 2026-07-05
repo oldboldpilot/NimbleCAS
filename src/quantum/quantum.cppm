@@ -44,6 +44,24 @@
 //     PRECONDITION — callers must not build scalar coefficients with an INT64_MIN part (the
 //     same int64 boundary the whole Rational layer carries) — and dagger leaves such a
 //     degenerate part unchanged rather than fabricating an unrepresentable value.
+//
+// -----------------------------------------------------------------------------
+// LADDER / BOSONIC EXTENSION (normal ordering, quadratures, expectation, unitary).
+// -----------------------------------------------------------------------------
+// On top of the free *-algebra above, this module adds a SINGLE canonical bosonic mode:
+// the annihilation operator a := annihilation() and its adjoint a† := creation(). The one
+// EXACT physical input layered on the free algebra is the canonical commutation relation
+// [a,a†] = I, realised by `normal_order`: a terminating & confluent rewrite that (after the
+// same distribute/fold pass as normal_form) applies a·a† → a†·a + I to move every a† left of
+// every a (boson normal ordering) and cancels adjacent named-unitary inverse pairs
+// U·U† → I, U†·U → I. Its SCOPE is exactly that — only the symbol named "a" is treated as a
+// boson, and only symbols tagged unitary cancel; every other atom (other symbols, kets, bras)
+// is opaque and is neither reordered nor contracted. Built on this: N = a†a (number operator,
+// with [N,a] = −a and [N,a†] = a†), the exact quadratures X = a+a† and P = i(a†−a) with the
+// physical canonical relation [x,p] = iI exposed exactly through the rational factor 1/2,
+// symbolic expectations <ψ|A|ψ>, and OPAQUE unitaries U (including U(θ) = exp(−iθH)) whose ONLY
+// claimed property is U†U = I. No eigenvalues, no exponential expansion, no Hilbert space — the
+// honesty boundary above still holds; normal_order only imposes the two exact rewrites named.
 
 export module nimblecas.quantum;
 
@@ -71,8 +89,13 @@ public:
     // A symbol declared self-adjoint (Hermitian): dagger(A) == A.
     [[nodiscard]] static auto self_adjoint_symbol(std::string name) -> Op;
     // General symbol factory used by dagger: `adjoint` selects the A† form, `self_adj`
-    // marks it Hermitian (in which case `adjoint` is always false).
-    [[nodiscard]] static auto make_symbol(std::string name, bool adjoint, bool self_adj) -> Op;
+    // marks it Hermitian (in which case `adjoint` is always false), `unitary` tags a named
+    // unitary U with the exact defining property U†U = UU† = I (enforced by normal_order).
+    [[nodiscard]] static auto make_symbol(std::string name, bool adjoint, bool self_adj,
+                                          bool unitary = false) -> Op;
+    // A named unitary operator U: opaque, with the exact defining property U†U = UU† = I
+    // (enforced by normal_order's cancellation, NOT by expanding any exponential).
+    [[nodiscard]] static auto unitary_symbol(std::string name) -> Op;
     // The scalar c times the identity (a c·I element of the algebra).
     [[nodiscard]] static auto scalar(Complex value) -> Op;
     // The identity operator I.
@@ -119,6 +142,7 @@ struct OpSymbolNode {
     std::string name;
     bool adjoint = false;       // the A† form of the symbol
     bool self_adjoint = false;  // Hermitian: dagger is a no-op (then adjoint is always false)
+    bool unitary = false;       // named unitary U with U†U = UU† = I (opaque; no expansion)
 };
 
 struct OpScalarNode {
@@ -191,6 +215,45 @@ struct OpNode {
 // are algebraically equal iff their normal forms are structurally equal. Returns
 // MathError::overflow if any scalar coefficient overflows int64 during folding.
 [[nodiscard]] auto normal_form(const Op& a) -> Result<Op>;
+
+// ---------------------------------------------------------------------------
+// Ladder / bosonic-mode extension (a single canonical mode `a`, ROADMAP 7.15).
+// ---------------------------------------------------------------------------
+[[nodiscard]] auto annihilation() -> Op;      // a  (the mode symbol "a")
+[[nodiscard]] auto creation() -> Op;          // a† = dagger(a)
+[[nodiscard]] auto number_operator() -> Op;   // N = a† a
+
+// Exact quadratures X = a + a† and P = i(a† − a). These are the √2-scaled representatives of
+// position x = (a+a†)/√2 and momentum p = (a−a†)/(i√2): since 1/√2 ∉ Q+Qi it cannot be an
+// exact scalar coefficient, so position()/momentum() return X = √2·x and P = √2·p, whose
+// coefficients (±1, ±i) ARE exact Gaussian rationals. The physical canonical relation
+// [x,p] = iI is exposed exactly via canonical_xp_commutator() — the √2 factors only ever
+// appear squared, leaving the rational 1/2, so no irrational scalar is ever needed.
+[[nodiscard]] auto position() -> Op;          // X = a + a†     (= √2 · x)
+[[nodiscard]] auto momentum() -> Op;          // P = i(a† − a)  (= √2 · p)
+
+// The exact canonical commutator [x,p] = iI, computed as (1/2)[X,P] normal-ordered under the
+// CCR (since [X,P] = 2iI). Returns MathError::overflow only on coefficient overflow.
+[[nodiscard]] auto canonical_xp_commutator() -> Result<Op>;
+
+// Symbolic expectation <ψ|A|ψ> = <ψ|·A·|ψ>, assembled as dagger(state_ket)·op·state_ket.
+// Purely symbolic (there is no Hilbert-space inner product); run normal_order() to reduce any
+// ladder/unitary structure in the operator part. Total: only builds a tree.
+[[nodiscard]] auto expectation(const Op& state_ket, const Op& op) -> Op;
+
+// A named symbolic unitary U (opaque) with the exact defining property U†U = UU† = I.
+[[nodiscard]] auto unitary(std::string name) -> Op;
+// The time-evolution operator U(θ) = exp(−iθH), represented OPAQUELY as a named unitary tagged
+// by H (no exponential expansion): U†U reduces to I under normal_order, and NOTHING more is
+// claimed. Equal Hamiltonians (equal renderings) yield the same U.
+[[nodiscard]] auto unitary_from(const Op& hamiltonian) -> Op;
+
+// Normal-ordering rewrite. Distributes/folds exactly like normal_form, then applies the EXACT
+// bosonic CCR a·a† → a†·a + I on the single mode `a` (moving every a† left of every a) and
+// cancels adjacent named-unitary inverse pairs U·U† → I and U†·U → I. Terminating and confluent
+// on that subalgebra; every other atom (other symbols, kets, bras) is opaque and is neither
+// reordered nor contracted. Returns MathError::overflow if a coefficient overflows int64.
+[[nodiscard]] auto normal_order(const Op& a) -> Result<Op>;
 
 }  // namespace nimblecas
 
@@ -279,6 +342,7 @@ namespace {
                 seed = hash_combine(seed, std::hash<std::string>{}(n.name));
                 seed = hash_combine(seed, std::hash<bool>{}(n.adjoint));
                 seed = hash_combine(seed, std::hash<bool>{}(n.self_adjoint));
+                seed = hash_combine(seed, std::hash<bool>{}(n.unitary));
             } else if constexpr (std::is_same_v<T, OpScalarNode>) {
                 seed = hash_combine(seed, hash_complex(n.value));
             } else if constexpr (std::is_same_v<T, OpIdentityNode>) {
@@ -316,11 +380,15 @@ auto Op::self_adjoint_symbol(std::string name) -> Op {
     return Op(OpNode{
         .value = OpSymbolNode{.name = std::move(name), .adjoint = false, .self_adjoint = true}});
 }
-auto Op::make_symbol(std::string name, bool adjoint, bool self_adj) -> Op {
+auto Op::make_symbol(std::string name, bool adjoint, bool self_adj, bool unitary) -> Op {
     // A Hermitian symbol is its own adjoint, so it never carries the A† flag.
     return Op(OpNode{.value = OpSymbolNode{.name = std::move(name),
                                            .adjoint = self_adj ? false : adjoint,
-                                           .self_adjoint = self_adj}});
+                                           .self_adjoint = self_adj,
+                                           .unitary = unitary}});
+}
+auto Op::unitary_symbol(std::string name) -> Op {
+    return Op(OpNode{.value = OpSymbolNode{.name = std::move(name), .unitary = true}});
 }
 auto Op::scalar(Complex value) -> Op {
     return Op(OpNode{.value = OpScalarNode{.value = std::move(value)}});
@@ -360,7 +428,7 @@ auto Op::is_equivalent_to(const Op& other) const -> bool {
             const T& rhs = std::get<T>(b.value);
             if constexpr (std::is_same_v<T, OpSymbolNode>) {
                 return lhs.name == rhs.name && lhs.adjoint == rhs.adjoint &&
-                       lhs.self_adjoint == rhs.self_adjoint;
+                       lhs.self_adjoint == rhs.self_adjoint && lhs.unitary == rhs.unitary;
             } else if constexpr (std::is_same_v<T, OpScalarNode>) {
                 return lhs.value == rhs.value;
             } else if constexpr (std::is_same_v<T, OpIdentityNode>) {
@@ -485,7 +553,8 @@ auto dagger(const Op& a) -> Op {
                 if (n.self_adjoint) {
                     return a;  // Hermitian: fixed point of dagger
                 }
-                return Op::make_symbol(n.name, !n.adjoint, false);  // toggle the A† form
+                // Toggle the A† form, preserving the unitary tag (U ↔ U†).
+                return Op::make_symbol(n.name, !n.adjoint, false, n.unitary);
             } else if constexpr (std::is_same_v<T, OpScalarNode>) {
                 return Op::scalar(conj(n.value));  // scalars conjugate
             } else if constexpr (std::is_same_v<T, OpIdentityNode>) {
@@ -524,12 +593,13 @@ struct Atom {
     std::string name;
     bool adjoint = false;
     bool self_adjoint = false;
+    bool unitary = false;
 
     [[nodiscard]] auto operator==(const Atom& o) const -> bool = default;
-    // Deterministic total order (self_adjoint last so it never splits a genuine collision).
+    // Deterministic total order (flags last so they never split a genuine collision).
     [[nodiscard]] auto key() const {
         return std::tuple{static_cast<std::uint8_t>(kind), std::string_view{name}, adjoint,
-                          self_adjoint};
+                          self_adjoint, unitary};
     }
 };
 
@@ -557,7 +627,8 @@ struct Term {
                     Term{.mono = {Atom{.kind = Atom::Kind::Symbol,
                                        .name = n.name,
                                        .adjoint = n.adjoint,
-                                       .self_adjoint = n.self_adjoint}},
+                                       .self_adjoint = n.self_adjoint,
+                                       .unitary = n.unitary}},
                          .coeff = one_scalar()}};
             } else if constexpr (std::is_same_v<T, OpScalarNode>) {
                 return std::vector<Term>{Term{.mono = {}, .coeff = n.value}};  // c·I
@@ -630,7 +701,7 @@ struct Term {
 [[nodiscard]] auto atom_to_op(const Atom& atom) -> Op {
     switch (atom.kind) {
         case Atom::Kind::Symbol:
-            return Op::make_symbol(atom.name, atom.adjoint, atom.self_adjoint);
+            return Op::make_symbol(atom.name, atom.adjoint, atom.self_adjoint, atom.unitary);
         case Atom::Kind::Ket:
             return Op::ket(atom.name);
         case Atom::Kind::Bra:
@@ -665,19 +736,15 @@ struct Term {
     return Op::scaled(t.coeff, std::move(base));
 }
 
-}  // namespace
-
-auto normal_form(const Op& a) -> Result<Op> {
-    auto terms = to_terms(a);
-    if (!terms) {
-        return make_error<Op>(terms.error());
-    }
-    // Canonical ordering, then merge adjacent like monomials with exact Complex addition.
-    std::ranges::stable_sort(*terms, [](const Term& x, const Term& y) {
+// Canonical ordering + collection shared by normal_form and normal_order: sort monomials by
+// the fixed total order, merge adjacent like monomials with exact Complex addition, drop zero
+// coefficients, and emit the zero operator / a lone term / a deterministically-ordered sum.
+[[nodiscard]] auto collect_terms(std::vector<Term> terms) -> Result<Op> {
+    std::ranges::stable_sort(terms, [](const Term& x, const Term& y) {
         return mono_less(x.mono, y.mono);
     });
     std::vector<Term> collected;
-    for (Term& t : *terms) {
+    for (Term& t : terms) {
         if (!collected.empty() && mono_equal(collected.back().mono, t.mono)) {
             auto s = collected.back().coeff.add(t.coeff);
             if (!s) {
@@ -688,7 +755,6 @@ auto normal_form(const Op& a) -> Result<Op> {
             collected.push_back(std::move(t));
         }
     }
-    // Drop zero-coefficient monomials.
     std::erase_if(collected, [](const Term& t) { return t.coeff.is_zero(); });
 
     if (collected.empty()) {
@@ -703,6 +769,122 @@ auto normal_form(const Op& a) -> Result<Op> {
         out.push_back(term_to_op(t));
     }
     return Op::sum(std::move(out));
+}
+
+// --- normal-ordering rewrite for the single bosonic mode `a` plus unitary cancellation ---
+
+inline constexpr std::string_view kLadderMode = "a";  // the one symbol treated as a boson
+
+[[nodiscard]] auto is_annihilation_atom(const Atom& x) -> bool {
+    return x.kind == Atom::Kind::Symbol && !x.self_adjoint && !x.unitary && !x.adjoint &&
+           x.name == kLadderMode;  // a
+}
+[[nodiscard]] auto is_creation_atom(const Atom& x) -> bool {
+    return x.kind == Atom::Kind::Symbol && !x.self_adjoint && !x.unitary && x.adjoint &&
+           x.name == kLadderMode;  // a†
+}
+// Adjacent U·U† or U†·U for the same named unitary: cancels to I.
+[[nodiscard]] auto unitary_inverse_pair(const Atom& x, const Atom& y) -> bool {
+    return x.kind == Atom::Kind::Symbol && y.kind == Atom::Kind::Symbol && x.unitary &&
+           y.unitary && !x.self_adjoint && !y.self_adjoint && x.name == y.name &&
+           x.adjoint != y.adjoint;
+}
+
+// Normal-order one monomial: repeatedly apply a·a† → a†·a + I (mode `a`) and cancel adjacent
+// unitary inverse pairs, appending the resulting normal-ordered monomials (each carrying the
+// caller's `coeff`) to `out`. This is a PURE structural rewrite — no scalar arithmetic, hence
+// no overflow. Termination: each unitary cancellation strictly shortens the monomial, and each
+// bosonic step strictly lowers the number of (a … a†) inversions — the swap branch removes
+// exactly that adjacency-inversion (reordering the same two atoms creates no new ones), and the
+// contraction branch removes at least it — so the lexicographic measure (length, #inversions)
+// strictly decreases on every branch. The boson-normal-ordered / free-group-reduced form is
+// unique, so the rewrite is confluent on this subalgebra.
+auto normal_order_mono(std::vector<Atom> mono, const Complex& coeff, std::vector<Term>& out)
+    -> void {
+    std::vector<std::vector<Atom>> work;
+    work.push_back(std::move(mono));
+    while (!work.empty()) {
+        std::vector<Atom> cur = std::move(work.back());
+        work.pop_back();
+        bool rewrote = false;
+        for (std::size_t i = 0; i + 1 < cur.size(); ++i) {
+            const auto idx = static_cast<std::ptrdiff_t>(i);
+            if (unitary_inverse_pair(cur[i], cur[i + 1])) {
+                std::vector<Atom> reduced = cur;
+                reduced.erase(reduced.begin() + idx, reduced.begin() + idx + 2);  // U U† → I
+                work.push_back(std::move(reduced));
+                rewrote = true;
+                break;
+            }
+            if (is_annihilation_atom(cur[i]) && is_creation_atom(cur[i + 1])) {
+                std::vector<Atom> swapped = cur;  // a·a† → a†·a
+                swapped[i].adjoint = true;        // a  → a†
+                swapped[i + 1].adjoint = false;   // a† → a
+                std::vector<Atom> contracted = cur;  // a·a† → I
+                contracted.erase(contracted.begin() + idx, contracted.begin() + idx + 2);
+                work.push_back(std::move(swapped));
+                work.push_back(std::move(contracted));
+                rewrote = true;
+                break;
+            }
+        }
+        if (!rewrote) {
+            out.push_back(Term{.mono = std::move(cur), .coeff = coeff});
+        }
+    }
+}
+
+}  // namespace
+
+auto normal_form(const Op& a) -> Result<Op> {
+    auto terms = to_terms(a);
+    if (!terms) {
+        return make_error<Op>(terms.error());
+    }
+    return collect_terms(std::move(*terms));
+}
+
+auto normal_order(const Op& a) -> Result<Op> {
+    auto terms = to_terms(a);
+    if (!terms) {
+        return make_error<Op>(terms.error());
+    }
+    std::vector<Term> ordered;
+    ordered.reserve(terms->size());
+    for (Term& t : *terms) {
+        normal_order_mono(std::move(t.mono), t.coeff, ordered);
+    }
+    return collect_terms(std::move(ordered));
+}
+
+// --- ladder / quadrature / expectation / unitary constructors ---
+auto annihilation() -> Op { return Op::make_symbol(std::string{kLadderMode}, false, false); }
+auto creation() -> Op { return dagger(annihilation()); }  // a†
+auto number_operator() -> Op { return multiply(creation(), annihilation()); }  // N = a† a
+
+auto position() -> Op { return add(annihilation(), creation()); }  // X = a + a†
+auto momentum() -> Op {
+    // P = i(a† − a) = i·a† + (−i)·a; coefficients ±i are exact Gaussian rationals.
+    const Complex i = Complex::i();
+    const Complex neg_i = Complex::make(Rational::from_int(0), Rational::from_int(-1));
+    return add(scale(i, creation()), scale(neg_i, annihilation()));
+}
+
+auto canonical_xp_commutator() -> Result<Op> {
+    // [X,P] = 2iI, so the physical [x,p] = (1/2)[X,P] = iI (exact: only the rational 1/2 enters).
+    const Complex half = Complex::from_real(Rational::make(1, 2).value());
+    return normal_order(scale(half, commutator(position(), momentum())));
+}
+
+auto expectation(const Op& state_ket, const Op& op) -> Op {
+    return multiply(multiply(dagger(state_ket), op), state_ket);  // <ψ| A |ψ>
+}
+
+auto unitary(std::string name) -> Op { return Op::unitary_symbol(std::move(name)); }
+auto unitary_from(const Op& hamiltonian) -> Op {
+    // U(θ) = exp(−iθH) kept OPAQUE: a named unitary tagged by H's rendering, so equal H give the
+    // same U and dagger(U)·U reduces to I under normal_order. No exponential is expanded.
+    return Op::unitary_symbol("U[" + hamiltonian.to_string() + "]");
 }
 
 }  // namespace nimblecas

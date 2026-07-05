@@ -6,6 +6,11 @@
 // dagger/adjoint rules (order reversal, conjugation of i, involution, self-adjoint,
 // bra<->ket), non-commutativity, and normal-form collection of like monomials with EXACT
 // Gaussian-rational coefficients.
+//
+// The ladder extension is covered too: annihilation/creation/number operators and the exact
+// bosonic normal-ordering rewrite (a·a† → a†·a + I) that reduces [a,a†]=I, [N,a]=−a, [N,a†]=a†;
+// the exact canonical relation [x,p]=iI from the quadratures X=a+a†, P=i(a†−a); symbolic
+// expectation assembly <ψ|A|ψ>; and the opaque symbolic unitary with U†U=I.
 
 import std;
 import nimblecas.core;
@@ -41,6 +46,14 @@ namespace {
 // The zero operator (empty normal form).
 [[nodiscard]] auto is_zero_op(const Op& a) -> bool {
     return nf_eq(a, nq::op_scalar(Complex{}));
+}
+
+// Ladder identity test: two operators are equal AFTER the bosonic/unitary normal-ordering
+// rewrite (a·a† → a†·a + I, U·U† → I) iff their normal_order forms are structurally equal.
+[[nodiscard]] auto no_eq(const Op& a, const Op& b) -> bool {
+    auto na = nq::normal_order(a);
+    auto nb = nq::normal_order(b);
+    return na.has_value() && nb.has_value() && na->is_equivalent_to(*nb);
 }
 
 }  // namespace
@@ -191,6 +204,81 @@ auto main() -> int {
                   const Op third = nq::scale(rat(1, 3), A);
                   t.expect(nf_eq(nq::add(nq::add(third, third), third), A),
                            "(1/3)A * 3 = A exactly");
+              })
+        .test("ladder_operators_and_adjoint",
+              [&](TestContext& t) {
+                  const Op a = nq::annihilation();
+                  const Op ad = nq::creation();
+                  // a† is exactly the adjoint of a, and the two are distinct generators.
+                  t.expect(nf_eq(nq::creation(), nq::dagger(nq::annihilation())),
+                           "a† = dagger(a)");
+                  t.expect(nf_eq(nq::annihilation(), nq::dagger(nq::creation())),
+                           "a = dagger(a†)  (involution)");
+                  t.expect(!nf_eq(a, ad), "a != a† (distinct generators)");
+                  // N = a† a by construction.
+                  t.expect(nf_eq(nq::number_operator(), nq::multiply(ad, a)), "N = a† a");
+              })
+        .test("canonical_commutation_normal_order",
+              [&](TestContext& t) {
+                  const Op a = nq::annihilation();
+                  const Op ad = nq::creation();
+                  const Op N = nq::number_operator();
+                  // [a, a†] = I  — the defining bosonic CCR, via normal_order (a a† → a† a + I).
+                  t.expect(no_eq(nq::commutator(a, ad), nq::identity()), "[a, a†] = I");
+                  // The free algebra does NOT auto-reduce it: a a† − a† a is not I without
+                  // normal-ordering (normal_form alone leaves the two ordered monomials).
+                  t.expect(!nf_eq(nq::commutator(a, ad), nq::identity()),
+                           "[a,a†] != I without normal-ordering (honest: free algebra)");
+                  // [N, a] = −a  and  [N, a†] = a†.
+                  t.expect(no_eq(nq::commutator(N, a), nq::negate(a)), "[N, a] = −a");
+                  t.expect(no_eq(nq::commutator(N, ad), ad), "[N, a†] = a†");
+                  // A three-atom sanity check of the rewrite: a·a·a† = a†·a·a + 2a.
+                  const Op lhs = nq::multiply(nq::multiply(a, a), ad);
+                  const Op rhs = nq::add(nq::multiply(nq::multiply(ad, a), a), nq::scale(ci(2, 0), a));
+                  t.expect(no_eq(lhs, rhs), "a a a† = a† a a + 2a");
+              })
+        .test("position_momentum_canonical_relation",
+              [&](TestContext& t) {
+                  // [X,P] = 2iI for the exact quadratures X = a+a†, P = i(a†−a).
+                  t.expect(no_eq(nq::commutator(nq::position(), nq::momentum()),
+                                 nq::scale(ci(0, 2), nq::identity())),
+                           "[X,P] = 2iI (exact quadratures)");
+                  // The physical [x,p] = (1/2)[X,P] = iI, exposed exactly (only 1/2 enters).
+                  auto xp = nq::canonical_xp_commutator();
+                  t.expect(xp.has_value() && no_eq(*xp, nq::op_scalar(Complex::i())),
+                           "[x,p] = iI (exact canonical commutator)");
+              })
+        .test("expectation_assembly",
+              [&](TestContext& t) {
+                  const Op psi = nq::ket("psi");
+                  const Op N = nq::number_operator();
+                  // <ψ|N|ψ> is assembled as <ψ|·a†·a·|ψ> (bra = dagger(ket)).
+                  const Op expected = nq::multiply(
+                      nq::multiply(nq::multiply(nq::bra("psi"), nq::creation()), nq::annihilation()),
+                      nq::ket("psi"));
+                  t.expect(no_eq(nq::expectation(psi, N), expected),
+                           "<ψ|N|ψ> = <ψ| a† a |ψ>");
+                  // General shape: <ψ|A|ψ> = dagger(|ψ>)·A·|ψ>.
+                  t.expect(nf_eq(nq::expectation(psi, A),
+                                 nq::multiply(nq::multiply(nq::bra("psi"), A), nq::ket("psi"))),
+                           "<ψ|A|ψ> = <ψ| A |ψ>");
+              })
+        .test("symbolic_unitary_property",
+              [&](TestContext& t) {
+                  const Op U = nq::unitary("U");
+                  // U†U = I and UU† = I — the defining property, under normal_order.
+                  t.expect(no_eq(nq::multiply(nq::dagger(U), U), nq::identity()), "U† U = I");
+                  t.expect(no_eq(nq::multiply(U, nq::dagger(U)), nq::identity()), "U U† = I");
+                  // A generic (non-unitary) symbol does NOT satisfy this (honesty check).
+                  t.expect(!no_eq(nq::multiply(nq::dagger(A), A), nq::identity()),
+                           "A† A != I for a generic symbol");
+                  // Time-evolution operator U(θ) = exp(−iθH), opaque, still obeys U†U = I.
+                  const Op Uh = nq::unitary_from(nq::self_adjoint("H"));
+                  t.expect(no_eq(nq::multiply(nq::dagger(Uh), Uh), nq::identity()),
+                           "exp(−iθH)† exp(−iθH) = I (opaque unitary)");
+                  // Equal Hamiltonians yield the same U; the exponential is NOT expanded.
+                  t.expect(nf_eq(nq::unitary_from(nq::self_adjoint("H")), Uh),
+                           "unitary_from(H) is deterministic in H");
               })
         .run();
 }

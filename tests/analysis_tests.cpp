@@ -13,20 +13,29 @@ import nimblecas.dynamics;
 import nimblecas.analysis;
 import nimblecas.testing;
 
+using nimblecas::abel_test;
 using nimblecas::alternating_series_test;
+using nimblecas::bertrand_test;
+using nimblecas::cauchy_condensation_test;
 using nimblecas::comparison_test;
 using nimblecas::condition_1;
 using nimblecas::condition_2_estimate;
 using nimblecas::condition_inf;
+using nimblecas::dirichlet_test;
+using nimblecas::gauss_test;
 using nimblecas::is_asymptotically_stable;
 using nimblecas::is_positive_definite;
 using nimblecas::is_stable_lyapunov;
+using nimblecas::kummer_test;
+using nimblecas::limit_comparison_test;
 using nimblecas::lyapunov_exponent;
 using nimblecas::lyapunov_solve;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::matrix_norm_1;
 using nimblecas::matrix_norm_inf;
+using nimblecas::p_series_test;
+using nimblecas::raabe_test;
 using nimblecas::Rational;
 using nimblecas::ratio_test;
 using nimblecas::root_test;
@@ -171,6 +180,134 @@ auto main() -> int {
                       [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n); },
                       Verdict::converges);
                   t.expect(v == Verdict::converges, "term-wise dominated by a convergent series");
+              })
+        // --- extended convergence battery -----------------------------------
+        .test("raabe_p2_converges_exact",
+              [](TestContext& t) {
+                  // a_n = 1/(n(n+1)): a_n/a_{n+1} = (n+2)/n, so n(a_n/a_{n+1}-1) = 2 exactly.
+                  // Raabe l = 2 > 1 => converges, and the limit is exact over Q.
+                  auto r = raabe_test([](std::int64_t n) {
+                      return rr(1, n * (n + 1));
+                  });
+                  t.expect(r.exact, "Raabe limit for 1/(n(n+1)) is exact over Q");
+                  t.expect(r.exact_limit.has_value() && *r.exact_limit == ri(2),
+                           "Raabe l = 2 exactly");
+                  t.expect(r.verdict == Verdict::converges, "l = 2 > 1 => converges");
+              })
+        .test("raabe_p2_series_converges_numeric",
+              [](TestContext& t) {
+                  // a_n = 1/n^2: n(a_n/a_{n+1}-1) = (2n+1)/n -> 2 (not constant => numeric).
+                  auto r = raabe_test([](std::int64_t n) { return rr(1, n * n); });
+                  t.expect(!r.exact, "Raabe limit for 1/n^2 is not a constant rational");
+                  t.expect(r.numeric_limit > 1.5, "numeric Raabe estimate approaches 2");
+                  t.expect(r.verdict == Verdict::converges, "l ~ 2 > 1 => converges");
+              })
+        .test("raabe_harmonic_is_inconclusive",
+              [](TestContext& t) {
+                  // a_n = 1/n: n(a_n/a_{n+1}-1) = n((n+1)/n - 1) = 1 exactly. l = 1 boundary
+                  // => Raabe is honestly inconclusive (harmonic actually diverges).
+                  auto r = raabe_test([](std::int64_t n) { return rr(1, n); });
+                  t.expect(r.exact && r.exact_limit.has_value() && *r.exact_limit == ri(1),
+                           "Raabe l = 1 exactly for the harmonic series");
+                  t.expect(r.verdict == Verdict::inconclusive, "l = 1 => inconclusive");
+              })
+        .test("gauss_resolves_harmonic_boundary",
+              [](TestContext& t) {
+                  // Same harmonic a_n = 1/n with exact h = 1. Gauss RESOLVES the boundary:
+                  // converges iff h > 1, so h = 1 => diverges (correct: harmonic diverges).
+                  auto g = gauss_test([](std::int64_t n) { return rr(1, n); });
+                  t.expect(g.exact && g.exact_limit.has_value() && *g.exact_limit == ri(1),
+                           "Gauss h = 1 exactly for the harmonic series");
+                  t.expect(g.verdict == Verdict::diverges, "Gauss h = 1 => diverges");
+                  // And 1/(n(n+1)) with h = 2 > 1 => converges.
+                  auto g2 = gauss_test([](std::int64_t n) { return rr(1, n * (n + 1)); });
+                  t.expect(g2.verdict == Verdict::converges, "Gauss h = 2 => converges");
+              })
+        .test("kummer_decides_with_auxiliary",
+              [](TestContext& t) {
+                  // a_n = 1/(n(n+1)), b_n = n (so Sum 1/b_n = Sum 1/n diverges). Then
+                  // b_n a_n/a_{n+1} - b_{n+1} = n(n+2)/n - (n+1) = 1 exactly. l = 1 > 0 =>
+                  // converges (the divergence side condition is irrelevant when l > 0).
+                  auto k = kummer_test([](std::int64_t n) { return rr(1, n * (n + 1)); },
+                                       [](std::int64_t n) { return ri(n); },
+                                       /*one_over_b_diverges=*/true);
+                  t.expect(k.exact && k.exact_limit.has_value() && *k.exact_limit == ri(1),
+                           "Kummer l = 1 exactly");
+                  t.expect(k.verdict == Verdict::converges, "l = 1 > 0 => converges");
+              })
+        .test("p_series_threshold_exact",
+              [](TestContext& t) {
+                  // Sum 1/n^p: p > 1 converges, p <= 1 diverges. Exact, never inconclusive.
+                  t.expect(p_series_test(ri(2)) == Verdict::converges, "p = 2 converges");
+                  t.expect(p_series_test(ri(1)) == Verdict::diverges, "p = 1 (harmonic) diverges");
+                  t.expect(p_series_test(rr(3, 2)) == Verdict::converges, "p = 3/2 converges");
+                  t.expect(p_series_test(rr(1, 2)) == Verdict::diverges, "p = 1/2 diverges");
+              })
+        .test("bertrand_threshold_exact",
+              [](TestContext& t) {
+                  // Sum 1/(n (ln n)^p): p > 1 converges, p <= 1 diverges (incl. p = 1).
+                  t.expect(bertrand_test(ri(2)) == Verdict::converges, "Bertrand p = 2 converges");
+                  t.expect(bertrand_test(ri(1)) == Verdict::diverges, "Bertrand p = 1 diverges");
+              })
+        .test("cauchy_condensation_harmonic_and_p2",
+              [](TestContext& t) {
+                  // 1/n: condensed c_k = 2^k / 2^k = 1, Sum 1 diverges => diverges.
+                  auto h = cauchy_condensation_test(
+                      [](std::int64_t n) { return 1.0 / static_cast<double>(n); });
+                  t.expect(h.has_value() && *h == Verdict::diverges,
+                           "condensation: harmonic 1/n diverges");
+                  // 1/n^2: condensed c_k = 2^k / 4^k = 2^{-k}, geometric => converges.
+                  auto p2 = cauchy_condensation_test([](std::int64_t n) {
+                      return 1.0 / (static_cast<double>(n) * static_cast<double>(n));
+                  });
+                  t.expect(p2.has_value() && *p2 == Verdict::converges,
+                           "condensation: 1/n^2 converges");
+              })
+        .test("cauchy_condensation_rejects_nonmonotone",
+              [](TestContext& t) {
+                  // A non-monotone (and negative) term violates the precondition => domain_error.
+                  auto bad = cauchy_condensation_test(
+                      [](std::int64_t n) { return (n % 2 == 0) ? 1.0 : -1.0; });
+                  t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
+                           "non-monotone / negative term => domain_error");
+              })
+        .test("limit_comparison_matches_reference",
+              [](TestContext& t) {
+                  // a_n = 1/(n^2+1), b_n = 1/n^2: a_n/b_n = n^2/(n^2+1) -> 1 in (0, inf).
+                  // Sum b_n converges => Sum a_n converges.
+                  auto lc = limit_comparison_test(
+                      [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n + 1.0); },
+                      [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n); },
+                      Verdict::converges);
+                  t.expect(std::fabs(lc.numeric_limit - 1.0) < 1e-2,
+                           "limit-comparison ratio l ~ 1");
+                  t.expect(lc.verdict == Verdict::converges,
+                           "0 < l < inf => mirrors the convergent reference");
+              })
+        .test("dirichlet_bounded_partial_sums",
+              [](TestContext& t) {
+                  // a_n = (-1)^n has partial sums in {-1, 0} (bounded); b_n = 1/n monotone
+                  // -> 0. Dirichlet => Sum (-1)^n / n converges.
+                  auto v = dirichlet_test(
+                      [](std::int64_t n) { return (n % 2 == 0) ? 1.0 : -1.0; },
+                      [](std::int64_t n) { return 1.0 / static_cast<double>(n); });
+                  t.expect(v == Verdict::converges, "Dirichlet certifies convergence");
+                  // a_n = 1 has unbounded partial sums => hypothesis fails => inconclusive.
+                  auto v2 = dirichlet_test([](std::int64_t) { return 1.0; },
+                                           [](std::int64_t n) { return 1.0 / static_cast<double>(n); });
+                  t.expect(v2 == Verdict::inconclusive,
+                           "unbounded partial sums => honestly inconclusive");
+              })
+        .test("abel_convergent_times_monotone_bounded",
+              [](TestContext& t) {
+                  // Sum a_n = Sum (-1)^n / n converges; b_n = 1 + 1/n monotone, bounded.
+                  // Abel => Sum a_n b_n converges.
+                  auto v = abel_test(
+                      [](std::int64_t n) {
+                          return ((n % 2 == 0) ? 1.0 : -1.0) / static_cast<double>(n);
+                      },
+                      [](std::int64_t n) { return 1.0 + 1.0 / static_cast<double>(n); });
+                  t.expect(v == Verdict::converges, "Abel certifies convergence");
               })
         // --- Lyapunov equation ----------------------------------------------
         .test("lyapunov_solve_reconstructs_stable",

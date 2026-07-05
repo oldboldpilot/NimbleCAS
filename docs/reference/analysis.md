@@ -114,6 +114,52 @@ struct NumericTest {
 The alternating (Leibniz) test is exact in its logic but evaluated on sampled
 doubles, so it is reported under the numerical family.
 
+### Extended classical battery
+
+Raabe, Kummer, Gauss, limit-comparison, Cauchy condensation, Dirichlet, Abel,
+and the sharp `p`-series / Bertrand threshold wrappers. Each keeps the module's
+honesty discipline: when a test's decisive limit is a **constant rational over
+the sampled indices** it is returned **exactly over `Q`** (carried in the
+`RatioTest` `exact` / `exact_limit` fields) and the verdict follows exactly —
+*including* the boundary cases a test is designed to resolve; otherwise a
+**numerical** finite-`n` estimate is reported and the verdict is **inconclusive
+whenever the estimate is too close to the threshold to certify a strict
+inequality**. None of them ever reports converges/diverges on a genuinely
+inconclusive (boundary) limit.
+
+Raabe, Gauss, and Kummer reuse the `RatioTest` carrier (`verdict`, `exact`,
+`exact_limit`, `numeric_limit`) — but note the **comparison direction differs
+per test**: the ratio test compares `L` to `1` with `L < 1 ⇒ converges`; Raabe
+and Gauss compare their limit to `1` with the *reversed* direction; Kummer
+compares its limit to `0`.
+
+| Function | Signature | Behavior |
+| :--- | :--- | :--- |
+| `raabe_test` | `[[nodiscard]] auto raabe_test(const RationalSequence& a) -> RatioTest` | Raabe's test: `l = lim n(aₙ/aₙ₊₁ − 1)`. `l > 1` **converges**, `l < 1` **diverges**, `l == 1` **inconclusive** (the boundary Raabe cannot resolve). Exact over `Q` when `l` is a constant rational on the samples (`aₙ = 1/(n(n+1)) ⇒ l = 2`; `aₙ = 1/n ⇒ l = 1`); else a numeric estimate with an inconclusive band of `0.1` about `1`. |
+| `gauss_test` | `[[nodiscard]] auto gauss_test(const RationalSequence& a) -> RatioTest` | Gauss's test. **Assumes** `aₙ/aₙ₊₁ = 1 + h/n + O(1/n^{1+r})`, `r > 0` (an unverifiable precondition), extracts `h = lim n(aₙ/aₙ₊₁ − 1)`, and concludes **converges iff `h > 1`, diverges iff `h ≤ 1`**. Unlike Raabe it **resolves the `h == 1` boundary (to diverges)** — but only on the exact path, where `h` is a constant rational (harmonic `aₙ = 1/n ⇒ h = 1 ⇒` diverges). On the numeric path a near-1 estimate cannot certify the boundary and is **inconclusive**. Shares the `h` extraction with `raabe_test`. |
+| `kummer_test` | `[[nodiscard]] auto kummer_test(const RationalSequence& a, const RationalSequence& b, bool one_over_b_diverges = false) -> RatioTest` | Kummer's general test with a positive auxiliary `bₙ`: `l = lim(bₙ·aₙ/aₙ₊₁ − bₙ₊₁)`. `l > 0` **converges**. `l < 0` **diverges only when `Σ 1/bₙ` diverges** — a side condition the caller certifies via `one_over_b_diverges`; without it a negative `l` is **inconclusive** (divergence not established). `l == 0` inconclusive. Exact when `l` is constant on the samples (`aₙ = 1/(n(n+1))`, `bₙ = n ⇒ l = 1`), else numeric with an inconclusive band about `0`. (`bₙ ≡ 1` recovers the d'Alembert ratio test as `l = lim(aₙ/aₙ₊₁ − 1)`.) |
+| `limit_comparison_test` | `[[nodiscard]] auto limit_comparison_test(const RealSequence& a, const RealSequence& b, Verdict b_behaviour, std::int64_t samples = 200) -> NumericTest` | Limit-comparison test (**numerical**): `l = lim aₙ/bₙ`. When `0 < l < ∞` the series `Σ aₙ` shares the reference's `b_behaviour`, so the verdict echoes it; `numeric_limit` carries the finite-`n` estimate of `l`. If the sampled ratios are not all finite-and-positive, or do not settle to a finite positive limit (bounded spread), the verdict is **inconclusive**. |
+| `cauchy_condensation_test` | `[[nodiscard]] auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples = 1000) -> Result<Verdict>` | Cauchy condensation (**numerical**): for `aₙ ≥ 0` monotonically non-increasing, `Σ aₙ` converges iff `Σ 2ᵏ a₍₂ᵏ₎` converges. The condensed series is summed and its vanishing tail increment decides the verdict (same tail heuristic as `integral_test`). The monotonicity / non-negativity precondition is **checked on `[1, samples]`** and yields `domain_error` if violated there (assumed, not checked, beyond that range). |
+| `dirichlet_test` | `[[nodiscard]] auto dirichlet_test(const RealSequence& a, const RealSequence& b, std::int64_t samples = 1000) -> Verdict` | Dirichlet's test for `Σ aₙbₙ` (**numerical**). Certifies **convergence** from two checkable hypotheses on the sampled range: the partial sums `A_N = Σ_{n≤N} aₙ` stay **bounded**, and `bₙ` is **monotone with `bₙ → 0`**. Both hold ⇒ converges; otherwise **inconclusive** — it never certifies divergence. |
+| `abel_test` | `[[nodiscard]] auto abel_test(const RealSequence& a, const RealSequence& b, std::int64_t samples = 1000) -> Verdict` | Abel's test for `Σ aₙbₙ` (**numerical**). Certifies **convergence** when `Σ aₙ` converges (checked via a vanishing partial-sum tail `A_{2N} − A_N`) and `bₙ` is **monotone and bounded** (convergent). Both hold ⇒ converges, otherwise **inconclusive**. Sampled over `n = 1..2·samples`. |
+| `p_series_test` | `[[nodiscard]] auto p_series_test(const Rational& p) -> Verdict` | `p`-series threshold, **exact over `Q`**: `Σ 1/nᵖ` **converges iff `p > 1`**, else diverges. A sharp, decidable threshold — **never inconclusive**. |
+| `bertrand_test` | `[[nodiscard]] auto bertrand_test(const Rational& p) -> Verdict` | Bertrand-series threshold, **exact over `Q`**: `Σ_{n≥2} 1/(n(ln n)ᵖ)` **converges iff `p > 1`**, else diverges (including `p == 1`, where `Σ 1/(n ln n)` diverges). The known logarithmic-scale threshold — sharp and decidable. |
+
+**Honesty boundaries.** `p_series_test` / `bertrand_test` are pure exact-`Q`
+threshold decisions (a rational `p` compared to `1`) and carry no sampling.
+`raabe_test` / `gauss_test` / `kummer_test` are exact **only** when their limit
+is a constant rational across the small sample set `n = 2..6` (three or more
+equal samples pin a bounded-degree rational statistic); otherwise they fall to a
+numeric estimate at the largest index whose exact statistic stays inside `int64`
+and go **inconclusive within a band of the threshold**. `raabe`/`gauss` differ
+*only* at the exact `l == 1` boundary — Raabe reports inconclusive, Gauss (whose
+`O(1/n^{1+r})` premise resolves it) reports diverges. The four sampled
+`RealSequence` tests (`limit_comparison`, `cauchy_condensation`, `dirichlet`,
+`abel`) are numerical: they read boundedness / monotonicity / vanishing tails off
+a finite sample and are honestly **inconclusive** whenever a hypothesis cannot be
+certified there. Dirichlet and Abel certify **only convergence**, never
+divergence.
+
 ## Lyapunov equations and stability
 
 The two matrix equations are solved **exactly over `Q`** by vectorization
@@ -146,6 +192,8 @@ struct StabilityCrossCheck {
 | `condition_1` / `condition_inf` / `condition_2_estimate`: `a` not square | `MathError::domain_error` |
 | `condition_1` / `condition_inf` / `condition_2_estimate`: singular `A` (no inverse) | `MathError::domain_error` (from the inverse) |
 | `condition_2_estimate`: the estimated `κ₂²` is not positive | `MathError::domain_error` |
+| `cauchy_condensation_test`: `samples < 2` | `MathError::domain_error` |
+| `cauchy_condensation_test`: a term is negative or the sequence is not non-increasing on `[1, samples]` | `MathError::domain_error` |
 | `lyapunov_solve` / `stein_solve`: `a` not square, or `a.rows() < 1` | `MathError::domain_error` |
 | `lyapunov_solve` / `stein_solve`: `q` not the same size as `a` | `MathError::domain_error` |
 | `lyapunov_solve` / `stein_solve`: singular Kronecker-sum system | `MathError::domain_error` (from the solve) |
@@ -159,8 +207,13 @@ Two outcomes are **results, not errors**: a singular Kronecker-sum system inside
 returns `false` — a non-Hurwitz `A` — and a Jacobian product that annihilates the
 probe direction returns `−∞` from `lyapunov_exponent`. The sequence callables
 and `to_string_view` are total and never error. Note that `ratio_test`,
-`root_test`, `comparison_test`, `integral_test`, and `alternating_series_test`
-return their verdict structs/enums directly (no `Result`): they cannot fail.
+`root_test`, `comparison_test`, `integral_test`, `alternating_series_test`,
+`raabe_test`, `gauss_test`, `kummer_test`, `limit_comparison_test`,
+`dirichlet_test`, `abel_test`, `p_series_test`, and `bertrand_test` return their
+verdict structs/enums directly (no `Result`): they cannot fail. The lone
+extended-battery exception is `cauchy_condensation_test`, which returns
+`Result<Verdict>` because its non-negativity / monotonicity precondition is
+enforced (`domain_error` on violation).
 
 ## Worked examples
 
@@ -227,6 +280,45 @@ comparison_test([](std::int64_t n) { return 1.0 / (double(n) * n + 1.0); },
                 Verdict::converges);                // Verdict::converges
 
 to_string_view(Verdict::diverges);                  // "diverges"
+
+// --- extended battery -----------------------------------------------------
+// Raabe on aₙ = 1/(n(n+1)): aₙ/aₙ₊₁ = (n+2)/n, so n(aₙ/aₙ₊₁−1) = 2 exactly.
+auto rb = raabe_test([&](std::int64_t n) { return rr(1, n * (n + 1)); });
+rb.exact;  *rb.exact_limit;  rb.verdict;             // true, 2, Verdict::converges
+
+// Raabe on the harmonic aₙ = 1/n: l = 1 exactly => inconclusive boundary.
+raabe_test([&](std::int64_t n) { return rr(1, n); }).verdict;   // Verdict::inconclusive
+// Gauss resolves the same boundary: h = 1 => diverges (harmonic diverges).
+gauss_test([&](std::int64_t n) { return rr(1, n); }).verdict;   // Verdict::diverges
+
+// Kummer with bₙ = n (Σ1/bₙ = Σ1/n diverges) on aₙ = 1/(n(n+1)): l = 1 > 0.
+kummer_test([&](std::int64_t n) { return rr(1, n * (n + 1)); },
+            [&](std::int64_t n) { return ri(n); }, /*one_over_b_diverges=*/true)
+    .verdict;                                        // Verdict::converges
+
+// Sharp thresholds, exact over Q.
+p_series_test(ri(2));                                // Verdict::converges (p = 2 > 1)
+p_series_test(ri(1));                                // Verdict::diverges  (harmonic)
+bertrand_test(ri(1));                                // Verdict::diverges  (Σ 1/(n ln n))
+
+// Cauchy condensation: 1/n diverges, 1/n² converges.
+cauchy_condensation_test([](std::int64_t n) { return 1.0 / double(n); }).value();
+                                                     // Verdict::diverges
+cauchy_condensation_test([](std::int64_t n) { return 1.0 / (double(n) * n); }).value();
+                                                     // Verdict::converges
+
+// Limit comparison of 1/(n²+1) against the convergent 1/n²: l → 1 in (0, ∞).
+limit_comparison_test([](std::int64_t n) { return 1.0 / (double(n) * n + 1.0); },
+                      [](std::int64_t n) { return 1.0 / (double(n) * n); },
+                      Verdict::converges).verdict;    // Verdict::converges
+
+// Dirichlet: aₙ = (−1)ⁿ (bounded partials), bₙ = 1/n ↓ 0 => Σ(−1)ⁿ/n converges.
+dirichlet_test([](std::int64_t n) { return (n % 2 == 0) ? 1.0 : -1.0; },
+               [](std::int64_t n) { return 1.0 / double(n); });   // Verdict::converges
+
+// Abel: Σ(−1)ⁿ/n converges, bₙ = 1 + 1/n monotone & bounded => product converges.
+abel_test([](std::int64_t n) { return ((n % 2 == 0) ? 1.0 : -1.0) / double(n); },
+          [](std::int64_t n) { return 1.0 + 1.0 / double(n); });  // Verdict::converges
 
 // --- Lyapunov equation & stability ----------------------------------------
 // A = [[-1,1],[0,-1]] (Hurwitz), Q = I. Solve AᵀP + PA = -Q; the residual is -Q.

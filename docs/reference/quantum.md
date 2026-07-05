@@ -260,11 +260,139 @@ bilinearity, the Leibniz/derivation rule, the Jacobi identity — becomes a
 with no bracket-specific logic in the engine. The empty (all-cancelled) normal
 form is the zero operator `Op::scalar(Complex{})`.
 
+## Ladder / bosonic-mode extension
+
+On top of the free `*`-algebra above, the module adds **one canonical bosonic
+mode** and the single exact physical law that governs it, the canonical
+commutation relation `[a, a†] = I`. This is the one place where a specific
+relation is *baked into a rewrite* rather than left to the caller — and it is
+done exactly, with a terminating, confluent normal-ordering procedure.
+
+```cpp
+[[nodiscard]] auto annihilation() -> Op;      // a  (the mode symbol "a")
+[[nodiscard]] auto creation() -> Op;          // a† = dagger(a)
+[[nodiscard]] auto number_operator() -> Op;   // N = a† a
+
+[[nodiscard]] auto position() -> Op;          // X = a + a†     (= √2 · x)
+[[nodiscard]] auto momentum() -> Op;          // P = i(a† − a)  (= √2 · p)
+[[nodiscard]] auto canonical_xp_commutator() -> Result<Op>;   // (1/2)[X,P] = iI
+
+[[nodiscard]] auto expectation(const Op& state_ket, const Op& op) -> Op;
+
+[[nodiscard]] auto unitary(std::string name) -> Op;
+[[nodiscard]] auto unitary_from(const Op& hamiltonian) -> Op;
+
+[[nodiscard]] auto normal_order(const Op& a) -> Result<Op>;
+```
+
+### `annihilation`, `creation`, `number_operator`
+
+`annihilation()` is the plain non-commuting symbol `a` (internally the reserved
+name `"a"`). `creation()` is exactly `dagger(annihilation())`, i.e. the `a†` form
+of the same symbol, so `dagger` and the ladder pair agree by construction.
+`number_operator()` is `N = a†·a`.
+
+### `normal_order` — the CCR rewrite (and its exact scope)
+
+`normal_order` is the counterpart to `normal_form` that additionally imposes the
+bosonic CCR. It first runs the same distribute-and-fold pass as `normal_form`
+(products over sums, exact `Complex` coefficients, order preserved), then applies
+two **exact** rewrites, repeatedly, until neither can fire:
+
+1. **Bosonic normal ordering** — `a·a† → a†·a + I`, applied to the reserved mode
+   symbol `a`. This moves every `a†` to the left of every `a`. The `+ I` branch is
+   the exact `[a,a†] = I` contraction, so e.g. `a·a·a† → a†·a·a + 2a`.
+2. **Unitary cancellation** — for any symbol tagged unitary (see below), an
+   adjacent inverse pair `U·U† → I` and `U†·U → I`.
+
+**Scope — read this before relying on it.** The rewrite is deliberately narrow
+and honest:
+
+- Only the **single symbol named `a`** is treated as a boson. Any other symbol —
+  including a second mode you might name `b` — is opaque and is **not** subject to
+  `[·,·] = I`. (Multi-mode support is intentionally out of scope; it would need a
+  per-mode tag rather than a single reserved name.)
+- Only symbols built via `unitary` / `unitary_from` cancel; a generic `A†·A` is
+  **left unreduced**, because a generic operator is not unitary.
+- All other atoms — other symbols, kets, bras, self-adjoint symbols — are opaque:
+  they are **neither reordered nor contracted**. In particular `normal_order` does
+  **not** evaluate inner products, so `<ψ|·|ψ>` stays symbolic.
+
+**Termination and confluence.** Each unitary cancellation strictly shortens the
+monomial; each bosonic step strictly lowers the count of `(a … a†)` inversions
+(the swap branch removes exactly the adjacency-inversion it acts on and creates no
+new ones; the contraction branch removes at least it). The lexicographic measure
+`(length, #inversions)` therefore strictly decreases on **every** branch, so the
+procedure always terminates. The boson-normal-ordered / free-group-reduced form is
+unique, so the result is independent of the order in which sites are chosen
+(confluent on this subalgebra). The output is then collected exactly like
+`normal_form` (like monomials merged with exact `Complex` addition, zero terms
+dropped, deterministic order), so **two operators are CCR-equal iff their
+`normal_order` forms are structurally equal:**
+
+```cpp
+normal_order(a).value().is_equivalent_to(normal_order(b).value())
+```
+
+This is how the ladder identities become decidable checks:
+
+```cpp
+// [a, a†] = I, [N, a] = −a, [N, a†] = a†  (I = normal_order-reduced identity)
+normal_order(commutator(a, ad)).value().is_equivalent_to(normal_order(identity()).value());
+```
+
+### `position`, `momentum`, and the exact `[x,p] = iI`
+
+Physical position and momentum are `x = (a+a†)/√2` and `p = (a−a†)/(i√2)`. Since
+`√2 ∉ Q + Qi`, `1/√2` has no exact scalar coefficient, so `position()` and
+`momentum()` return the **exact `√2`-scaled quadratures**
+
+```
+X = a + a†  = √2 · x        P = i(a† − a) = √2 · p
+```
+
+whose coefficients (`±1`, `±i`) *are* exact Gaussian rationals. The physical
+canonical relation is nonetheless available **exactly**, because the `√2` factors
+only ever appear squared: `[X,P] = 2iI`, and
+
+```
+[x,p] = (1/2)[X,P] = iI
+```
+
+involves only the rational `1/2`. `canonical_xp_commutator()` returns this
+exact `iI`. This is the honest, exact statement — no irrational scalar ever enters
+the engine.
+
+### `expectation`
+
+`expectation(state_ket, op)` assembles the symbolic expectation value
+`<ψ|A|ψ>` as `dagger(state_ket) · op · state_ket` using the existing bra/ket and
+product machinery (`dagger(|ψ>) = <ψ|`). It is **purely symbolic**: there is no
+Hilbert-space inner product, so `<ψ|ψ>` is not evaluated to `1` and number- or
+coherent-state expectations remain symbolic. Run `normal_order` to reduce the
+operator part (e.g. to move a `N = a†a` into normal order); the bra/ket wrappers
+pass through opaquely. `expectation` is **total** — it only builds a tree.
+
+### Symbolic unitaries — `unitary`, `unitary_from`
+
+`unitary(name)` is a named operator `U` tagged as unitary, carrying the single
+exact defining property `U†U = UU† = I` (enforced by `normal_order`'s
+cancellation, above). `unitary_from(H)` represents the time-evolution operator
+`U(θ) = exp(−iθH)` **opaquely**: it returns a unitary tagged by `H`'s rendering,
+so equal Hamiltonians yield the same `U` and `dagger(U)·U` reduces to `I` — but
+**the exponential is never expanded**. This is the honesty boundary for
+time-evolution: the engine will confirm `U†U = I` and propagate `U` as an opaque
+unitary factor, and nothing more. Anything requiring the series expansion of a
+general operator exponential is deliberately **not** attempted (it would not be
+exact in this algebra).
+
 ## Error model
 
 | Function | Fallibility |
 | :--- | :--- |
 | `normal_form` | Returns `Result<Op>`; propagates `MathError::overflow` from `Complex` coefficient `add`/`multiply` during folding and collection. |
+| `normal_order`, `canonical_xp_commutator` | Return `Result<Op>`; same overflow propagation as `normal_form` (the CCR rewrite itself is a pure structural rewrite and adds no arithmetic). |
+| `annihilation`, `creation`, `number_operator`, `position`, `momentum`, `expectation`, `unitary`, `unitary_from` | Return a plain `Op` — they only **build** trees. Any coefficient overflow surfaces later, in `normal_order`/`normal_form`. |
 | `add`, `scale`, `multiply`, `negate`, `subtract`, `commutator`, `anticommutator` | Return a plain `Op` — they only **build** trees (no scalar arithmetic yet). Any coefficient overflow surfaces later, when the tree is passed to `normal_form`. |
 | `dagger` | **Total** (returns `Op`). Its only fallible step — conjugating a scalar's imaginary part — is overflow-free for every canonical Gaussian rational; the sole unrepresentable case is an `INT64_MIN` part, a documented **precondition** the caller must not violate (the part is then left unchanged). |
 | leaf/compound factories, `op_symbol`/`self_adjoint`/`op_scalar`/`identity`/`ket`/`bra` | Total; never error. |
@@ -343,6 +471,46 @@ nf_eq(dagger(multiply(ket("a"), bra("b"))),
 // Exact rational collection: (1/2)A + (1/2)A = A, with no float rounding.
 const Complex half = Complex::from_real(Rational::make(1, 2).value());
 nf_eq(add(scale(half, A), scale(half, A)), A);    // true
+```
+
+### Ladder operators, normal ordering, expectation, unitary
+
+```cpp
+// CCR equality: two operators are equal AFTER normal_order iff the reduced forms match.
+auto no_eq = [](const Op& a, const Op& b) {
+    auto na = normal_order(a);
+    auto nb = normal_order(b);
+    return na.has_value() && nb.has_value() && na->is_equivalent_to(*nb);
+};
+
+const Op a  = annihilation();     // a
+const Op ad = creation();         // a† = dagger(a)
+const Op N  = number_operator();  // N = a† a
+
+// The canonical commutation relation and the number-operator identities — via a·a† → a†·a + I.
+no_eq(commutator(a, ad), identity());       // true  — [a, a†] = I
+no_eq(commutator(N, a),  negate(a));        // true  — [N, a]  = −a
+no_eq(commutator(N, ad), ad);               // true  — [N, a†] = a†
+no_eq(multiply(multiply(a, a), ad),
+      add(multiply(multiply(ad, a), a), scale(ci(2, 0), a)));  // true — a a a† = a† a a + 2a
+
+// Honest boundary: the FREE algebra does not auto-reduce [a,a†]; only normal_order does.
+nf_eq(commutator(a, ad), identity());       // false — normal_form alone keeps a a† − a† a
+
+// Exact canonical [x,p] = iI from the √2-scaled quadratures X = a+a†, P = i(a†−a).
+canonical_xp_commutator().value()
+    .is_equivalent_to(op_scalar(Complex::i()));                 // true  — [x,p] = iI
+
+// Symbolic expectation <ψ|N|ψ> = <ψ| a† a |ψ> (bra = dagger(ket); purely symbolic).
+no_eq(expectation(ket("psi"), N),
+      multiply(multiply(multiply(bra("psi"), ad), a), ket("psi")));  // true
+
+// Opaque unitary: U†U = I, but the exponential is never expanded.
+const Op U = unitary("U");
+no_eq(multiply(dagger(U), U), identity());  // true  — U† U = I
+no_eq(multiply(dagger(op_symbol("A")), op_symbol("A")), identity());  // false — generic A† A ≠ I
+const Op Uh = unitary_from(self_adjoint("H"));   // U(θ) = exp(−iθH), opaque
+no_eq(multiply(dagger(Uh), Uh), identity());     // true  — still U† U = I
 ```
 
 ## See also

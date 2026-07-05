@@ -764,6 +764,59 @@ target_link_libraries(nimblecas_symint
          nimblecas_diff nimblecas_simplify nimblecas_symbolic nimblecas_ratpoly
          nimblecas_core std_module)
 
+# ---- nimblecas.kronprod : Kronecker/direct/Hadamard products, vec/unvec (§7.2) ----
+add_library(nimblecas_kronprod STATIC)
+target_sources(nimblecas_kronprod PUBLIC
+  FILE_SET CXX_MODULES FILES src/kronprod/kronprod.cppm)
+target_link_libraries(nimblecas_kronprod
+  PUBLIC nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.qrschur : QR decomposition + real Schur form (§7.2) ----
+add_library(nimblecas_qrschur STATIC)
+target_sources(nimblecas_qrschur PUBLIC
+  FILE_SET CXX_MODULES FILES src/qrschur/qrschur.cppm)
+target_link_libraries(nimblecas_qrschur
+  PUBLIC nimblecas_numeigen nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.cheigen : numeric eigenvalues of complex matrices (§7.2) ----
+add_library(nimblecas_cheigen STATIC)
+target_sources(nimblecas_cheigen PUBLIC
+  FILE_SET CXX_MODULES FILES src/cheigen/cheigen.cppm)
+target_link_libraries(nimblecas_cheigen
+  PUBLIC nimblecas_cmatrix nimblecas_complex nimblecas_numeigen nimblecas_ratpoly
+         nimblecas_core std_module)
+
+# ---- nimblecas.laurent : truncated Laurent series over Q (§7) ----
+add_library(nimblecas_laurent STATIC)
+target_sources(nimblecas_laurent PUBLIC
+  FILE_SET CXX_MODULES FILES src/laurent/laurent.cppm)
+target_link_libraries(nimblecas_laurent
+  PUBLIC nimblecas_powerseries nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.contfrac : continued fractions + Viskovatov (§7) ----
+add_library(nimblecas_contfrac STATIC)
+target_sources(nimblecas_contfrac PUBLIC
+  FILE_SET CXX_MODULES FILES src/contfrac/contfrac.cppm)
+target_link_libraries(nimblecas_contfrac
+  PUBLIC nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.hyptest : hypothesis tests + MLE (score/Fisher) (§7.7) ----
+add_library(nimblecas_hyptest STATIC)
+target_sources(nimblecas_hyptest PUBLIC
+  FILE_SET CXX_MODULES FILES src/hyptest/hyptest.cppm)
+target_link_libraries(nimblecas_hyptest
+  PUBLIC nimblecas_statinfer nimblecas_probdist nimblecas_diff nimblecas_simplify
+         nimblecas_stats nimblecas_matrix nimblecas_symbolic nimblecas_ratpoly
+         nimblecas_core std_module)
+
+# ---- nimblecas.pdeham : PDE homotopy analysis method, h-bar deformation (§7) ----
+add_library(nimblecas_pdeham STATIC)
+target_sources(nimblecas_pdeham PUBLIC
+  FILE_SET CXX_MODULES FILES src/pdeham/pdeham.cppm)
+target_link_libraries(nimblecas_pdeham
+  PUBLIC nimblecas_expand nimblecas_diff nimblecas_simplify nimblecas_symbolic
+         nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -819,6 +872,48 @@ target_link_libraries(symint_tests
           nimblecas_polynomial nimblecas_diff nimblecas_simplify nimblecas_symbolic
           nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
 add_test(NAME symint_tests COMMAND symint_tests)
+
+add_executable(kronprod_tests tests/kronprod_tests.cpp)
+target_link_libraries(kronprod_tests
+  PRIVATE nimblecas_kronprod nimblecas_matrix nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME kronprod_tests COMMAND kronprod_tests)
+
+add_executable(qrschur_tests tests/qrschur_tests.cpp)
+target_link_libraries(qrschur_tests
+  PRIVATE nimblecas_qrschur nimblecas_numeigen nimblecas_matrix nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME qrschur_tests COMMAND qrschur_tests)
+
+add_executable(cheigen_tests tests/cheigen_tests.cpp)
+target_link_libraries(cheigen_tests
+  PRIVATE nimblecas_cheigen nimblecas_cmatrix nimblecas_complex nimblecas_numeigen
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME cheigen_tests COMMAND cheigen_tests)
+
+add_executable(laurent_tests tests/laurent_tests.cpp)
+target_link_libraries(laurent_tests
+  PRIVATE nimblecas_laurent nimblecas_powerseries nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME laurent_tests COMMAND laurent_tests)
+
+add_executable(contfrac_tests tests/contfrac_tests.cpp)
+target_link_libraries(contfrac_tests
+  PRIVATE nimblecas_contfrac nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME contfrac_tests COMMAND contfrac_tests)
+
+add_executable(hyptest_tests tests/hyptest_tests.cpp)
+target_link_libraries(hyptest_tests
+  PRIVATE nimblecas_hyptest nimblecas_statinfer nimblecas_probdist nimblecas_stats
+          nimblecas_simplify nimblecas_diff nimblecas_symbolic nimblecas_matrix
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME hyptest_tests COMMAND hyptest_tests)
+
+add_executable(pdeham_tests tests/pdeham_tests.cpp)
+target_link_libraries(pdeham_tests
+  PRIVATE nimblecas_pdeham nimblecas_pde nimblecas_expand nimblecas_diff nimblecas_simplify
+          nimblecas_symbolic nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME pdeham_tests COMMAND pdeham_tests)
 
 add_executable(core_tests tests/core_tests.cpp)
 target_link_libraries(core_tests PRIVATE nimblecas_core nimblecas_testing std_module)
