@@ -29,6 +29,16 @@ enum class MathError : std::uint8_t {
     syntax_error,
     not_implemented,
     gpu_error,
+    // A base-10 result cannot be represented at any finite scale without a rounding
+    // mode (e.g. divide_exact of a non-terminating quotient), or an exact->decimal
+    // conversion whose denominator is not of the form 2^a*5^b. Distinct from
+    // domain_error so the honesty signal — "an exact answer exists but you must ask
+    // for a rounding policy to see it" — is not blurred with "no answer exists".
+    inexact,
+    // An iterative/numerical procedure (root-finding for IRR/XIRR/RATE/YIELD, a
+    // fixed-point or Newton loop) exhausted its iteration budget without meeting its
+    // tolerance. Never returned in place of a silently-arbitrary root (Rule 32).
+    not_converged,
 };
 
 [[nodiscard]] constexpr auto to_string_view(MathError err) noexcept -> std::string_view {
@@ -40,6 +50,8 @@ enum class MathError : std::uint8_t {
         case MathError::syntax_error:     return "syntax error";
         case MathError::not_implemented:  return "not implemented";
         case MathError::gpu_error:        return "gpu error";
+        case MathError::inexact:          return "inexact (rounding mode required)";
+        case MathError::not_converged:    return "iteration did not converge";
     }
     return "unknown error";
 }

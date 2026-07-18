@@ -1,0 +1,668 @@
+// NimbleCAS derivatives pricing — options & instrument valuation.
+// @author Olumuyiwa Oluwasanmi
+//
+// SCOPE. Black-Scholes-Merton closed form with full Greeks (the analytic oracle);
+// Kamrad-Ritchken TRINOMIAL trees for European / American / Bermudan exercise (a trinomial
+// lattice converges faster and more smoothly than a binomial one — the accuracy the owner
+// asked for); reproducible MONTE CARLO for European and Asian (arithmetic-average) payoffs
+// with the geometric-average closed form as a control variate AND a validation oracle;
+// Longstaff-Schwartz least-squares Monte Carlo for American exercise; a composable
+// Portfolio that aggregates price and Greeks across positions; and probability-curve /
+// payoff / price-sweep plotting (terminal risk-neutral density, payoff and P&L diagrams,
+// price-vs-parameter curves) rendered through nimblecas.svgplot.
+//
+// HONESTY (config/cpp_details.txt Rule 32, AGENTS.md). This module is NUMERICAL /
+// STATISTICAL by nature — an option price is a limit (of a lattice as steps -> infinity, of
+// a sample mean as paths -> infinity), and the very first quantity a tree computes,
+// exp(sigma*sqrt(dt)), is transcendental. So NOTHING here claims exactness. Instead:
+//   * closed forms (Black-Scholes, geometric Asian) are correctly-rounded double formulas;
+//   * lattice prices carry O(dt) discretization error that shrinks with `steps`;
+//   * Monte Carlo returns the estimate AND its standard error, and is BIT-REPRODUCIBLE and
+//     PARTITION-INDEPENDENT by construction — every draw is a pure function of its global
+//     index via nimblecas.rng's counter_u64, inheriting the design guarantee documented in
+//     nimblecas.montecarlo (no time/entropy seeding anywhere; equal seeds reproduce equal
+//     results bit-for-bit, and any partition of the path range reproduces the serial mean).
+// All failure rides the railway (Result<T> / MathError); nothing throws.
+
+module;
+#include <cassert>
+
+export module nimblecas.pricing;
+
+import std;
+import nimblecas.core;
+import nimblecas.rng;
+import nimblecas.svgplot;
+
+export namespace nimblecas::pricing {
+
+enum class OptionType : std::uint8_t { call, put };
+enum class Exercise : std::uint8_t { european, american, bermudan };
+
+// Immutable option contract + market state. Built fluently (Rules 15/47) via the with_*
+// chain; every field has a sensible default so only the relevant ones need setting.
+struct OptionSpec {
+    double spot{100.0};              // S — current underlying price
+    double strike{100.0};            // K
+    double rate{0.0};                // r — continuously-compounded risk-free rate
+    double dividend_yield{0.0};      // q — continuous dividend yield
+    double volatility{0.2};          // sigma — annualised
+    double time_to_expiry{1.0};      // T in years
+    OptionType type{OptionType::call};
+
+    [[nodiscard]] auto with_spot(double s) const -> OptionSpec { auto c = *this; c.spot = s; return c; }
+    [[nodiscard]] auto with_strike(double k) const -> OptionSpec { auto c = *this; c.strike = k; return c; }
+    [[nodiscard]] auto with_rate(double r) const -> OptionSpec { auto c = *this; c.rate = r; return c; }
+    [[nodiscard]] auto with_dividend(double q) const -> OptionSpec { auto c = *this; c.dividend_yield = q; return c; }
+    [[nodiscard]] auto with_volatility(double v) const -> OptionSpec { auto c = *this; c.volatility = v; return c; }
+    [[nodiscard]] auto with_expiry(double t) const -> OptionSpec { auto c = *this; c.time_to_expiry = t; return c; }
+    [[nodiscard]] auto with_type(OptionType t) const -> OptionSpec { auto c = *this; c.type = t; return c; }
+
+    // Intrinsic payoff at underlying price s.
+    [[nodiscard]] auto payoff(double s) const -> double {
+        return type == OptionType::call ? std::max(s - strike, 0.0) : std::max(strike - s, 0.0);
+    }
+};
+
+// Price plus first- and second-order Greeks. theta is per-year; vega/rho per unit (1.00)
+// change in vol/rate (divide by 100 for per-percent).
+struct Greeks {
+    double price{0.0};
+    double delta{0.0};
+    double gamma{0.0};
+    double vega{0.0};
+    double theta{0.0};
+    double rho{0.0};
+};
+
+// A Monte Carlo estimate with its sampling error and the antithetic/CV method used.
+struct McResult {
+    double price{0.0};
+    double std_error{0.0};
+    std::uint64_t paths{0};
+    // A 95%-ish confidence half-width (1.96 * std_error), for reporting.
+    [[nodiscard]] auto confidence_half_width() const -> double { return 1.96 * std_error; }
+};
+
+// --- Standard-normal helpers (exposed: useful to callers and to plotting) ---
+[[nodiscard]] auto norm_pdf(double x) -> double;
+[[nodiscard]] auto norm_cdf(double x) -> double;
+[[nodiscard]] auto inverse_norm_cdf(double p) -> Result<double>;
+
+// --- Black-Scholes-Merton closed form (European) ---------------------------
+[[nodiscard]] auto black_scholes_price(const OptionSpec& spec) -> Result<double>;
+[[nodiscard]] auto black_scholes_greeks(const OptionSpec& spec) -> Result<Greeks>;
+// Implied volatility from a market price (bracketed root of BS(vol) = market_price).
+[[nodiscard]] auto implied_volatility(const OptionSpec& spec, double market_price) -> Result<double>;
+
+// --- Trinomial lattice (Kamrad-Ritchken) -----------------------------------
+// European/American use `steps` time steps. For Bermudan, `exercise_times` lists the years
+// at which early exercise is permitted (mapped to the nearest step); an empty list with
+// Exercise::bermudan behaves European.
+[[nodiscard]] auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
+                                   std::span<const double> exercise_times = {}) -> Result<double>;
+
+// --- Monte Carlo (reproducible, partition-independent) ---------------------
+// European MC with antithetic variates. `paths` sample terminal prices; `seed` fully
+// determines the draw stream.
+[[nodiscard]] auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths,
+                                        std::uint64_t seed) -> Result<McResult>;
+// Arithmetic-average Asian option via MC, using the geometric-average price as a CONTROL
+// VARIATE (exact closed form below) — a large variance reduction. `steps` averaging dates.
+[[nodiscard]] auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps,
+                                     std::uint64_t seed, bool control_variate = true)
+    -> Result<McResult>;
+// Geometric-average Asian option CLOSED FORM (the CV control and a validation oracle).
+[[nodiscard]] auto geometric_asian_price(const OptionSpec& spec, int steps) -> Result<double>;
+// Longstaff-Schwartz least-squares MC for American exercise (polynomial basis {1,S,S^2}).
+[[nodiscard]] auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths,
+                                               int steps, std::uint64_t seed) -> Result<McResult>;
+
+// ===========================================================================
+// Composable position / portfolio graph (fluent, reusable).
+// ===========================================================================
+// A signed quantity of an option (or, via a zero-vol/zero-strike trick, the underlying).
+struct Position {
+    OptionSpec spec{};
+    double quantity{1.0};  // signed: long (+) / short (-)
+};
+
+// A portfolio is a composable bag of positions valued and risk-aggregated as a unit — the
+// "computational graph" for a book of trades. Pricing/Greeks are the linear combination of
+// the legs (bump-and-reprice would give cross-Greeks; the analytic legs suffice here).
+class Portfolio {
+public:
+    [[nodiscard]] static auto create() -> Portfolio { return Portfolio{}; }
+    [[nodiscard]] auto add(const OptionSpec& spec, double quantity) -> Portfolio& {
+        legs_.push_back(Position{spec, quantity});
+        return *this;
+    }
+    [[nodiscard]] auto with(const Position& p) -> Portfolio& { legs_.push_back(p); return *this; }
+    [[nodiscard]] auto legs() const noexcept -> std::span<const Position> { return legs_; }
+
+    // Aggregate Black-Scholes value and Greeks (sum of quantity-weighted legs).
+    [[nodiscard]] auto value() const -> Result<double>;
+    [[nodiscard]] auto greeks() const -> Result<Greeks>;
+    // Aggregate payoff at expiry across all legs at underlying price s (for P&L diagrams).
+    [[nodiscard]] auto payoff_at(double s) const -> double;
+
+private:
+    Portfolio() = default;
+    std::vector<Position> legs_{};
+};
+
+// ===========================================================================
+// Probability curves, payoff & price plotting (SVG, via nimblecas.svgplot).
+// ===========================================================================
+// Risk-neutral terminal density of S_T (lognormal) over [s_min, s_max].
+[[nodiscard]] auto terminal_density_svg(const OptionSpec& spec, double s_min, double s_max,
+                                        int samples, const PlotOptions& opt) -> Result<std::string>;
+// Option payoff at expiry over [s_min, s_max] (optionally net of a premium for a P&L line).
+[[nodiscard]] auto payoff_diagram_svg(const OptionSpec& spec, double s_min, double s_max,
+                                      int samples, const PlotOptions& opt,
+                                      double premium = 0.0) -> Result<std::string>;
+// Portfolio P&L at expiry over [s_min, s_max], net of the portfolio's current BS value.
+[[nodiscard]] auto portfolio_pnl_svg(const Portfolio& book, double s_min, double s_max,
+                                     int samples, const PlotOptions& opt) -> Result<std::string>;
+// Black-Scholes price as spot sweeps [s_min, s_max] (the price curve).
+[[nodiscard]] auto price_vs_spot_svg(const OptionSpec& spec, double s_min, double s_max,
+                                     int samples, const PlotOptions& opt) -> Result<std::string>;
+
+}  // namespace nimblecas::pricing
+
+// ===========================================================================
+// Implementation.
+// ===========================================================================
+namespace nimblecas::pricing {
+namespace {
+
+constexpr double kSqrt2   = 1.4142135623730951;
+constexpr double kInvSqrt2Pi = 0.3989422804014327;
+
+// A single standard-normal draw as a pure function of a global index (partition-independent
+// reproducibility). uniform in (0,1) from the counter core, mapped through the inverse CDF.
+[[nodiscard]] auto normal_at(std::uint64_t key, std::uint64_t index) -> double;
+
+// Small dense solve of the 3x3 normal equations (Longstaff-Schwartz regression). Returns
+// nullopt on a singular system, so the caller falls back to "never exercise early".
+[[nodiscard]] auto solve3(std::array<std::array<double, 3>, 3> a, std::array<double, 3> b)
+    -> std::optional<std::array<double, 3>> {
+    for (int col = 0; col < 3; ++col) {
+        int piv = col;
+        for (int r = col + 1; r < 3; ++r) {
+            if (std::abs(a[r][col]) > std::abs(a[piv][col])) { piv = r; }
+        }
+        if (std::abs(a[piv][col]) < 1e-14) { return std::nullopt; }
+        std::swap(a[col], a[piv]);
+        std::swap(b[col], b[piv]);
+        for (int r = 0; r < 3; ++r) {
+            if (r == col) { continue; }
+            const double factor = a[r][col] / a[col][col];
+            for (int c = col; c < 3; ++c) { a[r][c] -= factor * a[col][c]; }
+            b[r] -= factor * b[col];
+        }
+    }
+    return std::array<double, 3>{b[0] / a[0][0], b[1] / a[1][1], b[2] / a[2][2]};
+}
+
+}  // namespace
+
+auto norm_pdf(double x) -> double { return kInvSqrt2Pi * std::exp(-0.5 * x * x); }
+
+auto norm_cdf(double x) -> double {
+    // Correctly-rounded via the C library erfc (available through import std): more accurate
+    // than a rational approximation, especially in the tails.
+    return 0.5 * std::erfc(-x / kSqrt2);
+}
+
+auto inverse_norm_cdf(double p) -> Result<double> {
+    if (!(p > 0.0 && p < 1.0)) { return make_error<double>(MathError::domain_error); }
+    // Acklam's rational approximation, then one Halley refinement against erfc for ~machine
+    // accuracy across the whole (0,1) range.
+    static constexpr std::array<double, 6> a{
+        -3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+        1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00};
+    static constexpr std::array<double, 5> b{
+        -5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+        6.680131188771972e+01, -1.328068155288572e+01};
+    static constexpr std::array<double, 6> c{
+        -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+        -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00};
+    static constexpr std::array<double, 4> d{
+        7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+        3.754408661907416e+00};
+    constexpr double p_low = 0.02425;
+    constexpr double p_high = 1.0 - p_low;
+    double x = 0.0;
+    if (p < p_low) {
+        const double q = std::sqrt(-2.0 * std::log(p));
+        x = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+            ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
+    } else if (p <= p_high) {
+        const double q = p - 0.5;
+        const double r = q * q;
+        x = (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+            (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0);
+    } else {
+        const double q = std::sqrt(-2.0 * std::log(1.0 - p));
+        x = -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+             ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
+    }
+    // Halley step: e = Phi(x) - p, u = e / phi(x); x -= u/(1 + x*u/2).
+    const double e = norm_cdf(x) - p;
+    const double u = e / norm_pdf(x);
+    x -= u / (1.0 + 0.5 * x * u);
+    return x;
+}
+
+namespace {
+auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
+    const std::uint64_t bits = counter_u64(key, index);
+    const double u = uniform_unit(bits);
+    // Map the open-unit uniform to a normal; clamp away from the exact endpoints so the
+    // inverse CDF stays finite (uniform_unit already returns (0,1), this is belt-and-braces).
+    const double uc = std::min(std::max(u, 1e-15), 1.0 - 1e-15);
+    auto z = inverse_norm_cdf(uc);
+    return z.value_or(0.0);
+}
+}  // namespace
+
+// --- Black-Scholes ----------------------------------------------------------
+
+auto black_scholes_greeks(const OptionSpec& spec) -> Result<Greeks> {
+    const double S = spec.spot;
+    const double K = spec.strike;
+    const double r = spec.rate;
+    const double q = spec.dividend_yield;
+    const double sig = spec.volatility;
+    const double T = spec.time_to_expiry;
+    if (S <= 0.0 || K <= 0.0 || T < 0.0 || sig < 0.0) {
+        return make_error<Greeks>(MathError::domain_error);
+    }
+    const bool call = spec.type == OptionType::call;
+    Greeks g{};
+    if (T == 0.0 || sig == 0.0) {
+        // Degenerate: value is the discounted intrinsic on the forward; Greeks are limits.
+        const double fwd = S * std::exp((r - q) * T);
+        const double intrinsic = call ? std::max(fwd - K, 0.0) : std::max(K - fwd, 0.0);
+        g.price = std::exp(-r * T) * intrinsic;
+        g.delta = call ? (fwd > K ? std::exp(-q * T) : 0.0) : (fwd < K ? -std::exp(-q * T) : 0.0);
+        return g;
+    }
+    const double sqrtT = std::sqrt(T);
+    const double d1 = (std::log(S / K) + (r - q + 0.5 * sig * sig) * T) / (sig * sqrtT);
+    const double d2 = d1 - sig * sqrtT;
+    const double disc_r = std::exp(-r * T);
+    const double disc_q = std::exp(-q * T);
+    const double Nd1 = norm_cdf(call ? d1 : -d1);
+    const double Nd2 = norm_cdf(call ? d2 : -d2);
+    const double pdf_d1 = norm_pdf(d1);
+    if (call) {
+        g.price = S * disc_q * Nd1 - K * disc_r * Nd2;
+        g.delta = disc_q * norm_cdf(d1);
+        g.rho = K * T * disc_r * norm_cdf(d2);
+        g.theta = -S * disc_q * pdf_d1 * sig / (2.0 * sqrtT)
+                  - r * K * disc_r * norm_cdf(d2) + q * S * disc_q * norm_cdf(d1);
+    } else {
+        g.price = K * disc_r * Nd2 - S * disc_q * Nd1;
+        g.delta = -disc_q * norm_cdf(-d1);
+        g.rho = -K * T * disc_r * norm_cdf(-d2);
+        g.theta = -S * disc_q * pdf_d1 * sig / (2.0 * sqrtT)
+                  + r * K * disc_r * norm_cdf(-d2) - q * S * disc_q * norm_cdf(-d1);
+    }
+    g.gamma = disc_q * pdf_d1 / (S * sig * sqrtT);
+    g.vega = S * disc_q * pdf_d1 * sqrtT;
+    return g;
+}
+
+auto black_scholes_price(const OptionSpec& spec) -> Result<double> {
+    return black_scholes_greeks(spec).transform([](const Greeks& g) { return g.price; });
+}
+
+auto implied_volatility(const OptionSpec& spec, double market_price) -> Result<double> {
+    if (market_price <= 0.0) { return make_error<double>(MathError::domain_error); }
+    auto f = [&](double vol) -> double {
+        auto p = black_scholes_price(spec.with_volatility(vol));
+        return p ? (*p - market_price) : std::numeric_limits<double>::quiet_NaN();
+    };
+    // Bracket vol in (0, 5] (500% covers essentially all quoted markets).
+    double lo = 1e-6;
+    double hi = 5.0;
+    double flo = f(lo);
+    double fhi = f(hi);
+    if (!std::isfinite(flo) || !std::isfinite(fhi) || (flo > 0.0) == (fhi > 0.0)) {
+        return make_error<double>(MathError::not_converged);
+    }
+    for (int i = 0; i < 200; ++i) {
+        const double mid = 0.5 * (lo + hi);
+        const double fm = f(mid);
+        if (std::abs(fm) < 1e-10 || (hi - lo) < 1e-12) { return mid; }
+        if ((fm > 0.0) == (flo > 0.0)) { lo = mid; flo = fm; } else { hi = mid; }
+    }
+    return 0.5 * (lo + hi);
+}
+
+// --- Trinomial lattice ------------------------------------------------------
+
+auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
+                     std::span<const double> exercise_times) -> Result<double> {
+    if (steps < 1) { return make_error<double>(MathError::domain_error); }
+    if (spec.spot <= 0.0 || spec.strike <= 0.0 || spec.time_to_expiry <= 0.0 ||
+        spec.volatility <= 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const double dt = spec.time_to_expiry / static_cast<double>(steps);
+    const double sig = spec.volatility;
+    const double nu = spec.rate - spec.dividend_yield - 0.5 * sig * sig;
+    const double dx = sig * std::sqrt(3.0 * dt);          // Kamrad-Ritchken space step
+    const double var = sig * sig * dt + nu * nu * dt * dt;
+    const double pu = 0.5 * (var / (dx * dx) + nu * dt / dx);
+    const double pm = 1.0 - var / (dx * dx);
+    const double pd = 0.5 * (var / (dx * dx) - nu * dt / dx);
+    if (pu < 0.0 || pm < 0.0 || pd < 0.0) {
+        // Instability (too few steps for these parameters): report rather than mislead.
+        return make_error<double>(MathError::not_converged);
+    }
+    const double disc = std::exp(-spec.rate * dt);
+
+    // Which steps permit early exercise.
+    std::vector<char> can_exercise(static_cast<std::size_t>(steps) + 1, 0);
+    if (exercise == Exercise::american) {
+        std::ranges::fill(can_exercise, static_cast<char>(1));
+    } else if (exercise == Exercise::bermudan) {
+        for (double t : exercise_times) {
+            const int idx = static_cast<int>(std::lround(t / dt));
+            if (idx >= 0 && idx <= steps) { can_exercise[static_cast<std::size_t>(idx)] = 1; }
+        }
+    }
+
+    // Terminal layer: 2*steps + 1 nodes, index k in [0, 2*steps], log-offset (k - steps).
+    const std::size_t width = static_cast<std::size_t>(2 * steps + 1);
+    std::vector<double> value(width);
+    for (std::size_t k = 0; k < width; ++k) {
+        const double s = spec.spot * std::exp((static_cast<double>(k) - steps) * dx);
+        value[k] = spec.payoff(s);
+    }
+    // Backward induction. At step i the live nodes span index [steps-i, steps+i].
+    for (int i = steps - 1; i >= 0; --i) {
+        const std::size_t lo = static_cast<std::size_t>(steps - i);
+        const std::size_t hi = static_cast<std::size_t>(steps + i);
+        for (std::size_t k = lo; k <= hi; ++k) {
+            const double cont = disc * (pu * value[k + 1] + pm * value[k] + pd * value[k - 1]);
+            double v = cont;
+            if (can_exercise[static_cast<std::size_t>(i)]) {
+                const double s = spec.spot * std::exp((static_cast<double>(k) - steps) * dx);
+                v = std::max(cont, spec.payoff(s));
+            }
+            value[k] = v;
+        }
+    }
+    return value[static_cast<std::size_t>(steps)];
+}
+
+// --- Monte Carlo ------------------------------------------------------------
+
+auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint64_t seed)
+    -> Result<McResult> {
+    if (paths == 0) { return make_error<McResult>(MathError::domain_error); }
+    if (spec.time_to_expiry < 0.0 || spec.volatility < 0.0 || spec.spot <= 0.0) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    const double T = spec.time_to_expiry;
+    const double drift = (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * T;
+    const double vol_sqrtT = spec.volatility * std::sqrt(T);
+    const double disc = std::exp(-spec.rate * T);
+    const std::uint64_t key = splitmix64(seed);
+    // Antithetic variates: each index i produces the pair (+z, -z), halving variance cheaply.
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (std::uint64_t i = 0; i < paths; ++i) {
+        const double z = normal_at(key, i);
+        const double sp = spec.spot * std::exp(drift + vol_sqrtT * z);
+        const double sm = spec.spot * std::exp(drift - vol_sqrtT * z);
+        const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
+        sum += payoff;
+        sum_sq += payoff * payoff;
+    }
+    const double n = static_cast<double>(paths);
+    const double mean = sum / n;
+    const double var = std::max((sum_sq - n * mean * mean) / std::max(n - 1.0, 1.0), 0.0);
+    return McResult{mean, std::sqrt(var / n), paths};
+}
+
+auto geometric_asian_price(const OptionSpec& spec, int steps) -> Result<double> {
+    if (steps < 1) { return make_error<double>(MathError::domain_error); }
+    if (spec.spot <= 0.0 || spec.strike <= 0.0 || spec.time_to_expiry <= 0.0 ||
+        spec.volatility <= 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    // EXACT closed form for the DISCRETE geometric average G = (prod_{i=1..n} S_{t_i})^(1/n)
+    // over equally-spaced dates t_i = i*dt. ln G is normal with the mean/variance below (the
+    // variance uses sum_{i,j} min(i,j) = n(n+1)(2n+1)/6). Because this matches the MC's
+    // discrete geometric average exactly, it is BOTH the control-variate expectation and a
+    // validation oracle. With steps == 1 it reduces to Black-Scholes (G == S_T) — a checked
+    // invariant in the tests.
+    const double n = static_cast<double>(steps);
+    const double T = spec.time_to_expiry;
+    const double dt = T / n;
+    const double sig = spec.volatility;
+    const double drift = spec.rate - spec.dividend_yield - 0.5 * sig * sig;
+    const double mu_g = std::log(spec.spot) + drift * dt * (n + 1.0) / 2.0;
+    const double var_g = sig * sig * dt * (n + 1.0) * (2.0 * n + 1.0) / (6.0 * n);
+    const double sg = std::sqrt(var_g);
+    const double eg = std::exp(mu_g + 0.5 * var_g);          // E[G] under the risk-neutral law
+    const double lnK = std::log(spec.strike);
+    const double d1 = (mu_g + var_g - lnK) / sg;
+    const double d2 = d1 - sg;
+    const double disc = std::exp(-spec.rate * T);
+    if (spec.type == OptionType::call) {
+        return disc * (eg * norm_cdf(d1) - spec.strike * norm_cdf(d2));
+    }
+    return disc * (spec.strike * norm_cdf(-d2) - eg * norm_cdf(-d1));
+}
+
+auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, std::uint64_t seed,
+                       bool control_variate) -> Result<McResult> {
+    if (paths == 0 || steps < 1) { return make_error<McResult>(MathError::domain_error); }
+    if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    const double dt = spec.time_to_expiry / static_cast<double>(steps);
+    const double drift = (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * dt;
+    const double vol_sqrtdt = spec.volatility * std::sqrt(dt);
+    const double disc = std::exp(-spec.rate * spec.time_to_expiry);
+    const std::uint64_t key = splitmix64(seed);
+    double geo_closed = 0.0;
+    if (control_variate) {
+        auto g = geometric_asian_price(spec, steps);
+        if (!g) { return make_error<McResult>(g.error()); }
+        geo_closed = *g;
+    }
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (std::uint64_t i = 0; i < paths; ++i) {
+        double s = spec.spot;
+        double arith_sum = 0.0;
+        double log_sum = 0.0;
+        for (int step = 0; step < steps; ++step) {
+            const std::uint64_t idx = i * static_cast<std::uint64_t>(steps) + static_cast<std::uint64_t>(step);
+            const double z = normal_at(key, idx);
+            s *= std::exp(drift + vol_sqrtdt * z);
+            arith_sum += s;
+            log_sum += std::log(s);
+        }
+        const double arith_avg = arith_sum / static_cast<double>(steps);
+        const double geo_avg = std::exp(log_sum / static_cast<double>(steps));
+        double payoff = spec.type == OptionType::call ? std::max(arith_avg - spec.strike, 0.0)
+                                                      : std::max(spec.strike - arith_avg, 0.0);
+        payoff *= disc;
+        if (control_variate) {
+            double geo_payoff = spec.type == OptionType::call ? std::max(geo_avg - spec.strike, 0.0)
+                                                              : std::max(spec.strike - geo_avg, 0.0);
+            geo_payoff *= disc;
+            payoff += geo_closed - geo_payoff;  // CV with beta = 1 (geometric is highly correlated)
+        }
+        sum += payoff;
+        sum_sq += payoff * payoff;
+    }
+    const double n = static_cast<double>(paths);
+    const double mean = sum / n;
+    const double var = std::max((sum_sq - n * mean * mean) / std::max(n - 1.0, 1.0), 0.0);
+    return McResult{mean, std::sqrt(var / n), paths};
+}
+
+auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths, int steps,
+                                 std::uint64_t seed) -> Result<McResult> {
+    if (paths < 4 || steps < 1) { return make_error<McResult>(MathError::domain_error); }
+    if (spec.spot <= 0.0 || spec.volatility <= 0.0 || spec.time_to_expiry <= 0.0) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    const std::size_t P = static_cast<std::size_t>(paths);
+    const int N = steps;
+    const double dt = spec.time_to_expiry / static_cast<double>(N);
+    const double drift = (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * dt;
+    const double vol_sqrtdt = spec.volatility * std::sqrt(dt);
+    const double disc = std::exp(-spec.rate * dt);
+    const std::uint64_t key = splitmix64(seed);
+
+    // Simulate and store the full price grid (paths x (N+1)). Memory is O(P*N).
+    std::vector<double> S(P * static_cast<std::size_t>(N + 1));
+    for (std::size_t p = 0; p < P; ++p) {
+        S[p * (N + 1)] = spec.spot;
+        for (int t = 0; t < N; ++t) {
+            const std::uint64_t idx = static_cast<std::uint64_t>(p) * static_cast<std::uint64_t>(N)
+                                      + static_cast<std::uint64_t>(t);
+            const double z = normal_at(key, idx);
+            S[p * (N + 1) + static_cast<std::size_t>(t + 1)] =
+                S[p * (N + 1) + static_cast<std::size_t>(t)] * std::exp(drift + vol_sqrtdt * z);
+        }
+    }
+    // Cashflow at expiry, then roll backward regressing continuation on {1,S,S^2}.
+    std::vector<double> cash(P);
+    for (std::size_t p = 0; p < P; ++p) {
+        cash[p] = spec.payoff(S[p * (N + 1) + static_cast<std::size_t>(N)]);
+    }
+    for (int t = N - 1; t >= 1; --t) {
+        std::array<std::array<double, 3>, 3> ata{};
+        std::array<double, 3> atb{};
+        std::vector<std::size_t> itm;
+        itm.reserve(P);
+        for (std::size_t p = 0; p < P; ++p) {
+            const double s = S[p * (N + 1) + static_cast<std::size_t>(t)];
+            const double ex = spec.payoff(s);
+            if (ex > 0.0) { itm.push_back(p); }
+            cash[p] *= disc;  // discount every path's future cashflow one step
+        }
+        if (itm.size() >= 3) {
+            for (std::size_t p : itm) {
+                const double s = S[p * (N + 1) + static_cast<std::size_t>(t)];
+                const std::array<double, 3> x{1.0, s, s * s};
+                const double y = cash[p];  // already discounted to time t
+                for (int a = 0; a < 3; ++a) {
+                    for (int b = 0; b < 3; ++b) { ata[a][b] += x[a] * x[b]; }
+                    atb[a] += x[a] * y;
+                }
+            }
+            if (auto beta = solve3(ata, atb)) {
+                for (std::size_t p : itm) {
+                    const double s = S[p * (N + 1) + static_cast<std::size_t>(t)];
+                    const double cont = (*beta)[0] + (*beta)[1] * s + (*beta)[2] * s * s;
+                    const double ex = spec.payoff(s);
+                    if (ex > cont) { cash[p] = ex; }  // exercise now
+                }
+            }
+        }
+    }
+    // Discount the time-1 cashflows back to time 0.
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (std::size_t p = 0; p < P; ++p) {
+        const double v = cash[p] * disc;
+        sum += v;
+        sum_sq += v * v;
+    }
+    const double n = static_cast<double>(P);
+    const double mean = sum / n;
+    const double var = std::max((sum_sq - n * mean * mean) / std::max(n - 1.0, 1.0), 0.0);
+    // American value is at least the immediate exercise value at t0.
+    const double lower = spec.payoff(spec.spot);
+    return McResult{std::max(mean, lower), std::sqrt(var / n), paths};
+}
+
+// --- Portfolio --------------------------------------------------------------
+
+auto Portfolio::value() const -> Result<double> {
+    double total = 0.0;
+    for (const auto& leg : legs_) {
+        auto p = black_scholes_price(leg.spec);
+        if (!p) { return p; }
+        total += leg.quantity * *p;
+    }
+    return total;
+}
+
+auto Portfolio::greeks() const -> Result<Greeks> {
+    Greeks agg{};
+    for (const auto& leg : legs_) {
+        auto g = black_scholes_greeks(leg.spec);
+        if (!g) { return g; }
+        agg.price += leg.quantity * g->price;
+        agg.delta += leg.quantity * g->delta;
+        agg.gamma += leg.quantity * g->gamma;
+        agg.vega  += leg.quantity * g->vega;
+        agg.theta += leg.quantity * g->theta;
+        agg.rho   += leg.quantity * g->rho;
+    }
+    return agg;
+}
+
+auto Portfolio::payoff_at(double s) const -> double {
+    double total = 0.0;
+    for (const auto& leg : legs_) { total += leg.quantity * leg.spec.payoff(s); }
+    return total;
+}
+
+// --- Plotting ---------------------------------------------------------------
+
+auto terminal_density_svg(const OptionSpec& spec, double s_min, double s_max, int samples,
+                          const PlotOptions& opt) -> Result<std::string> {
+    if (spec.spot <= 0.0 || spec.volatility <= 0.0 || spec.time_to_expiry <= 0.0) {
+        return make_error<std::string>(MathError::domain_error);
+    }
+    const double T = spec.time_to_expiry;
+    const double mu = std::log(spec.spot) +
+                      (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * T;
+    const double sd = spec.volatility * std::sqrt(T);
+    auto density = [=](double s) -> double {
+        if (s <= 0.0) { return 0.0; }
+        const double z = (std::log(s) - mu) / sd;
+        return norm_pdf(z) / (s * sd);
+    };
+    return plot_function(density, s_min, s_max, samples, opt);
+}
+
+auto payoff_diagram_svg(const OptionSpec& spec, double s_min, double s_max, int samples,
+                        const PlotOptions& opt, double premium) -> Result<std::string> {
+    auto f = [=](double s) -> double { return spec.payoff(s) - premium; };
+    return plot_function(f, s_min, s_max, samples, opt);
+}
+
+auto portfolio_pnl_svg(const Portfolio& book, double s_min, double s_max, int samples,
+                       const PlotOptions& opt) -> Result<std::string> {
+    auto cost = book.value();
+    if (!cost) { return make_error<std::string>(cost.error()); }
+    const double c = *cost;
+    auto f = [&book, c](double s) -> double { return book.payoff_at(s) - c; };
+    return plot_function(f, s_min, s_max, samples, opt);
+}
+
+auto price_vs_spot_svg(const OptionSpec& spec, double s_min, double s_max, int samples,
+                       const PlotOptions& opt) -> Result<std::string> {
+    auto f = [spec](double s) -> double {
+        auto p = black_scholes_price(spec.with_spot(s));
+        return p ? *p : std::numeric_limits<double>::quiet_NaN();
+    };
+    return plot_function(f, s_min, s_max, samples, opt);
+}
+
+}  // namespace nimblecas::pricing
