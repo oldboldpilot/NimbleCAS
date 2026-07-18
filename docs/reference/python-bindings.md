@@ -70,6 +70,38 @@ branch; total functions (`free_of`, `substitute`) never raise.
 | `polynomial_gcd(a, b, var)` | `nimblecas::polynomial_gcd` | |
 | `square_free_factor(u, var)` | `nimblecas::square_free_factor` | Returns a list of `(Expr, int)` `(factor, multiplicity)` pairs. |
 
+## Financial submodules (`pricing`, `finance`, `analytics`)
+
+Beyond the symbolic core, `nimblecas_ext` exposes thin wrappers over the
+financial-mathematics engine. **These reuse the existing CAS engine — the Python
+layer computes nothing itself; it forwards to `pricing::…` / `finance::…` /
+`analytics::…` and translates the `Result<T>` error branch to `ValueError`.** In
+particular `pricing.monte_carlo` calls the same `pricing::monte_carlo_european`
+(the reproducible counter-RNG engine) that the CUDA and Triton kernels accelerate
+and validate against — there is one Monte-Carlo implementation, not three.
+
+| Python | C++ engine reused |
+| :--- | :--- |
+| `pricing.black_scholes(spot, strike, rate, div, vol, expiry, is_call=True)` | `pricing::black_scholes_price` |
+| `pricing.greeks(...)` | `pricing::black_scholes_greeks` |
+| `pricing.implied_volatility(...)` | `pricing::implied_volatility` |
+| `pricing.monte_carlo(..., paths=1e6, seed=42) -> (price, std_error)` | `pricing::monte_carlo_european` |
+| `pricing.trinomial(...)` | `pricing::trinomial_price` |
+| `finance.irr(values, guess=0.1)`, `finance.mirr`, `finance.rate`, `finance.nper` | `finance::irr` / `mirr` / `rate` / `nper` |
+| `analytics.sharpe_ratio(returns, rf=0, periods_per_year=1)` | `analytics::sharpe_ratio` |
+| `analytics.max_drawdown`, `analytics.value_at_risk` | `analytics::…` |
+| `analytics.min_variance_weights(cov)`, `analytics.tangency_weights(...)` | `analytics::…` |
+
+Verified through the built extension on clang++-22 (nanobind 2.13):
+
+```python
+import nimblecas_ext as n
+assert abs(n.pricing.black_scholes(100, 100, 0.05, 0.0, 0.2, 1.0, True) - 10.4506) < 1e-3
+assert abs(n.finance.irr([-100.0, 110.0]) - 0.10) < 1e-9
+w = n.analytics.min_variance_weights([[0.04, 0.0], [0.0, 0.09]])   # -> [0.6923, 0.3077]
+price, se = n.pricing.monte_carlo(100, 100, 0.05, 0.0, 0.2, 1.0, True, 1_000_000, 42)  # CAS CPU MC
+```
+
 ## Example
 
 The smoke test `tests/test_bindings.py` is the usage source of truth:

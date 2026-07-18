@@ -241,6 +241,28 @@ flowchart TD
     ret --> rep["Integrated risk report<br/>Sharpe · Sortino · Treynor · α · β · MDD · VaR/CVaR"]
 ```
 
+## GPU acceleration & Python bindings
+
+The whole finance stack is reachable from Python through the nanobind extension
+`nimblecas_ext` — and the bindings **reuse the C++ engine**, computing nothing
+themselves:
+
+```python
+import nimblecas_ext as n
+n.pricing.black_scholes(100, 100, 0.05, 0.0, 0.2, 1.0, True)   # 10.4506
+n.finance.irr([-100.0, 110.0])                                  # 0.10
+n.analytics.min_variance_weights([[0.04, 0.0], [0.0, 0.09]])   # [0.6923, 0.3077]
+price, se = n.pricing.monte_carlo(100, 100, 0.05, 0.0, 0.2, 1.0, True, 1_000_000, 42)
+```
+
+There is **one Monte-Carlo implementation**, not several: `pricing.monte_carlo`
+forwards to the same `pricing::monte_carlo_european` (the reproducible counter-RNG
+engine) that the [CUDA and Triton kernels](../reference/gpu.md) accelerate and
+validate against the Black-Scholes oracle. On an RTX 5090 the Triton kernel prices
+an 8M-path European call at 10.45238 ± 0.00260 — 0.69 standard errors from the
+closed form. See the [Python bindings](../reference/python-bindings.md) and
+[GPU](../reference/gpu.md) references.
+
 ## Where to go next
 
 - Per-module reference: [bigdecimal](../reference/bigdecimal.md) ·

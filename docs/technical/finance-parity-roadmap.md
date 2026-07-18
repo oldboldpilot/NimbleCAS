@@ -98,3 +98,25 @@ The four systems genuinely disagree here; our contract states which we reproduce
     vs MATLAB ≈ type 5); loss reported positive (MATLAB `portvrisk` convention).
 11. **NPV timing:** Excel NPV discounts the first flow one full period; a "NPV at t=0" differs.
     Both `npv` (Excel convention) and the fluent schedule's `net_present_value` (t=0) exist.
+
+## Security & resource bounds (a documented input contract)
+
+Every function that takes untrusted numeric or string input is **DoS-bounded**: a
+hostile value returns an honest `Result<T>`/`MathError` (or `std::nullopt`) instead of
+provoking an OOM, an unbounded loop, or UB. These bounds are a deliberate contract, not
+silent truncation — a rejected input is refused loudly on the railway. Covered by
+`tests/security_tests.cpp` (an adversarial-audit regression suite).
+
+| Lever | Bound | Rejected with |
+| :--- | :--- | :--- |
+| `BigDecimal::from_string` scale/exponent | `\|scale\|`, `\|exponent\|` ≤ 10⁶ | `overflow` (a ~15-byte `1e-2000000000` would otherwise materialize a ~2×10⁹-digit `BigInt`) |
+| TVM period count (`fv`/`pv`/`pmt`/`effect`/growing annuities) | `\|nper\|` ≤ 10⁵ | `domain_error`/`overflow` (bounds the `(1+r)^n` exponent; negative `n` is still supported for discounting) |
+| `Date::of` year, and `Date::ymd` on a raw serial | year ∈ [1, 9999]; serial walk clamped | `domain_error` (an unbounded year drove a ~2×10⁹-iteration calendar walk) |
+| Pricing `steps`/`paths` (trinomial, MC, LSM, barrier, Asian) | `steps` ≤ 10⁵; `paths·steps` product bounded (~10⁹, LSM cells ~5×10⁸) | `domain_error` (prevents `2·steps+1` int overflow and multi-GB grids / multi-hour loops) |
+| Depreciation `life` (`db`/`ddb`/`vdb`) | `life` ≤ 10⁵ | `domain_error` |
+| Optimizer dimension (`lu_solve_ridge`, `covariance_matrix`) | `n` ≤ 4096; non-finite matrix/rhs rejected | `nullopt`/`domain_error` (an O(n³) solve on unbounded `n`; NaN never flows into silent weights) |
+
+The Cholesky path additionally uses a **relative pivot floor** (`s ≤ 1e-12·|diagᵢ|`) so a
+rank-deficient (positive-*semi*-definite) covariance — e.g. two perfectly collinear assets —
+is refused honestly rather than yielding unstable garbage weights, while genuinely small-variance
+positive-definite matrices still solve.
