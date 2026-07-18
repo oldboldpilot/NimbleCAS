@@ -75,9 +75,10 @@ flowchart LR
     C -->|"reproducible under a fixed seed"| M
 ```
 
-> **Excel-compat caveat (documented, never hidden):** Tier-A exact mode differs from Excel in
-> trailing digits because Excel computes in IEEE double. The contract is "exact over ℚ — *more*
-> accurate than Excel", never "exact" and "Excel-identical" in the same breath.
+> **Exactness caveat (documented, never hidden):** Tier-A exact mode differs in trailing digits
+> from any engine computing the same identity in IEEE double. The contract is "exact over ℚ —
+> *more* accurate than a double-precision result", never "exact" and "bit-identical to a
+> double-precision engine" in the same breath.
 
 ---
 

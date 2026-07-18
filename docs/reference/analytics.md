@@ -10,8 +10,8 @@ drawdown, value-at-risk and conditional VaR (both historical and
 parametric-Gaussian), and **mean-variance portfolio optimization** (global
 minimum-variance and tangency/max-Sharpe portfolios in closed form, plus an
 efficient frontier by the two-fund theorem), backed by an internal Cholesky solve
-of the covariance system. This is the MATLAB `portopt`/`Portfolio` +
-financial-ratio surface.
+of the covariance system — a combined portfolio-optimization and financial-ratio
+surface.
 
 ## Honesty boundary
 

@@ -1,13 +1,12 @@
-# Financial Mathematics — Parity Roadmap & Convention Notes
+# Financial Mathematics — Capability Roadmap & Convention Notes
 
 **Author:** Olumuyiwa Oluwasanmi
 
 This document is the honest record of where the NimbleCAS financial-mathematics stack
-(`bigdecimal`, `finance`, `currency`, `pricing`, `analytics`) stands against the
-**superset-of-Excel/Mathematica/MATLAB/Maple** goal: what is implemented, what is not yet,
-and where the four reference systems *disagree on convention* so we document divergence
-rather than claim false parity. It follows the project honesty invariant (AGENTS.md): a
-feature is listed as present only when it ships with a passing test.
+(`bigdecimal`, `finance`, `currency`, `pricing`, `analytics`) stands: what is implemented,
+what is not yet, and — where more than one industry convention exists — which one we chose,
+so behavior is documented rather than assumed. It follows the project honesty invariant
+(AGENTS.md): a feature is listed as present only when it ships with a passing test.
 
 ## Implemented (shipping, tested)
 
@@ -17,7 +16,7 @@ feature is listed as present only when it ships with a passing test.
 - **TVM (exact over ℚ):** PV, FV, PMT, IPMT, PPMT, CUMIPMT, CUMPRINC, NPV, FVSCHEDULE, ISPMT,
   growing annuity / perpetuity / growing perpetuity.
 - **TVM (numerical):** NPER, RATE, IRR, XNPV, XIRR, MIRR, NOMINAL, RRI, PDURATION, EFFECT (exact).
-- **Depreciation (exact):** SLN, SYD, DDB, VDB; DB (hybrid, Excel 3-decimal rate rounding).
+- **Depreciation (exact):** SLN, SYD, DDB, VDB; DB (hybrid, standard 3-decimal rate rounding).
 - **Bonds/fixed income:** PRICE, YIELD, DURATION, MDURATION, convexity, accrued interest,
   COUPNUM, PRICEDISC, YIELDDISC, DISC, INTRATE, RECEIVED, TBILLPRICE/YIELD/EQ; day-count layer
   (30/360, 30E/360, ACT/360, ACT/365, ACT/ACT).
@@ -30,12 +29,12 @@ feature is listed as present only when it ships with a passing test.
   option P&L, payoff/density/price plotting; Triton GPU MC kernel.
 - **Risk/portfolio:** returns, covariance/correlation, Sharpe/Sortino/Treynor/information ratio,
   beta/alpha, max drawdown, historical & Gaussian VaR/CVaR, mean-variance optimization
-  (min-variance, tangency, efficient frontier). *Historical VaR/CVaR and the equality-constrained
-  frontier are a **better-than-parity** capability — none of the four rivals offer exact VaR.*
+  (min-variance, tangency, efficient frontier). *Exact historical VaR/CVaR and the
+  equality-constrained frontier are distinctive exact-over-ℚ capabilities of this stack.*
 
-## Backlog (not yet implemented — do NOT claim parity for these)
+## Backlog (not yet implemented)
 
-Priorities from the feature-gap analysis. **P0** = required for a genuine superset; P1 strong;
+Priorities from the feature-gap analysis. **P0** = required for a complete toolkit; P1 strong;
 P2 nice-to-have.
 
 ### (A) Bonds & fixed income
@@ -62,7 +61,7 @@ P2 nice-to-have.
 - **P1** Box/inequality-constrained frontier (active-set QP); lower partial moments; EW moments;
   `corr2cov`/`cov2corr`; correlated return simulation; CVaR-optimal portfolios.
 
-### (E) Remaining Excel scalar functions
+### (E) Remaining scalar functions
 - **P1** AMORLINC, AMORDEGRC (French depreciation — coefficient table + rounding quirks).
 
 ### (F) Rate/annuity variants
@@ -74,30 +73,35 @@ P2 nice-to-have.
   it at ~73% self-time in the Monte Carlo path engine; the current 23 Mpaths/s (post
   Halley-drop optimization) is RNG-bound.
 
-## Convention divergences to document, not fake
+## Convention choices (documented, deliberate)
 
-The four systems genuinely disagree here; our contract states which we reproduce.
+More than one industry convention exists for each item below; this states which we
+chose and why, so behavior is documented rather than assumed.
 
-1. **Day-count basis numbering** differs (Excel basis 0 = 30/360 US; MATLAB basis 0 = ACT/ACT).
-   Our `DayCount` enum is **named**, never a raw integer.
-2. **ACT/ACT is three conventions** (Excel YEARFRAC basis-1, ISDA, ICMA) and Excel is internally
-   inconsistent. We use a rational ACT/ACT and document it.
-3. **30/360 variants** disagree on Feb 28/29 endpoints across Excel/OOo/Gnumeric.
-4. **IRR root selection:** multiple sign changes ⇒ multiple roots; Excel returns whichever
-   Newton-from-guess finds. We bracket-and-Brent and return `not_converged` rather than an
-   arbitrary root (an all-roots variant is future work).
-5. **XIRR/XNPV** hard-code ACT/365 exponents (Excel); MATLAB allows a basis.
-6. **DB** rounds its rate to 3 decimals by spec — we reproduce this deliberately (hybrid tier).
+1. **Day-count basis numbering** is not universal (a raw integer basis means different
+   bases in different toolkits). Our `DayCount` enum is **named**, never a raw integer.
+2. **ACT/ACT has three variants** (YEARFRAC-style, ISDA, ICMA). We use a rational
+   ACT/ACT (ISDA `(days·4)/1461`) and document it.
+3. **30/360 variants** disagree on Feb 28/29 endpoints across implementations; ours is
+   the standard 30/360 US rule, with a separate 30E/360 basis.
+4. **IRR root selection:** multiple sign changes ⇒ multiple roots. We bracket-and-Brent
+   and return `not_converged` rather than an arbitrary root (an all-roots variant is
+   future work).
+5. **XIRR/XNPV** use ACT/365 day-count exponents.
+6. **DB** rounds its rate to 3 decimals by definition — reproduced deliberately (hybrid tier).
 7. **TBILLEQ** is piecewise (>182 days uses a quadratic); we ship the ≤182-day simple form and
    document the divergence for longer bills.
 8. **Date epoch:** our serial dates use the astronomical proleptic Gregorian count **without**
-   Excel's 1900-leap-year bug — a documented divergence (dates differ by one before 1900-03-01).
-9. **Exact vs Excel:** Tier-A exact-over-ℚ results differ from Excel in trailing digits because
-   Excel computes in IEEE double. We are **more accurate**, never "Excel-bit-identical".
-10. **VaR/quantile:** historical VaR depends on the quantile type (Excel PERCENTILE.INC = type 7
-    vs MATLAB ≈ type 5); loss reported positive (MATLAB `portvrisk` convention).
-11. **NPV timing:** Excel NPV discounts the first flow one full period; a "NPV at t=0" differs.
-    Both `npv` (Excel convention) and the fluent schedule's `net_present_value` (t=0) exist.
+   the legacy 1900-leap-year bug carried by some spreadsheet date systems (dates differ by one
+   before 1900-03-01).
+9. **Exact vs double:** Tier-A exact-over-ℚ results differ in trailing digits from any engine
+   computing the same identity in IEEE double — ours is the more accurate result, never claimed
+   as "bit-identical to a double-precision engine".
+10. **VaR/quantile:** historical VaR depends on the quantile interpolation type; we use the
+    inclusive-percentile (type-7) convention and report the loss as a positive number.
+11. **NPV timing:** the classic NPV discounts the first flow one full period; a "NPV at t=0"
+    differs. Both `npv` (first-flow-discounted) and the fluent schedule's `net_present_value`
+    (t=0) exist.
 
 ## Security & resource bounds (a documented input contract)
 

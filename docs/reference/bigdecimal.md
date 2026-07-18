@@ -67,7 +67,7 @@ caller's back.
 | Value | Rule |
 | :--- | :--- |
 | `half_even` | To nearest, ties to **even** — banker's rounding, the money default. |
-| `half_up` | To nearest, ties **away from zero** (Excel's `DB` rounds its rate this way at 3 decimals). |
+| `half_up` | To nearest, ties **away from zero** (the declining-balance `DB` rate is rounded this way at 3 decimals). |
 | `half_down` | To nearest, ties **toward zero**. |
 | `down` | Toward zero (truncate). |
 | `up` | Away from zero. |

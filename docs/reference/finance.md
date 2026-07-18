@@ -4,14 +4,14 @@
 
 Source: `src/finance/finance.cppm`
 
-The Excel / Mathematica / MATLAB / Maple financial-function suite: time value of
+A comprehensive financial-function suite: time value of
 money (PV, FV, PMT, IPMT, PPMT, NPER, RATE, CUMIPMT, CUMPRINC), cashflow analysis
 (NPV, XNPV, IRR, XIRR, MIRR, FVSCHEDULE), depreciation (SLN, SYD, DDB, DB, VDB),
 rate conversion (EFFECT, NOMINAL, RRI, PDURATION), dollar-fraction conversion,
 fixed-income analytics (bond PRICE, YIELD, DURATION, MDURATION, convexity, accrued
 interest, discount securities, T-bills), swaps, and a fluent
-`CashflowSchedule` / `TvmProblem` builder layer that mirrors Wolfram's `Cashflow`
-/ `TimeValue` and exceeds a spreadsheet's fixed arity.
+`CashflowSchedule` / `TvmProblem` builder layer that composes cashflows and time-value
+problems without a fixed-arity function signature.
 
 ## Honesty boundary — the two-tier contract
 
@@ -29,18 +29,20 @@ in exactly one of two tiers, and the return type tells you which:
   denominators every Newton step), so root-finding runs on `double` via a
   **bracketed Brent method** that returns `MathError::not_converged` rather than a
   silently-arbitrary root.
-- **DB is HYBRID.** Its rate is Excel-mandated to be **rounded to three decimals**
-  (a numeric nth root, then an explicit `BigDecimal::quantize(3, half_up)`); the
-  depreciation schedule is then exact given that rounded rate.
+- **DB is HYBRID.** Its rate is, by the standard declining-balance definition,
+  **rounded to three decimals** (a numeric nth root, then an explicit
+  `BigDecimal::quantize(3, half_up)`); the depreciation schedule is then exact given
+  that rounded rate.
 
-**The Excel-compat caveat, stated plainly and never hidden:** Tier-A exact mode
-will **disagree with Excel in low-order digits, because Excel computes the same
-quantities in IEEE double**. The honest contract is *"exact over Q — more accurate
-than Excel"*, and never "exact" and "Excel-bit-identical" in the same breath. Sign
-and timing conventions do follow Excel (a cash *outflow* is negative;
-`PaymentTiming::begin` is Excel type 1), and the `Date` type uses the Excel serial
-epoch **without** the Excel 1900-leap-year bug — a documented, deliberate
-divergence (see `Date` below).
+**The exactness caveat, stated plainly and never hidden:** Tier-A exact mode is
+exact over ℚ. A double-precision engine computing the same identity in IEEE double
+will **disagree in low-order digits** — our result is the more accurate one. The
+honest contract is *"exact over ℚ"*, never "exact" and "bit-identical to a
+double-precision result" in the same breath. Sign and timing conventions are the
+standard ones (a cash *outflow* is negative; `PaymentTiming::begin` is annuity-due,
+"type 1"), and the `Date` type uses the 1899-12-31 serial epoch **without** the
+legacy 1900-leap-year bug carried by some spreadsheet date systems — a documented,
+deliberate divergence (see `Date` below).
 
 ### Per-function tier table
 
@@ -62,7 +64,7 @@ substrate and the money quantizer at the boundary). Everything lives in namespac
 
 ## Conventions — timing, day counts, and dates
 
-The Excel TVM identity, for per-period rate `r`, integer term `n`, level payment
+The standard TVM identity, for per-period rate `r`, integer term `n`, level payment
 `pmt`, present value `pv`, future value `fv`, timing `t ∈ {0, 1}`:
 
 ```
@@ -75,16 +77,16 @@ arithmetic.
 
 | Type | Definition |
 | :--- | :--- |
-| `PaymentTiming` | `enum class { end = 0, begin = 1 }` — end-of-period (ordinary annuity, Excel type 0) or start-of-period (annuity due, Excel type 1). |
-| `DayCount` | `enum class { thirty_360, actual_actual, actual_360, actual_365, thirty_360e }` — Excel bases 0–4. Year fractions are **exact rationals** because calendar dates are integers; only a subsequent `(1+y)^t` with fractional `t` is numerical. `actual_actual` uses the act/act(ISDA) `(days·4)/1461` convention to stay exact and monotone. |
+| `PaymentTiming` | `enum class { end = 0, begin = 1 }` — end-of-period (ordinary annuity, "type 0") or start-of-period (annuity due, "type 1"). |
+| `DayCount` | `enum class { thirty_360, actual_actual, actual_360, actual_365, thirty_360e }` — the five standard day-count bases 0–4. Year fractions are **exact rationals** because calendar dates are integers; only a subsequent `(1+y)^t` with fractional `t` is numerical. `actual_actual` uses the act/act(ISDA) `(days·4)/1461` convention to stay exact and monotone. |
 
 ### `Date` — a serial-day calendar date
 
 `struct Date { std::int64_t serial; }` — days since 1899-12-31, so `serial == 1`
-is 1900-01-01 (Excel-compatible epoch). Differences are exact integers. The
-calendar is **proleptic Gregorian throughout — the astronomical count, WITHOUT
-Excel's 1900-leap-year bug** (a documented divergence: Excel treats 1900 as a leap
-year, this does not).
+is 1900-01-01. Differences are exact integers. The calendar is **proleptic
+Gregorian throughout — the astronomical count, WITHOUT the legacy 1900-leap-year
+bug** carried by some spreadsheet date systems (a documented divergence: those
+systems treat 1900 as a leap year, this does not).
 
 | Method | Signature | Behavior |
 | :--- | :--- | :--- |
@@ -100,8 +102,8 @@ year, this does not).
 | `fv` | `auto fv(const BigRational& rate, std::int64_t nper, const BigRational& pmt, const BigRational& pv, PaymentTiming timing = end) -> Result<BigRational>` | Future value. Never fails (all operations total over Q). |
 | `pv` | `auto pv(const BigRational& rate, std::int64_t nper, const BigRational& pmt, const BigRational& fv, PaymentTiming timing = end) -> Result<BigRational>` | Present value. |
 | `pmt` | `auto pmt(const BigRational& rate, std::int64_t nper, const BigRational& pv, const BigRational& fv, PaymentTiming timing = end) -> Result<BigRational>` | Level payment. `division_by_zero` only in the degenerate `nper == 0` case. |
-| `ipmt` / `ppmt` | `auto ipmt(const BigRational& rate, std::int64_t per, std::int64_t nper, const BigRational& pv, const BigRational& fv, PaymentTiming timing = end) -> Result<BigRational>` (and `ppmt`, same shape) | Interest / principal part of the payment in period `per`. Follows the LibreOffice/Excel reference decomposition. `per < 1` or `per > nper` → `domain_error`. |
-| `cumipmt` / `cumprinc` | `auto cumipmt(const BigRational& rate, std::int64_t nper, const BigRational& pv, std::int64_t start, std::int64_t end, PaymentTiming timing = end) -> Result<BigRational>` (and `cumprinc`) | Cumulative interest / principal between periods `start..end` inclusive, with `fv == 0` as in Excel. `start < 1`, `end < start`, or `end > nper` → `domain_error`. |
+| `ipmt` / `ppmt` | `auto ipmt(const BigRational& rate, std::int64_t per, std::int64_t nper, const BigRational& pv, const BigRational& fv, PaymentTiming timing = end) -> Result<BigRational>` (and `ppmt`, same shape) | Interest / principal part of the payment in period `per`. Follows the standard interest/principal decomposition. `per < 1` or `per > nper` → `domain_error`. |
+| `cumipmt` / `cumprinc` | `auto cumipmt(const BigRational& rate, std::int64_t nper, const BigRational& pv, std::int64_t start, std::int64_t end, PaymentTiming timing = end) -> Result<BigRational>` (and `cumprinc`) | Cumulative interest / principal between periods `start..end` inclusive, with `fv == 0`. `start < 1`, `end < start`, or `end > nper` → `domain_error`. |
 | `ispmt` | `auto ispmt(const BigRational& rate, std::int64_t per, std::int64_t nper, const BigRational& pv) -> Result<BigRational>` | Lotus-compatible straight-line interest: `−pv·rate·(nper−per)/nper`. `nper == 0` → `division_by_zero`; `per` out of range → `domain_error`. |
 | `growing_annuity_pv` | `auto growing_annuity_pv(const BigRational& rate, const BigRational& growth, std::int64_t nper, const BigRational& first_payment) -> Result<BigRational>` | PV of `nper` payments growing at `growth`. Handles the `rate == growth` limit `n·C₁/(1+r)` exactly. `nper < 0` → `domain_error`; `1+rate == 0` → `division_by_zero`. |
 | `perpetuity_pv` | `auto perpetuity_pv(const BigRational& rate, const BigRational& payment) -> Result<BigRational>` | `payment / rate`. `rate == 0` → `division_by_zero`. |
@@ -111,7 +113,7 @@ year, this does not).
 
 | Function | Signature | Behavior |
 | :--- | :--- | :--- |
-| `npv` | `auto npv(const BigRational& rate, std::span<const BigRational> cashflows) -> Result<BigRational>` | Net present value; the first value is discounted **one** period (Excel convention). `rate == −1` → `division_by_zero`. |
+| `npv` | `auto npv(const BigRational& rate, std::span<const BigRational> cashflows) -> Result<BigRational>` | Net present value; the first value is discounted **one** period (the end-of-first-period convention). `rate == −1` → `division_by_zero`. |
 | `fvschedule` | `auto fvschedule(const BigRational& principal, std::span<const BigRational> rates) -> BigRational` | Compound a principal through a series of period rates. Total (returns a bare `BigRational`). |
 | `effect` | `auto effect(const BigRational& nominal_rate, std::int64_t npery) -> Result<BigRational>` | Effective annual rate `(1 + nominal/npery)^npery − 1`, exact. `npery < 1` → `domain_error`. |
 
@@ -140,7 +142,7 @@ window outward from a guess; failure to bracket a sign change is
 | `sln` | `auto sln(const BigRational& cost, const BigRational& salvage, std::int64_t life) -> Result<BigRational>` | Straight-line per period. `life <= 0` → `division_by_zero`. |
 | `syd` | `auto syd(const BigRational& cost, const BigRational& salvage, std::int64_t life, std::int64_t per) -> Result<BigRational>` | Sum-of-years'-digits for period `per`. `life <= 0` → `division_by_zero`; `per` out of `[1, life]` → `domain_error`. |
 | `ddb` | `auto ddb(const BigRational& cost, const BigRational& salvage, std::int64_t life, std::int64_t per, const BigRational& factor = 2) -> Result<BigRational>` | Double- (or `factor`-) declining balance, capped so book value never drops below salvage. Same guards as `syd`. |
-| `vdb` | `auto vdb(const BigRational& cost, const BigRational& salvage, std::int64_t life, std::int64_t start_period, std::int64_t end_period, const BigRational& factor = 2, bool no_switch = false) -> Result<BigRational>` | Variable declining balance from `start_period` to `end_period`, optionally switching to straight line when that deducts more (Excel default). `life <= 0` → `division_by_zero`; a bad period range → `domain_error`. |
+| `vdb` | `auto vdb(const BigRational& cost, const BigRational& salvage, std::int64_t life, std::int64_t start_period, std::int64_t end_period, const BigRational& factor = 2, bool no_switch = false) -> Result<BigRational>` | Variable declining balance from `start_period` to `end_period`, optionally switching to straight line when that deducts more (the standard VDB default). `life <= 0` → `division_by_zero`; a bad period range → `domain_error`. |
 
 ## Dollar-fraction conversion (exact over Q)
 
@@ -159,11 +161,11 @@ Prices are per 100 face. Coupon frequency must be 1, 2, or 4.
 | `bond_yield` | `auto bond_yield(const Date& settlement, const Date& maturity, double coupon_rate, double clean_price, double redemption, int frequency, DayCount basis) -> Result<double>` | Yield to maturity: bracketed root of `price(yield) = clean_price`. |
 | `bond_duration` / `bond_mduration` | `auto bond_duration(const Date& settlement, const Date& maturity, double coupon_rate, double yield, int frequency, DayCount basis) -> Result<double>` (and `bond_mduration`) | Macaulay and modified duration, in years. |
 | `bond_convexity` | `auto bond_convexity(...) -> Result<double>` (same params as `bond_duration`) | Convexity in years², the second-order price/yield sensitivity. |
-| `coupon_num` | `auto coupon_num(const Date& settlement, const Date& maturity, int frequency) -> Result<std::int64_t>` | Number of coupons between settlement and maturity (Excel COUPNUM). Exact integer. |
+| `coupon_num` | `auto coupon_num(const Date& settlement, const Date& maturity, int frequency) -> Result<std::int64_t>` | Number of coupons between settlement and maturity (COUPNUM). Exact integer. |
 | `accrued_interest` | `auto accrued_interest(const Date& last_coupon, const Date& settlement, double coupon_rate, int frequency, DayCount basis, double par = 100.0) -> Result<double>` | Accrued interest per 100 face from the last coupon to settlement (single period). |
 | `disc` / `intrate` / `received` | see source | Discount-security helpers (simple ratios over the day-count year fraction). |
 | `price_disc` / `yield_disc` | see source | Discounted (zero-coupon) securities, per 100 face. |
-| `tbill_price` / `tbill_yield` / `tbill_eq` | e.g. `auto tbill_price(const Date& settlement, const Date& maturity, double discount_rate) -> Result<double>` | T-bills on the actual/360 discount basis. `tbill_eq` uses the ≤182-day simple bond-equivalent form, which **diverges from Excel for longer bills** — a documented convention divergence. Maturities beyond 366 days → `domain_error`. |
+| `tbill_price` / `tbill_yield` / `tbill_eq` | e.g. `auto tbill_price(const Date& settlement, const Date& maturity, double discount_rate) -> Result<double>` | T-bills on the actual/360 discount basis. `tbill_eq` uses the ≤182-day simple bond-equivalent form, which **diverges from the piecewise long-bill convention for maturities > 182 days** — a documented convention divergence. Maturities beyond 366 days → `domain_error`. |
 
 ## Swaps (numerical, discount-factor based)
 
