@@ -977,6 +977,10 @@ target_link_libraries(riskextra_tests
   PRIVATE nimblecas_riskextra nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME riskextra_tests COMMAND riskextra_tests)
 
+# Throughput micro-benchmark: scalar counter_u64 vs the AVX-512 batched RNG core.
+add_executable(rng_bench examples/rng_bench.cpp)
+target_link_libraries(rng_bench PRIVATE nimblecas_rng nimblecas_core std_module)
+
 # Comprehensive worked-examples showcase across the full financial stack (buildable + runnable).
 add_executable(finance_showcase examples/finance_showcase.cpp)
 target_link_libraries(finance_showcase

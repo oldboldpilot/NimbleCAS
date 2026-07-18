@@ -14,6 +14,9 @@
 // subtask its own independent stream. There is no global mutable state and no time /
 // entropy seeding — identical seeds always reproduce identical results.
 
+module;
+#include <immintrin.h>  // AVX-512 intrinsics for the vectorised counter core (GMF include).
+
 export module nimblecas.rng;
 
 import std;
@@ -39,6 +42,16 @@ export namespace nimblecas {
 // thus reproducible regardless of thread count or scheduling.
 [[nodiscard]] auto counter_u64(std::uint64_t key, std::uint64_t counter) noexcept
     -> std::uint64_t;
+
+// Batched counter core: fills out[i] = counter_u64(key, base_counter + i) for every i in
+// [0, out.size()). BIT-IDENTICAL to calling counter_u64 in a loop — it preserves the same
+// parallelism and reproducibility contract — but processes eight Threefry-2x64 blocks per
+// step through an AVX-512F path when the running CPU supports it, transparently falling back
+// to the scalar core otherwise. The dispatch is purely a performance detail: the produced
+// values never depend on the ISA, the thread count, or how a range was partitioned. This is
+// the hot path for the Monte Carlo engines, whose profile is dominated by RNG self-time.
+void counter_u64_batch(std::uint64_t key, std::uint64_t base_counter,
+                       std::span<std::uint64_t> out) noexcept;
 
 // ---------------------------------------------------------------------------
 // Distributions as free functions over a raw 64-bit draw (`bits`). These are pure
@@ -78,6 +91,12 @@ public:
 
     // Next raw 64-bit draw; advances the internal counter.
     [[nodiscard]] auto next_u64() noexcept -> std::uint64_t;
+
+    // Fills `out` with the next out.size() raw draws and advances the counter by that many —
+    // equivalent to calling next_u64() out.size() times, but routed through counter_u64_batch
+    // (AVX-512 when available). The stream is unchanged bit-for-bit, so a batched fill and a
+    // scalar loop are freely interchangeable.
+    void fill_u64(std::span<std::uint64_t> out) noexcept;
 
     // Returns an independent child stream whose key is derived from (this key, index)
     // through the counter core. Distinct indices yield independent streams, and children
@@ -122,6 +141,58 @@ namespace {
 // the counter positions a stream draws from during normal generation.
 inline constexpr std::uint64_t split_domain = 0x9E3779B97F4A7C15ULL;
 
+// The Threefry-2x64-20 rotation schedule (shared by the scalar and vector cores).
+inline constexpr std::array<unsigned, 8> threefry_rot{16U, 42U, 12U, 31U, 16U, 32U, 24U, 21U};
+
+// The Threefry-2x64 key schedule: {k0, k1, k2} with k2 = parity ^ k0 ^ k1. Computed once per
+// key and shared by the scalar and vector cores so both derive keys identically.
+struct ThreefryKeys {
+    std::uint64_t k[3];
+};
+
+[[nodiscard]] auto threefry_keys(std::uint64_t key) noexcept -> ThreefryKeys {
+    constexpr std::uint64_t parity = 0x1BD11BDAA9FC1A22ULL;
+    const std::uint64_t k0 = key;
+    const std::uint64_t k1 = splitmix64(key);
+    return ThreefryKeys{{k0, k1, parity ^ k0 ^ k1}};
+}
+
+#if defined(__x86_64__)
+// AVX-512 vector core: eight Threefry-2x64-20 blocks per outer step, one counter per lane.
+// Marked with an AVX-512F target attribute so the enclosing translation unit need NOT be
+// compiled with -mavx512f (the project default is -march=x86-64-v3, i.e. AVX2); this function
+// is reached only after __builtin_cpu_supports("avx512f") confirms the ISA at run time. Every
+// operation is a per-lane mod-2^64 add / xor / rotate — identical semantics to the scalar
+// core — so each lane's output equals counter_u64(key, block_base + lane) bit-for-bit.
+__attribute__((target("avx512f"))) void counter_u64_batch_avx512(
+    const ThreefryKeys& kk, std::uint64_t base, std::uint64_t* out, std::size_t blocks) noexcept {
+    const __m512i lane_id = _mm512_setr_epi64(0, 1, 2, 3, 4, 5, 6, 7);
+    const __m512i k0 = _mm512_set1_epi64(static_cast<long long>(kk.k[0]));
+    const __m512i k1v = _mm512_set1_epi64(static_cast<long long>(kk.k[1]));
+    for (std::size_t b = 0; b < blocks; ++b) {
+        const std::uint64_t block_base = base + b * 8ULL;
+        const __m512i ctr =
+            _mm512_add_epi64(_mm512_set1_epi64(static_cast<long long>(block_base)), lane_id);
+        __m512i x0 = _mm512_add_epi64(ctr, k0);
+        __m512i x1 = k1v;
+        for (unsigned r = 0; r < 20U; ++r) {
+            x0 = _mm512_add_epi64(x0, x1);
+            x1 = _mm512_rolv_epi64(
+                x1, _mm512_set1_epi64(static_cast<long long>(threefry_rot[r % 8U])));
+            x1 = _mm512_xor_si512(x1, x0);
+            if ((r + 1U) % 4U == 0U) {
+                const unsigned s = (r + 1U) / 4U;  // key-injection index 1..5
+                x0 = _mm512_add_epi64(x0, _mm512_set1_epi64(static_cast<long long>(kk.k[s % 3U])));
+                x1 = _mm512_add_epi64(
+                    x1, _mm512_set1_epi64(static_cast<long long>(kk.k[(s + 1U) % 3U] + s)));
+            }
+        }
+        _mm512_storeu_si512(reinterpret_cast<__m512i*>(out + b * 8ULL),
+                            _mm512_xor_si512(x0, x1));
+    }
+}
+#endif
+
 }  // namespace
 
 auto splitmix64(std::uint64_t x) noexcept -> std::uint64_t {
@@ -161,6 +232,25 @@ auto counter_u64(std::uint64_t key, std::uint64_t counter) noexcept -> std::uint
         }
     }
     return x0 ^ x1;
+}
+
+void counter_u64_batch(std::uint64_t key, std::uint64_t base_counter,
+                       std::span<std::uint64_t> out) noexcept {
+    const ThreefryKeys kk = threefry_keys(key);
+    std::size_t done = 0;
+#if defined(__x86_64__)
+    // Vector core handles whole 8-block groups; __builtin_cpu_supports gates the ISA at run
+    // time so a non-AVX-512 host silently uses the scalar loop below with identical output.
+    if (out.size() >= 8U && __builtin_cpu_supports("avx512f")) {
+        const std::size_t blocks = out.size() / 8U;
+        counter_u64_batch_avx512(kk, base_counter, out.data(), blocks);
+        done = blocks * 8U;
+    }
+#endif
+    // Scalar tail (and the whole range when AVX-512 is unavailable). Bit-identical by design.
+    for (std::size_t i = done; i < out.size(); ++i) {
+        out[i] = counter_u64(key, base_counter + static_cast<std::uint64_t>(i));
+    }
 }
 
 auto uniform_unit(std::uint64_t bits) noexcept -> double {
@@ -209,6 +299,13 @@ auto Rng::seeded(std::uint64_t seed) noexcept -> Rng {
 
 auto Rng::next_u64() noexcept -> std::uint64_t {
     return counter_u64(key_, counter_++);
+}
+
+void Rng::fill_u64(std::span<std::uint64_t> out) noexcept {
+    // Draws out.size() values from the current counter position and advances by that many, so
+    // the post-fill stream is identical to out.size() successive next_u64() calls.
+    counter_u64_batch(key_, counter_, out);
+    counter_ += out.size();
 }
 
 auto Rng::split(std::uint64_t index) const noexcept -> Rng {

@@ -338,13 +338,32 @@ namespace {
            ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
 }
 
-auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
-    const std::uint64_t bits = counter_u64(key, index);
+// Map a single raw counter draw to a standard normal. Shared by the scalar and batched paths
+// so both produce identical values for the same underlying bits.
+[[nodiscard]] auto bits_to_normal(std::uint64_t bits) -> double {
     const double u = uniform_unit(bits);
     // Clamp away from the exact endpoints so the inverse CDF stays finite (uniform_unit
     // already returns (0,1); this is belt-and-braces against a boundary bit pattern).
     const double uc = std::min(std::max(u, 1e-15), 1.0 - 1e-15);
     return fast_inv_norm(uc);
+}
+
+auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
+    return bits_to_normal(counter_u64(key, index));
+}
+
+// Batched standard-normal draws: out[j] = normal_at(key, base_index + j) for every j, sourcing
+// the raw bits through counter_u64_batch (AVX-512 when available). BIT-IDENTICAL to calling
+// normal_at per index — this is the hot path that lets the Monte Carlo engines feed the
+// vectorised RNG core instead of one draw at a time. `scratch` must be at least out.size();
+// it holds the raw u64 draws so no allocation happens inside the per-path loop.
+void normal_fill(std::uint64_t key, std::uint64_t base_index, std::span<double> out,
+                 std::span<std::uint64_t> scratch) {
+    const std::span<std::uint64_t> bits = scratch.first(out.size());
+    counter_u64_batch(key, base_index, bits);
+    for (std::size_t j = 0; j < out.size(); ++j) {
+        out[j] = bits_to_normal(bits[j]);
+    }
 }
 }  // namespace
 
@@ -558,14 +577,19 @@ auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, st
     const double vol_sqrtdt = spec.volatility * std::sqrt(dt);
     const double disc = std::exp(-spec.rate * spec.time_to_expiry);
     const std::uint64_t key = splitmix64(seed);
+    // Per-path scratch: the `steps` draws of a path occupy the contiguous counter range
+    // [i*steps, i*steps+steps), so they batch through the vectorised RNG core in one call.
+    const std::size_t nsteps = static_cast<std::size_t>(steps);
+    std::vector<double> z(nsteps);
+    std::vector<std::uint64_t> zbits(nsteps);
     double sum = 0.0;
     double sum_sq = 0.0;
     for (std::uint64_t i = 0; i < paths; ++i) {
         double s = spec.spot;
         bool hit = false;
+        normal_fill(key, i * static_cast<std::uint64_t>(steps), z, zbits);
         for (int step = 0; step < steps; ++step) {
-            const std::uint64_t idx = i * static_cast<std::uint64_t>(steps) + static_cast<std::uint64_t>(step);
-            s *= std::exp(drift + vol_sqrtdt * normal_at(key, idx));
+            s *= std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(step)]);
             if ((down && s <= barrier) || (!down && s >= barrier)) { hit = true; }
         }
         const bool alive = knock_in ? hit : !hit;
@@ -662,15 +686,24 @@ auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint
     const double disc = std::exp(-spec.rate * T);
     const std::uint64_t key = splitmix64(seed);
     // Antithetic variates: each index i produces the pair (+z, -z), halving variance cheaply.
+    // Draws are the contiguous counter range [0, paths); process them in tiles so the
+    // vectorised RNG core fills each tile at once while memory stays O(tile), not O(paths).
     double sum = 0.0;
     double sum_sq = 0.0;
-    for (std::uint64_t i = 0; i < paths; ++i) {
-        const double z = normal_at(key, i);
-        const double sp = spec.spot * std::exp(drift + vol_sqrtT * z);
-        const double sm = spec.spot * std::exp(drift - vol_sqrtT * z);
-        const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
-        sum += payoff;
-        sum_sq += payoff * payoff;
+    constexpr std::size_t kTile = 8192;
+    const std::size_t tile = static_cast<std::size_t>(std::min<std::uint64_t>(paths, kTile));
+    std::vector<double> z(tile);
+    std::vector<std::uint64_t> zbits(tile);
+    for (std::uint64_t base = 0; base < paths; base += tile) {
+        const std::size_t m = static_cast<std::size_t>(std::min<std::uint64_t>(paths - base, tile));
+        normal_fill(key, base, std::span<double>(z).first(m), zbits);
+        for (std::size_t j = 0; j < m; ++j) {
+            const double sp = spec.spot * std::exp(drift + vol_sqrtT * z[j]);
+            const double sm = spec.spot * std::exp(drift - vol_sqrtT * z[j]);
+            const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
+            sum += payoff;
+            sum_sq += payoff * payoff;
+        }
     }
     const double n = static_cast<double>(paths);
     const double mean = sum / n;
@@ -732,16 +765,18 @@ auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, s
         if (!g) { return make_error<McResult>(g.error()); }
         geo_closed = *g;
     }
+    const std::size_t nsteps = static_cast<std::size_t>(steps);
+    std::vector<double> z(nsteps);
+    std::vector<std::uint64_t> zbits(nsteps);
     double sum = 0.0;
     double sum_sq = 0.0;
     for (std::uint64_t i = 0; i < paths; ++i) {
         double s = spec.spot;
         double arith_sum = 0.0;
         double log_sum = 0.0;
+        normal_fill(key, i * static_cast<std::uint64_t>(steps), z, zbits);
         for (int step = 0; step < steps; ++step) {
-            const std::uint64_t idx = i * static_cast<std::uint64_t>(steps) + static_cast<std::uint64_t>(step);
-            const double z = normal_at(key, idx);
-            s *= std::exp(drift + vol_sqrtdt * z);
+            s *= std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(step)]);
             arith_sum += s;
             log_sum += std::log(s);
         }
@@ -786,16 +821,19 @@ auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths, in
     const double disc = std::exp(-spec.rate * dt);
     const std::uint64_t key = splitmix64(seed);
 
-    // Simulate and store the full price grid (paths x (N+1)). Memory is O(P*N).
+    // Simulate and store the full price grid (paths x (N+1)). Memory is O(P*N). Each path's N
+    // draws are the contiguous counter range [p*N, p*N+N), filled through the vectorised RNG core.
     std::vector<double> S(P * static_cast<std::size_t>(N + 1));
+    const std::size_t Nn = static_cast<std::size_t>(N);
+    std::vector<double> z(Nn);
+    std::vector<std::uint64_t> zbits(Nn);
     for (std::size_t p = 0; p < P; ++p) {
         S[p * (N + 1)] = spec.spot;
+        normal_fill(key, static_cast<std::uint64_t>(p) * static_cast<std::uint64_t>(N), z, zbits);
         for (int t = 0; t < N; ++t) {
-            const std::uint64_t idx = static_cast<std::uint64_t>(p) * static_cast<std::uint64_t>(N)
-                                      + static_cast<std::uint64_t>(t);
-            const double z = normal_at(key, idx);
             S[p * (N + 1) + static_cast<std::size_t>(t + 1)] =
-                S[p * (N + 1) + static_cast<std::size_t>(t)] * std::exp(drift + vol_sqrtdt * z);
+                S[p * (N + 1) + static_cast<std::size_t>(t)] *
+                std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(t)]);
         }
     }
     // Cashflow at expiry, then roll backward regressing continuation on {1,S,S^2}.
