@@ -542,7 +542,9 @@ auto digital_asset_or_nothing(const OptionSpec& spec) -> Result<double> {
 
 auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, std::uint64_t paths,
                        int steps, std::uint64_t seed) -> Result<McResult> {
-    if (paths == 0 || steps < 1 || barrier <= 0.0) {
+    // paths/steps bound only runtime here (O(1) memory), but a ~1e18 loop is an effective hang.
+    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
+    if (paths == 0 || paths > kMaxPaths || steps < 1 || steps > 100'000 || barrier <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }
     if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
@@ -579,7 +581,11 @@ auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, st
 
 auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
                      std::span<const double> exercise_times) -> Result<double> {
-    if (steps < 1) { return make_error<double>(MathError::domain_error); }
+    // steps drives a (2*steps+1)-wide lattice. Cap it so `2*steps + 1` cannot overflow int
+    // (UB / negative width) and the two O(steps) buffers stay bounded (~a few hundred MB at the
+    // ceiling). 100k steps is far past any convergence need.
+    constexpr int kMaxSteps = 100'000;
+    if (steps < 1 || steps > kMaxSteps) { return make_error<double>(MathError::domain_error); }
     if (spec.spot <= 0.0 || spec.strike <= 0.0 || spec.time_to_expiry <= 0.0 ||
         spec.volatility <= 0.0) {
         return make_error<double>(MathError::domain_error);
@@ -642,7 +648,9 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
 
 auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint64_t seed)
     -> Result<McResult> {
-    if (paths == 0) { return make_error<McResult>(MathError::domain_error); }
+    // Cap paths to bound runtime (O(1) memory, but a ~1e18-iteration loop is an effective hang).
+    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
+    if (paths == 0 || paths > kMaxPaths) { return make_error<McResult>(MathError::domain_error); }
     if (spec.time_to_expiry < 0.0 || spec.volatility < 0.0 || spec.spot <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }
@@ -701,7 +709,11 @@ auto geometric_asian_price(const OptionSpec& spec, int steps) -> Result<double> 
 
 auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, std::uint64_t seed,
                        bool control_variate) -> Result<McResult> {
-    if (paths == 0 || steps < 1) { return make_error<McResult>(MathError::domain_error); }
+    // Cap paths/steps to bound runtime (O(1) memory here, but ~1e18 iterations is a hang).
+    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
+    if (paths == 0 || paths > kMaxPaths || steps < 1 || steps > 100'000) {
+        return make_error<McResult>(MathError::domain_error);
+    }
     if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }
@@ -752,6 +764,13 @@ auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, s
 auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths, int steps,
                                  std::uint64_t seed) -> Result<McResult> {
     if (paths < 4 || steps < 1) { return make_error<McResult>(MathError::domain_error); }
+    // O(paths*(steps+1)) doubles are materialized as one grid; bound the product so it cannot
+    // overflow size_t or ask for tens of GB (5e8 doubles ~ 4 GB at the ceiling).
+    constexpr std::uint64_t kMaxCells = 500'000'000;
+    if (steps > 100'000 ||
+        paths > kMaxCells / (static_cast<std::uint64_t>(steps) + 1)) {
+        return make_error<McResult>(MathError::domain_error);
+    }
     if (spec.spot <= 0.0 || spec.volatility <= 0.0 || spec.time_to_expiry <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }

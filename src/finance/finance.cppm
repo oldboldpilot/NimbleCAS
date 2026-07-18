@@ -424,8 +424,16 @@ namespace {
     return *r;
 }
 
-// (1+r)^n for integer n >= 0, exact.
+// Largest period/exponent count we will raise (1+r) to. (1+r)^n on BigRational grows the
+// numerator and denominator by ~n*log10(1+r) digits each, so n is a direct OOM/CPU lever on
+// untrusted TVM inputs (fv/pv/pmt/effect all route a caller int64 into pow). 100k periods
+// (>8000 years monthly) is beyond any real use; larger is refused, not allocated.
+inline constexpr std::int64_t kMaxPeriods = 100'000;
+
+// (1+r)^n for integer n in [0, kMaxPeriods], exact. The upper bound is a DoS guard, not a
+// mathematical limit: pow(n) would otherwise materialize an ~n-digit rational from one int.
 [[nodiscard]] auto growth(const BigRational& rate, std::int64_t n) -> Result<BigRational> {
+    if (n < 0 || n > kMaxPeriods) { return make_error<BigRational>(MathError::overflow); }
     return q_one().add(rate).pow(n);
 }
 
@@ -559,7 +567,11 @@ template <typename F>
 }  // namespace
 
 auto Date::of(int year, int month, int day) -> Result<Date> {
-    if (month < 1 || month > 12 || day < 1 || day > days_in_month(year, month)) {
+    // Bound the year to the proleptic-Gregorian spreadsheet range. to_serial walks year-by-year
+    // from the 1900 epoch, so an unbounded year (e.g. 2'000'000'000) is a ~2-billion-iteration
+    // CPU-exhaustion DoS. 1..9999 also keeps the 360*(y2-y1) day-count products within int.
+    if (year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 ||
+        day > days_in_month(year, month)) {
         return make_error<Date>(MathError::domain_error);
     }
     return Date{to_serial(year, month, day)};
@@ -571,6 +583,12 @@ auto Date::ymd() const -> std::tuple<int, int, int> {
     // forward month walk — otherwise the forward loop exits immediately and yields day 0.
     std::int64_t rem = serial;
     int y = 1900;
+    // `serial` is a public field, so a hostile out-of-range value (bypassing Date::of) could
+    // otherwise drive the year walk for billions of iterations. Years 1..9999 span serials
+    // roughly [-693593, 2958465]; clamp beyond that to keep the walk bounded.
+    constexpr std::int64_t kMinSerial = -700'000;
+    constexpr std::int64_t kMaxSerial = 3'000'000;
+    if (rem < kMinSerial) { rem = kMinSerial; } else if (rem > kMaxSerial) { rem = kMaxSerial; }
     while (rem <= 0) { --y; rem += is_leap(y) ? 366 : 365; }
     while (true) {
         const std::int64_t yd = is_leap(y) ? 366 : 365;
@@ -834,7 +852,10 @@ auto mirr(std::span<const double> values, double finance_rate, double reinvest_r
 // --- Rate conversion --------------------------------------------------------
 
 auto effect(const BigRational& nominal_rate, std::int64_t npery) -> Result<BigRational> {
-    if (npery < 1) { return make_error<BigRational>(MathError::domain_error); }
+    // npery drives (1 + nominal/npery)^npery; cap it against the DoS bound (an attacker-scale
+    // npery would raise a rational to a billion-plus power). kMaxPeriods is well past any real
+    // compounding frequency (daily is 365).
+    if (npery < 1 || npery > kMaxPeriods) { return make_error<BigRational>(MathError::domain_error); }
     // (1 + nominal/npery)^npery - 1, exact (integer power).
     auto per = nominal_rate.divide(q_int(npery));
     if (!per) { return per; }
@@ -885,7 +906,7 @@ auto syd(const BigRational& cost, const BigRational& salvage, std::int64_t life,
 
 auto ddb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
          std::int64_t per, const BigRational& factor) -> Result<BigRational> {
-    if (life <= 0) { return make_error<BigRational>(MathError::division_by_zero); }
+    if (life <= 0 || life > kMaxPeriods) { return make_error<BigRational>(MathError::division_by_zero); }
     if (per < 1 || per > life) { return make_error<BigRational>(MathError::domain_error); }
     auto per_rate = factor.divide(q_int(life));  // factor/life
     if (!per_rate) { return per_rate; }
@@ -904,7 +925,7 @@ auto ddb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
 auto vdb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
          std::int64_t start_period, std::int64_t end_period, const BigRational& factor,
          bool no_switch) -> Result<BigRational> {
-    if (life <= 0) { return make_error<BigRational>(MathError::division_by_zero); }
+    if (life <= 0 || life > kMaxPeriods) { return make_error<BigRational>(MathError::division_by_zero); }
     if (start_period < 0 || end_period < start_period || end_period > life) {
         return make_error<BigRational>(MathError::domain_error);
     }
@@ -937,7 +958,8 @@ auto vdb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
 
 auto db(double cost, double salvage, std::int64_t life, std::int64_t period, std::int64_t month)
     -> Result<double> {
-    if (cost <= 0.0 || life <= 0 || period < 1 || period > life + 1 || month < 1 || month > 12) {
+    if (cost <= 0.0 || life <= 0 || life > kMaxPeriods || period < 1 || period > life + 1 ||
+        month < 1 || month > 12) {
         return make_error<double>(MathError::domain_error);
     }
     // Excel: rate = 1 - (salvage/cost)^(1/life), ROUNDED to 3 decimals (half_up).
@@ -1132,7 +1154,8 @@ auto ispmt(const BigRational& rate, std::int64_t per, std::int64_t nper, const B
 
 auto growing_annuity_pv(const BigRational& rate, const BigRational& growth, std::int64_t nper,
                         const BigRational& first_payment) -> Result<BigRational> {
-    if (nper < 0) { return make_error<BigRational>(MathError::domain_error); }
+    // nper feeds ratio->pow(nper) below; bound it against the same exponent-bomb DoS as growth().
+    if (nper < 0 || nper > kMaxPeriods) { return make_error<BigRational>(MathError::domain_error); }
     const BigRational one_plus_r = q_one().add(rate);
     const BigRational one_plus_g = q_one().add(growth);
     if (one_plus_r.is_zero()) { return make_error<BigRational>(MathError::division_by_zero); }

@@ -926,6 +926,21 @@ target_link_libraries(portfolio_tests
   PRIVATE nimblecas_portfolio nimblecas_analytics nimblecas_core nimblecas_testing std_module)
 add_test(NAME portfolio_tests COMMAND portfolio_tests)
 
+# Comprehensive worked-examples showcase across the full financial stack (buildable + runnable).
+add_executable(finance_showcase examples/finance_showcase.cpp)
+target_link_libraries(finance_showcase
+  PRIVATE nimblecas_portfolio nimblecas_analytics nimblecas_pricing nimblecas_svgplot
+          nimblecas_rng nimblecas_currency nimblecas_finance nimblecas_bigdecimal
+          nimblecas_bigrational nimblecas_bigint nimblecas_simplify nimblecas_diff
+          nimblecas_symbolic nimblecas_core std_module)
+
+add_executable(security_tests tests/security_tests.cpp)
+target_link_libraries(security_tests
+  PRIVATE nimblecas_portfolio nimblecas_analytics nimblecas_pricing nimblecas_svgplot
+          nimblecas_rng nimblecas_finance nimblecas_bigdecimal nimblecas_bigrational
+          nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME security_tests COMMAND security_tests)
+
 add_executable(numeigen_tests tests/numeigen_tests.cpp)
 target_link_libraries(numeigen_tests
   PRIVATE nimblecas_numeigen nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
