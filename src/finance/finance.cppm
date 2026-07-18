@@ -430,10 +430,12 @@ namespace {
 // (>8000 years monthly) is beyond any real use; larger is refused, not allocated.
 inline constexpr std::int64_t kMaxPeriods = 100'000;
 
-// (1+r)^n for integer n in [0, kMaxPeriods], exact. The upper bound is a DoS guard, not a
-// mathematical limit: pow(n) would otherwise materialize an ~n-digit rational from one int.
+// (1+r)^n for integer n with |n| <= kMaxPeriods, exact. Only the MAGNITUDE is bounded (a DoS
+// guard, not a mathematical limit): BigRational::pow handles negative n exactly — the
+// discounting behavior fv/pv/pmt have always relied on — so a negative n is preserved, while
+// pow(|n|) is prevented from materializing an ~|n|-digit rational from one attacker int.
 [[nodiscard]] auto growth(const BigRational& rate, std::int64_t n) -> Result<BigRational> {
-    if (n < 0 || n > kMaxPeriods) { return make_error<BigRational>(MathError::overflow); }
+    if (n < -kMaxPeriods || n > kMaxPeriods) { return make_error<BigRational>(MathError::domain_error); }
     return q_one().add(rate).pow(n);
 }
 
@@ -906,8 +908,10 @@ auto syd(const BigRational& cost, const BigRational& salvage, std::int64_t life,
 
 auto ddb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
          std::int64_t per, const BigRational& factor) -> Result<BigRational> {
-    if (life <= 0 || life > kMaxPeriods) { return make_error<BigRational>(MathError::division_by_zero); }
-    if (per < 1 || per > life) { return make_error<BigRational>(MathError::domain_error); }
+    if (life <= 0) { return make_error<BigRational>(MathError::division_by_zero); }
+    if (life > kMaxPeriods || per < 1 || per > life) {
+        return make_error<BigRational>(MathError::domain_error);  // life cap is a DoS guard, not a div-by-zero
+    }
     auto per_rate = factor.divide(q_int(life));  // factor/life
     if (!per_rate) { return per_rate; }
     BigRational book = cost;
@@ -925,8 +929,8 @@ auto ddb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
 auto vdb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
          std::int64_t start_period, std::int64_t end_period, const BigRational& factor,
          bool no_switch) -> Result<BigRational> {
-    if (life <= 0 || life > kMaxPeriods) { return make_error<BigRational>(MathError::division_by_zero); }
-    if (start_period < 0 || end_period < start_period || end_period > life) {
+    if (life <= 0) { return make_error<BigRational>(MathError::division_by_zero); }
+    if (life > kMaxPeriods || start_period < 0 || end_period < start_period || end_period > life) {
         return make_error<BigRational>(MathError::domain_error);
     }
     auto per_rate = factor.divide(q_int(life));

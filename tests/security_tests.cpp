@@ -49,6 +49,10 @@ auto main() -> int {
                            "1e-2000000000 refused (scale +2e9)");
                   t.expect(!BigDecimal::from_string("1e2000000000").has_value(),
                            "1e2000000000 refused (scale -2e9)");
+                  // Exponent == INT64_MIN: refused BEFORE the frac_digits-exponent subtraction,
+                  // which would otherwise be signed-overflow UB (D2).
+                  t.expect(!BigDecimal::from_string("1e-9223372036854775808").has_value(),
+                           "INT64_MIN exponent refused without UB");
                   // A sane money scale still parses.
                   t.expect(BigDecimal::from_string("1.2345").has_value(), "normal scale still ok");
                   t.expect(BigDecimal::from_string("1e-6").has_value(), "scale at 1e-6 still ok");
@@ -105,6 +109,16 @@ auto main() -> int {
                            "LSM rejects a 160GB grid");
                   t.expect(!px::monte_carlo_european(spec, 5'000'000'000ULL, 7).has_value(),
                            "MC rejects paths=5e9 (hang guard)");
+                  // The hang guard must bound the PRODUCT paths*steps, not just each factor: two
+                  // individually-in-range values (1e9 paths * 1e5 steps = 1e14 iters) must refuse.
+                  t.expect(!px::monte_carlo_asian(spec, 1'000'000'000ULL, 100'000, 7).has_value(),
+                           "Asian MC rejects paths*steps=1e14");
+                  t.expect(!px::barrier_option_mc(spec, 90.0, false, 1'000'000'000ULL, 100'000, 7)
+                                .has_value(),
+                           "barrier MC rejects paths*steps=1e14");
+                  // A modest product still prices.
+                  t.expect(px::monte_carlo_asian(spec, 20'000, 20, 7).has_value(),
+                           "a 20k-path/20-step Asian still prices");
                   // Sane sizes still price.
                   t.expect(px::trinomial_price(spec, 200, px::Exercise::american, {}).has_value(),
                            "trinomial with 200 steps still prices");
@@ -112,11 +126,17 @@ auto main() -> int {
         // --- F5: lu_solve_ridge dimension cap + NaN rejection --------------------------------
         .test("F5 lu_solve_ridge rejects a NaN matrix instead of returning NaN weights",
               [](TestContext& t) {
-                  const std::vector<std::vector<double>> nan_cov{
-                      {std::numeric_limits<double>::quiet_NaN(), 0.0}, {0.0, 0.04}};
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  const std::vector<std::vector<double>> nan_cov{{nan, 0.0}, {0.0, 0.04}};
                   const std::array<double, 2> rhs{1.0, 1.0};
                   t.expect(!lu_solve_ridge(nan_cov, rhs, 0.0).has_value(),
                            "NaN covariance -> nullopt, never a NaN solution");
+                  // A NaN in the RHS (e.g. a NaN expected-return into tangency_weights) must also
+                  // be refused, not flow into silently-NaN weights (D3).
+                  const std::vector<std::vector<double>> ok_cov{{0.04, 0.0}, {0.0, 0.09}};
+                  const std::array<double, 2> nan_rhs{nan, 1.0};
+                  t.expect(!lu_solve_ridge(ok_cov, nan_rhs, 0.0).has_value(),
+                           "NaN rhs -> nullopt, never NaN weights");
                   // A finite well-posed system still solves.
                   const std::vector<std::vector<double>> ok{{4.0, 1.0}, {1.0, 3.0}};
                   t.expect(lu_solve_ridge(ok, rhs, 0.0).has_value(), "finite system still solves");

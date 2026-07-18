@@ -57,6 +57,14 @@ namespace {
 
 auto header(std::string_view title) -> void { std::println("\n=== {} ===", title); }
 
+// Render the error of a Result that is EXPECTED to fail (an intentional honest-failure demo).
+// Guards the .error()-on-a-success UB: if the call unexpectedly succeeded, say so instead.
+template <class R>
+[[nodiscard]] auto err_of(const R& r) -> std::string {
+    if (r.has_value()) { return "SOLVED (unexpected)"; }
+    return std::string(to_string_view(r.error()));
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -85,7 +93,7 @@ auto main() -> int {
                      bd("1").divide_exact(bd("8")).value().to_string());     // expect 0.125
         const auto inexact = bd("1").divide_exact(bd("3"));
         std::println("1 / 3 exact              -> error: {}",
-                     to_string_view(inexact.error()));  // expect "inexact (rounding mode required)"
+                     err_of(inexact));  // expect "inexact (rounding mode required)"
         std::println("1 / 3 at scale 6         = {}",
                      bd("1").divide(bd("3"), 6, Rounding::half_even).value().to_string());
                                                                              // expect 0.333333
@@ -225,7 +233,7 @@ auto main() -> int {
 
         // Honest failure: growth >= rate diverges -> domain_error, never a number.
         const auto diverge = fin::growing_perpetuity_pv(q("3/100"), q("1/20"), qi(100));
-        std::println("g>r perpetuity           -> error: {}", to_string_view(diverge.error()));
+        std::println("g>r perpetuity           -> error: {}", err_of(diverge));
                                                              // expect "domain error"
         // DOLLARDE / DOLLARFR: 1.02 read in 32nds -> 1 + 2/32 = 1.0625 exactly.
         std::println("DOLLARDE(1.02, 32)       = {}", money(fin::dollarde(q("51/50"), 32).value(), 4));
@@ -353,12 +361,12 @@ auto main() -> int {
 
         // Honest failure: no quoted route -> not_implemented, never a fabricated rate.
         const auto no_route = fx.convert(m100, "CHF", 2, Rounding::half_even);
-        std::println("EUR -> CHF               -> error: {}", to_string_view(no_route.error()));
+        std::println("EUR -> CHF               -> error: {}", err_of(no_route));
                                                              // expect "not implemented"
         // Money refuses cross-currency arithmetic.
         const auto bad_add = cur::Money::parse("1.00", "USD").value()
                                  .add(cur::Money::parse("1.00", "EUR").value());
-        std::println("1 USD + 1 EUR            -> error: {}", to_string_view(bad_add.error()));
+        std::println("1 USD + 1 EUR            -> error: {}", err_of(bad_add));
                                                              // expect "domain error"
 
         // Triangular arbitrage on DIRECT quotes only (no auto-reciprocals):
@@ -585,9 +593,7 @@ auto main() -> int {
         // A singular covariance (two identical assets): the Cholesky path refuses honestly...
         const std::vector<std::vector<double>> singular{{0.04, 0.04}, {0.04, 0.04}};
         const auto refused = an::min_variance_weights(singular);
-        std::println("singular cov (Cholesky)  -> {}",
-                     refused.has_value() ? std::string("SOLVED (unexpected)")
-                                         : std::format("error: {}", to_string_view(refused.error())));
+        std::println("singular cov (Cholesky)  -> error: {}", err_of(refused));
                                                              // expect "error: domain error"
         // ...while the ridge-regularized LU path solves it (Sigma + lambda*I).
         const auto ridge_w = pf::min_variance_weights(singular, 1e-8).value();

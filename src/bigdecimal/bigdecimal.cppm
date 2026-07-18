@@ -322,6 +322,13 @@ auto BigDecimal::from_string(std::string_view text) -> Result<BigDecimal> {
         if (ec != std::errc{} || ptr != exp_str.data() + exp_str.size()) {
             return make_error<BigDecimal>(MathError::syntax_error);
         }
+        // Reject a wildly out-of-range exponent NOW, before it enters the `frac_digits -
+        // exponent` subtraction below: from_chars accepts any int64, so e.g. "1e-9223372036854775808"
+        // (exponent == INT64_MIN) would make that subtraction signed-overflow UB at the exact
+        // untrusted-input boundary. |exponent| past the scale bound cannot yield a legal scale.
+        if (exponent > kMaxScaleMagnitude || exponent < -kMaxScaleMagnitude) {
+            return make_error<BigDecimal>(MathError::overflow);
+        }
     }
     // A lone sign with no magnitude (e.g. "-") is caught by saw_digit above; digits may be
     // just "-" + nothing only if !saw_digit, already rejected. Empty numeric part -> "0".

@@ -177,6 +177,12 @@ auto lu_solve_ridge(std::span<const std::vector<double>> matrix, std::span<const
             a[i][j] = v;
         }
     }
+    // Reject a non-finite rhs too: tangency_weights passes caller-supplied mean_returns here, so
+    // a NaN/Inf expected-return entry would otherwise flow through elimination into a silently-NaN
+    // weight vector returned as a valid optional — the same honesty violation as a NaN matrix.
+    for (double v : rhs) {
+        if (!std::isfinite(v)) { return std::nullopt; }
+    }
     std::vector<double> b(rhs.begin(), rhs.end());
     // Gaussian elimination with PARTIAL PIVOTING (row interchange on the largest pivot).
     for (std::size_t k = 0; k < n; ++k) {

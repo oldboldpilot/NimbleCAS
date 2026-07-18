@@ -542,9 +542,11 @@ auto digital_asset_or_nothing(const OptionSpec& spec) -> Result<double> {
 
 auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, std::uint64_t paths,
                        int steps, std::uint64_t seed) -> Result<McResult> {
-    // paths/steps bound only runtime here (O(1) memory), but a ~1e18 loop is an effective hang.
-    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
-    if (paths == 0 || paths > kMaxPaths || steps < 1 || steps > 100'000 || barrier <= 0.0) {
+    // The inner work is paths*steps iterations (O(1) memory), so bound the PRODUCT, not just each
+    // factor: two individually-in-range values (1e9 paths * 1e5 steps = 1e14) would still hang.
+    constexpr std::uint64_t kMaxPathSteps = 1'000'000'000;
+    if (paths == 0 || steps < 1 || barrier <= 0.0 ||
+        paths > kMaxPathSteps / static_cast<std::uint64_t>(steps)) {
         return make_error<McResult>(MathError::domain_error);
     }
     if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
@@ -709,9 +711,11 @@ auto geometric_asian_price(const OptionSpec& spec, int steps) -> Result<double> 
 
 auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, std::uint64_t seed,
                        bool control_variate) -> Result<McResult> {
-    // Cap paths/steps to bound runtime (O(1) memory here, but ~1e18 iterations is a hang).
-    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
-    if (paths == 0 || paths > kMaxPaths || steps < 1 || steps > 100'000) {
+    // Bound the PRODUCT paths*steps (the iteration count), not just each factor: 1e9 paths *
+    // 1e5 steps = 1e14 iterations would hang even with both factors individually in range.
+    constexpr std::uint64_t kMaxPathSteps = 1'000'000'000;
+    if (paths == 0 || steps < 1 ||
+        paths > kMaxPathSteps / static_cast<std::uint64_t>(steps)) {
         return make_error<McResult>(MathError::domain_error);
     }
     if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
