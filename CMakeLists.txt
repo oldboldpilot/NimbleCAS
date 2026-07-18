@@ -847,8 +847,72 @@ target_sources(nimblecas_probmethod PUBLIC
 target_link_libraries(nimblecas_probmethod
   PUBLIC nimblecas_bigcombinatorics nimblecas_bigint nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.bigdecimal : exact base-10 scaled decimal (money type + boundary quantizer) ----
+add_library(nimblecas_bigdecimal STATIC)
+target_sources(nimblecas_bigdecimal PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigdecimal/bigdecimal.cppm)
+target_link_libraries(nimblecas_bigdecimal
+  PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
+# ---- nimblecas.finance : Excel/Mathematica/MATLAB/Maple financial suite (TVM, cashflow, bonds) ----
+add_library(nimblecas_finance STATIC)
+target_sources(nimblecas_finance PUBLIC
+  FILE_SET CXX_MODULES FILES src/finance/finance.cppm)
+target_link_libraries(nimblecas_finance
+  PUBLIC nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
+# ---- nimblecas.currency : exact FX — money, rate graph, cross rates, arbitrage, forwards ----
+add_library(nimblecas_currency STATIC)
+target_sources(nimblecas_currency PUBLIC
+  FILE_SET CXX_MODULES FILES src/currency/currency.cppm)
+target_link_libraries(nimblecas_currency
+  PUBLIC nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
+# ---- nimblecas.pricing : options/instrument pricing (trinomial trees, MC, LSM, plotting) ----
+add_library(nimblecas_pricing STATIC)
+target_sources(nimblecas_pricing PUBLIC
+  FILE_SET CXX_MODULES FILES src/pricing/pricing.cppm)
+target_link_libraries(nimblecas_pricing
+  PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_core std_module)
+
+# ---- nimblecas.analytics : portfolio & risk analytics (Sharpe, VaR/CVaR, MV optimization) ----
+add_library(nimblecas_analytics STATIC)
+target_sources(nimblecas_analytics PUBLIC
+  FILE_SET CXX_MODULES FILES src/analytics/analytics.cppm)
+target_link_libraries(nimblecas_analytics
+  PUBLIC nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
+
+add_executable(bigdecimal_tests tests/bigdecimal_tests.cpp)
+target_link_libraries(bigdecimal_tests
+  PRIVATE nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME bigdecimal_tests COMMAND bigdecimal_tests)
+
+add_executable(finance_tests tests/finance_tests.cpp)
+target_link_libraries(finance_tests
+  PRIVATE nimblecas_finance nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME finance_tests COMMAND finance_tests)
+
+add_executable(currency_tests tests/currency_tests.cpp)
+target_link_libraries(currency_tests
+  PRIVATE nimblecas_currency nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME currency_tests COMMAND currency_tests)
+
+add_executable(pricing_tests tests/pricing_tests.cpp)
+target_link_libraries(pricing_tests
+  PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME pricing_tests COMMAND pricing_tests)
+
+add_executable(analytics_tests tests/analytics_tests.cpp)
+target_link_libraries(analytics_tests
+  PRIVATE nimblecas_analytics nimblecas_core nimblecas_testing std_module)
+add_test(NAME analytics_tests COMMAND analytics_tests)
 
 add_executable(numeigen_tests tests/numeigen_tests.cpp)
 target_link_libraries(numeigen_tests
@@ -1680,7 +1744,10 @@ if(NIMBLECAS_PYTHON)
 
   nanobind_add_module(nimblecas_ext src/bindings/bindings.cpp)
   target_link_libraries(nimblecas_ext
-    PRIVATE nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_symint
+    PRIVATE nimblecas_pricing nimblecas_finance nimblecas_analytics nimblecas_currency
+            nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint nimblecas_svgplot
+            nimblecas_rng
+            nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_symint
             nimblecas_expand nimblecas_hyptest nimblecas_stats nimblecas_kronprod
             nimblecas_contfrac nimblecas_probdist nimblecas_qrschur nimblecas_cheigen
             nimblecas_cmatrix nimblecas_laurent nimblecas_frobenius nimblecas_dynamics

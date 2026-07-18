@@ -97,6 +97,7 @@ The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Ratio
 | `nimblecas.int128` | [int128.md](reference/int128.md) | Native `__int128` `Int128` + `Rational128` (~1.7·10³⁸), overflow-checked via `__builtin_*_overflow` — the tier between `int64` `Rational` and `BigInt`. |
 | `nimblecas.bigint` | [bigint.md](reference/bigint.md) | Arbitrary-precision `BigInt` (sign-magnitude base-2³² limbs, Knuth Algorithm-D division) with `gcd`/`pow`/`modpow` for cryptography. |
 | `nimblecas.bigrational` | [bigrational.md](reference/bigrational.md) | Exact unbounded rational `num`/`den` over `BigInt`, gcd-reduced with `den > 0`; infallible add/sub/mul, guarded divide/reciprocal/pow. |
+| `nimblecas.bigdecimal` | [bigdecimal.md](reference/bigdecimal.md) | Exact base-10 scaled decimal (`BigInt` unscaled + `int32` scale) — the money type & boundary quantizer: semantic scale (`2.50` ≠ `2.5` by representation, `==` by value), seven explicit `Rounding` modes, no ambient context, `divide_exact` → `inexact` on non-terminating quotients. |
 | `nimblecas.bigfloat` | [bigfloat.md](reference/bigfloat.md) | Arbitrary-precision software binary float on a `BigInt` mantissa; correctly-rounded add/mul/div/sqrt with guard/round/sticky ties-to-even. |
 | `nimblecas.doubledouble` | [doubledouble.md](reference/doubledouble.md) | ~106-bit extended-precision float via error-free transforms; SIMD-batched `dd_sum`/`dd_dot`/`dd_poly` with bit-identical scalar == SIMD. |
 | `nimblecas.bigcombinatorics` | [bigcombinatorics.md](reference/bigcombinatorics.md) | `BigInt`-backed factorial/binomial/multinomial/Catalan/Fibonacci/Stirling/Bell — the overflow-free counterpart to `combinatorics`. |
@@ -202,6 +203,15 @@ Analysis, control & stochastic processes:
 | `nimblecas.hmm` | [hmm.md](reference/hmm.md) | Discrete hidden Markov models exact over `Q`: Forward/Backward, posteriors (smoothing), Viterbi, Baum–Welch; `forward_scaled` numerical alternative; honest `overflow` at the int64 ceiling. |
 | `nimblecas.smc` | [smc.md](reference/smc.md) | Sequential Monte Carlo (numerical): bootstrap particle filters, multinomial/systematic/stratified/residual resampling, ESS, variance reduction — deterministic via counter-based RNG, honest statistical estimates. |
 
+Financial mathematics (exact-over-`Q` where closed-form, numerical/statistical where not):
+
+| Module | Reference | Summary |
+| :--- | :--- | :--- |
+| `nimblecas.finance` | [finance.md](reference/finance.md) | The Excel/Mathematica/MATLAB/Maple financial suite with a **two-tier honesty contract**: Tier A exact over `Q` (PV/FV/PMT/IPMT/PPMT/CUMIPMT/CUMPRINC/NPV/FVSCHEDULE/depreciation/EFFECT/annuities) returning `Result<BigRational>`; Tier B numerical (NPER/RATE/IRR/XIRR/MIRR, bonds, rate roots) via a bracketed Brent solver returning `not_converged` not a bogus root — more accurate than Excel, never Excel-bit-identical; fluent `CashflowSchedule`/`TvmProblem` builders. |
+| `nimblecas.currency` | [currency.md](reference/currency.md) | Exact FX: tagged `Money` (over `BigDecimal`), an exchange-rate **graph** with BFS cross-rate pathfinding, triangular-arbitrage detection (exact over `Q`), and covered-interest-parity forwards — a missing route → `not_implemented` (never a fabricated rate), cross-currency `Money` addition → `domain_error`. |
+| `nimblecas.pricing` | [pricing.md](reference/pricing.md) | Derivatives pricing (numerical/statistical): Black-Scholes + full & extended Greeks (analytic oracle), Kamrad-Ritchken trinomial trees (European/American/Bermudan), reproducible partition-independent Monte Carlo (European + Asian with geometric control variate), Longstaff-Schwartz American MC, Black-76/digitals/barriers, composable `Portfolio`, and SVG plotting — MC returns estimate + standard error and is bit-reproducible under a fixed seed. |
+| `nimblecas.analytics` | [analytics.md](reference/analytics.md) | Portfolio & risk analytics (numerical/statistical): returns, summary stats, Sharpe/Sortino/Treynor/information ratios, beta/alpha, drawdown, historical + Gaussian VaR/CVaR, and mean-variance optimization (min-variance/tangency/efficient frontier via Cholesky) — non-PD covariance → `domain_error`, division-by-zero-std refused, never `±inf`. |
+
 Tooling, front-end & integration:
 
 | Module | Reference | Summary |
@@ -282,6 +292,11 @@ subsystems layer on top of it along these roots:
   distribution.
 - **Symbolic constants** — `symconst` bridges the `symbolic` `Expr` layer to the
   numeric `constants`.
+- **Financial mathematics** — `bigdecimal` builds on `bigrational` as the exact
+  money/quantizer type; `finance` and `currency` build on it (Tier-A exact over
+  `Q`, quantizing to `BigDecimal` at the boundary; Tier-B numerical root-finding
+  on `double`); `pricing` builds on the counter-based `rng` + `svgplot`
+  (numerical/statistical), and `analytics` stands on `core` alone.
 
 See the [architecture overview](architecture/overview.md) for the exact `import`
 edges and the rationale.

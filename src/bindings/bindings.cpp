@@ -85,6 +85,9 @@ import nimblecas.frobenius;
 import nimblecas.dynamics;
 import nimblecas.algnum;
 import nimblecas.jordan;
+import nimblecas.pricing;
+import nimblecas.finance;
+import nimblecas.analytics;
 // The GPU module is bound only when the binding TU is compiled with
 // -DNIMBLECAS_EXT_WITH_GPU (and nimblecas_ext is linked against nimblecas_gpu +
 // the CUDA runtime). This keeps the default CPU-only Python build importable.
@@ -1542,4 +1545,137 @@ NB_MODULE(nimblecas_ext, m) {
 #else
     m.attr("HAS_GPU") = false;
 #endif
+
+    // =======================================================================
+    // Financial mathematics — pricing / finance / analytics submodules.
+    // Numerical/double surface (the exact BigRational/BigDecimal finance layer is used
+    // from C++; Python callers work in floats). Every Result<T> rides `unwrap`.
+    // =======================================================================
+    namespace pr = nimblecas::pricing;
+
+    auto spec_of = [](double spot, double strike, double rate, double div, double vol,
+                      double expiry, bool is_call) -> pr::OptionSpec {
+        pr::OptionSpec s{};
+        s.spot = spot; s.strike = strike; s.rate = rate; s.dividend_yield = div;
+        s.volatility = vol; s.time_to_expiry = expiry;
+        s.type = is_call ? pr::OptionType::call : pr::OptionType::put;
+        return s;
+    };
+
+    auto pricing = m.def_submodule("pricing", "Options & instrument pricing (numerical).");
+    pricing.def("black_scholes",
+                [spec_of](double spot, double strike, double rate, double div, double vol,
+                          double expiry, bool is_call) {
+                    return unwrap(pr::black_scholes_price(
+                        spec_of(spot, strike, rate, div, vol, expiry, is_call)));
+                },
+                nb::arg("spot"), nb::arg("strike"), nb::arg("rate"), nb::arg("dividend_yield"),
+                nb::arg("volatility"), nb::arg("expiry"), nb::arg("is_call") = true,
+                "Black-Scholes-Merton European price.");
+    pricing.def("greeks",
+                [spec_of](double spot, double strike, double rate, double div, double vol,
+                          double expiry, bool is_call) {
+                    const auto g = unwrap(pr::black_scholes_greeks(
+                        spec_of(spot, strike, rate, div, vol, expiry, is_call)));
+                    nb::dict d;
+                    d["price"] = g.price; d["delta"] = g.delta; d["gamma"] = g.gamma;
+                    d["vega"] = g.vega; d["theta"] = g.theta; d["rho"] = g.rho;
+                    return d;
+                },
+                nb::arg("spot"), nb::arg("strike"), nb::arg("rate"), nb::arg("dividend_yield"),
+                nb::arg("volatility"), nb::arg("expiry"), nb::arg("is_call") = true,
+                "Price + first-order Greeks as a dict.");
+    pricing.def("trinomial",
+                [spec_of](double spot, double strike, double rate, double div, double vol,
+                          double expiry, bool is_call, int steps, const std::string& exercise) {
+                    auto ex = exercise == "american" ? pr::Exercise::american
+                              : exercise == "bermudan" ? pr::Exercise::bermudan
+                                                       : pr::Exercise::european;
+                    return unwrap(pr::trinomial_price(
+                        spec_of(spot, strike, rate, div, vol, expiry, is_call), steps, ex));
+                },
+                nb::arg("spot"), nb::arg("strike"), nb::arg("rate"), nb::arg("dividend_yield"),
+                nb::arg("volatility"), nb::arg("expiry"), nb::arg("is_call") = true,
+                nb::arg("steps") = 200, nb::arg("exercise") = "european",
+                "Kamrad-Ritchken trinomial price (european/american/bermudan).");
+    pricing.def("monte_carlo",
+                [spec_of](double spot, double strike, double rate, double div, double vol,
+                          double expiry, bool is_call, std::uint64_t paths, std::uint64_t seed) {
+                    const auto r = unwrap(pr::monte_carlo_european(
+                        spec_of(spot, strike, rate, div, vol, expiry, is_call), paths, seed));
+                    return std::make_pair(r.price, r.std_error);
+                },
+                nb::arg("spot"), nb::arg("strike"), nb::arg("rate"), nb::arg("dividend_yield"),
+                nb::arg("volatility"), nb::arg("expiry"), nb::arg("is_call") = true,
+                nb::arg("paths") = 1000000, nb::arg("seed") = 42,
+                "Reproducible European Monte Carlo; returns (price, std_error).");
+    pricing.def("implied_volatility",
+                [spec_of](double spot, double strike, double rate, double div, double expiry,
+                          bool is_call, double market_price) {
+                    return unwrap(pr::implied_volatility(
+                        spec_of(spot, strike, rate, div, 0.2, expiry, is_call), market_price));
+                },
+                nb::arg("spot"), nb::arg("strike"), nb::arg("rate"), nb::arg("dividend_yield"),
+                nb::arg("expiry"), nb::arg("is_call"), nb::arg("market_price"),
+                "Implied volatility from a market price.");
+
+    auto finance = m.def_submodule("finance", "Financial mathematics (numerical tier).");
+    finance.def("irr",
+                [](const std::vector<double>& values, double guess) {
+                    return unwrap(nimblecas::finance::irr(values, guess));
+                },
+                nb::arg("values"), nb::arg("guess") = 0.1, "Internal rate of return.");
+    finance.def("mirr",
+                [](const std::vector<double>& values, double finance_rate, double reinvest_rate) {
+                    return unwrap(nimblecas::finance::mirr(values, finance_rate, reinvest_rate));
+                },
+                nb::arg("values"), nb::arg("finance_rate"), nb::arg("reinvest_rate"),
+                "Modified internal rate of return.");
+    finance.def("rate",
+                [](std::int64_t nper, double pmt, double pv, double fv, double guess) {
+                    return unwrap(nimblecas::finance::rate(nper, pmt, pv, fv,
+                                                           nimblecas::finance::PaymentTiming::end,
+                                                           guess));
+                },
+                nb::arg("nper"), nb::arg("pmt"), nb::arg("pv"), nb::arg("fv"),
+                nb::arg("guess") = 0.1, "Per-period rate solving the TVM identity.");
+    finance.def("nper",
+                [](double rate, double pmt, double pv, double fv) {
+                    return unwrap(nimblecas::finance::nper(rate, pmt, pv, fv));
+                },
+                nb::arg("rate"), nb::arg("pmt"), nb::arg("pv"), nb::arg("fv"),
+                "Number of periods.");
+
+    auto analytics = m.def_submodule("analytics", "Portfolio & risk analytics.");
+    analytics.def("sharpe_ratio",
+                  [](const std::vector<double>& returns, double rf, double periods) {
+                      return unwrap(nimblecas::analytics::sharpe_ratio(
+                          returns, rf, nimblecas::analytics::Annualisation{periods}));
+                  },
+                  nb::arg("returns"), nb::arg("risk_free") = 0.0, nb::arg("periods_per_year") = 1.0,
+                  "Sharpe ratio (optionally annualised).");
+    analytics.def("max_drawdown",
+                  [](const std::vector<double>& equity) {
+                      return unwrap(nimblecas::analytics::max_drawdown(equity));
+                  },
+                  nb::arg("equity_curve"), "Maximum peak-to-trough fractional drawdown.");
+    analytics.def("value_at_risk",
+                  [](const std::vector<double>& returns, double conf) {
+                      return unwrap(nimblecas::analytics::value_at_risk_historical(returns, conf));
+                  },
+                  nb::arg("returns"), nb::arg("confidence") = 0.95,
+                  "Historical value-at-risk (positive loss fraction).");
+    analytics.def("min_variance_weights",
+                  [](const std::vector<std::vector<double>>& cov) {
+                      return unwrap(nimblecas::analytics::min_variance_weights(cov));
+                  },
+                  nb::arg("covariance"), "Global minimum-variance portfolio weights.");
+    analytics.def("tangency_weights",
+                  [](const std::vector<std::vector<double>>& cov,
+                     const std::vector<double>& mean_returns, double risk_free) {
+                      return unwrap(nimblecas::analytics::tangency_weights(cov, mean_returns,
+                                                                          risk_free));
+                  },
+                  nb::arg("covariance"), nb::arg("mean_returns"), nb::arg("risk_free") = 0.0,
+                  "Tangency (max-Sharpe) portfolio weights.");
 }
