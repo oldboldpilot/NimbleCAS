@@ -57,7 +57,11 @@ enum class PaymentTiming : std::uint8_t { end = 0, begin = 1 };
 // t is numerical.
 enum class DayCount : std::uint8_t {
     thirty_360,   // US (NASD) 30/360 — Excel basis 0
-    actual_actual,// Excel basis 1
+    // NOTE: not Excel's basis-1 algorithm. Implemented as the exact rational actual/365.25
+    // (days*4/1461) — monotone and exact over Q, but it DIVERGES from Excel YEARFRAC(basis 1),
+    // ACT/ACT-ISDA, and ACT/ACT-ICMA in the low-order digits. Use a 30/360 or actual/365 basis
+    // when Excel bit-parity matters. (See docs/technical/finance-parity-roadmap.md.)
+    actual_actual,
     actual_360,   // Excel basis 2
     actual_365,   // Excel basis 3
     thirty_360e,  // European 30E/360 — Excel basis 4
@@ -562,9 +566,12 @@ auto Date::of(int year, int month, int day) -> Result<Date> {
 }
 
 auto Date::ymd() const -> std::tuple<int, int, int> {
-    // Walk the calendar from the epoch; adequate for the date ranges finance uses.
+    // Walk the calendar from the 1900 epoch. For serial <= 0 (pre-1900 dates, which
+    // to_serial supports) step BACKWARD first so `rem` lands in [1, days_in_year] before the
+    // forward month walk — otherwise the forward loop exits immediately and yields day 0.
     std::int64_t rem = serial;
     int y = 1900;
+    while (rem <= 0) { --y; rem += is_leap(y) ? 366 : 365; }
     while (true) {
         const std::int64_t yd = is_leap(y) ? 366 : 365;
         if (rem > yd) { rem -= yd; ++y; } else { break; }
@@ -737,6 +744,7 @@ auto fvschedule(const BigRational& principal, std::span<const BigRational> rates
 
 auto nper(double rate, double pmt_, double pv_, double fv_, PaymentTiming timing)
     -> Result<double> {
+    if (rate <= -1.0) { return make_error<double>(MathError::domain_error); }  // log(1+rate) undefined
     if (rate == 0.0) {
         if (pmt_ == 0.0) { return make_error<double>(MathError::division_by_zero); }
         return -(pv_ + fv_) / pmt_;
@@ -779,8 +787,8 @@ auto irr(std::span<const double> values, double guess) -> Result<double> {
 
 auto xnpv(double rate_, std::span<const double> values, std::span<const Date> dates)
     -> Result<double> {
-    if (values.size() != dates.size() || values.empty()) {
-        return make_error<double>(MathError::domain_error);
+    if (values.size() != dates.size() || values.empty() || rate_ <= -1.0) {
+        return make_error<double>(MathError::domain_error);  // (1+rate)^t undefined for rate<=-1
     }
     const double d0 = static_cast<double>(dates[0].serial);
     double acc = 0.0;
@@ -929,7 +937,7 @@ auto vdb(const BigRational& cost, const BigRational& salvage, std::int64_t life,
 
 auto db(double cost, double salvage, std::int64_t life, std::int64_t period, std::int64_t month)
     -> Result<double> {
-    if (cost <= 0.0 || life <= 0 || period < 1) {
+    if (cost <= 0.0 || life <= 0 || period < 1 || period > life + 1 || month < 1 || month > 12) {
         return make_error<double>(MathError::domain_error);
     }
     // Excel: rate = 1 - (salvage/cost)^(1/life), ROUNDED to 3 decimals (half_up).
@@ -966,9 +974,10 @@ auto dollarde(const BigRational& fractional_dollar, std::int64_t fraction) -> Re
                              .value_or(BigInt::from_i64(0));
     const BigRational int_part = BigRational::from_bigint(whole);
     const BigRational frac_part = fractional_dollar.subtract(int_part);
-    // digits in `fraction`:
+    // Scale = 10^ceil(log10(fraction)) == digit count of (fraction - 1): 16->2, 10->1, 100->2,
+    // 1->0. Using digits of `fraction` itself is wrong for powers of ten (DOLLARDE(1.1,10)).
     std::int64_t d = 0;
-    for (std::int64_t f = fraction; f > 0; f /= 10) { ++d; }
+    for (std::int64_t f = fraction - 1; f > 0; f /= 10) { ++d; }
     auto scaled = frac_part.multiply(BigRational::from_bigint(BigInt::from_u64(10).pow(
                                          static_cast<std::uint64_t>(d))))
                       .divide(q_int(fraction));
@@ -983,7 +992,7 @@ auto dollarfr(const BigRational& decimal_dollar, std::int64_t fraction) -> Resul
     const BigRational int_part = BigRational::from_bigint(whole);
     const BigRational frac_part = decimal_dollar.subtract(int_part);
     std::int64_t d = 0;
-    for (std::int64_t f = fraction; f > 0; f /= 10) { ++d; }
+    for (std::int64_t f = fraction - 1; f > 0; f /= 10) { ++d; }  // 10^ceil(log10(fraction))
     auto scaled = frac_part.multiply(q_int(fraction))
                       .divide(BigRational::from_bigint(
                           BigInt::from_u64(10).pow(static_cast<std::uint64_t>(d))));
@@ -1009,7 +1018,13 @@ namespace {
     if (!yf) { return make_error<std::pair<double, double>>(yf.error()); }
     const double years = yf->to_double();
     const double periods = years * static_cast<double>(frequency);
-    return std::pair<double, double>{periods, periods - std::floor(periods)};
+    double frac = periods - std::floor(periods);
+    // Settlement exactly on a coupon date: the current period is a FULL one (frac -> 1),
+    // so the k-th coupon discounts at t = k (not k-1), the redemption at t = n, and accrued
+    // interest is zero. Without this, an integer `periods` collapses the schedule by one
+    // period and subtracts a spurious full coupon as accrued.
+    if (frac < 1e-9) { frac = 1.0; }
+    return std::pair<double, double>{periods, frac};
 }
 
 }  // namespace
@@ -1167,13 +1182,17 @@ auto coupon_num(const Date& settlement, const Date& maturity, int frequency) -> 
         return make_error<std::int64_t>(MathError::domain_error);
     }
     const int step = 12 / frequency;
-    // Walk coupon dates backward from maturity; count those strictly after settlement.
+    // Coupon dates are maturity, maturity-step, maturity-2*step, ...; count those strictly
+    // after settlement. Each date is computed FROM maturity (add_months(maturity, -step*k))
+    // rather than iteratively, so the anchor day never drifts through a short month.
     std::int64_t count = 0;
+    int k = 0;
     Date c = maturity;
     while (c.serial > settlement.serial) {
         ++count;
-        c = add_months(c, -step);
-        if (count > 4000) { break; }  // ~1000 years guard
+        ++k;
+        if (k > 4000) { return make_error<std::int64_t>(MathError::domain_error); }  // absurd tenor
+        c = add_months(maturity, -step * k);
     }
     return count;
 }
@@ -1199,7 +1218,8 @@ auto bond_convexity(const Date& settlement, const Date& maturity, double coupon_
     if (!yf) { return make_error<double>(yf.error()); }
     const double f = static_cast<double>(frequency);
     const double periods = yf->to_double() * f;
-    const double frac = periods - std::floor(periods);
+    double frac = periods - std::floor(periods);
+    if (frac < 1e-9) { frac = 1.0; }  // settlement on a coupon date (see coupon_geometry)
     const int n = static_cast<int>(std::ceil(periods - 1e-9));
     const double coupon = 100.0 * coupon_rate / f;
     const double y = yield / f;

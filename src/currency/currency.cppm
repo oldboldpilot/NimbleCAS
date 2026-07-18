@@ -95,7 +95,7 @@ public:
         -> std::optional<BigRational>;
 
     // Exact cross rate base->quote as the product along the SHORTEST path through the graph
-    // (fewest hops; ties broken by lexicographic order for determinism). No route ->
+    // (fewest hops; ties broken by edge INSERTION order — deterministic). No route ->
     // not_implemented.
     [[nodiscard]] auto cross_rate(std::string_view base, std::string_view quote) const
         -> Result<BigRational>;
@@ -198,12 +198,13 @@ auto RateTable::convert(const Money& amount, std::string_view to_code, std::int3
 
 auto RateTable::triangular_product(std::string_view a, std::string_view b, std::string_view c) const
     -> Result<BigRational> {
-    auto ab = cross_rate(a, b);
-    if (!ab) { return ab; }
-    auto bc = cross_rate(b, c);
-    if (!bc) { return bc; }
-    auto ca = cross_rate(c, a);
-    if (!ca) { return ca; }
+    // Use the DIRECTLY QUOTED legs, not cross rates. Routing a missing leg through the graph
+    // would collapse the cycle to a tautology (R(a->c)*R(c->a) == 1), silently masking real
+    // arbitrage or fabricating a "no-arbitrage" verdict for a triangle that was never quoted.
+    auto ab = direct_rate(a, b);
+    auto bc = direct_rate(b, c);
+    auto ca = direct_rate(c, a);
+    if (!ab || !bc || !ca) { return make_error<BigRational>(MathError::not_implemented); }
     return ab->multiply(*bc).multiply(*ca);
 }
 

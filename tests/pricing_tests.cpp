@@ -139,6 +139,16 @@ auto main() -> int {
                       (black_scholes_price(s.with_strike(100 + h)).value() -
                        black_scholes_price(s.with_strike(100 - h)).value()) / (2 * h);
                   t.expect(close(eg.dual_delta, dp_dk, 1e-4), "dual_delta == d price/d strike");
+                  // veta/color are per CALENDAR time (decay) == -d/d(time-to-expiry).
+                  const double ht = 1e-4;
+                  const double dvega_dT =
+                      (black_scholes_greeks(s.with_expiry(1.0 + ht)).value().vega -
+                       black_scholes_greeks(s.with_expiry(1.0 - ht)).value().vega) / (2 * ht);
+                  t.expect(close(eg.veta, -dvega_dT, 1e-2), "veta == -d vega/d time-to-expiry");
+                  const double dgamma_dT =
+                      (black_scholes_greeks(s.with_expiry(1.0 + ht)).value().gamma -
+                       black_scholes_greeks(s.with_expiry(1.0 - ht)).value().gamma) / (2 * ht);
+                  t.expect(close(eg.color, -dgamma_dT, 1e-2), "color == -d gamma/d time-to-expiry");
               })
         .test("Black-76, digitals, option P&L, and barrier in/out parity",
               [](TestContext& t) {

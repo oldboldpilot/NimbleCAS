@@ -454,9 +454,12 @@ auto black_scholes_extended_greeks(const OptionSpec& spec) -> Result<ExtendedGre
     auto up = black_scholes_greeks(spec.with_expiry(T + h));
     auto dn = black_scholes_greeks(spec.with_expiry(T - h));
     if (up && dn) {
-        g.charm = (up->delta - dn->delta) / (2.0 * h);   // d delta / d T
-        g.color = (up->gamma - dn->gamma) / (2.0 * h);   // d gamma / d T
-        g.veta  = (up->vega - dn->vega) / (2.0 * h);     // d vega / d T
+        // The struct documents these per unit of CALENDAR time (decay), which is -d/dT since
+        // calendar time t = expiry - T. charm's doc carries the minus already (charm =
+        // -d delta/d time == +d delta/dT); veta and color are d/d time, so negate the dT slope.
+        g.charm = (up->delta - dn->delta) / (2.0 * h);      // +d delta/dT == -d delta/d time
+        g.color = -(up->gamma - dn->gamma) / (2.0 * h);     // d gamma / d time
+        g.veta  = -(up->vega - dn->vega) / (2.0 * h);       // d vega  / d time
     }
     return g;
 }

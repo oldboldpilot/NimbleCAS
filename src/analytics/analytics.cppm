@@ -392,10 +392,12 @@ auto value_at_risk_historical(std::span<const double> returns, double conf) -> R
     }
     std::vector<double> sorted(returns.begin(), returns.end());
     std::ranges::sort(sorted);
-    // The (1-conf) lower quantile; report the loss as a positive number.
-    const double idx = (1.0 - conf) * static_cast<double>(sorted.size());
-    const std::size_t k = std::min(static_cast<std::size_t>(std::floor(idx)), sorted.size() - 1);
-    return -sorted[k];
+    // The ceil((1-conf)*n)-th smallest return is the VaR order statistic (consistent with the
+    // CVaR tail below); report the loss as a positive number.
+    const std::size_t n = sorted.size();
+    const std::size_t cutoff =
+        std::min(std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil((1.0 - conf) * static_cast<double>(n)))), n);
+    return -sorted[cutoff - 1];
 }
 
 auto conditional_var_historical(std::span<const double> returns, double conf) -> Result<double> {
@@ -404,8 +406,11 @@ auto conditional_var_historical(std::span<const double> returns, double conf) ->
     }
     std::vector<double> sorted(returns.begin(), returns.end());
     std::ranges::sort(sorted);
+    // Mean loss over the tail AT OR BEYOND VaR — the same ceil((1-conf)*n) cutoff as the VaR
+    // order statistic, so CVaR >= VaR by construction (they share the boundary observation).
+    const std::size_t n = sorted.size();
     const std::size_t cutoff =
-        std::max<std::size_t>(1, static_cast<std::size_t>(std::floor((1.0 - conf) * static_cast<double>(sorted.size()))));
+        std::min(std::max<std::size_t>(1, static_cast<std::size_t>(std::ceil((1.0 - conf) * static_cast<double>(n)))), n);
     double s = 0.0;
     for (std::size_t i = 0; i < cutoff; ++i) { s += sorted[i]; }
     return -s / static_cast<double>(cutoff);  // mean loss in the tail, positive

@@ -63,6 +63,14 @@ auto main() -> int {
                   // Gaussian VaR at 95% of a standard normal is the 1.6449 quantile.
                   t.expect(close(value_at_risk_gaussian(0.0, 1.0, 0.95).value(), 1.6448536, 1e-5),
                            "Gaussian VaR95 == 1.6449");
+                  // Regression (M2): CVaR >= VaR by construction (shared tail cutoff). On a
+                  // 10-point series at 90%, cutoff = ceil(0.1*10) = 1 -> VaR = worst loss.
+                  const std::array<double, 10> r10{-0.08, -0.05, -0.03, -0.01, 0.0,
+                                                   0.01, 0.02, 0.02, 0.03, 0.05};
+                  const double v = value_at_risk_historical(r10, 0.90).value();
+                  const double cv = conditional_var_historical(r10, 0.90).value();
+                  t.expect(close(v, 0.08) && close(cv, 0.08), "10-pt VaR90/CVaR90 == 0.08");
+                  t.expect(cv >= v - 1e-12, "CVaR >= VaR (consistent tail)");
               })
         .test("mean-variance optimization closed forms",
               [](TestContext& t) {

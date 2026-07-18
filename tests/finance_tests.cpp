@@ -153,6 +153,17 @@ auto main() -> int {
                                                      Date::of(2020, 7, 1).value(), 0.06, 2,
                                                      DayCount::thirty_360).value() - 3.0) < 1e-9,
                            "accrued interest == 3");
+                  // Regression (C1): settlement exactly on a coupon date must NOT collapse the
+                  // schedule. A 1-year zero-coupon bond at 5% prices at 100/1.05, not 100.
+                  t.expect(std::abs(bond_price(Date::of(2020, 1, 1).value(),
+                                               Date::of(2021, 1, 1).value(), 0.0, 0.05, 100.0, 1,
+                                               DayCount::thirty_360).value() - 100.0 / 1.05) < 1e-6,
+                           "1y zero-coupon bond == 100/1.05");
+                  // Regression (C2): DOLLARDE with a power-of-ten fraction. 1.1 in tenths == 1.1.
+                  t.expect(dollarde(q("11/10"), 10).value() == q("11/10"),
+                           "DOLLARDE(1.1,10) == 1.1 (power-of-ten fraction)");
+                  t.expect(dollarfr(q("11/10"), 10).value() == q("11/10"),
+                           "DOLLARFR(1.1,10) == 1.1");
               })
         .test("fluent TvmProblem quantizes money at the boundary",
               [](TestContext& t) {

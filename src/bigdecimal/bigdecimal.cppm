@@ -303,9 +303,15 @@ auto BigDecimal::from_string(std::string_view text) -> Result<BigDecimal> {
     std::int64_t exponent = 0;
     if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
         ++i;
-        const auto exp_str = text.substr(i);
+        auto exp_str = text.substr(i);
+        // std::from_chars never accepts a leading '+', but a signed exponent may carry one
+        // ("1.5e+3", as std::format emits); skip it so scientific round-trips parse.
+        if (!exp_str.empty() && exp_str.front() == '+') { exp_str.remove_prefix(1); }
         if (exp_str.empty()) { return make_error<BigDecimal>(MathError::syntax_error); }
         auto [ptr, ec] = std::from_chars(exp_str.data(), exp_str.data() + exp_str.size(), exponent);
+        if (ec == std::errc::result_out_of_range) {
+            return make_error<BigDecimal>(MathError::overflow);  // exponent too large for int64
+        }
         if (ec != std::errc{} || ptr != exp_str.data() + exp_str.size()) {
             return make_error<BigDecimal>(MathError::syntax_error);
         }
@@ -455,8 +461,11 @@ auto BigDecimal::pow(std::int64_t exp) const -> Result<BigDecimal> {
     if (exp < 0) {
         return make_error<BigDecimal>(MathError::domain_error);
     }
-    const std::int64_t s = static_cast<std::int64_t>(scale_) * exp;
-    if (s > std::numeric_limits<std::int32_t>::max() ||
+    // scale_ * exp can overflow int64 itself (UB) before a naive range check runs — compute
+    // the product with overflow detection, then bound it to int32.
+    std::int64_t s = 0;
+    if (__builtin_mul_overflow(static_cast<std::int64_t>(scale_), exp, &s) ||
+        s > std::numeric_limits<std::int32_t>::max() ||
         s < std::numeric_limits<std::int32_t>::min()) {
         return make_error<BigDecimal>(MathError::overflow);
     }
