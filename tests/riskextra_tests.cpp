@@ -284,6 +284,36 @@ auto main() -> int {
                   const auto ad = amordegrc(1000.0, 100.0, 5, 1e-300, 1.0);
                   t.expect(!ad.has_value() || std::isfinite(ad.value()),
                            "amordegrc(tiny rate) -> finite or error, no UB");
+                  // Overflow path: individually-finite cost/rate whose product is +inf makes the
+                  // internal `full` a NaN; it must be refused before the int64 cast (no UB).
+                  const auto ov = amorlinc(1e200, 0.0, 1, 1e200, 1.0);
+                  t.expect(!ov.has_value(), "amorlinc(overflowing cost*rate) -> domain_error");
+              })
+        .test("a CVaR instance at the documented scenario/asset caps still fits the simplex",
+              [](TestContext& t) {
+                  // Invariant (riskextra.cppm kMaxScenarios note): a within-cap CVaR always fits
+                  // the LP tableau. Regression for the kMaxLpCells bound, which must not reject a
+                  // large-scenario instance (1024 x 8 => ~1.07e6 tableau cells).
+                  constexpr std::size_t S = 1024;
+                  constexpr std::size_t N = 8;
+                  std::vector<std::vector<double>> scen(S, std::vector<double>(N, 0.0));
+                  for (std::size_t i = 0; i < S; ++i) {
+                      for (std::size_t j = 0; j < N; ++j) {
+                          // Deterministic, finite, asset-dependent returns with dispersion.
+                          const double phase = static_cast<double>(i) * 0.01 +
+                                               static_cast<double>(j);
+                          scen[i][j] = 0.001 * static_cast<double>(j + 1) +
+                                       0.02 * std::sin(phase) - 0.01;
+                      }
+                  }
+                  const auto r = cvar_optimal_weights(scen, 0.95);
+                  t.expect(r.has_value(),
+                           "1024-scenario x 8-asset CVaR fits the tableau (not over-rejected)");
+                  if (r.has_value()) {
+                      double wsum = 0.0;
+                      for (double w : r.value().weights) { wsum += w; }
+                      t.expect(std::abs(wsum - 1.0) < 1e-6, "CVaR weights sum to 1");
+                  }
               })
         .run();
 }

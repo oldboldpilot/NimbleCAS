@@ -885,10 +885,13 @@ auto linprog(std::span<const double> c, std::span<const std::vector<double>> A_l
         return make_error<LinProgResult>(MathError::domain_error);
     }
     // Bound the tableau PRODUCT m*n: two individually-in-range dimensions (e.g. 8192 vars x
-    // 8192 constraints) would build a ~500 MB tableau and a pivot loop long enough to be an
-    // effective hang. 1e6 cells is generous for any realistic LP; larger is refused honestly.
+    // 8192 constraints, 6.7e7 cells) would build a ~500 MB tableau and a pivot loop long enough
+    // to be an effective hang. The ceiling must stay ABOVE the largest LP the in-house callers
+    // build so the documented "within-cap always fits" invariant (see kMaxScenarios) holds: a
+    // CVaR at its caps (S=1024, N=128) is ~1.33e6 cells, so 4e6 clears it with headroom while
+    // still refusing the 8192^2 case. Larger is refused honestly.
     const std::size_t m = A_le.size() + A_eq.size();
-    constexpr std::size_t kMaxLpCells = 1'000'000;
+    constexpr std::size_t kMaxLpCells = 4'000'000;
     if (m > kMaxLpDim || (m != 0 && n > kMaxLpCells / m)) {
         return make_error<LinProgResult>(MathError::domain_error);
     }
@@ -1105,6 +1108,12 @@ auto amorlinc(double cost, double salvage, std::int64_t period, double rate,
     const double f0 = first_period_fraction * rate * cost;  // prorated first period
     if (one_rate <= 0.0) { return make_error<double>(MathError::domain_error); }
     const double full = (cost - salvage - f0) / one_rate;
+    if (!std::isfinite(full)) {
+        // Individually-finite hostile inputs can overflow `one_rate`/`f0` to +inf, making
+        // `full = (finite - inf)/inf = NaN`. NaN defeats the clamp below (min/max with NaN
+        // returns NaN), so floor(NaN) then static_cast<int64_t>(NaN) would be UB. Refuse here.
+        return make_error<double>(MathError::domain_error);
+    }
     // Clamp before the float->int64 cast: a tiny rate makes `full` ~1e298, and casting a double
     // that exceeds INT64_MAX is undefined behaviour. 4e18 is far above the kMaxPeriods cap yet
     // safely below 2^63, so the clamp changes no realistic result — it only tames a hostile rate.
