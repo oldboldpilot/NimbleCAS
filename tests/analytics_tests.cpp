@@ -82,10 +82,16 @@ auto main() -> int {
                   const std::array<double, 2> half{0.5, 0.5};
                   t.expect(close(portfolio_variance(half, cov2).value(), 0.02),
                            "portfolio variance == 0.02");
-                  // A frontier point achieves its target return and sums to 1.
-                  auto pt = efficient_portfolio(cov2, mu, 0.10).value();
+                  // A frontier point achieves its target return and sums to 1. (Distinct means
+                  // are required — equal means make the frontier determinant degenerate, which
+                  // efficient_portfolio honestly reports as an error rather than guessing.)
+                  const std::array<double, 2> mu2{0.08, 0.12};
+                  auto pt = efficient_portfolio(cov2, mu2, 0.10).value();
                   t.expect(close(pt.ret, 0.10), "frontier point return == target");
                   t.expect(close(pt.weights[0] + pt.weights[1], 1.0), "frontier weights sum to 1");
+                  // Equal means -> degenerate frontier -> honest error, not a bogus portfolio.
+                  t.expect(!efficient_portfolio(cov2, mu, 0.10).has_value(),
+                           "degenerate (equal-mean) frontier -> error");
                   // Non-PD covariance is refused, not silently solved.
                   const std::vector<std::vector<double>> bad{{0.0, 0.0}, {0.0, 0.0}};
                   t.expect(!min_variance_weights(bad).has_value(), "singular cov -> error");

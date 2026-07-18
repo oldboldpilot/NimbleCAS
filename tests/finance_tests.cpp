@@ -130,7 +130,7 @@ auto main() -> int {
                   t.expect(growing_perpetuity_pv(q("1/10"), q("1/20"), qi(100)).value() == qi(2000),
                            "growing perpetuity == 2000");
                   // Currency swap: 100 - 1.1*90 == 1.
-                  t.expect(std::abs(currency_swap_value(100.0, 90.0, 1.1) - 1.0) < 1e-12,
+                  t.expect(std::abs(currency_swap_value(100.0, 90.0, 1.1).value() - 1.0) < 1e-12,
                            "currency swap value == 1");
                   // Swap value at the par rate is zero.
                   const std::array<double, 2> ac{1.0, 1.0};
