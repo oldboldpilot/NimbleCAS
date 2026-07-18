@@ -211,6 +211,10 @@ Financial mathematics (exact-over-`Q` where closed-form, numerical/statistical w
 | `nimblecas.currency` | [currency.md](reference/currency.md) | Exact FX: tagged `Money` (over `BigDecimal`), an exchange-rate **graph** with BFS cross-rate pathfinding, triangular-arbitrage detection (exact over `Q`), and covered-interest-parity forwards — a missing route → `not_implemented` (never a fabricated rate), cross-currency `Money` addition → `domain_error`. |
 | `nimblecas.pricing` | [pricing.md](reference/pricing.md) | Derivatives pricing (numerical/statistical): Black-Scholes + full & extended Greeks (analytic oracle), Kamrad-Ritchken trinomial trees (European/American/Bermudan), reproducible partition-independent Monte Carlo (European + Asian with geometric control variate), Longstaff-Schwartz American MC, Black-76/digitals/barriers, composable `Portfolio`, and SVG plotting — MC returns estimate + standard error and is bit-reproducible under a fixed seed. |
 | `nimblecas.analytics` | [analytics.md](reference/analytics.md) | Portfolio & risk analytics (numerical/statistical): returns, summary stats, Sharpe/Sortino/Treynor/information ratios, beta/alpha, drawdown, historical + Gaussian VaR/CVaR, and mean-variance optimization (min-variance/tangency/efficient frontier via Cholesky) — non-PD covariance → `domain_error`, division-by-zero-std refused, never `±inf`. |
+| `nimblecas.portfolio` | [portfolio.md](reference/portfolio.md) | Integrated portfolio analytics over [`analytics`](reference/analytics.md): a one-call `analyze()` **risk report** (Sharpe/Sortino/Treynor/Jensen-α/β/max-drawdown/historical + parametric VaR/CVaR) and a **robust Markowitz optimizer** — global-minimum-variance / tangency / efficient frontier via **diagonal ridge regularization (Σ+λI)** and an **LU-with-partial-pivoting** solver that stays well-posed on ill-conditioned or singular sample covariance. |
+
+**Guide:** a hands-on tour with worked examples, engine-rendered charts, and architecture
+diagrams lives at [guides/financial-mathematics.md](guides/financial-mathematics.md).
 
 Tooling, front-end & integration:
 
