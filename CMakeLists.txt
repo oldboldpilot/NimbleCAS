@@ -854,7 +854,7 @@ target_sources(nimblecas_bigdecimal PUBLIC
 target_link_libraries(nimblecas_bigdecimal
   PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
 
-# ---- nimblecas.finance : Excel/Mathematica/MATLAB/Maple financial suite (TVM, cashflow, bonds) ----
+# ---- nimblecas.finance : financial suite (TVM, cashflow, bonds, depreciation, dates) ----
 add_library(nimblecas_finance STATIC)
 target_sources(nimblecas_finance PUBLIC
   FILE_SET CXX_MODULES FILES src/finance/finance.cppm)
@@ -888,6 +888,34 @@ target_sources(nimblecas_portfolio PUBLIC
   FILE_SET CXX_MODULES FILES src/portfolio/portfolio.cppm)
 target_link_libraries(nimblecas_portfolio
   PUBLIC nimblecas_analytics nimblecas_core std_module)
+
+# ---- nimblecas.exotics : exotic-option pricing (CRR, barrier/lookback closed forms, CN PDE, basket MC) ----
+add_library(nimblecas_exotics STATIC)
+target_sources(nimblecas_exotics PUBLIC
+  FILE_SET CXX_MODULES FILES src/exotics/exotics.cppm)
+target_link_libraries(nimblecas_exotics
+  PUBLIC nimblecas_pricing nimblecas_rng nimblecas_core std_module)
+
+# ---- nimblecas.yieldcurve : term-structure toolkit (Curve, conversions, bootstrap, NS/Svensson, Hull-White) ----
+add_library(nimblecas_yieldcurve STATIC)
+target_sources(nimblecas_yieldcurve PUBLIC
+  FILE_SET CXX_MODULES FILES src/yieldcurve/yieldcurve.cppm)
+target_link_libraries(nimblecas_yieldcurve
+  PUBLIC nimblecas_finance nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
+# ---- nimblecas.fixedincome : sensitivities, cashflows, odd-period pricing, z-spread, FRN ----
+add_library(nimblecas_fixedincome STATIC)
+target_sources(nimblecas_fixedincome PUBLIC
+  FILE_SET CXX_MODULES FILES src/fixedincome/fixedincome.cppm)
+target_link_libraries(nimblecas_fixedincome
+  PUBLIC nimblecas_finance nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
+# ---- nimblecas.riskextra : constrained frontier (active-set QP), LPM, EW moments, corr2cov, CVaR-optimal LP ----
+add_library(nimblecas_riskextra STATIC)
+target_sources(nimblecas_riskextra PUBLIC
+  FILE_SET CXX_MODULES FILES src/riskextra/riskextra.cppm)
+target_link_libraries(nimblecas_riskextra
+  PUBLIC nimblecas_rng nimblecas_core std_module)
 
 # ---- tests ----
 enable_testing()
@@ -925,6 +953,29 @@ add_executable(portfolio_tests tests/portfolio_tests.cpp)
 target_link_libraries(portfolio_tests
   PRIVATE nimblecas_portfolio nimblecas_analytics nimblecas_core nimblecas_testing std_module)
 add_test(NAME portfolio_tests COMMAND portfolio_tests)
+
+add_executable(exotics_tests tests/exotics_tests.cpp)
+target_link_libraries(exotics_tests
+  PRIVATE nimblecas_exotics nimblecas_pricing nimblecas_rng nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME exotics_tests COMMAND exotics_tests)
+
+add_executable(yieldcurve_tests tests/yieldcurve_tests.cpp)
+target_link_libraries(yieldcurve_tests
+  PRIVATE nimblecas_yieldcurve nimblecas_finance nimblecas_bigrational nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME yieldcurve_tests COMMAND yieldcurve_tests)
+
+add_executable(fixedincome_tests tests/fixedincome_tests.cpp)
+target_link_libraries(fixedincome_tests
+  PRIVATE nimblecas_fixedincome nimblecas_finance nimblecas_bigdecimal nimblecas_bigrational
+          nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME fixedincome_tests COMMAND fixedincome_tests)
+
+add_executable(riskextra_tests tests/riskextra_tests.cpp)
+target_link_libraries(riskextra_tests
+  PRIVATE nimblecas_riskextra nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME riskextra_tests COMMAND riskextra_tests)
 
 # Comprehensive worked-examples showcase across the full financial stack (buildable + runnable).
 add_executable(finance_showcase examples/finance_showcase.cpp)
