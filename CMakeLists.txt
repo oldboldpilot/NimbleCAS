@@ -875,6 +875,13 @@ target_sources(nimblecas_pricing PUBLIC
 target_link_libraries(nimblecas_pricing
   PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_core std_module)
 
+# ---- nimblecas.analytics : portfolio & risk analytics (Sharpe, VaR/CVaR, MV optimization) ----
+add_library(nimblecas_analytics STATIC)
+target_sources(nimblecas_analytics PUBLIC
+  FILE_SET CXX_MODULES FILES src/analytics/analytics.cppm)
+target_link_libraries(nimblecas_analytics
+  PUBLIC nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -901,6 +908,11 @@ target_link_libraries(pricing_tests
   PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME pricing_tests COMMAND pricing_tests)
+
+add_executable(analytics_tests tests/analytics_tests.cpp)
+target_link_libraries(analytics_tests
+  PRIVATE nimblecas_analytics nimblecas_core nimblecas_testing std_module)
+add_test(NAME analytics_tests COMMAND analytics_tests)
 
 add_executable(numeigen_tests tests/numeigen_tests.cpp)
 target_link_libraries(numeigen_tests

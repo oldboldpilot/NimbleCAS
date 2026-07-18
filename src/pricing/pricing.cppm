@@ -95,6 +95,50 @@ struct McResult {
 // Implied volatility from a market price (bracketed root of BS(vol) = market_price).
 [[nodiscard]] auto implied_volatility(const OptionSpec& spec, double market_price) -> Result<double>;
 
+// Higher-order ("exotic") Greeks — the full analytic sensitivity set beyond the first five.
+// vanna = d delta / d vol; charm = -d delta / d time; vomma/volga = d vega / d vol;
+// veta = d vega / d time; speed = d gamma / d spot; zomma = d gamma / d vol;
+// color = d gamma / d time; lambda = delta * spot / price (elasticity/gearing);
+// dual_delta = d price / d strike; dual_gamma = d^2 price / d strike^2.
+struct ExtendedGreeks {
+    double vanna{0.0};
+    double charm{0.0};
+    double vomma{0.0};   // == volga
+    double veta{0.0};
+    double speed{0.0};
+    double zomma{0.0};
+    double color{0.0};
+    double lambda{0.0};
+    double dual_delta{0.0};
+    double dual_gamma{0.0};
+};
+[[nodiscard]] auto black_scholes_extended_greeks(const OptionSpec& spec) -> Result<ExtendedGreeks>;
+
+// Option profit/loss. pnl_at_expiry: realised P&L of a long option at underlying price s_T,
+// net of the premium paid. mark_to_market_pnl: unrealised P&L = current BS value - premium.
+[[nodiscard]] auto option_pnl_at_expiry(const OptionSpec& spec, double premium, double s_T)
+    -> double;
+[[nodiscard]] auto option_mark_to_market_pnl(const OptionSpec& spec, double premium)
+    -> Result<double>;
+
+// Black-76: option on a FORWARD/FUTURES price F (futures options, caps/floors substrate).
+// price = e^{-rT}[F N(d1) - K N(d2)] for a call. Returns price and delta w.r.t. F.
+[[nodiscard]] auto black76_price(bool is_call, double forward, double strike, double rate,
+                                 double volatility, double time) -> Result<double>;
+
+// European digital (binary) options, closed form. cash_or_nothing pays `cash` if in the
+// money; asset_or_nothing pays the underlying if in the money.
+[[nodiscard]] auto digital_cash_or_nothing(const OptionSpec& spec, double cash) -> Result<double>;
+[[nodiscard]] auto digital_asset_or_nothing(const OptionSpec& spec) -> Result<double>;
+
+// Single-barrier option by reproducible Monte Carlo with discrete monitoring at `steps`
+// dates. `knock_in` selects in vs out; `barrier` is the level. Returns the estimate and its
+// standard error. STATISTICAL: price carries MC error and monitoring bias (documented). The
+// in/out parity in-price + out-price == vanilla holds up to MC error — a checked invariant.
+[[nodiscard]] auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in,
+                                     std::uint64_t paths, int steps, std::uint64_t seed)
+    -> Result<McResult>;
+
 // --- Trinomial lattice (Kamrad-Ritchken) -----------------------------------
 // European/American use `steps` time steps. For Bermudan, `exercise_times` lists the years
 // at which early exercise is permitted (mapped to the nearest step); an empty list with
@@ -340,6 +384,143 @@ auto implied_volatility(const OptionSpec& spec, double market_price) -> Result<d
         if ((fm > 0.0) == (flo > 0.0)) { lo = mid; flo = fm; } else { hi = mid; }
     }
     return 0.5 * (lo + hi);
+}
+
+auto black_scholes_extended_greeks(const OptionSpec& spec) -> Result<ExtendedGreeks> {
+    const double S = spec.spot;
+    const double K = spec.strike;
+    const double r = spec.rate;
+    const double q = spec.dividend_yield;
+    const double sig = spec.volatility;
+    const double T = spec.time_to_expiry;
+    if (S <= 0.0 || K <= 0.0 || T <= 0.0 || sig <= 0.0) {
+        return make_error<ExtendedGreeks>(MathError::domain_error);
+    }
+    const bool call = spec.type == OptionType::call;
+    const double sqrtT = std::sqrt(T);
+    const double d1 = (std::log(S / K) + (r - q + 0.5 * sig * sig) * T) / (sig * sqrtT);
+    const double d2 = d1 - sig * sqrtT;
+    const double phi = norm_pdf(d1);
+    const double disc_q = std::exp(-q * T);
+    const double disc_r = std::exp(-r * T);
+    const double gamma = disc_q * phi / (S * sig * sqrtT);
+    const double vega = S * disc_q * phi * sqrtT;
+    auto base = black_scholes_greeks(spec);
+    if (!base) { return make_error<ExtendedGreeks>(base.error()); }
+
+    ExtendedGreeks g{};
+    g.vanna = -disc_q * phi * d2 / sig;
+    g.vomma = vega * d1 * d2 / sig;
+    g.speed = -gamma / S * (d1 / (sig * sqrtT) + 1.0);
+    g.zomma = gamma * (d1 * d2 - 1.0) / sig;
+    g.lambda = base->price != 0.0 ? base->delta * S / base->price : 0.0;
+    g.dual_delta = call ? -disc_r * norm_cdf(d2) : disc_r * norm_cdf(-d2);
+    g.dual_gamma = disc_r * norm_pdf(d2) / (K * sig * sqrtT);
+    // Time-derivatives (charm, color, veta) via central differences of the analytic delta /
+    // gamma / vega w.r.t. time_to_expiry — robust and sign-consistent with our BS functions.
+    const double h = 1e-4 * T;
+    auto up = black_scholes_greeks(spec.with_expiry(T + h));
+    auto dn = black_scholes_greeks(spec.with_expiry(T - h));
+    if (up && dn) {
+        g.charm = (up->delta - dn->delta) / (2.0 * h);   // d delta / d T
+        g.color = (up->gamma - dn->gamma) / (2.0 * h);   // d gamma / d T
+        g.veta  = (up->vega - dn->vega) / (2.0 * h);     // d vega / d T
+    }
+    return g;
+}
+
+auto option_pnl_at_expiry(const OptionSpec& spec, double premium, double s_T) -> double {
+    return spec.payoff(s_T) - premium;
+}
+
+auto option_mark_to_market_pnl(const OptionSpec& spec, double premium) -> Result<double> {
+    return black_scholes_price(spec).transform([&](double p) { return p - premium; });
+}
+
+auto black76_price(bool is_call, double forward, double strike, double rate, double volatility,
+                   double time) -> Result<double> {
+    if (forward <= 0.0 || strike <= 0.0 || time < 0.0 || volatility < 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const double disc = std::exp(-rate * time);
+    if (time == 0.0 || volatility == 0.0) {
+        const double intrinsic = is_call ? std::max(forward - strike, 0.0)
+                                         : std::max(strike - forward, 0.0);
+        return disc * intrinsic;
+    }
+    const double sqrtT = std::sqrt(time);
+    const double d1 = (std::log(forward / strike) + 0.5 * volatility * volatility * time) /
+                      (volatility * sqrtT);
+    const double d2 = d1 - volatility * sqrtT;
+    if (is_call) {
+        return disc * (forward * norm_cdf(d1) - strike * norm_cdf(d2));
+    }
+    return disc * (strike * norm_cdf(-d2) - forward * norm_cdf(-d1));
+}
+
+auto digital_cash_or_nothing(const OptionSpec& spec, double cash) -> Result<double> {
+    if (spec.spot <= 0.0 || spec.strike <= 0.0 || spec.time_to_expiry <= 0.0 ||
+        spec.volatility <= 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const double sqrtT = std::sqrt(spec.time_to_expiry);
+    const double d2 = (std::log(spec.spot / spec.strike) +
+                       (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) *
+                           spec.time_to_expiry) /
+                      (spec.volatility * sqrtT);
+    const double disc = std::exp(-spec.rate * spec.time_to_expiry);
+    return cash * disc *
+           (spec.type == OptionType::call ? norm_cdf(d2) : norm_cdf(-d2));
+}
+
+auto digital_asset_or_nothing(const OptionSpec& spec) -> Result<double> {
+    if (spec.spot <= 0.0 || spec.strike <= 0.0 || spec.time_to_expiry <= 0.0 ||
+        spec.volatility <= 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const double sqrtT = std::sqrt(spec.time_to_expiry);
+    const double d1 = (std::log(spec.spot / spec.strike) +
+                       (spec.rate - spec.dividend_yield + 0.5 * spec.volatility * spec.volatility) *
+                           spec.time_to_expiry) /
+                      (spec.volatility * sqrtT);
+    const double disc_q = std::exp(-spec.dividend_yield * spec.time_to_expiry);
+    return spec.spot * disc_q *
+           (spec.type == OptionType::call ? norm_cdf(d1) : norm_cdf(-d1));
+}
+
+auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, std::uint64_t paths,
+                       int steps, std::uint64_t seed) -> Result<McResult> {
+    if (paths == 0 || steps < 1 || barrier <= 0.0) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    const bool down = barrier < spec.spot;  // barrier below spot -> down-barrier, else up
+    const double dt = spec.time_to_expiry / static_cast<double>(steps);
+    const double drift = (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * dt;
+    const double vol_sqrtdt = spec.volatility * std::sqrt(dt);
+    const double disc = std::exp(-spec.rate * spec.time_to_expiry);
+    const std::uint64_t key = splitmix64(seed);
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (std::uint64_t i = 0; i < paths; ++i) {
+        double s = spec.spot;
+        bool hit = false;
+        for (int step = 0; step < steps; ++step) {
+            const std::uint64_t idx = i * static_cast<std::uint64_t>(steps) + static_cast<std::uint64_t>(step);
+            s *= std::exp(drift + vol_sqrtdt * normal_at(key, idx));
+            if ((down && s <= barrier) || (!down && s >= barrier)) { hit = true; }
+        }
+        const bool alive = knock_in ? hit : !hit;
+        const double payoff = alive ? spec.payoff(s) * disc : 0.0;
+        sum += payoff;
+        sum_sq += payoff * payoff;
+    }
+    const double n = static_cast<double>(paths);
+    const double mean = sum / n;
+    const double var = std::max((sum_sq - n * mean * mean) / std::max(n - 1.0, 1.0), 0.0);
+    return McResult{mean, std::sqrt(var / n), paths};
 }
 
 // --- Trinomial lattice ------------------------------------------------------

@@ -252,6 +252,71 @@ struct Date {
                             double discount, DayCount basis) -> Result<double>;
 
 // ===========================================================================
+// Additional TVM & annuity variants (exact over Q).
+// ===========================================================================
+// ISPMT (Lotus-compatible straight-line interest in period `per`): -pv*rate*(nper-per)/nper.
+[[nodiscard]] auto ispmt(const BigRational& rate, std::int64_t per, std::int64_t nper,
+                         const BigRational& pv) -> Result<BigRational>;
+// Growing annuity PV: first_payment discounted over nper periods growing at `growth`.
+[[nodiscard]] auto growing_annuity_pv(const BigRational& rate, const BigRational& growth,
+                                      std::int64_t nper, const BigRational& first_payment)
+    -> Result<BigRational>;
+// Perpetuity PV = payment/rate; growing perpetuity = payment/(rate-growth) (needs rate>growth).
+[[nodiscard]] auto perpetuity_pv(const BigRational& rate, const BigRational& payment)
+    -> Result<BigRational>;
+[[nodiscard]] auto growing_perpetuity_pv(const BigRational& rate, const BigRational& growth,
+                                         const BigRational& payment) -> Result<BigRational>;
+
+// ===========================================================================
+// Additional fixed income: convexity, accrued interest, discount & T-bill securities.
+// ===========================================================================
+// Number of coupons between settlement and maturity (Excel COUPNUM).
+[[nodiscard]] auto coupon_num(const Date& settlement, const Date& maturity, int frequency)
+    -> Result<std::int64_t>;
+// Accrued interest per 100 face from the last coupon to settlement (Excel ACCRINT, single
+// period). Exact given the day-count year fraction.
+[[nodiscard]] auto accrued_interest(const Date& last_coupon, const Date& settlement,
+                                    double coupon_rate, int frequency, DayCount basis,
+                                    double par = 100.0) -> Result<double>;
+// Bond convexity (years^2), the second-order price sensitivity to yield.
+[[nodiscard]] auto bond_convexity(const Date& settlement, const Date& maturity, double coupon_rate,
+                                  double yield, int frequency, DayCount basis) -> Result<double>;
+// PRICEDISC / YIELDDISC: discounted (zero-coupon) securities, per 100 face.
+[[nodiscard]] auto price_disc(const Date& settlement, const Date& maturity, double discount_rate,
+                              double redemption, DayCount basis) -> Result<double>;
+[[nodiscard]] auto yield_disc(const Date& settlement, const Date& maturity, double price,
+                              double redemption, DayCount basis) -> Result<double>;
+// TBILLPRICE / TBILLYIELD / TBILLEQ (actual/360 discount basis; TBILLEQ is the bond-equivalent
+// yield, valid for maturities up to one year).
+[[nodiscard]] auto tbill_price(const Date& settlement, const Date& maturity, double discount_rate)
+    -> Result<double>;
+[[nodiscard]] auto tbill_yield(const Date& settlement, const Date& maturity, double price)
+    -> Result<double>;
+[[nodiscard]] auto tbill_eq(const Date& settlement, const Date& maturity, double discount_rate)
+    -> Result<double>;
+
+// ===========================================================================
+// Swaps (discount-factor based; NUMERICAL). Caller supplies the per-period accrual factors,
+// discount factors to each payment date, and (for the floating leg) the forward rates.
+// ===========================================================================
+// Value of a PAYER interest-rate swap (pay fixed, receive floating), per unit notional:
+//   sum_i df_i * accrual_i * (forward_i - fixed_rate).
+[[nodiscard]] auto interest_rate_swap_value(double notional, double fixed_rate,
+                                            std::span<const double> accruals,
+                                            std::span<const double> discount_factors,
+                                            std::span<const double> forward_rates) -> Result<double>;
+// Par (fair) fixed rate that makes the swap value zero:
+//   sum(df_i*accrual_i*forward_i) / sum(df_i*accrual_i).
+[[nodiscard]] auto swap_par_rate(std::span<const double> accruals,
+                                 std::span<const double> discount_factors,
+                                 std::span<const double> forward_rates) -> Result<double>;
+// Value of a fixed-for-fixed CURRENCY swap from the perspective of the domestic-leg receiver:
+// PV(domestic leg) - fx_spot * PV(foreign leg), each leg discounted on its own curve. fx_spot
+// is domestic units per one foreign unit.
+[[nodiscard]] auto currency_swap_value(double domestic_leg_pv, double foreign_leg_pv,
+                                       double fx_spot) -> Result<double>;
+
+// ===========================================================================
 // FLUENT LAYER (Rules 15/47) — composable builders that quantize to money at the boundary.
 // ===========================================================================
 
@@ -1037,6 +1102,198 @@ auto received(const Date& settlement, const Date& maturity, double investment, d
     const double den = 1.0 - discount * t;
     if (den == 0.0) { return make_error<double>(MathError::division_by_zero); }
     return investment / den;
+}
+
+// --- Additional TVM & annuity variants (exact) ------------------------------
+
+auto ispmt(const BigRational& rate, std::int64_t per, std::int64_t nper, const BigRational& pv_)
+    -> Result<BigRational> {
+    if (nper == 0) { return make_error<BigRational>(MathError::division_by_zero); }
+    if (per < 1 || per > nper) { return make_error<BigRational>(MathError::domain_error); }
+    // -pv * rate * (nper - per) / nper.
+    return pv_.multiply(rate).multiply(q_int(nper - per)).divide(q_int(nper))
+        .transform([](const BigRational& x) { return x.negate(); });
+}
+
+auto growing_annuity_pv(const BigRational& rate, const BigRational& growth, std::int64_t nper,
+                        const BigRational& first_payment) -> Result<BigRational> {
+    if (nper < 0) { return make_error<BigRational>(MathError::domain_error); }
+    const BigRational one_plus_r = q_one().add(rate);
+    const BigRational one_plus_g = q_one().add(growth);
+    if (one_plus_r.is_zero()) { return make_error<BigRational>(MathError::division_by_zero); }
+    if (rate == growth) {
+        // Limit: n * C1 / (1+r).
+        return first_payment.multiply(q_int(nper)).divide(one_plus_r);
+    }
+    // C1/(r-g) * (1 - ((1+g)/(1+r))^n).
+    auto ratio = one_plus_g.divide(one_plus_r);
+    if (!ratio) { return ratio; }
+    auto ratio_n = ratio->pow(nper);
+    if (!ratio_n) { return ratio_n; }
+    const BigRational bracket = q_one().subtract(*ratio_n);
+    return first_payment.divide(rate.subtract(growth))
+        .transform([&](const BigRational& x) { return x.multiply(bracket); });
+}
+
+auto perpetuity_pv(const BigRational& rate, const BigRational& payment) -> Result<BigRational> {
+    return payment.divide(rate);  // rate == 0 -> division_by_zero
+}
+
+auto growing_perpetuity_pv(const BigRational& rate, const BigRational& growth,
+                           const BigRational& payment) -> Result<BigRational> {
+    const BigRational spread = rate.subtract(growth);
+    if (spread.sign() <= 0) { return make_error<BigRational>(MathError::domain_error); }  // diverges
+    return payment.divide(spread);
+}
+
+// --- Additional fixed income ------------------------------------------------
+
+namespace {
+// Add `months` (can be negative) to a date, clamping the day to the target month length.
+[[nodiscard]] auto add_months(const Date& d, int months) -> Date {
+    const auto [y, m, day] = d.ymd();
+    int total = (y * 12 + (m - 1)) + months;
+    int ny = total / 12;
+    int nm = total % 12;
+    if (nm < 0) { nm += 12; --ny; }
+    const int clamped = std::min(day, days_in_month(ny, nm + 1));
+    return Date::of(ny, nm + 1, clamped).value_or(Date{d.serial});
+}
+}  // namespace
+
+auto coupon_num(const Date& settlement, const Date& maturity, int frequency) -> Result<std::int64_t> {
+    if ((frequency != 1 && frequency != 2 && frequency != 4) ||
+        maturity.serial <= settlement.serial) {
+        return make_error<std::int64_t>(MathError::domain_error);
+    }
+    const int step = 12 / frequency;
+    // Walk coupon dates backward from maturity; count those strictly after settlement.
+    std::int64_t count = 0;
+    Date c = maturity;
+    while (c.serial > settlement.serial) {
+        ++count;
+        c = add_months(c, -step);
+        if (count > 4000) { break; }  // ~1000 years guard
+    }
+    return count;
+}
+
+auto accrued_interest(const Date& last_coupon, const Date& settlement, double coupon_rate,
+                      int frequency, DayCount basis, double par) -> Result<double> {
+    if (frequency != 1 && frequency != 2 && frequency != 4) {
+        return make_error<double>(MathError::domain_error);
+    }
+    auto yf = year_fraction(last_coupon, settlement, basis);
+    if (!yf) { return make_error<double>(yf.error()); }
+    // Accrue at the annual coupon rate over the elapsed year fraction.
+    return par * coupon_rate * yf->to_double();
+}
+
+auto bond_convexity(const Date& settlement, const Date& maturity, double coupon_rate, double yield,
+                    int frequency, DayCount basis) -> Result<double> {
+    if ((frequency != 1 && frequency != 2 && frequency != 4) ||
+        maturity.serial <= settlement.serial) {
+        return make_error<double>(MathError::domain_error);
+    }
+    auto yf = year_fraction(settlement, maturity, basis);
+    if (!yf) { return make_error<double>(yf.error()); }
+    const double f = static_cast<double>(frequency);
+    const double periods = yf->to_double() * f;
+    const double frac = periods - std::floor(periods);
+    const int n = static_cast<int>(std::ceil(periods - 1e-9));
+    const double coupon = 100.0 * coupon_rate / f;
+    const double y = yield / f;
+    double price = 0.0;
+    double conv = 0.0;
+    for (int k = 1; k <= n; ++k) {
+        const double t = static_cast<double>(k) - (1.0 - frac);
+        const double cf = coupon + (k == n ? 100.0 : 0.0);
+        const double pv = cf / std::pow(1.0 + y, t);
+        price += pv;
+        conv += t * (t + 1.0) * pv;
+    }
+    if (price == 0.0) { return make_error<double>(MathError::division_by_zero); }
+    // Convexity in years^2: divide by (1+y)^2 and the frequency squared.
+    return conv / (price * std::pow(1.0 + y, 2.0) * f * f);
+}
+
+auto price_disc(const Date& settlement, const Date& maturity, double discount_rate,
+                double redemption, DayCount basis) -> Result<double> {
+    auto yf = year_fraction(settlement, maturity, basis);
+    if (!yf) { return make_error<double>(yf.error()); }
+    return redemption * (1.0 - discount_rate * yf->to_double());
+}
+
+auto yield_disc(const Date& settlement, const Date& maturity, double price, double redemption,
+                DayCount basis) -> Result<double> {
+    auto yf = year_fraction(settlement, maturity, basis);
+    if (!yf) { return make_error<double>(yf.error()); }
+    const double t = yf->to_double();
+    if (t == 0.0 || price == 0.0) { return make_error<double>(MathError::division_by_zero); }
+    return (redemption - price) / price / t;
+}
+
+auto tbill_price(const Date& settlement, const Date& maturity, double discount_rate)
+    -> Result<double> {
+    const double dsm = static_cast<double>(maturity.serial - settlement.serial);
+    if (dsm <= 0.0 || dsm > 366.0) { return make_error<double>(MathError::domain_error); }
+    return 100.0 * (1.0 - discount_rate * dsm / 360.0);  // actual/360 discount basis
+}
+
+auto tbill_yield(const Date& settlement, const Date& maturity, double price) -> Result<double> {
+    const double dsm = static_cast<double>(maturity.serial - settlement.serial);
+    if (dsm <= 0.0 || dsm > 366.0 || price <= 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    return (100.0 - price) / price * 360.0 / dsm;
+}
+
+auto tbill_eq(const Date& settlement, const Date& maturity, double discount_rate) -> Result<double> {
+    const double dsm = static_cast<double>(maturity.serial - settlement.serial);
+    if (dsm <= 0.0 || dsm > 366.0) { return make_error<double>(MathError::domain_error); }
+    // Bond-equivalent yield. Excel's exact form is piecewise (>182 days uses a quadratic);
+    // this uses the ≤182-day simple form, which diverges from Excel for longer bills — a
+    // documented convention divergence (see docs/reference/finance.md).
+    const double den = 360.0 - discount_rate * dsm;
+    if (den == 0.0) { return make_error<double>(MathError::division_by_zero); }
+    return 365.0 * discount_rate / den;
+}
+
+// --- Swaps (numerical, discount-factor based) -------------------------------
+
+auto interest_rate_swap_value(double notional, double fixed_rate, std::span<const double> accruals,
+                              std::span<const double> discount_factors,
+                              std::span<const double> forward_rates) -> Result<double> {
+    const std::size_t n = accruals.size();
+    if (n == 0 || discount_factors.size() != n || forward_rates.size() != n) {
+        return make_error<double>(MathError::domain_error);
+    }
+    double value = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        value += discount_factors[i] * accruals[i] * (forward_rates[i] - fixed_rate);
+    }
+    return notional * value;  // payer swap (pay fixed, receive floating)
+}
+
+auto swap_par_rate(std::span<const double> accruals, std::span<const double> discount_factors,
+                   std::span<const double> forward_rates) -> Result<double> {
+    const std::size_t n = accruals.size();
+    if (n == 0 || discount_factors.size() != n || forward_rates.size() != n) {
+        return make_error<double>(MathError::domain_error);
+    }
+    double float_pv = 0.0;
+    double annuity = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        float_pv += discount_factors[i] * accruals[i] * forward_rates[i];
+        annuity += discount_factors[i] * accruals[i];
+    }
+    if (annuity == 0.0) { return make_error<double>(MathError::division_by_zero); }
+    return float_pv / annuity;
+}
+
+auto currency_swap_value(double domestic_leg_pv, double foreign_leg_pv, double fx_spot)
+    -> Result<double> {
+    return domestic_leg_pv - fx_spot * foreign_leg_pv;
 }
 
 // --- Fluent layer -----------------------------------------------------------

@@ -117,6 +117,43 @@ auto main() -> int {
                   const std::array<double, 3> c{-1000.0, 500.0, 700.0};
                   t.expect(mirr(c, 0.10, 0.12).has_value(), "MIRR computes");
               })
+        .test("annuity variants, swaps, and discount securities",
+              [](TestContext& t) {
+                  // ISPMT(10%, per 1, 10, 10000) == -900.
+                  t.expect(ispmt(q("1/10"), 1, 10, qi(10000)).value() == qi(-900),
+                           "ISPMT == -900");
+                  // Growing annuity with rate == growth: n*C1/(1+r) == 10*100/1.1 == 10000/11.
+                  t.expect(growing_annuity_pv(q("1/10"), q("1/10"), 10, qi(100)).value() ==
+                               q("10000/11"), "growing annuity (r==g) == 10000/11");
+                  // Perpetuity 100/0.05 == 2000; growing perpetuity 100/(0.1-0.05) == 2000.
+                  t.expect(perpetuity_pv(q("1/20"), qi(100)).value() == qi(2000), "perpetuity == 2000");
+                  t.expect(growing_perpetuity_pv(q("1/10"), q("1/20"), qi(100)).value() == qi(2000),
+                           "growing perpetuity == 2000");
+                  // Currency swap: 100 - 1.1*90 == 1.
+                  t.expect(std::abs(currency_swap_value(100.0, 90.0, 1.1) - 1.0) < 1e-12,
+                           "currency swap value == 1");
+                  // Swap value at the par rate is zero.
+                  const std::array<double, 2> ac{1.0, 1.0};
+                  const std::array<double, 2> df{0.95, 0.90};
+                  const std::array<double, 2> fw{0.05, 0.06};
+                  const double par = swap_par_rate(ac, df, fw).value();
+                  t.expect(std::abs(interest_rate_swap_value(1.0, par, ac, df, fw).value()) < 1e-12,
+                           "swap value at par == 0");
+                  // T-bill: 90-day bill at 5% discount prices at 98.75 (actual/360).
+                  auto s0 = Date::of(2020, 1, 1).value();
+                  const Date m90{s0.serial + 90};
+                  t.expect(std::abs(tbill_price(s0, m90, 0.05).value() - 98.75) < 1e-9,
+                           "T-bill price == 98.75");
+                  // Coupon count: 2y semiannual == 4 coupons.
+                  t.expect(coupon_num(Date::of(2020, 1, 1).value(),
+                                      Date::of(2022, 1, 1).value(), 2).value() == 4,
+                           "COUPNUM == 4");
+                  // Accrued interest over a full 30/360 half-year at 6% == 3 per 100.
+                  t.expect(std::abs(accrued_interest(Date::of(2020, 1, 1).value(),
+                                                     Date::of(2020, 7, 1).value(), 0.06, 2,
+                                                     DayCount::thirty_360).value() - 3.0) < 1e-9,
+                           "accrued interest == 3");
+              })
         .test("fluent TvmProblem quantizes money at the boundary",
               [](TestContext& t) {
                   auto prob = TvmProblem::create().rate(q("1/20")).nper(12).pmt(qi(-100))

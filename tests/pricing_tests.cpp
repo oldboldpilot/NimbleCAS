@@ -114,6 +114,56 @@ auto main() -> int {
                   // Payoff at expiry: |S - K|.
                   t.expect(close(straddle.payoff_at(120.0), 20.0, 1e-12), "straddle payoff at 120 == 20");
               })
+        .test("extended Greeks match finite differences",
+              [](TestContext& t) {
+                  const auto s = atm();
+                  const auto eg = black_scholes_extended_greeks(s).value();
+                  const double h = 1e-4;
+                  // vanna == d delta / d vol.
+                  const double dd_dvol =
+                      (black_scholes_greeks(s.with_volatility(0.2 + h)).value().delta -
+                       black_scholes_greeks(s.with_volatility(0.2 - h)).value().delta) / (2 * h);
+                  t.expect(close(eg.vanna, dd_dvol, 1e-3), "vanna == d delta/d vol");
+                  // vomma == d vega / d vol.
+                  const double dvega_dvol =
+                      (black_scholes_greeks(s.with_volatility(0.2 + h)).value().vega -
+                       black_scholes_greeks(s.with_volatility(0.2 - h)).value().vega) / (2 * h);
+                  t.expect(close(eg.vomma, dvega_dvol, 1e-2), "vomma == d vega/d vol");
+                  // speed == d gamma / d spot.
+                  const double dg_ds =
+                      (black_scholes_greeks(s.with_spot(100 + h)).value().gamma -
+                       black_scholes_greeks(s.with_spot(100 - h)).value().gamma) / (2 * h);
+                  t.expect(close(eg.speed, dg_ds, 1e-4), "speed == d gamma/d spot");
+                  // dual_delta == d price / d strike.
+                  const double dp_dk =
+                      (black_scholes_price(s.with_strike(100 + h)).value() -
+                       black_scholes_price(s.with_strike(100 - h)).value()) / (2 * h);
+                  t.expect(close(eg.dual_delta, dp_dk, 1e-4), "dual_delta == d price/d strike");
+              })
+        .test("Black-76, digitals, option P&L, and barrier in/out parity",
+              [](TestContext& t) {
+                  // Black-76 on the forward F = S e^{(r-q)T} equals Black-Scholes (q=0).
+                  const auto s = atm();
+                  const double fwd = s.spot * std::exp(s.rate * s.time_to_expiry);
+                  const double b76 = black76_price(true, fwd, s.strike, s.rate, s.volatility,
+                                                   s.time_to_expiry).value();
+                  t.expect(close(b76, black_scholes_price(s).value(), 1e-9),
+                           "Black-76(F) == Black-Scholes");
+                  // Vanilla call == asset-or-nothing - K * cash-or-nothing(1).
+                  const double aon = digital_asset_or_nothing(s).value();
+                  const double con = digital_cash_or_nothing(s, 1.0).value();
+                  t.expect(close(black_scholes_price(s).value(), aon - s.strike * con, 1e-9),
+                           "call == AON - K*CON");
+                  // Option P&L at expiry: long ATM call, S_T = 120, premium 10 -> profit 10.
+                  t.expect(close(option_pnl_at_expiry(s, 10.0, 120.0), 10.0, 1e-12), "call P&L == 10");
+                  // Barrier in/out parity: knock-in + knock-out == vanilla (same path engine).
+                  const auto in = barrier_option_mc(s, 90.0, true, 100000, 50, 2024).value();
+                  const auto out = barrier_option_mc(s, 90.0, false, 100000, 50, 2024).value();
+                  t.expect(std::abs((in.price + out.price) - black_scholes_price(s).value()) < 0.3,
+                           "barrier in + out == vanilla (within MC error)");
+                  t.expect(out.price <= black_scholes_price(s).value() + 1e-9,
+                           "knock-out <= vanilla");
+              })
         .test("plotting produces SVG",
               [](TestContext& t) {
                   PlotOptions opt{};
