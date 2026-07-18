@@ -3,10 +3,11 @@
 **Author:** Olumuyiwa Oluwasanmi
 
 This document is the honest record of where the NimbleCAS financial-mathematics stack
-(`bigdecimal`, `finance`, `currency`, `pricing`, `analytics`) stands: what is implemented,
-what is not yet, and — where more than one industry convention exists — which one we chose,
-so behavior is documented rather than assumed. It follows the project honesty invariant
-(AGENTS.md): a feature is listed as present only when it ships with a passing test.
+(`bigdecimal`, `finance`, `currency`, `pricing`, `analytics`, `exotics`, `yieldcurve`,
+`fixedincome`, `riskextra`) stands: what is implemented, what is not yet, and — where more
+than one industry convention exists — which one we chose, so behavior is documented rather
+than assumed. It follows the project honesty invariant (AGENTS.md): a feature is listed as
+present only when it ships with a passing test.
 
 ## Implemented (shipping, tested)
 
@@ -31,47 +32,44 @@ so behavior is documented rather than assumed. It follows the project honesty in
   beta/alpha, max drawdown, historical & Gaussian VaR/CVaR, mean-variance optimization
   (min-variance, tangency, efficient frontier). *Exact historical VaR/CVaR and the
   equality-constrained frontier are distinctive exact-over-ℚ capabilities of this stack.*
+- **Fixed income (`fixedincome`):** DV01/PV01, duration-from-price, effective & key-rate
+  durations; `cfdates`/`cfamounts` (dated cashflow schedule with an optional prorated odd first
+  stub); COUPPCD/COUPNCD/COUPDAYBS/COUPDAYS/COUPDAYSNC (with the `bs + nc == full` invariant);
+  ODDFPRICE/ODDFYIELD/ODDLPRICE/ODDLYIELD (reproducing `bond_price` bit-for-bit on 30/360);
+  PRICEMAT/YIELDMAT/ACCRINTM; continuous Z-spread over a supplied curve; simple↔compound and
+  nominal converters (incl. annual↔semiannual); FRN valuation and level-payment amortization.
+- **Yield curve / term structure (`yieldcurve`):** pillar `Curve` (linear-on-zero / log-linear-on-DF
+  interpolation, continuous/annual/semiannual/k-per-year compounding); `zero2disc`/`disc2zero`/
+  `zero2fwd`/`fwd2zero`; par↔zero (`par2zero`/`zero2par`) exact inverses; bootstrapping
+  (`zbtprice`/`zbtyield`); Nelson-Siegel and Svensson fits; a Hull-White trinomial short-rate
+  lattice calibrated to the input discount curve by Arrow-Debreu forward induction.
+- **Exotic options (`exotics`):** Cox-Ross-Rubinstein binomial (European/American) + escrowed-spot
+  discrete dividends; Reiner-Rubinstein analytic single barriers (all 8 types, with rebate);
+  Goldman-Sosin-Gatto floating-strike lookback; Crank-Nicolson finite-difference PDE with Rannacher
+  startup (Thomas for European, PSOR for American); Margrabe exchange, Kirk spread, Drezner
+  bivariate-normal CDF, Geske compound, chooser, and a Cholesky-correlated antithetic basket MC.
+  (General SDE integration — Euler-Maruyama/Milstein/tamed/Heun/SRK over caller-supplied drift &
+  diffusion — lives in `sde`.)
+- **Extended risk (`riskextra`):** `corr2cov`/`cov2corr`; lower partial moments & downside deviation;
+  exponentially-weighted mean/covariance; Cholesky-correlated return simulation; a box-constrained
+  mean-variance frontier via a primal active-set QP; Rockafellar-Uryasev CVaR-optimal weights over a
+  self-contained two-phase simplex; AMORLINC/AMORDEGRC French depreciation; continuous-compounding
+  EFFECT/NOMINAL, a full `amortize` schedule, and `pay_per`/`pay_odd`/`pay_uni` annuity variants.
+- **Performance:** the counter-based RNG core (`counter_u64`) has an AVX-512F batched path
+  (`counter_u64_batch`, eight Threefry-2x64-20 blocks per step, runtime-dispatched, bit-identical
+  to the scalar loop) that the Monte Carlo engines feed through; ~8.2× on the RNG core
+  (72 → 592 M draws/s, Zen 5), addressing the ~73%-RNG-self-time profile of the path engines.
 
-## Backlog (not yet implemented)
+## Remaining (P1, deferred — no test yet, so honestly not claimed)
 
-Priorities from the feature-gap analysis. **P0** = required for a complete toolkit; P1 strong;
-P2 nice-to-have.
-
-### (A) Bonds & fixed income
-- **P0** DV01/PV01; duration-from-price; `cfamounts`/`cfdates` (exported dated cashflow schedule
-  incl. odd first/last periods, arbitrary frequency); COUPPCD/COUPNCD/COUPDAYBS/COUPDAYS/COUPDAYSNC.
-- **P0** ODDFPRICE/ODDFYIELD/ODDLPRICE/ODDLYIELD; PRICEMAT/YIELDMAT; ACCRINTM.
-- **P0** Z-spread / static spread; price-off-curve (`prbyzero`); key-rate durations (`bndkrdur`).
-- **P1** Yield-convention adapters (street/true, simple, annual↔semiannual); callable/puttable
-  bonds + OAS (needs a short-rate lattice); FRN, amortizing schedules.
-
-### (B) Exotic options & pricing methods
-- **P0** Finite-difference PDE pricer (Crank-Nicolson + Rannacher, American via penalty/PSOR);
-  CRR binomial with discrete dividends (`binprice`); barrier analytic (Reiner-Rubinstein 8-case);
-  lookback (Goldman-Sosin-Gatto).
-- **P1** Margrabe exchange, Kirk spread, Geske compound (needs bivariate-normal CDF), chooser,
-  basket; named SDE processes (GBM/OU-Vasicek/CIR/Heston/Merton jump) with correlated drivers.
-
-### (C) Yield-curve / term-structure toolkit (greenfield — nothing exists yet)
-- **P0** Curve object (discount factors + interpolation + compounding conventions);
-  `zero2disc`/`disc2zero`/`zero2fwd`/`fwd2zero`; bootstrapping (`zbtprice`/`zbtyield`).
-- **P1** Par-yield↔zero; Nelson-Siegel/Svensson/spline fits; short-rate lattice (Hull-White/BDT).
-
-### (D) Risk & portfolio analytics
-- **P1** Box/inequality-constrained frontier (active-set QP); lower partial moments; EW moments;
-  `corr2cov`/`cov2corr`; correlated return simulation; CVaR-optimal portfolios.
-
-### (E) Remaining scalar functions
-- **P1** AMORLINC, AMORDEGRC (French depreciation — coefficient table + rounding quirks).
-
-### (F) Rate/annuity variants
-- **P1** Continuous compounding / force-of-interest in EFFECT/NOMINAL (`EffectiveInterest`);
-  `amortize` full schedule; `payodd`/`payuni`/`payper`.
-
-### Performance
-- **P0** AVX-512 vectorization of the `counter_u64` RNG core — profiling (perf, 2026-07-18) shows
-  it at ~73% self-time in the Monte Carlo path engine; the current 23 Mpaths/s (post
-  Halley-drop optimization) is RNG-bound.
+- **Callable/puttable bonds + OAS.** The building blocks now exist (the `yieldcurve` Hull-White
+  short-rate lattice and the `fixedincome` cashflow engine); coupling them into an
+  option-adjusted-spread backward induction over a callable schedule is the remaining step.
+- **Named SDE process constructors.** `sde` integrates any user-supplied `(a, b)`; convenience
+  parameterizations for GBM / Ornstein-Uhlenbeck-Vasicek / CIR / Heston / Merton-jump (with
+  correlated drivers) are not yet packaged as named factories.
+- **Spline zero-curve fit.** Nelson-Siegel and Svensson ship; a cubic-/tension-spline curve fit
+  and a BDT short-rate lattice are future work.
 
 ## Convention choices (documented, deliberate)
 
