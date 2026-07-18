@@ -149,6 +149,21 @@ auto main() -> int {
                       (black_scholes_greeks(s.with_expiry(1.0 + ht)).value().gamma -
                        black_scholes_greeks(s.with_expiry(1.0 - ht)).value().gamma) / (2 * ht);
                   t.expect(close(eg.color, -dgamma_dT, 1e-2), "color == -d gamma/d time-to-expiry");
+                  // epsilon == d price / d dividend_yield.
+                  const double dp_dq =
+                      (black_scholes_price(s.with_dividend(0.0 + h)).value() -
+                       black_scholes_price(s.with_dividend(0.0 - h)).value()) / (2 * h);
+                  t.expect(close(eg.epsilon, dp_dq, 1e-3), "epsilon == d price/d dividend");
+                  // vera == d rho / d vol.
+                  const double drho_dvol =
+                      (black_scholes_greeks(s.with_volatility(0.2 + h)).value().rho -
+                       black_scholes_greeks(s.with_volatility(0.2 - h)).value().rho) / (2 * h);
+                  t.expect(close(eg.vera, drho_dvol, 1e-2), "vera == d rho/d vol");
+                  // ultima == d vomma / d vol (compare closed form to a vomma finite difference).
+                  const double dvomma_dvol =
+                      (black_scholes_extended_greeks(s.with_volatility(0.2 + h)).value().vomma -
+                       black_scholes_extended_greeks(s.with_volatility(0.2 - h)).value().vomma) / (2 * h);
+                  t.expect(close(eg.ultima, dvomma_dvol, 1.0), "ultima == d vomma/d vol");
               })
         .test("Black-76, digitals, option P&L, and barrier in/out parity",
               [](TestContext& t) {
