@@ -73,7 +73,7 @@ The numeric results are double approximations accurate to roughly machine epsilo
   back-substitution of hqr2 is **not** performed). This is the same double-shift family as
   [`numeigen`](numeigen.md)'s `hqr`, but with the orthogonal transformations accumulated;
   `numeigen`'s Gaussian `elmhes` is eigenvalue-only and **cannot** yield an orthogonal `Q`,
-  which is why an orthogonal reduction is used here. Wilkinson- and MATLAB-style exceptional
+  which is why an orthogonal reduction is used here. Wilkinson-style ad-hoc exceptional
   shifts break cycles. Small subdiagonals are deflated when `|aₗ,ₗ₋₁| < tol·(|aₗ₋₁,ₗ₋₁| +
   |aₗ,ₗ|)`.
 

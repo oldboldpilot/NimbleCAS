@@ -13,6 +13,7 @@ import nimblecas.testing;
 
 using nimblecas::Rng;
 using nimblecas::counter_u64;
+using nimblecas::counter_u64_batch;
 using nimblecas::splitmix64;
 using nimblecas::uniform_double;
 using nimblecas::uniform_int;
@@ -201,6 +202,71 @@ auto main() -> int {
                   t.expect_eq(splitmix64(0), splitmix64(0), "splitmix64 is deterministic");
                   t.expect_ne(splitmix64(0), splitmix64(1),
                               "splitmix64 separates adjacent inputs");
+              })
+        .test("counter_u64_batch_is_bit_identical_to_scalar",
+              [](TestContext& t) {
+                  // The AVX-512 (or scalar-fallback) batch core must reproduce the scalar
+                  // counter_u64 loop bit-for-bit — this is the reproducibility contract the
+                  // whole parallel design rests on. Cover sizes that span several full 8-wide
+                  // vector groups plus every possible tail remainder (n % 8), across a base
+                  // counter chosen so base + n crosses no special boundary.
+                  constexpr std::uint64_t key = 0xDEADBEEFCAFEF00DULL;
+                  bool all_match = true;
+                  std::size_t first_bad = 0;
+                  for (std::size_t n = 0; n <= 40; ++n) {
+                      std::vector<std::uint64_t> batch(n);
+                      counter_u64_batch(key, 1000, batch);
+                      for (std::size_t i = 0; i < n; ++i) {
+                          if (batch[i] != counter_u64(key, 1000 + i)) {
+                              all_match = false;
+                              first_bad = n;
+                              break;
+                          }
+                      }
+                      if (!all_match) {
+                          break;
+                      }
+                  }
+                  t.expect(all_match,
+                           std::format("counter_u64_batch == scalar for all n in [0,40] "
+                                       "(first mismatch at n={})",
+                                       first_bad));
+
+                  // A large fill exercises many vector groups at once.
+                  constexpr std::size_t big = 10007;  // prime: guarantees a non-zero tail
+                  std::vector<std::uint64_t> b(big);
+                  counter_u64_batch(0x0123456789ABCDEFULL, 0, b);
+                  bool big_match = true;
+                  for (std::size_t i = 0; i < big; ++i) {
+                      if (b[i] != counter_u64(0x0123456789ABCDEFULL, i)) {
+                          big_match = false;
+                          break;
+                      }
+                  }
+                  t.expect(big_match, "counter_u64_batch matches scalar over a 10007-wide fill");
+              })
+        .test("rng_fill_u64_matches_sequential_next",
+              [](TestContext& t) {
+                  // Rng::fill_u64 must equal the same count of next_u64() calls AND leave the
+                  // counter at the same position, so batched and scalar draws interleave freely.
+                  auto a = Rng::seeded(7);
+                  auto b = Rng::seeded(7);
+                  constexpr std::size_t k = 37;  // not a multiple of 8: exercises the tail path
+                  std::vector<std::uint64_t> filled(k);
+                  a.fill_u64(filled);
+                  bool match = true;
+                  for (std::size_t i = 0; i < k; ++i) {
+                      if (filled[i] != b.next_u64()) {
+                          match = false;
+                          break;
+                      }
+                  }
+                  t.expect(match, "fill_u64(k) equals k sequential next_u64() draws");
+                  t.expect_eq(a.counter(), b.counter(),
+                              "fill_u64 advances the counter exactly k positions");
+                  // The two streams remain in lock-step for subsequent draws.
+                  t.expect_eq(a.next_u64(), b.next_u64(),
+                              "streams stay aligned after a batched fill");
               })
         .run();
 }

@@ -57,7 +57,26 @@ The `nimblecas.gpu` module holds no CUDA types at all: it only marshals
 - **`available()`** — whether at least one device is present (`device_count() > 0`).
 - **`poly_eval(coeffs, x)`** — evaluate the polynomial `coeffs` (**low degree
   first**, so `coeffs[0]` is the constant term) at every point in `x`, returning
-  the vector of `p(x_i)`.
+  the vector of `p(x_i)`. This is the flagship, documented in full below.
+
+### Additional batch kernels
+
+The module has grown into a batch-numeric offload surface. Every entry is a
+Result-based wrapper over a hand-written CUDA kernel reached across the `gpu_bridge.h`
+C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_tests.cpp`:
+
+| Function | Purpose |
+| :--- | :--- |
+| `edit_distance_batch(a_flat, a_off, b_flat, b_off, ...)` | Levenshtein distance over a batch of sequence pairs. |
+| `bfs(row_offsets, col_indices, n, source)` | Single-source BFS distances on a CSR graph. |
+| `nqueens_count(n)` | Exact solution count for the N-queens problem. |
+| `qmc_poly_integrate(coeffs, points)` | Quasi-Monte-Carlo polynomial integration (device reduction). |
+| `haar_dwt_batch(data, batch, len)` | Batched Haar discrete wavelet transform. |
+| `batched_matmul(a, b, batch, ...)` | Batched dense matrix multiply. |
+| `fft_batch(in, batch, n)` | Batched FFT (power-of-two length). |
+
+All eight kernels (poly-eval plus the seven above) execute and pass on the
+**RTX 5090** (sm_120, CUDA 13.2, nvcc `-arch=native`); see [Testing](#testing).
 
 ### Error model
 
@@ -122,17 +141,34 @@ at **~209,800 Melem/s** (float32, kernel-only, 20M points). As with the CUDA
 path, `nsys` shows the work is transfer-bound; the benchmark isolates the kernel
 by keeping data **device-resident** across calls.
 
-The Triton kernels live under `python/triton` and run via the uv-managed venv,
-complementing — not replacing — the in-engine CUDA path.
+### Triton financial Monte Carlo (`python/triton/mc_option.py`)
+
+`mc_option.py` is a `@triton.jit` European-option Monte-Carlo kernel: each program
+simulates a block of terminal prices under geometric Brownian motion and reduces to
+partial sum / sum-of-squares, which the host combines into a price ± standard error.
+It **accelerates the same computation as the in-engine `pricing::monte_carlo_european`**
+(the CAS CPU MC) rather than reimplementing the model — and it validates against the
+Black-Scholes closed form. Verified on the **RTX 5090** (torch 2.13.0+cu130, triton
+3.7.1): 8,000,000 paths → **10.45238 ± 0.00260**, agreeing with Black-Scholes
+(10.45058) to **0.69 standard errors**.
+
+The Triton kernels live under `python/triton` and run via the managed venv,
+complementing — not replacing — the in-engine CUDA and CPU paths.
 
 ## Testing
 
-`tests/gpu_tests.cpp` cross-checks the GPU batch evaluation against a **CPU
-Horner reference** (matching the kernel's coefficient order) across a small
-polynomial, a large batch (exercising multiple blocks), and the empty /
-constant-polynomial edge cases. It uses a relative tolerance because the GPU may
+`tests/gpu_tests.cpp` cross-checks **every** GPU kernel against a CPU reference:
+poly-eval (small/large/edge cases), batched edit-distance, CSR BFS, N-queens count,
+QMC polynomial integration, batched Haar DWT, batched matmul, and batched FFT (vs a
+CPU DFT) — **12 groups, 41 checks**. It uses relative tolerances because the GPU may
 contract to FMA where the CPU does not. The suite is built and run **only with
 `-DNIMBLECAS_CUDA=ON` on a machine with a CUDA device**.
+
+Verified green on the **RTX 5090** (sm_120, CUDA 13.2): all 12 groups pass, and an
+`nsys` trace confirms all nine kernels launch and the pipeline is transfer-bound.
+`ncu` deep-counter profiling on that host requires elevated GPU-counter permissions
+(`ERR_NVGPUCTRPERM` — the `NVreg_RestrictProfilingToAdminUsers=0` driver setting or
+root), which was unavailable; `nsys` needs no such permission and profiled cleanly.
 
 ## Example
 

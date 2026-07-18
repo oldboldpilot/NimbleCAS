@@ -180,7 +180,17 @@ constexpr double kSqrt2 = 1.4142135623730951;
             double s = m[i][j];
             for (std::size_t k = 0; k < j; ++k) { s -= L[i][k] * L[j][k]; }
             if (i == j) {
-                if (s <= 0.0) { return std::nullopt; }
+                // Reject a pivot that is non-finite OR not positive relative to the matrix
+                // scale. A NaN pivot passes `<= 0.0` (NaN compares false) and would sqrt(NaN)
+                // silently. A rank-deficient (positive-SEMI-definite) covariance — e.g. two
+                // perfectly collinear assets — leaves a Schur pivot that is a tiny POSITIVE
+                // float (~1e-18) rather than exactly 0; a bare `s > 0` test lets it through and
+                // yields unstable garbage weights. Comparing against the original diagonal
+                // m[i][i] (a relative floor) refuses the semidefinite case while still admitting
+                // genuinely small-variance PD matrices (tiny returns), whose pivots track their
+                // own diagonal scale.
+                const double pivot_floor = 1e-12 * std::abs(m[i][i]);
+                if (!std::isfinite(s) || s <= pivot_floor) { return std::nullopt; }
                 L[i][j] = std::sqrt(s);
             } else {
                 L[i][j] = s / L[j][j];
@@ -294,6 +304,10 @@ auto covariance_matrix(std::span<const std::vector<double>> series, bool sample)
     -> Result<std::vector<std::vector<double>>> {
     if (series.empty()) { return make_error<std::vector<std::vector<double>>>(MathError::domain_error); }
     const std::size_t k = series.size();
+    // Bound the number of series: the result is a dense k x k matrix and the fill is O(k^2 * n),
+    // so an unbounded k is an OOM/CPU DoS. 4096 matches the solver dimension cap in portfolio.
+    constexpr std::size_t kMaxDim = 4096;
+    if (k > kMaxDim) { return make_error<std::vector<std::vector<double>>>(MathError::domain_error); }
     const std::size_t n = series[0].size();
     for (const auto& s : series) {
         if (s.size() != n) { return make_error<std::vector<std::vector<double>>>(MathError::domain_error); }

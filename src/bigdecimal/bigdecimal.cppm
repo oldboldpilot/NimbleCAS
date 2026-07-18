@@ -176,6 +176,13 @@ namespace {
 [[nodiscard]] auto bi_one() -> BigInt { return BigInt::from_u64(1); }
 [[nodiscard]] auto bi_two() -> BigInt { return BigInt::from_u64(2); }
 
+// Largest |scale| we will represent. A BigDecimal at scale S can require a 10^|S| BigInt
+// (~|S| decimal digits) on quantize / divide / to_bigrational / to_string, so |S| is a hard
+// DoS lever on any untrusted input (a ~15-byte "1e-2000000000" fits inside int32 but detonates
+// on first use). 10^6 fractional digits (~sub-MB) is far beyond any real money/rate need;
+// anything larger is rejected as overflow at the parse boundary rather than allocated.
+inline constexpr std::int64_t kMaxScaleMagnitude = 1'000'000;
+
 // 10^k for k >= 0.
 [[nodiscard]] auto pow10(std::uint64_t k) -> BigInt { return bi_ten().pow(k); }
 
@@ -315,6 +322,13 @@ auto BigDecimal::from_string(std::string_view text) -> Result<BigDecimal> {
         if (ec != std::errc{} || ptr != exp_str.data() + exp_str.size()) {
             return make_error<BigDecimal>(MathError::syntax_error);
         }
+        // Reject a wildly out-of-range exponent NOW, before it enters the `frac_digits -
+        // exponent` subtraction below: from_chars accepts any int64, so e.g. "1e-9223372036854775808"
+        // (exponent == INT64_MIN) would make that subtraction signed-overflow UB at the exact
+        // untrusted-input boundary. |exponent| past the scale bound cannot yield a legal scale.
+        if (exponent > kMaxScaleMagnitude || exponent < -kMaxScaleMagnitude) {
+            return make_error<BigDecimal>(MathError::overflow);
+        }
     }
     // A lone sign with no magnitude (e.g. "-") is caught by saw_digit above; digits may be
     // just "-" + nothing only if !saw_digit, already rejected. Empty numeric part -> "0".
@@ -325,10 +339,11 @@ auto BigDecimal::from_string(std::string_view text) -> Result<BigDecimal> {
     if (!mant) {
         return make_error<BigDecimal>(mant.error());
     }
-    // scale = frac_digits - exponent, checked into int32.
+    // scale = frac_digits - exponent, checked against the DoS bound (not merely int32): a
+    // scale inside int32 but beyond kMaxScaleMagnitude would materialize a 10^|scale| BigInt
+    // on first use. Reject it here, at the untrusted-input boundary.
     const std::int64_t scale64 = frac_digits - exponent;
-    if (scale64 > std::numeric_limits<std::int32_t>::max() ||
-        scale64 < std::numeric_limits<std::int32_t>::min()) {
+    if (scale64 > kMaxScaleMagnitude || scale64 < -kMaxScaleMagnitude) {
         return make_error<BigDecimal>(MathError::overflow);
     }
     return BigDecimal{std::move(*mant), static_cast<std::int32_t>(scale64)};

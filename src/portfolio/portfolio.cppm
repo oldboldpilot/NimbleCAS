@@ -159,13 +159,29 @@ auto lu_solve_ridge(std::span<const std::vector<double>> matrix, std::span<const
                     double ridge_lambda) -> std::optional<std::vector<double>> {
     const std::size_t n = matrix.size();
     if (n == 0 || rhs.size() != n) { return std::nullopt; }
-    // Build the regularized working copy A = Sigma + lambda*I and the rhs.
+    // O(n^3) solve + O(n^2) allocation: bound the dimension so a caller-supplied n cannot turn
+    // an optimizer call into an OOM / minutes-long hang. 4096 keeps a dense solve well under a
+    // second and the working matrix under ~130 MB.
+    constexpr std::size_t kMaxDim = 4096;
+    if (n > kMaxDim) { return std::nullopt; }
+    // Build the regularized working copy A = Sigma + lambda*I and the rhs, rejecting any
+    // non-finite entry: NaN defeats the `< 1e-300` pivot test below (NaN compares false), so an
+    // un-rejected NaN would flow through elimination into a silently-NaN weight vector —
+    // violating the honesty contract (failure must ride the railway, never surface as NaN).
     std::vector<std::vector<double>> a(n, std::vector<double>(n));
     for (std::size_t i = 0; i < n; ++i) {
         if (matrix[i].size() != n) { return std::nullopt; }
         for (std::size_t j = 0; j < n; ++j) {
-            a[i][j] = matrix[i][j] + (i == j ? ridge_lambda : 0.0);
+            const double v = matrix[i][j] + (i == j ? ridge_lambda : 0.0);
+            if (!std::isfinite(v)) { return std::nullopt; }
+            a[i][j] = v;
         }
+    }
+    // Reject a non-finite rhs too: tangency_weights passes caller-supplied mean_returns here, so
+    // a NaN/Inf expected-return entry would otherwise flow through elimination into a silently-NaN
+    // weight vector returned as a valid optional — the same honesty violation as a NaN matrix.
+    for (double v : rhs) {
+        if (!std::isfinite(v)) { return std::nullopt; }
     }
     std::vector<double> b(rhs.begin(), rhs.end());
     // Gaussian elimination with PARTIAL PIVOTING (row interchange on the largest pivot).

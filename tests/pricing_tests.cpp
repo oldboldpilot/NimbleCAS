@@ -188,6 +188,14 @@ auto main() -> int {
                            "barrier in + out == vanilla (within MC error)");
                   t.expect(out.price <= black_scholes_price(s).value() + 1e-9,
                            "knock-out <= vanilla");
+                  // DoS regression: the batched path engines allocate an O(steps) draw buffer, so
+                  // `steps` is now capped independently of the paths*steps product. A single path
+                  // with 1e9 steps (which passes the product guard) must be refused, not attempt a
+                  // ~16 GB allocation.
+                  t.expect(!barrier_option_mc(s, 90.0, false, 1, 1'000'000'000, 2024).has_value(),
+                           "barrier_option_mc: 1e9 steps -> domain_error (no giant buffer)");
+                  t.expect(!monte_carlo_asian(atm(), 1, 1'000'000'000, 7, false).has_value(),
+                           "monte_carlo_asian: 1e9 steps -> domain_error (no giant buffer)");
               })
         .test("plotting produces SVG",
               [](TestContext& t) {

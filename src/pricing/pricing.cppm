@@ -338,13 +338,32 @@ namespace {
            ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
 }
 
-auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
-    const std::uint64_t bits = counter_u64(key, index);
+// Map a single raw counter draw to a standard normal. Shared by the scalar and batched paths
+// so both produce identical values for the same underlying bits.
+[[nodiscard]] auto bits_to_normal(std::uint64_t bits) -> double {
     const double u = uniform_unit(bits);
     // Clamp away from the exact endpoints so the inverse CDF stays finite (uniform_unit
     // already returns (0,1); this is belt-and-braces against a boundary bit pattern).
     const double uc = std::min(std::max(u, 1e-15), 1.0 - 1e-15);
     return fast_inv_norm(uc);
+}
+
+auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
+    return bits_to_normal(counter_u64(key, index));
+}
+
+// Batched standard-normal draws: out[j] = normal_at(key, base_index + j) for every j, sourcing
+// the raw bits through counter_u64_batch (AVX-512 when available). BIT-IDENTICAL to calling
+// normal_at per index — this is the hot path that lets the Monte Carlo engines feed the
+// vectorised RNG core instead of one draw at a time. `scratch` must be at least out.size();
+// it holds the raw u64 draws so no allocation happens inside the per-path loop.
+void normal_fill(std::uint64_t key, std::uint64_t base_index, std::span<double> out,
+                 std::span<std::uint64_t> scratch) {
+    const std::span<std::uint64_t> bits = scratch.first(out.size());
+    counter_u64_batch(key, base_index, bits);
+    for (std::size_t j = 0; j < out.size(); ++j) {
+        out[j] = bits_to_normal(bits[j]);
+    }
 }
 }  // namespace
 
@@ -542,7 +561,12 @@ auto digital_asset_or_nothing(const OptionSpec& spec) -> Result<double> {
 
 auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, std::uint64_t paths,
                        int steps, std::uint64_t seed) -> Result<McResult> {
-    if (paths == 0 || steps < 1 || barrier <= 0.0) {
+    // The inner work is paths*steps iterations (O(1) memory), so bound the PRODUCT, not just each
+    // factor: two individually-in-range values (1e9 paths * 1e5 steps = 1e14) would still hang.
+    constexpr std::uint64_t kMaxPathSteps = 1'000'000'000;
+    constexpr int kMaxSteps = 100'000;  // caps the per-path draw buffer (O(steps)) independently
+    if (paths == 0 || steps < 1 || steps > kMaxSteps || barrier <= 0.0 ||
+        paths > kMaxPathSteps / static_cast<std::uint64_t>(steps)) {
         return make_error<McResult>(MathError::domain_error);
     }
     if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
@@ -554,14 +578,19 @@ auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, st
     const double vol_sqrtdt = spec.volatility * std::sqrt(dt);
     const double disc = std::exp(-spec.rate * spec.time_to_expiry);
     const std::uint64_t key = splitmix64(seed);
+    // Per-path scratch: the `steps` draws of a path occupy the contiguous counter range
+    // [i*steps, i*steps+steps), so they batch through the vectorised RNG core in one call.
+    const std::size_t nsteps = static_cast<std::size_t>(steps);
+    std::vector<double> z(nsteps);
+    std::vector<std::uint64_t> zbits(nsteps);
     double sum = 0.0;
     double sum_sq = 0.0;
     for (std::uint64_t i = 0; i < paths; ++i) {
         double s = spec.spot;
         bool hit = false;
+        normal_fill(key, i * static_cast<std::uint64_t>(steps), z, zbits);
         for (int step = 0; step < steps; ++step) {
-            const std::uint64_t idx = i * static_cast<std::uint64_t>(steps) + static_cast<std::uint64_t>(step);
-            s *= std::exp(drift + vol_sqrtdt * normal_at(key, idx));
+            s *= std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(step)]);
             if ((down && s <= barrier) || (!down && s >= barrier)) { hit = true; }
         }
         const bool alive = knock_in ? hit : !hit;
@@ -579,7 +608,11 @@ auto barrier_option_mc(const OptionSpec& spec, double barrier, bool knock_in, st
 
 auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
                      std::span<const double> exercise_times) -> Result<double> {
-    if (steps < 1) { return make_error<double>(MathError::domain_error); }
+    // steps drives a (2*steps+1)-wide lattice. Cap it so `2*steps + 1` cannot overflow int
+    // (UB / negative width) and the two O(steps) buffers stay bounded (~a few hundred MB at the
+    // ceiling). 100k steps is far past any convergence need.
+    constexpr int kMaxSteps = 100'000;
+    if (steps < 1 || steps > kMaxSteps) { return make_error<double>(MathError::domain_error); }
     if (spec.spot <= 0.0 || spec.strike <= 0.0 || spec.time_to_expiry <= 0.0 ||
         spec.volatility <= 0.0) {
         return make_error<double>(MathError::domain_error);
@@ -642,7 +675,9 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
 
 auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint64_t seed)
     -> Result<McResult> {
-    if (paths == 0) { return make_error<McResult>(MathError::domain_error); }
+    // Cap paths to bound runtime (O(1) memory, but a ~1e18-iteration loop is an effective hang).
+    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
+    if (paths == 0 || paths > kMaxPaths) { return make_error<McResult>(MathError::domain_error); }
     if (spec.time_to_expiry < 0.0 || spec.volatility < 0.0 || spec.spot <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }
@@ -652,15 +687,24 @@ auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint
     const double disc = std::exp(-spec.rate * T);
     const std::uint64_t key = splitmix64(seed);
     // Antithetic variates: each index i produces the pair (+z, -z), halving variance cheaply.
+    // Draws are the contiguous counter range [0, paths); process them in tiles so the
+    // vectorised RNG core fills each tile at once while memory stays O(tile), not O(paths).
     double sum = 0.0;
     double sum_sq = 0.0;
-    for (std::uint64_t i = 0; i < paths; ++i) {
-        const double z = normal_at(key, i);
-        const double sp = spec.spot * std::exp(drift + vol_sqrtT * z);
-        const double sm = spec.spot * std::exp(drift - vol_sqrtT * z);
-        const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
-        sum += payoff;
-        sum_sq += payoff * payoff;
+    constexpr std::size_t kTile = 8192;
+    const std::size_t tile = static_cast<std::size_t>(std::min<std::uint64_t>(paths, kTile));
+    std::vector<double> z(tile);
+    std::vector<std::uint64_t> zbits(tile);
+    for (std::uint64_t base = 0; base < paths; base += tile) {
+        const std::size_t m = static_cast<std::size_t>(std::min<std::uint64_t>(paths - base, tile));
+        normal_fill(key, base, std::span<double>(z).first(m), zbits);
+        for (std::size_t j = 0; j < m; ++j) {
+            const double sp = spec.spot * std::exp(drift + vol_sqrtT * z[j]);
+            const double sm = spec.spot * std::exp(drift - vol_sqrtT * z[j]);
+            const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
+            sum += payoff;
+            sum_sq += payoff * payoff;
+        }
     }
     const double n = static_cast<double>(paths);
     const double mean = sum / n;
@@ -701,7 +745,14 @@ auto geometric_asian_price(const OptionSpec& spec, int steps) -> Result<double> 
 
 auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, std::uint64_t seed,
                        bool control_variate) -> Result<McResult> {
-    if (paths == 0 || steps < 1) { return make_error<McResult>(MathError::domain_error); }
+    // Bound the PRODUCT paths*steps (the iteration count), not just each factor: 1e9 paths *
+    // 1e5 steps = 1e14 iterations would hang even with both factors individually in range.
+    constexpr std::uint64_t kMaxPathSteps = 1'000'000'000;
+    constexpr int kMaxSteps = 100'000;  // caps the per-path draw buffer (O(steps)) independently
+    if (paths == 0 || steps < 1 || steps > kMaxSteps ||
+        paths > kMaxPathSteps / static_cast<std::uint64_t>(steps)) {
+        return make_error<McResult>(MathError::domain_error);
+    }
     if (spec.spot <= 0.0 || spec.volatility < 0.0 || spec.time_to_expiry <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }
@@ -716,16 +767,18 @@ auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, s
         if (!g) { return make_error<McResult>(g.error()); }
         geo_closed = *g;
     }
+    const std::size_t nsteps = static_cast<std::size_t>(steps);
+    std::vector<double> z(nsteps);
+    std::vector<std::uint64_t> zbits(nsteps);
     double sum = 0.0;
     double sum_sq = 0.0;
     for (std::uint64_t i = 0; i < paths; ++i) {
         double s = spec.spot;
         double arith_sum = 0.0;
         double log_sum = 0.0;
+        normal_fill(key, i * static_cast<std::uint64_t>(steps), z, zbits);
         for (int step = 0; step < steps; ++step) {
-            const std::uint64_t idx = i * static_cast<std::uint64_t>(steps) + static_cast<std::uint64_t>(step);
-            const double z = normal_at(key, idx);
-            s *= std::exp(drift + vol_sqrtdt * z);
+            s *= std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(step)]);
             arith_sum += s;
             log_sum += std::log(s);
         }
@@ -752,6 +805,13 @@ auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, s
 auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths, int steps,
                                  std::uint64_t seed) -> Result<McResult> {
     if (paths < 4 || steps < 1) { return make_error<McResult>(MathError::domain_error); }
+    // O(paths*(steps+1)) doubles are materialized as one grid; bound the product so it cannot
+    // overflow size_t or ask for tens of GB (5e8 doubles ~ 4 GB at the ceiling).
+    constexpr std::uint64_t kMaxCells = 500'000'000;
+    if (steps > 100'000 ||
+        paths > kMaxCells / (static_cast<std::uint64_t>(steps) + 1)) {
+        return make_error<McResult>(MathError::domain_error);
+    }
     if (spec.spot <= 0.0 || spec.volatility <= 0.0 || spec.time_to_expiry <= 0.0) {
         return make_error<McResult>(MathError::domain_error);
     }
@@ -763,16 +823,19 @@ auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths, in
     const double disc = std::exp(-spec.rate * dt);
     const std::uint64_t key = splitmix64(seed);
 
-    // Simulate and store the full price grid (paths x (N+1)). Memory is O(P*N).
+    // Simulate and store the full price grid (paths x (N+1)). Memory is O(P*N). Each path's N
+    // draws are the contiguous counter range [p*N, p*N+N), filled through the vectorised RNG core.
     std::vector<double> S(P * static_cast<std::size_t>(N + 1));
+    const std::size_t Nn = static_cast<std::size_t>(N);
+    std::vector<double> z(Nn);
+    std::vector<std::uint64_t> zbits(Nn);
     for (std::size_t p = 0; p < P; ++p) {
         S[p * (N + 1)] = spec.spot;
+        normal_fill(key, static_cast<std::uint64_t>(p) * static_cast<std::uint64_t>(N), z, zbits);
         for (int t = 0; t < N; ++t) {
-            const std::uint64_t idx = static_cast<std::uint64_t>(p) * static_cast<std::uint64_t>(N)
-                                      + static_cast<std::uint64_t>(t);
-            const double z = normal_at(key, idx);
             S[p * (N + 1) + static_cast<std::size_t>(t + 1)] =
-                S[p * (N + 1) + static_cast<std::size_t>(t)] * std::exp(drift + vol_sqrtdt * z);
+                S[p * (N + 1) + static_cast<std::size_t>(t)] *
+                std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(t)]);
         }
     }
     // Cashflow at expiry, then roll backward regressing continuation on {1,S,S^2}.
