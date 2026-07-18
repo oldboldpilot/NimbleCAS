@@ -54,7 +54,7 @@ Depends on [`core`](core.md), [`rng`](rng.md) (`splitmix64`, `counter_u64`,
 | `Exercise` | `enum class { european, american, bermudan }`. |
 | `OptionSpec` | Immutable option contract + market state, built fluently via a `with_*` chain. Fields: `spot` (S, default 100), `strike` (K, 100), `rate` (r, continuously compounded, 0), `dividend_yield` (q, 0), `volatility` (σ annualised, 0.2), `time_to_expiry` (T years, 1.0), `type` (call). `payoff(s)` returns the intrinsic. Every `with_spot/strike/rate/dividend/volatility/expiry/type` returns a modified copy. |
 | `Greeks` | `price`, `delta`, `gamma`, `vega`, `theta` (per-year), `rho` (all per unit change; divide vega/rho by 100 for per-percent). |
-| `ExtendedGreeks` | `vanna`, `charm`, `vomma` (= volga), `veta`, `speed`, `zomma`, `color`, `lambda` (elasticity), `dual_delta`, `dual_gamma`. |
+| `ExtendedGreeks` | `vanna`, `charm`, `vomma` (= volga), `veta`, `speed`, `zomma`, `color`, `lambda` (elasticity), `dual_delta`, `dual_gamma`, `epsilon` (= psi, ∂price/∂dividend), `vera` (∂rho/∂vol), `ultima` (∂vomma/∂vol). |
 | `McResult` | A Monte Carlo estimate: `price`, `std_error`, `paths`; `confidence_half_width()` returns `1.96 · std_error`. |
 | `Position` | A signed `quantity` of an `OptionSpec`. |
 | `Portfolio` | A composable bag of positions valued and risk-aggregated as a unit. |
