@@ -274,5 +274,16 @@ auto main() -> int {
                   t.expect(pay_uni(0.1, 3, 1000.0, 0.5).value() > pmt,
                            "capitalised odd interest raises the payment");
               })
+        .test("depreciation with a hostile tiny rate does not invoke float->int64 UB",
+              [](TestContext& t) {
+                  // A near-zero rate makes the internal period count ~1e298; the pre-cast clamp
+                  // must keep the float->int64 conversion well-defined (regression for the audit).
+                  const auto al = amorlinc(1000.0, 100.0, 5, 1e-300, 1.0);
+                  t.expect(!al.has_value() || std::isfinite(al.value()),
+                           "amorlinc(tiny rate) -> finite or error, no UB");
+                  const auto ad = amordegrc(1000.0, 100.0, 5, 1e-300, 1.0);
+                  t.expect(!ad.has_value() || std::isfinite(ad.value()),
+                           "amordegrc(tiny rate) -> finite or error, no UB");
+              })
         .run();
 }

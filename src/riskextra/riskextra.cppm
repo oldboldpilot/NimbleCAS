@@ -844,7 +844,10 @@ auto simulate_correlated_returns(std::span<const double> mean,
         return make_error<std::vector<std::vector<double>>>(MathError::domain_error);
     }
     const std::size_t d = cov.size();
-    if (mean.size() != d || n == 0 || n > 100'000) {
+    // Bound the OUTPUT PRODUCT n*d, not just each factor: 100000 rows * 4096 cols would
+    // materialize ~3.3 GB. 1e7 cells (~80 MB of doubles) is a generous, safe ceiling.
+    constexpr std::size_t kMaxSimCells = 10'000'000;
+    if (mean.size() != d || n == 0 || n > 100'000 || (d != 0 && n > kMaxSimCells / d)) {
         return make_error<std::vector<std::vector<double>>>(MathError::domain_error);
     }
     for (double v : mean) {
@@ -879,6 +882,14 @@ auto linprog(std::span<const double> c, std::span<const std::vector<double>> A_l
         if (!std::isfinite(v)) { return make_error<LinProgResult>(MathError::domain_error); }
     }
     if (A_le.size() != b_le.size() || A_eq.size() != b_eq.size()) {
+        return make_error<LinProgResult>(MathError::domain_error);
+    }
+    // Bound the tableau PRODUCT m*n: two individually-in-range dimensions (e.g. 8192 vars x
+    // 8192 constraints) would build a ~500 MB tableau and a pivot loop long enough to be an
+    // effective hang. 1e6 cells is generous for any realistic LP; larger is refused honestly.
+    const std::size_t m = A_le.size() + A_eq.size();
+    constexpr std::size_t kMaxLpCells = 1'000'000;
+    if (m > kMaxLpDim || (m != 0 && n > kMaxLpCells / m)) {
         return make_error<LinProgResult>(MathError::domain_error);
     }
     std::vector<Con> cons;
@@ -1094,7 +1105,12 @@ auto amorlinc(double cost, double salvage, std::int64_t period, double rate,
     const double f0 = first_period_fraction * rate * cost;  // prorated first period
     if (one_rate <= 0.0) { return make_error<double>(MathError::domain_error); }
     const double full = (cost - salvage - f0) / one_rate;
-    const std::int64_t n_full = full > 0.0 ? static_cast<std::int64_t>(std::floor(full)) : 0;
+    // Clamp before the float->int64 cast: a tiny rate makes `full` ~1e298, and casting a double
+    // that exceeds INT64_MAX is undefined behaviour. 4e18 is far above the kMaxPeriods cap yet
+    // safely below 2^63, so the clamp changes no realistic result — it only tames a hostile rate.
+    constexpr double kSafeIntCeil = 4.0e18;
+    const double full_capped = std::min(std::max(full, 0.0), kSafeIntCeil);
+    const std::int64_t n_full = static_cast<std::int64_t>(std::floor(full_capped));
     if (period == 0) { return f0; }
     if (period <= n_full) { return one_rate; }
     if (period == n_full + 1) {
@@ -1112,8 +1128,12 @@ auto amordegrc(double cost, double salvage, std::int64_t period, double rate,
     const double life = 1.0 / rate;
     const double arate = rate * amordegrc_coefficient(life);
     // Whole number of periods over which the asset is written down (used to switch to
-    // straight-line completion near the end, the defining French terminal behaviour).
-    const std::int64_t total_life = std::max<std::int64_t>(1, static_cast<std::int64_t>(round_half_up(life)));
+    // straight-line completion near the end, the defining French terminal behaviour). Clamp
+    // before the float->int64 cast: a tiny rate makes `life` ~1e300, and casting a double past
+    // INT64_MAX is UB. 4e18 is far above kMaxPeriods yet below 2^63 — no realistic result moves.
+    constexpr double kSafeIntCeil = 4.0e18;
+    const std::int64_t total_life =
+        std::max<std::int64_t>(1, static_cast<std::int64_t>(std::min(round_half_up(life), kSafeIntCeil)));
     // Period 0: the prorated (rounded) first charge.
     double dep = round_half_up(first_period_fraction * arate * cost);
     dep = std::min(dep, cost - salvage);

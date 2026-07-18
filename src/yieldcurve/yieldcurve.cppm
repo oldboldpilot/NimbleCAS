@@ -1097,7 +1097,11 @@ auto HullWhiteLattice::discount(double T) const -> Result<double> {
 
 auto HullWhiteLattice::bond_price(std::span<const double> times, std::span<const double> cashflows)
     const -> Result<double> {
-    if (times.empty() || times.size() != cashflows.size() || times.size() > kMaxPillars) {
+    // Each cashflow re-runs a full backward induction (O(steps*(2*jmax+1))); allowing
+    // kMaxPillars (1e5) cashflows would let a hostile schedule drive ~1e13 lattice ops. A real
+    // bond has tens of cashflows, so cap at 2000 — well past any coupon schedule.
+    constexpr std::size_t kMaxCashflows = 2'000;
+    if (times.empty() || times.size() != cashflows.size() || times.size() > kMaxCashflows) {
         return make_error<double>(MathError::domain_error);
     }
     double price = 0.0;

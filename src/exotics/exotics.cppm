@@ -268,6 +268,11 @@ auto crr_binomial(const OptionSpec& spec, int steps, Exercise exercise) -> Resul
     const double u = std::exp(spec.volatility * std::sqrt(dt));
     const double d = 1.0 / u;
     const double growth = std::exp((spec.rate - spec.dividend_yield) * dt);
+    if (!std::isfinite(u) || !std::isfinite(growth)) {
+        // An extreme vol*sqrt(dt) or carry overflows the up-factor / growth to +inf; a later
+        // 0*inf in the backward step would fabricate a NaN price. Refuse on the railway.
+        return make_error<double>(MathError::domain_error);
+    }
     const double p = (growth - d) / (u - d);
     if (!(p >= 0.0 && p <= 1.0)) {
         // Too few steps for these parameters: a risk-neutral probability outside [0,1] would
@@ -392,6 +397,12 @@ auto barrier_analytic(const OptionSpec& spec, double barrier, Barrier side, bool
     }
     // A barrier value is a non-negative discounted expectation; tiny negative round-off near
     // the knock boundary is clamped to zero (never a negative price).
+    if (!std::isfinite(value)) {
+        // Extreme parameters (e.g. a tiny vol with an up-barrier) overflow the (H/S)^(2mu)
+        // power while a companion norm_cdf underflows to 0, yielding inf*0 = NaN. std::max
+        // would pass a NaN straight through (NaN<0 is false), so refuse on the railway (Rule 32).
+        return make_error<double>(MathError::overflow);
+    }
     return std::max(value, 0.0);
 }
 
@@ -428,6 +439,11 @@ auto lookback_price(const OptionSpec& spec, double running_extremum) -> Result<d
                              S * dr * coeff *
                                  (std::pow(S / m, power) * norm_cdf(-a1 + 2.0 * b * sqrtT / sig) -
                                   std::exp(b * T) * norm_cdf(-a1));
+        if (!std::isfinite(value)) {
+            // Small vol / adverse carry overflows (S/m)^power while a companion norm_cdf
+            // underflows to 0 (inf*0 = NaN); refuse rather than leak the NaN through std::max.
+            return make_error<double>(MathError::overflow);
+        }
         return std::max(value, 0.0);
     }
     const double b1 = (std::log(S / m) + (b + 0.5 * sig * sig) * T) / sst;
@@ -436,6 +452,9 @@ auto lookback_price(const OptionSpec& spec, double running_extremum) -> Result<d
                          S * dr * coeff *
                              (-std::pow(S / m, power) * norm_cdf(b1 - 2.0 * b * sqrtT / sig) +
                               std::exp(b * T) * norm_cdf(b1));
+    if (!std::isfinite(value)) {
+        return make_error<double>(MathError::overflow);
+    }
     return std::max(value, 0.0);
 }
 
@@ -463,6 +482,11 @@ auto fd_pde_price(const OptionSpec& spec, int n_space, int n_time, Exercise exer
     // Domain wide enough that the far Dirichlet boundary contributes negligibly at spot.
     const double base = std::max(spec.spot, spec.strike);
     const double s_max = base * std::exp(5.0 * sig * std::sqrt(T));
+    if (!std::isfinite(s_max) || s_max <= 0.0) {
+        // A large vol*sqrt(T) overflows the grid ceiling to +inf; every S[j]/boundary would be
+        // inf and the spot interpolation would yield inf*0 = NaN. Refuse on the railway.
+        return make_error<double>(MathError::overflow);
+    }
     const double dS = s_max / static_cast<double>(M);
     const double dt = T / static_cast<double>(N);
 
@@ -723,9 +747,19 @@ auto basket_mc(std::span<const BasketAsset> assets, std::span<const double> corr
         paths > kMaxPaths / static_cast<std::uint64_t>(nn)) {
         return make_error<McResult>(MathError::domain_error);
     }
-    if (time <= 0.0) { return make_error<McResult>(MathError::domain_error); }
+    if (!std::isfinite(time) || time <= 0.0 || !std::isfinite(strike) || !std::isfinite(rate)) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    // A non-finite correlation entry must be rejected up front: a NaN reaching the Cholesky
+    // pivot test (s <= 0.0) would slip through (NaN<=0 is false), giving sqrt(NaN) and a NaN
+    // McResult returned as a value — an honesty violation. Same for a non-finite asset field.
+    for (double c : correlation) {
+        if (!std::isfinite(c)) { return make_error<McResult>(MathError::domain_error); }
+    }
     for (const auto& a : assets) {
-        if (a.spot <= 0.0 || a.volatility < 0.0) {
+        if (!std::isfinite(a.spot) || !std::isfinite(a.volatility) ||
+            !std::isfinite(a.dividend_yield) || !std::isfinite(a.weight) ||
+            a.spot <= 0.0 || a.volatility < 0.0) {
             return make_error<McResult>(MathError::domain_error);
         }
     }
@@ -736,8 +770,9 @@ auto basket_mc(std::span<const BasketAsset> assets, std::span<const double> corr
             double s = correlation[i * nn + j];
             for (std::size_t k = 0; k < j; ++k) { s -= L[i * nn + k] * L[j * nn + k]; }
             if (i == j) {
-                if (s <= 0.0) {
-                    // Not positive-definite: no real Cholesky factor exists.
+                if (!(s > 0.0)) {
+                    // Not positive-definite (or a NaN pivot): no real Cholesky factor exists.
+                    // The !(s > 0.0) form rejects NaN, which `s <= 0.0` would let through.
                     return make_error<McResult>(MathError::domain_error);
                 }
                 L[i * nn + j] = std::sqrt(s);

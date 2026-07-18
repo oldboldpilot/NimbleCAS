@@ -260,5 +260,34 @@ auto main() -> int {
                                        .value();
                   t.expect(mcb.price > 0.0 && std::isfinite(mcb.price), "two-asset basket positive");
               })
+        .test("adversarial inputs are refused on the railway, never a NaN/inf value",
+              [](TestContext& t) {
+                  // Extreme-parameter overflow must surface as an error, not a NaN price that
+                  // slips through std::max (NaN < 0 is false). Regression for the honesty audit.
+                  auto tiny_vol_up = atm().with_volatility(0.001);
+                  const auto ba = barrier_analytic(tiny_vol_up, 150.0, Barrier::up, false);
+                  t.expect(!ba.has_value() || std::isfinite(ba.value()),
+                           "barrier_analytic: extreme params -> error or finite, never NaN");
+
+                  auto lb_spec = atm().with_volatility(0.01).with_rate(0.0).with_dividend(0.05);
+                  const auto lb = lookback_price(lb_spec, 50.0);
+                  t.expect(!lb.has_value() || std::isfinite(lb.value()),
+                           "lookback_price: small vol/adverse carry -> error or finite");
+
+                  auto huge_vol = atm().with_volatility(1000.0);
+                  const auto cr = crr_binomial(huge_vol, 1, Exercise::european);
+                  t.expect(!cr.has_value() || std::isfinite(cr.value()),
+                           "crr_binomial: overflowing up-factor -> error, never NaN");
+                  const auto fd = fd_pde_price(huge_vol, 100, 100, Exercise::european);
+                  t.expect(!fd.has_value() || std::isfinite(fd.value()),
+                           "fd_pde_price: overflowing grid ceiling -> error, never NaN");
+
+                  // A non-finite correlation entry must be rejected before the Cholesky pivot.
+                  std::array<BasketAsset, 1> one{BasketAsset{}};
+                  const std::array<double, 1> nan_corr{std::numeric_limits<double>::quiet_NaN()};
+                  t.expect(!basket_mc(one, nan_corr, 100.0, 0.05, 1.0, OptionType::call, 100, 7)
+                                .has_value(),
+                           "basket_mc: NaN correlation -> domain_error, never a NaN McResult");
+              })
         .run();
 }

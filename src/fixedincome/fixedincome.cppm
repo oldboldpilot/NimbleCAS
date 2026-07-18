@@ -801,7 +801,9 @@ auto price_mat(const Date& settlement, const Date& maturity, const Date& issue, 
     auto i2s = yf(issue, settlement, basis);     // accrued term issue→settlement
     if (!i2s) { return i2s; }
     const double den = 1.0 + yield * *s2m;
-    if (den == 0.0) { return make_error<double>(MathError::division_by_zero); }
+    // A non-positive discount denominator (yield below -1/s2m) has no economic meaning and
+    // would return a large *negative* "price" as a valid value; refuse it on the railway.
+    if (den <= 0.0) { return make_error<double>(MathError::domain_error); }
     const double redemption_plus_interest = 100.0 * (1.0 + coupon_rate * *life);
     return redemption_plus_interest / den - 100.0 * coupon_rate * *i2s;  // clean price
 }

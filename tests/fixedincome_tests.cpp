@@ -218,5 +218,18 @@ auto main() -> int {
                   t.expect(!fi::amortizing_schedule(1000.0, 0.05, 200001).has_value(),
                            "DoS-sized period count -> error");
               })
+        .test("price_mat rejects a non-positive discount denominator",
+              [](TestContext& t) {
+                  // A deeply negative yield drives 1 + yield*t_to_maturity <= 0; the old code
+                  // returned a large negative "price" as a valid value. It must now be refused.
+                  const auto s = D(2020, 6, 1);
+                  const auto m = D(2021, 1, 1);
+                  const auto iss = D(2020, 1, 1);
+                  const auto bad = fi::price_mat(s, m, iss, 0.06, -3.0, fin::DayCount::thirty_360);
+                  t.expect(!bad.has_value(), "price_mat(den <= 0) -> error, not a negative price");
+                  // A normal yield still prices fine.
+                  const auto ok = fi::price_mat(s, m, iss, 0.06, 0.05, fin::DayCount::thirty_360);
+                  t.expect(ok.has_value() && ok.value() > 0.0, "price_mat(normal yield) prices > 0");
+              })
         .run();
 }
