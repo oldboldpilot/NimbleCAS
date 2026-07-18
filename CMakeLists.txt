@@ -882,6 +882,13 @@ target_sources(nimblecas_analytics PUBLIC
 target_link_libraries(nimblecas_analytics
   PUBLIC nimblecas_core std_module)
 
+# ---- nimblecas.portfolio : integrated risk report + ridge-regularized LU mean-variance ----
+add_library(nimblecas_portfolio STATIC)
+target_sources(nimblecas_portfolio PUBLIC
+  FILE_SET CXX_MODULES FILES src/portfolio/portfolio.cppm)
+target_link_libraries(nimblecas_portfolio
+  PUBLIC nimblecas_analytics nimblecas_core std_module)
+
 # ---- tests ----
 enable_testing()
 
@@ -913,6 +920,11 @@ add_executable(analytics_tests tests/analytics_tests.cpp)
 target_link_libraries(analytics_tests
   PRIVATE nimblecas_analytics nimblecas_core nimblecas_testing std_module)
 add_test(NAME analytics_tests COMMAND analytics_tests)
+
+add_executable(portfolio_tests tests/portfolio_tests.cpp)
+target_link_libraries(portfolio_tests
+  PRIVATE nimblecas_portfolio nimblecas_analytics nimblecas_core nimblecas_testing std_module)
+add_test(NAME portfolio_tests COMMAND portfolio_tests)
 
 add_executable(numeigen_tests tests/numeigen_tests.cpp)
 target_link_libraries(numeigen_tests
