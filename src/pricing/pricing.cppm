@@ -99,7 +99,9 @@ struct McResult {
 // vanna = d delta / d vol; charm = -d delta / d time; vomma/volga = d vega / d vol;
 // veta = d vega / d time; speed = d gamma / d spot; zomma = d gamma / d vol;
 // color = d gamma / d time; lambda = delta * spot / price (elasticity/gearing);
-// dual_delta = d price / d strike; dual_gamma = d^2 price / d strike^2.
+// dual_delta = d price / d strike; dual_gamma = d^2 price / d strike^2;
+// epsilon = d price / d dividend_yield; vera = d rho / d vol;
+// ultima = d vomma / d vol (third-order vol).
 struct ExtendedGreeks {
     double vanna{0.0};
     double charm{0.0};
@@ -111,6 +113,9 @@ struct ExtendedGreeks {
     double lambda{0.0};
     double dual_delta{0.0};
     double dual_gamma{0.0};
+    double epsilon{0.0};  // d price / d dividend_yield (a.k.a. psi)
+    double vera{0.0};     // d rho / d vol (a.k.a. rhova)
+    double ultima{0.0};   // d vomma / d vol == d^3 price / d vol^3
 };
 [[nodiscard]] auto black_scholes_extended_greeks(const OptionSpec& spec) -> Result<ExtendedGreeks>;
 
@@ -448,6 +453,10 @@ auto black_scholes_extended_greeks(const OptionSpec& spec) -> Result<ExtendedGre
     g.lambda = base->price != 0.0 ? base->delta * S / base->price : 0.0;
     g.dual_delta = call ? -disc_r * norm_cdf(d2) : disc_r * norm_cdf(-d2);
     g.dual_gamma = disc_r * norm_pdf(d2) / (K * sig * sqrtT);
+    // epsilon (psi): d price / d dividend_yield, closed form.
+    g.epsilon = call ? -S * T * disc_q * norm_cdf(d1) : S * T * disc_q * norm_cdf(-d1);
+    // ultima = d vomma / d vol == d^3 price / d vol^3, closed form.
+    g.ultima = -vega / (sig * sig) * (d1 * d2 * (1.0 - d1 * d2) + d1 * d1 + d2 * d2);
     // Time-derivatives (charm, color, veta) via central differences of the analytic delta /
     // gamma / vega w.r.t. time_to_expiry — robust and sign-consistent with our BS functions.
     const double h = 1e-4 * T;
@@ -460,6 +469,14 @@ auto black_scholes_extended_greeks(const OptionSpec& spec) -> Result<ExtendedGre
         g.charm = (up->delta - dn->delta) / (2.0 * h);      // +d delta/dT == -d delta/d time
         g.color = -(up->gamma - dn->gamma) / (2.0 * h);     // d gamma / d time
         g.veta  = -(up->vega - dn->vega) / (2.0 * h);       // d vega  / d time
+    }
+    // vera = d rho / d vol, via central difference of the analytic rho (avoids a fragile
+    // hand-derived cross-partial; sign-consistent with our BS rho).
+    const double hv = 1e-4 * sig;
+    auto upv = black_scholes_greeks(spec.with_volatility(sig + hv));
+    auto dnv = black_scholes_greeks(spec.with_volatility(sig - hv));
+    if (upv && dnv) {
+        g.vera = (upv->rho - dnv->rho) / (2.0 * hv);
     }
     return g;
 }
