@@ -1744,7 +1744,10 @@ if(NIMBLECAS_PYTHON)
 
   nanobind_add_module(nimblecas_ext src/bindings/bindings.cpp)
   target_link_libraries(nimblecas_ext
-    PRIVATE nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_symint
+    PRIVATE nimblecas_pricing nimblecas_finance nimblecas_analytics nimblecas_currency
+            nimblecas_bigdecimal nimblecas_bigrational nimblecas_bigint nimblecas_svgplot
+            nimblecas_rng
+            nimblecas_solve nimblecas_factor nimblecas_numeigen nimblecas_symint
             nimblecas_expand nimblecas_hyptest nimblecas_stats nimblecas_kronprod
             nimblecas_contfrac nimblecas_probdist nimblecas_qrschur nimblecas_cheigen
             nimblecas_cmatrix nimblecas_laurent nimblecas_frobenius nimblecas_dynamics
