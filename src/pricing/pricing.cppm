@@ -378,26 +378,31 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
 
     // Terminal layer: 2*steps + 1 nodes, index k in [0, 2*steps], log-offset (k - steps).
     const std::size_t width = static_cast<std::size_t>(2 * steps + 1);
-    std::vector<double> value(width);
+    std::vector<double> cur(width);   // holds step i+1 during the sweep of step i
+    std::vector<double> next(width);  // receives step i
     for (std::size_t k = 0; k < width; ++k) {
         const double s = spec.spot * std::exp((static_cast<double>(k) - steps) * dx);
-        value[k] = spec.payoff(s);
+        cur[k] = spec.payoff(s);
     }
-    // Backward induction. At step i the live nodes span index [steps-i, steps+i].
+    // Backward induction. At step i the live nodes span index [steps-i, steps+i]. We read the
+    // three step-(i+1) children from `cur` and write step i into `next`, then swap — reading
+    // and writing distinct buffers so a node's down-child is never overwritten before use.
     for (int i = steps - 1; i >= 0; --i) {
         const std::size_t lo = static_cast<std::size_t>(steps - i);
         const std::size_t hi = static_cast<std::size_t>(steps + i);
+        const bool exercisable = can_exercise[static_cast<std::size_t>(i)] != 0;
         for (std::size_t k = lo; k <= hi; ++k) {
-            const double cont = disc * (pu * value[k + 1] + pm * value[k] + pd * value[k - 1]);
-            double v = cont;
-            if (can_exercise[static_cast<std::size_t>(i)]) {
+            const double cont = disc * (pu * cur[k + 1] + pm * cur[k] + pd * cur[k - 1]);
+            if (exercisable) {
                 const double s = spec.spot * std::exp((static_cast<double>(k) - steps) * dx);
-                v = std::max(cont, spec.payoff(s));
+                next[k] = std::max(cont, spec.payoff(s));
+            } else {
+                next[k] = cont;
             }
-            value[k] = v;
         }
+        std::swap(cur, next);
     }
-    return value[static_cast<std::size_t>(steps)];
+    return cur[static_cast<std::size_t>(steps)];
 }
 
 // --- Monte Carlo ------------------------------------------------------------
