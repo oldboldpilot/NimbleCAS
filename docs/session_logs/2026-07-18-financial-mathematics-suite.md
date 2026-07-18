@@ -68,3 +68,44 @@ review CLI returned empty twice earlier this session (known-flaky).
 ## Deferred
 - SIMD/AVX-512 vectorization of the counter-RNG MC hotspot (roadmap perf backlog).
 - ncu deep-counter GPU profiling (needs elevated GPU-counter permission on the host).
+
+---
+
+## Addendum — capability backlog completion + AVX-512 RNG (same session)
+
+### New modules (all Result-based, honesty-preserving, DoS-bounded; 140/140 on clang++-22)
+- **`exotics`** — CRR binomial (+escrowed discrete divs), Reiner-Rubinstein analytic barriers
+  (8 types + rebate), Goldman-Sosin-Gatto lookback, Crank-Nicolson/Rannacher PDE (Thomas/PSOR),
+  Margrabe/Kirk/Geske/chooser/basket via a Drezner bivariate-normal CDF.
+- **`yieldcurve`** — pillar Curve (interp/compounding), zero2disc/disc2zero/zero2fwd/fwd2zero,
+  par<->zero, zbtprice/zbtyield bootstrap, Nelson-Siegel/Svensson, Hull-White trinomial lattice.
+- **`fixedincome`** — DV01/PV01, key-rate durations, cfdates/cfamounts, COUP* dates, ODDF/ODDL,
+  PRICEMAT/YIELDMAT/ACCRINTM, z-spread, rate adapters, FRN + amortization.
+- **`riskextra`** — corr2cov/cov2corr, LPM, EW moments, correlated sim, active-set QP frontier,
+  Rockafellar-Uryasev CVaR (self-contained two-phase simplex), AMORLINC/AMORDEGRC, continuous
+  rates/annuities.
+
+### Performance backlog item (done)
+- AVX-512F batched Threefry-2x64-20 core `counter_u64_batch` (runtime-dispatched, bit-identical
+  to scalar), `Rng::fill_u64`, and the four pricing MC engines rewired to draw through it.
+  ~8.2x on the RNG core (72 -> 592 M draws/s, Zen 5); pricing values unchanged (reproducibility
+  test still passes). Benchmark: `examples/rng_bench.cpp`.
+
+### Documentation
+- Four reference pages (`docs/reference/{exotics,yieldcurve,fixedincome,riskextra}.md`) + Index rows.
+- `finance-parity-roadmap.md`: backlog A-F + RNG moved to Implemented; honest P1 remainder
+  (callable/OAS, named-SDE factories, spline curve fit) — explicitly not claimed (no test yet).
+
+### Review process (two adversarial rounds, Fable)
+- Round 1 (new code): RNG SIMD core + MC batching verified bit-identical/clean; 10 real defects
+  + 1 nit found in exotics/pricing/riskextra/yieldcurve/fixedincome — 5 NaN-through-Result
+  honesty leaks, 1 float->int64 UB, 1 batching regression (O(steps) buffer), 3 DoS bounds. All
+  fixed with regression tests (commit 4250baf).
+- Round 2 (fix diff): found 2 of my own fixes wrong — the amorlinc clamp reordered a NaN check
+  out of existence (reintroduced the UB), and kMaxLpCells=1e6 over-rejected in-cap CVaR. Both
+  fixed + regression-tested (commit c08c8e0).
+
+## Deferred (updated)
+- Callable/puttable bond OAS, named-SDE process factories, spline zero-curve fit (P1; building
+  blocks now exist — see finance-parity-roadmap "Remaining").
+- ncu deep-counter GPU profiling (needs elevated GPU-counter permission on the host).
