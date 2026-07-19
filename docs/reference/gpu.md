@@ -189,16 +189,42 @@ call at **10.45058** (the textbook value).
 The Triton kernels live under `python/triton` and run via the managed venv,
 complementing — not replacing — the in-engine CUDA and CPU paths.
 
-### CuTile variant — status
+### cuTile tiled variant (`python/cutile/black_scholes.py`)
 
-The GPU acceleration variants requested for the finance path are: **CUDA** (`black_scholes_batch`)
-and **CUDA Graphs** (`black_scholes_batch_graphed`) — both implemented in-engine and validated
-on Blackwell above — and **Triton** (`black_scholes.py` + `mc_option.py`) — verified on the
-RTX 5090. The **CuTile** variant (NVIDIA's tile-based CUDA DSL) is **not yet implemented**: it
-requires the `cuda-python` / cuTile toolchain, which is not currently provisioned in the build
-venvs (only `torch`/`triton` are). It is a bounded follow-up — port the same tile structure as
-the Triton kernel onto cuTile once that toolchain is installed — and is tracked as the one open
-item of ROADMAP §5 GPU for finance. This module does not ship an unverified CuTile kernel.
+The fourth GPU flavour of the batched pricer, completing the requested set — **CUDA**
+(`black_scholes_batch`), **CUDA Graphs** (`black_scholes_batch_graphed`), **Triton**
+(`black_scholes.py`), and now **cuTile**. Each thread block cooperatively stages a **tile** of
+`tile_size` contracts into **shared memory** (six `double` lanes), prices the tile, and stores
+it back — the canonical cuTile *load → compute → store* pattern — so a whole option array is
+valued in one launch. Like every other GPU path it **mirrors the CPU closed form** (same
+`d1`/`d2`, same degenerate `T==0`/`σ==0` branch), never a second source of truth.
+
+**Honesty on the "cuTile" name.** NVIDIA's public cuTile *DSL* (a `@cutile.jit` Python
+front-end) is not yet released for this CUDA 13.x / sm_120 stack — the `cutile` PyPI name is a
+474-byte empty placeholder, no `tile` surface ships under `cuda.*`, and the CUDA 13.2 toolkit
+headers carry no cuTile intrinsics. Rather than fabricate a kernel against an API that does not
+exist, this delivers the cuTile *programming model* — cooperative shared-memory tiles — on
+NVIDIA's officially-shipping CUDA-Python runtime-compilation stack (`cuda-core` 1.1.0 /
+`cuda-bindings` 13.3.1): it JIT-compiles a tiled CUDA C++ kernel with `cuda.core.Program` and
+launches it with `cuda.core.launch` on the current device. When the cuTile DSL lands, only the
+kernel body's surface syntax changes; the tiled decomposition, the host API, and the
+verification harness stay identical.
+
+Because Black-Scholes is elementwise, each lane reads only the tile slot it wrote — the
+shared-memory tile carries **no cross-lane data reuse**, so it is *not* a bandwidth
+optimization (it adds one global→shared→register hop). It is present to express the cuTile
+decomposition faithfully; the measured time below already includes that staging, so the
+throughput figure is honest, and a naive global-only kernel would produce identical prices.
+
+Verified on the **RTX 5090** (sm_120, CUDA 13.2, `cuda-core` 1.1.0, torch 2.13.0+cu130): a
+10-option grid agrees with the CPU closed form to a max `|error|` of **7.1e-15**, ATM 1-year
+call **10.45058** (textbook). `nsys` profiling at **1,000,000 options** shows the tiled kernel
+at a stable **~262 µs/launch** (median 261,728 ns, StdDev 281 ns; 99.8 % of GPU time) — moving
+~64 MB (7 loads + 1 store per option) in that window, an honest **~245 GB/s effective**, ~14 %
+of the 5090's ~1.8 TB/s peak: memory/occupancy-bound at this size, not compute-bound, exactly
+as expected for a handful of transcendentals per option. `ncu` deep counters need elevated
+GPU-counter permissions (`ERR_NVGPUCTRPERM`), unavailable on this host, so no occupancy figure
+is claimed beyond the `nsys`-measured throughput above.
 
 ## Testing
 

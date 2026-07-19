@@ -74,13 +74,17 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
 2. ~~**Trading strategies across five asset classes** — options, futures, FX, bonds, money
    markets — each with strategy analytics.~~ ✅ `optstrat`, `futures` strategies, `fxstrat`,
    `bondstrat`, `mmstrat` shipped.
-3. **GPU acceleration** of the batch-valuation path (`nimblecas.gpu`, opt-in
-   `-DNIMBLECAS_CUDA=ON`): batched Black-Scholes as a **CUDA** kernel (`black_scholes_batch`,
+3. ✅ **GPU acceleration** of the batch-valuation path (`nimblecas.gpu`, opt-in
+   `-DNIMBLECAS_CUDA=ON`) — all four requested variants shipped and validated on the RTX 5090
+   (sm_120, CUDA 13.2): batched Black-Scholes as a **CUDA** kernel (`black_scholes_batch`,
    Blackwell-validated), a **CUDA Graph** replay variant (`black_scholes_batch_graphed`,
-   bit-identical), and a **Triton** kernel (`python/triton/black_scholes.py`, verified 7e-15
-   on the RTX 5090; joins the existing Triton `mc_option.py`). CPU path stays authoritative;
-   GPU is a validated mirror. **CuTile** variant is the one open item — needs the
-   `cuda-python`/cuTile toolchain provisioned (not fabricated).
+   bit-identical), a **Triton** kernel (`python/triton/black_scholes.py`, 7e-15; joins the
+   existing Triton `mc_option.py`), and a **cuTile** tiled kernel (`python/cutile/black_scholes.py`,
+   7.1e-15). CPU path stays authoritative; GPU is a validated mirror. The cuTile variant
+   delivers the tile *programming model* (cooperative shared-memory tiles: load → compute →
+   store) via NVIDIA's shipping `cuda-core` runtime-compilation stack — the public cuTile DSL
+   is not yet released for this CUDA 13.x/sm_120 stack (the `cutile` PyPI name is an empty stub),
+   so nothing is fabricated; when the DSL lands only the kernel-body syntax changes.
 4. ✅ **Profiling** (Rules 43/58/59): the batched Black-Scholes kernel profiled with
    **nsys** (timeline; CUDA-graph replay visible) and **ncu** (SM/DRAM throughput,
    duration) on Blackwell — honestly latency-bound at small grids. No unevidenced speedup
