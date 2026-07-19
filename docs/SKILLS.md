@@ -50,6 +50,7 @@ term*, or *numerical with a stated tolerance*. Preserve and extend that boundary
 | `nimblecas.analytics` / `nimblecas.portfolio` / `nimblecas.riskextra` | Sharpe/Sortino/VaR/CVaR, Markowitz optimization, CVaR-optimal weights | numerical |
 | `nimblecas.marketdata` | **provider-agnostic quote ingestion** — normalised `Quote`/`Bar`/`OptionChain`/`RateQuote` + Yahoo/Alpha Vantage/Alpaca adapters via `fastjson`; fluent `Feed` | data boundary (no fabricated values) |
 | `nimblecas.futures` | cost-of-carry forward/futures valuation (basis, convenience yield, implied carry, MtM) + composable `FuturesStrategy` (outright, calendar/inter-commodity spreads, hedges, cash-and-carry) | numerical |
+| `nimblecas.optstrat` | composable option strategies (covered call, spreads, straddle/strangle, strip/strap, butterfly, condor, collar, box, risk reversal, ratio) + exact piecewise-linear expiry-P&L analytics (net premium, max profit/loss, breakevens) + BS Greeks bridge | exact expiry P&L / numerical Greeks |
 
 **Market-data usage** (feeds every valuation engine above):
 
