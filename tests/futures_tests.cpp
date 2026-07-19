@@ -111,8 +111,9 @@ auto main() -> int {
                   const auto pl = cal.profile();
                   t.expect(!pl.unbounded_profit && !pl.unbounded_loss, "spread P&L is bounded");
                   t.expect(close(pl.net_quantity, 0.0, 1e-9), "net exposure zero");
-                  t.expect(close(pl.max_profit, 1000.0, 1e-9) && close(pl.max_loss, 1000.0, 1e-9),
-                           "convergence P&L = (far−near)·mult");
+                  t.expect(close(pl.locked_pnl, 1000.0, 1e-9), "locked convergence P&L = (far−near)·mult");
+                  t.expect(close(pl.max_profit, 1000.0, 1e-9) && close(pl.max_loss, 0.0, 1e-9),
+                           "positive locked P&L -> max_profit=1000, max_loss=0");
                   // A wrong-length price vector is refused.
                   const std::array<double, 1> bad{4510.0};
                   t.expect(!cal.pnl_at(bad).has_value(), "length mismatch -> domain_error");
@@ -128,7 +129,7 @@ auto main() -> int {
                   // Cash-and-carry: long spot @100, short futures @105 -> locks basis of 5.
                   const auto cc = cash_and_carry("SPOT", 100.0, "FUT", 105.0, 1.0, 1.0);
                   const auto pl = cc.profile();
-                  t.expect(close(pl.max_profit, 5.0, 1e-9) && close(pl.net_quantity, 0.0, 1e-9),
+                  t.expect(close(pl.locked_pnl, 5.0, 1e-9) && close(pl.net_quantity, 0.0, 1e-9),
                            "cash-and-carry locks the 5-point basis");
                   // At common delivery price 103, both legs settle there -> still 5.
                   const std::array<double, 2> conv{103.0, 103.0};

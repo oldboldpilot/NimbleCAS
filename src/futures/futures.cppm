@@ -140,15 +140,20 @@ struct FuturesLeg {
     [[nodiscard]] auto with_tick_size(double t) const -> FuturesLeg { auto c = *this; c.tick_size = t; return c; }
 };
 
-// The realised-risk profile of a strategy. Futures P&L is linear, so a direction with
-// non-zero net exposure is UNBOUNDED — reported truthfully rather than as a fake finite
-// number. `breakeven` is populated only when the whole strategy reduces to a single price
-// variable (every leg shares one `contract_size`-weighted exposure); empty otherwise.
+// The realised-risk profile of a strategy under the single-price (convergence)
+// interpretation. Futures P&L is linear, so a direction with non-zero net exposure is
+// UNBOUNDED — reported truthfully rather than as a fake finite number. A matched
+// (net-zero-exposure) spread has a CONSTANT P&L (the locked convergence spread):
+// `locked_pnl` carries that constant, and it is split honestly into `max_profit` (the
+// constant if positive, else 0) and `max_loss` (the constant if negative, else 0) so the
+// invariant max_profit >= 0 >= max_loss always holds. `breakeven` is populated only when
+// net exposure is non-zero (a single crossing price); empty for a flat/matched spread.
 struct StrategyProfile {
     bool unbounded_profit{false};
     bool unbounded_loss{false};
-    double max_profit{0.0};       // meaningful only when !unbounded_profit
-    double max_loss{0.0};         // meaningful only when !unbounded_loss (a loss is < 0)
+    double max_profit{0.0};       // >= 0; meaningful only when !unbounded_profit
+    double max_loss{0.0};         // <= 0; meaningful only when !unbounded_loss
+    double locked_pnl{0.0};       // the constant P&L of a matched (net-zero) spread; else 0
     std::optional<double> breakeven{};
     double net_quantity{0.0};     // Σ quantity·contract_size (signed net exposure)
 };
@@ -332,10 +337,13 @@ auto FuturesStrategy::profile() const -> StrategyProfile {
         prof.unbounded_loss = true;
         prof.breakeven = -intercept / prof.net_quantity;  // P&L(p*) == 0
     } else {
+        // Matched spread: P&L is the constant `intercept` (the locked convergence spread).
+        // Split it into the profit/loss fields so max_profit >= 0 >= max_loss holds.
         prof.unbounded_profit = false;
         prof.unbounded_loss = false;
-        prof.max_profit = intercept;   // constant P&L
-        prof.max_loss = intercept;
+        prof.locked_pnl = intercept;
+        prof.max_profit = std::max(intercept, 0.0);
+        prof.max_loss = std::min(intercept, 0.0);
     }
     return prof;
 }

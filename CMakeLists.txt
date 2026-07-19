@@ -899,6 +899,13 @@ target_sources(nimblecas_futures PUBLIC
 target_link_libraries(nimblecas_futures
   PUBLIC nimblecas_core std_module)
 
+# ---- nimblecas.optstrat : composable option trading strategies + expiry-P&L analytics ----
+add_library(nimblecas_optstrat STATIC)
+target_sources(nimblecas_optstrat PUBLIC
+  FILE_SET CXX_MODULES FILES src/optstrat/optstrat.cppm)
+target_link_libraries(nimblecas_optstrat
+  PUBLIC nimblecas_pricing nimblecas_core std_module)
+
 # ---- nimblecas.analytics : portfolio & risk analytics (Sharpe, VaR/CVaR, MV optimization) ----
 add_library(nimblecas_analytics STATIC)
 target_sources(nimblecas_analytics PUBLIC
@@ -978,6 +985,12 @@ add_executable(futures_tests tests/futures_tests.cpp)
 target_link_libraries(futures_tests
   PRIVATE nimblecas_futures nimblecas_core nimblecas_testing std_module)
 add_test(NAME futures_tests COMMAND futures_tests)
+
+add_executable(optstrat_tests tests/optstrat_tests.cpp)
+target_link_libraries(optstrat_tests
+  PRIVATE nimblecas_optstrat nimblecas_pricing nimblecas_svgplot nimblecas_rng
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME optstrat_tests COMMAND optstrat_tests)
 
 add_executable(analytics_tests tests/analytics_tests.cpp)
 target_link_libraries(analytics_tests

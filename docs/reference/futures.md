@@ -39,7 +39,7 @@ Depends only on [`core`](core.md) (`Result` / `MathError`). Everything lives in 
 | `MarketState` | `enum class { backwardation, flat, contango }`. |
 | `FuturesSpec` | Immutable contract + market state, built fluently. Fields: `spot` (S), `rate` (r), `dividend_yield` (q), `storage_cost` (u), `convenience_yield` (y), `time_to_expiry` (T), `contract_size` (multiplier), `tick_size`. `carry_rate()` = `r − q + u − y`. `with_*` chain returns a modified copy. |
 | `FuturesLeg` | A signed position in one contract: `label`, `entry_price`, `quantity` (signed, contracts), `contract_size`, `tick_size`. `pnl_at(p)` = `quantity·contract_size·(p − entry)`; `notional()`; fluent `with_*`. |
-| `StrategyProfile` | Realised-risk profile: `unbounded_profit`, `unbounded_loss`, `max_profit`, `max_loss`, `breakeven` (optional), `net_quantity` (signed net exposure). |
+| `StrategyProfile` | Realised-risk profile: `unbounded_profit`, `unbounded_loss`, `max_profit` (≥ 0), `max_loss` (≤ 0), `locked_pnl` (the constant P&L of a matched net-zero spread; else 0), `breakeven` (optional), `net_quantity` (signed net exposure). |
 | `FuturesStrategy` | A reusable bag of legs valued as a unit; fluent `create().with_leg(...)`. |
 
 ## Valuation
@@ -68,7 +68,7 @@ builder. P&L is the linear combination of the legs.
 | `pnl_at` | `auto pnl_at(std::span<const double> settlement_prices) const -> Result<double>` | Total P&L at per-leg settlement prices (parallel to `legs()`). Length mismatch → `domain_error` (never a silent partial sum). |
 | `pnl_at_uniform` | `auto pnl_at_uniform(double p) const noexcept -> double` | Total P&L when every leg settles at the same price (single-instrument / convergence case). |
 | `net_quantity` / `notional` | accessors | Signed net exposure `Σ q·mult`; summed leg notionals. |
-| `profile` | `auto profile() const -> StrategyProfile` | Risk profile under the single-price interpretation: non-zero net exposure → unbounded both ways with `breakeven = −intercept/net`; zero net exposure (matched spread) → flat P&L (the captured convergence spread as both `max_profit` and `max_loss`). |
+| `profile` | `auto profile() const -> StrategyProfile` | Risk profile under the single-price interpretation: non-zero net exposure → unbounded both ways with `breakeven = −intercept/net`; zero net exposure (matched spread) → constant P&L in `locked_pnl` (the captured convergence spread), split into `max_profit` (≥ 0) and `max_loss` (≤ 0). |
 
 ### Named builders
 
@@ -110,7 +110,7 @@ implied_convenience_yield(spec, 103.04545340).value();   // 0.02
 // A calendar spread captures the convergence spread when net exposure is zero.
 const auto cal = calendar_spread("ESM", 4500, "ESU", 4520, 1.0, 50.0);
 cal.pnl_at(std::array{4510.0, 4525.0}).value();      // 250 (distinct settles)
-cal.profile().max_profit;                            // 1000 == (far − near)·mult
+cal.profile().locked_pnl;                            // 1000 == (far − near)·mult
 
 // An outright is honestly unbounded, with breakeven at its entry.
 const auto lng = long_futures("ES", 4500, 2.0, 50.0);
