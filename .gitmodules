@@ -1,0 +1,3 @@
+[submodule "external/fastestjsoninthewest"]
+	path = external/fastestjsoninthewest
+	url = https://github.com/oldboldpilot/fastestjsoninthewest.git
