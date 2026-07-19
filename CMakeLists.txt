@@ -892,6 +892,13 @@ target_sources(nimblecas_marketdata PUBLIC
 target_link_libraries(nimblecas_marketdata
   PUBLIC nimblecas_fastjson nimblecas_core std_module)
 
+# ---- nimblecas.futures : cost-of-carry forward/futures valuation + futures strategies ----
+add_library(nimblecas_futures STATIC)
+target_sources(nimblecas_futures PUBLIC
+  FILE_SET CXX_MODULES FILES src/futures/futures.cppm)
+target_link_libraries(nimblecas_futures
+  PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.analytics : portfolio & risk analytics (Sharpe, VaR/CVaR, MV optimization) ----
 add_library(nimblecas_analytics STATIC)
 target_sources(nimblecas_analytics PUBLIC
@@ -966,6 +973,11 @@ target_link_libraries(marketdata_tests
   PRIVATE nimblecas_marketdata nimblecas_fastjson nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME marketdata_tests COMMAND marketdata_tests)
+
+add_executable(futures_tests tests/futures_tests.cpp)
+target_link_libraries(futures_tests
+  PRIVATE nimblecas_futures nimblecas_core nimblecas_testing std_module)
+add_test(NAME futures_tests COMMAND futures_tests)
 
 add_executable(analytics_tests tests/analytics_tests.cpp)
 target_link_libraries(analytics_tests
