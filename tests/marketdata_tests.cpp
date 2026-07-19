@@ -78,13 +78,15 @@ constexpr std::string_view kAvQuote = R"({
 })";
 
 // Alpha Vantage TIME_SERIES_DAILY — NEWEST FIRST (adapter must sort ascending).
-constexpr std::string_view kAvDaily = R"({
+// Custom delimiter: the JSON key "Time Series (Daily)" contains the sequence )" which
+// would prematurely close a plain R"(...)" raw string.
+constexpr std::string_view kAvDaily = R"JSON({
   "Meta Data": {"1. Information": "Daily", "2. Symbol": "IBM"},
   "Time Series (Daily)": {
     "2024-07-18": {"1. open":"185.00","2. high":"187.50","3. low":"184.20","4. close":"186.75","5. volume":"3500000"},
     "2024-07-17": {"1. open":"183.00","2. high":"185.10","3. low":"182.40","4. close":"184.90","5. volume":"3100000"}
   }
-})";
+})JSON";
 
 // Alpaca /v2/stocks/AAPL/quotes/latest — two-sided bp/ap + RFC-3339 t.
 constexpr std::string_view kAlpacaQuote = R"({
