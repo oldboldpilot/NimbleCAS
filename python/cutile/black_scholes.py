@@ -143,6 +143,57 @@ def black_scholes_batch(spot, strike, rate, dividend, vol, time, is_call,
     return out
 
 
+def black_scholes_batch_graphed(spot, strike, rate, dividend, vol, time, is_call,
+                                iterations=1, tile_size=256):
+    """cuTile sibling of the in-engine `black_scholes_batch_graphed`.
+
+    Captures the tiled kernel launch into a **CUDA graph** on persistent device buffers
+    (via `cuda.core`'s GraphBuilder) and replays it `iterations` times over a fixed-shape grid
+    (a risk sweep / live re-mark). Because every replay reads the same captured inputs and
+    writes the same buffer, the result is **bit-identical to the direct `black_scholes_batch`**
+    — a checked invariant, not a new source of truth. Returns the prices after the final replay.
+
+    HONEST PERFORMANCE NOTE: a CUDA graph amortizes the *CPU-side* launch cost of a whole
+    *sequence* of kernels per iteration. For this single-kernel pricer there is essentially
+    nothing to amortize — measured on the RTX 5090, graph replay is **on par with (or slightly
+    slower than) a direct launch** (~0.98x at 50k options, ~0.85x at 256; `cudaGraphLaunch` has
+    its own fixed cost). So this variant is NOT sold as a speedup: its value is (1) API and
+    structural parity with the in-engine `black_scholes_batch_graphed`, (2) the bit-identical
+    replay guarantee, and (3) being the correct substrate once the captured region grows into a
+    multi-kernel pipeline (e.g. price -> aggregate -> reduce), where graph amortization does pay.
+    """
+    device = Device()
+    device.set_current()
+    ker = _tile_kernel(device)
+
+    n = spot.numel()
+    # Persistent contiguous buffers: the graph captures these device addresses, so they must
+    # stay alive and stride-1 for the lifetime of the replays.
+    s_ = spot.contiguous();     k_ = strike.contiguous(); r_ = rate.contiguous()
+    q_ = dividend.contiguous(); v_ = vol.contiguous();    t_ = time.contiguous()
+    iscall_i32 = is_call.to(torch.int32).contiguous()
+    out = torch.empty(n, dtype=torch.float64, device=spot.device)
+
+    grid = (n + tile_size - 1) // tile_size
+    shmem = 6 * tile_size * 8
+    cfg = LaunchConfig(grid=grid, block=tile_size, shmem_size=shmem)
+
+    gb = device.create_graph_builder()
+    gb.begin_building()
+    launch(gb.stream, cfg, ker,
+           s_.data_ptr(), k_.data_ptr(), r_.data_ptr(), q_.data_ptr(),
+           v_.data_ptr(), t_.data_ptr(), iscall_i32.data_ptr(), out.data_ptr(),
+           np.int32(n))
+    gb.end_building()
+    graph = gb.complete()
+
+    stream = device.default_stream
+    for _ in range(max(1, iterations)):
+        graph.launch(stream)
+    stream.sync()
+    return out
+
+
 def _cpu_black_scholes(spot, strike, rate, q, vol, T, is_call):
     """Reference closed form for the validation check below."""
     from math import erf, exp, log, sqrt
@@ -179,3 +230,13 @@ if __name__ == "__main__":
     assert max_err < 1e-9, "cuTile tiled Black-Scholes disagrees with the CPU closed form"
     assert abs(atm_call - 10.4505835) < 1e-4, "ATM call off"
     print("OK: cuTile tiled Black-Scholes mirrors the CPU closed form.")
+
+    # CUDA-graph replay must be BIT-IDENTICAL to the direct launch (same captured inputs).
+    args = (t(spots, torch.float64), t(strikes, torch.float64), t(rates, torch.float64),
+            t(divs, torch.float64), t(vols, torch.float64), t(times, torch.float64),
+            t(calls, torch.int32))
+    direct = black_scholes_batch(*args)
+    graphed = black_scholes_batch_graphed(*args, iterations=8)
+    assert torch.equal(direct, graphed), "cuTile CUDA-graph replay is not bit-identical to direct"
+    print(f"OK: cuTile CUDA-graph replay (8 iters) is bit-identical to the direct launch "
+          f"(max abs diff = {(direct - graphed).abs().max().item():.1e}).")

@@ -226,6 +226,18 @@ as expected for a handful of transcendentals per option. `ncu` deep counters nee
 GPU-counter permissions (`ERR_NVGPUCTRPERM`), unavailable on this host, so no occupancy figure
 is claimed beyond the `nsys`-measured throughput above.
 
+**CUDA-graph replay sibling.** `black_scholes_batch_graphed(...)` captures the tiled launch into
+a CUDA graph on persistent buffers (via `cuda.core`'s `GraphBuilder` — `begin_building` →
+`launch(gb.stream, …)` → `end_building` → `complete()`) and replays it `iterations` times,
+mirroring the in-engine `black_scholes_batch_graphed`. The replay is **bit-identical to the
+direct launch** (verified `max abs diff = 0.0` over 8 iterations). It is **not** presented as a
+speedup: a CUDA graph amortizes the CPU cost of a *sequence* of kernels, and for a single-kernel
+pricer there is nothing to amortize — measured on the 5090 it is **on par with a direct launch
+(~0.98× at 50k options, ~0.85× at 256; `cudaGraphLaunch` carries its own fixed cost)**. Its value
+is API/structural parity with the in-engine graphed path, the bit-identical guarantee, and being
+the correct substrate once the captured region grows into a multi-kernel pipeline where graph
+amortization pays.
+
 ## Testing
 
 `tests/gpu_tests.cpp` cross-checks **every** GPU kernel against a CPU reference:
