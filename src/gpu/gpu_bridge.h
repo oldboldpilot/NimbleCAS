@@ -76,6 +76,32 @@ int nimblecas_gpu_batched_matmul(const double* a, const double* b, double* c, in
 // on success, or a non-zero CUDA error code on failure (cudaErrorInvalidValue for a bad shape).
 int nimblecas_gpu_fft_batch(const double* in, double* out, int batch, int n);
 
+// A single Black-Scholes-Merton option in POD form for the batched device pricer. Fields
+// mirror nimblecas::pricing::OptionSpec; is_call is 1 for a call, 0 for a put.
+typedef struct {
+    double spot;
+    double strike;
+    double rate;
+    double dividend;
+    double volatility;
+    double time;
+    int is_call;
+} NimblecasBsOption;
+
+// Batched Black-Scholes-Merton pricing, one thread per option (grid-stride). Writes the
+// price of opts[i] to out[i]. Inputs must be physically valid (spot>0, strike>0, time>=0,
+// volatility>=0) — nimblecas.gpu validates before calling. Returns 0 on success or a
+// non-zero CUDA error code.
+int nimblecas_gpu_black_scholes_batch(const NimblecasBsOption* opts, double* out, int n);
+
+// Same computation, but the kernel launch is captured once into a CUDA graph and replayed
+// `iterations` times on persistent device buffers before the result is read back.
+// Numerically identical to the direct version; the graph amortizes per-launch overhead
+// across repeated re-pricing of a fixed-shape grid (a live risk sweep). iterations<1 is
+// treated as 1. Returns 0 on success or a non-zero CUDA error code.
+int nimblecas_gpu_black_scholes_batch_graphed(const NimblecasBsOption* opts, double* out,
+                                              int n, int iterations);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

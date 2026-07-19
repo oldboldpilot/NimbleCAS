@@ -1041,3 +1041,168 @@ extern "C" int nimblecas_gpu_fft_batch(const double* in, double* out, int batch,
     host_unregister(pin_in);
     return rc;
 }
+
+// ---------------------------------------------------------------------------
+// Batched Black-Scholes-Merton option pricing (finance, ROADMAP 5).
+//
+// One thread per option, grid-stride. Matches nimblecas::pricing::black_scholes_greeks'
+// price formula exactly (same d1/d2, same degenerate T==0/vol==0 collapse to discounted
+// intrinsic), so the device result agrees with the CPU closed form to floating-point
+// tolerance — the GPU is a batch-valuation MIRROR of the authoritative CPU pricer, never a
+// second source of truth. The `_graphed` launcher captures the launch into a CUDA graph
+// and replays it, amortizing per-launch overhead across a repeated fixed-shape risk sweep.
+// ---------------------------------------------------------------------------
+namespace {
+
+__device__ inline double bs_norm_cdf(double x) {
+    return 0.5 * erfc(-x * 0.7071067811865475244);  // 0.5 * erfc(-x / sqrt(2))
+}
+
+__global__ void black_scholes_kernel(const NimblecasBsOption* __restrict__ opts,
+                                     double* __restrict__ out, int n) {
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    for (int i = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                 static_cast<int>(threadIdx.x);
+         i < n; i += stride) {
+        const NimblecasBsOption o = opts[i];
+        const double S = o.spot, K = o.strike, r = o.rate, q = o.dividend, v = o.volatility,
+                     T = o.time;
+        const bool call = o.is_call != 0;
+        double price;
+        if (T == 0.0 || v == 0.0) {
+            const double fwd = S * exp((r - q) * T);
+            const double intr = call ? fmax(fwd - K, 0.0) : fmax(K - fwd, 0.0);
+            price = exp(-r * T) * intr;
+        } else {
+            const double sq = sqrt(T);
+            const double d1 = (log(S / K) + (r - q + 0.5 * v * v) * T) / (v * sq);
+            const double d2 = d1 - v * sq;
+            const double dr = exp(-r * T), dq = exp(-q * T);
+            price = call ? (S * dq * bs_norm_cdf(d1) - K * dr * bs_norm_cdf(d2))
+                         : (K * dr * bs_norm_cdf(-d2) - S * dq * bs_norm_cdf(-d1));
+        }
+        out[i] = price;
+    }
+}
+
+// Device-sized grid (a small multiple of the SM count), capped at one block per option.
+inline int bs_blocks(int n, int threads) {
+    int sm = 0;
+    const int by_n = (n + threads - 1) / threads;
+    if (cudaDeviceGetAttribute(&sm, cudaDevAttrMultiProcessorCount, 0) == cudaSuccess && sm > 0) {
+        const int cap = sm * 32;
+        const int b = cap < by_n ? cap : by_n;
+        return b < 1 ? 1 : b;
+    }
+    cudaGetLastError();  // attribute query failed; fall back to one block per option
+    return by_n < 1 ? 1 : by_n;
+}
+
+}  // namespace
+
+extern "C" int nimblecas_gpu_black_scholes_batch(const NimblecasBsOption* opts, double* out,
+                                                 int n) {
+    if (n <= 0) {
+        return 0;
+    }
+    const size_t obytes = static_cast<size_t>(n) * sizeof(NimblecasBsOption);
+    const size_t pbytes = static_cast<size_t>(n) * sizeof(double);
+    NimblecasBsOption* dopts = nullptr;
+    double* dout = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    if ((err = cudaMalloc(&dopts, obytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dout, pbytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dopts, opts, obytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        const int threads = 256;
+        const int blocks = bs_blocks(n, threads);
+        black_scholes_kernel<<<blocks, threads>>>(dopts, dout, n);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(out, dout, pbytes, cudaMemcpyDeviceToHost)) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        }
+    }
+    if (dopts != nullptr) {
+        cudaFree(dopts);
+    }
+    if (dout != nullptr) {
+        cudaFree(dout);
+    }
+    return rc;
+}
+
+extern "C" int nimblecas_gpu_black_scholes_batch_graphed(const NimblecasBsOption* opts,
+                                                         double* out, int n, int iterations) {
+    if (n <= 0) {
+        return 0;
+    }
+    if (iterations < 1) {
+        iterations = 1;
+    }
+    const size_t obytes = static_cast<size_t>(n) * sizeof(NimblecasBsOption);
+    const size_t pbytes = static_cast<size_t>(n) * sizeof(double);
+    NimblecasBsOption* dopts = nullptr;
+    double* dout = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t exec = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    const int threads = 256;
+    const int blocks = bs_blocks(n, threads);
+    if ((err = cudaMalloc(&dopts, obytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dout, pbytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dopts, opts, obytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaStreamCreate(&stream)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        black_scholes_kernel<<<blocks, threads, 0, stream>>>(dopts, dout, n);
+        if ((err = cudaStreamEndCapture(stream, &graph)) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaGraphInstantiate(&exec, graph, 0)) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else {
+            for (int it = 0; it < iterations && rc == 0; ++it) {
+                if ((err = cudaGraphLaunch(exec, stream)) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                }
+            }
+            if (rc == 0 && (err = cudaStreamSynchronize(stream)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            }
+            if (rc == 0 &&
+                (err = cudaMemcpy(out, dout, pbytes, cudaMemcpyDeviceToHost)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            }
+        }
+    }
+    if (exec != nullptr) {
+        cudaGraphExecDestroy(exec);
+    }
+    if (graph != nullptr) {
+        cudaGraphDestroy(graph);
+    }
+    if (stream != nullptr) {
+        cudaStreamDestroy(stream);
+    }
+    if (dopts != nullptr) {
+        cudaFree(dopts);
+    }
+    if (dout != nullptr) {
+        cudaFree(dout);
+    }
+    return rc;
+}

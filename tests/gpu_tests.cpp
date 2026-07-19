@@ -30,6 +30,24 @@ namespace {
     return diff <= 1e-9 * (1.0 + std::abs(b));
 }
 
+// CPU Black-Scholes reference (matching the device kernel's formula) for validating the
+// batch GPU pricer against the authoritative CPU closed form.
+[[nodiscard]] auto cpu_bs(const gpu::BsOption& o) -> double {
+    const double S = o.spot, K = o.strike, r = o.rate, q = o.dividend, v = o.volatility, T = o.time;
+    const bool call = o.is_call;
+    auto ncdf = [](double x) { return 0.5 * std::erfc(-x * 0.7071067811865475244); };
+    if (T == 0.0 || v == 0.0) {
+        const double fwd = S * std::exp((r - q) * T);
+        const double intr = call ? std::max(fwd - K, 0.0) : std::max(K - fwd, 0.0);
+        return std::exp(-r * T) * intr;
+    }
+    const double sq = std::sqrt(T);
+    const double d1 = (std::log(S / K) + (r - q + 0.5 * v * v) * T) / (v * sq);
+    const double d2 = d1 - v * sq;
+    const double dr = std::exp(-r * T), dq = std::exp(-q * T);
+    return call ? (S * dq * ncdf(d1) - K * dr * ncdf(d2)) : (K * dr * ncdf(-d2) - S * dq * ncdf(-d1));
+}
+
 // Tiny CPU Levenshtein reference over integer code points, matching the kernel's recurrence.
 [[nodiscard]] auto cpu_levenshtein(std::span<const int> a, std::span<const int> b) -> int {
     std::vector<int> prev(b.size() + 1);
@@ -469,6 +487,43 @@ auto main() -> int {
                       auto got = gpu::fft_batch(in, batch, n);
                       t.expect(!got.has_value() && got.error() == MathError::gpu_error,
                                "CUDA-disabled path returns the documented gpu_error");
+                  }
+              })
+        .test("black_scholes_batch mirrors the CPU closed form; CUDA-graph replay agrees",
+              [](TestContext& t) {
+                  // A small option grid: calls and puts over a spot sweep at K=100, r=5%,
+                  // vol=20%, T=1 (so the S=100 call is the textbook 10.4506).
+                  std::vector<gpu::BsOption> opts;
+                  for (double s : {80.0, 90.0, 100.0, 110.0, 120.0}) {
+                      opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.0, 0.2, 1.0, true});
+                      opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.0, 0.2, 1.0, false});
+                  }
+                  if (gpu::available()) {
+                      auto got = gpu::black_scholes_batch(opts);
+                      t.expect(got.has_value() && got->size() == opts.size(), "batch priced");
+                      bool all_match = true;
+                      for (std::size_t i = 0; i < opts.size(); ++i) {
+                          all_match = all_match && approx((*got)[i], cpu_bs(opts[i]));
+                      }
+                      t.expect(all_match, "every GPU price matches the CPU closed form");
+                      t.expect(std::abs((*got)[4] - 10.4505835) < 1e-4, "ATM 1y call == 10.4506");
+                      // The CUDA-graph replay (4 iterations) yields identical prices.
+                      auto graphed = gpu::black_scholes_batch_graphed(opts, 4);
+                      t.expect(graphed.has_value(), "graphed batch ok");
+                      bool identical = graphed->size() == got->size();
+                      for (std::size_t i = 0; i < got->size() && identical; ++i) {
+                          identical = (*graphed)[i] == (*got)[i];
+                      }
+                      t.expect(identical, "CUDA-graph replay is bit-identical to the direct launch");
+                      // A non-physical option rides the railway.
+                      std::vector<gpu::BsOption> bad{gpu::BsOption{-1.0, 100.0, 0.05, 0.0, 0.2, 1.0, true}};
+                      auto br = gpu::black_scholes_batch(bad);
+                      t.expect(!br.has_value() && br.error() == MathError::domain_error,
+                               "non-physical spot -> domain_error");
+                  } else {
+                      auto got = gpu::black_scholes_batch(opts);
+                      t.expect(!got.has_value() && got.error() == MathError::gpu_error,
+                               "CUDA-disabled path returns gpu_error");
                   }
               })
         .run();

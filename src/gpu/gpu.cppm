@@ -329,4 +329,71 @@ inline constexpr int kGpuFftMaxLen = 2048;
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Batched Black-Scholes-Merton pricing (finance) — the batch-valuation MIRROR of the
+// authoritative CPU nimblecas.pricing closed form. Fields mirror pricing::OptionSpec.
+// ---------------------------------------------------------------------------
+struct BsOption {
+    double spot{100.0};
+    double strike{100.0};
+    double rate{0.0};
+    double dividend{0.0};
+    double volatility{0.2};
+    double time{1.0};
+    bool is_call{true};
+};
+
+namespace detail {
+// Validate the physical domain (matching pricing's black_scholes_greeks guards) and repack
+// the ergonomic BsOption span into the POD bridge array. A non-physical option ->
+// domain_error; too many options -> overflow.
+[[nodiscard]] inline auto to_bridge(std::span<const BsOption> opts)
+    -> Result<std::vector<NimblecasBsOption>> {
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (opts.size() > int_max) { return make_error<std::vector<NimblecasBsOption>>(MathError::overflow); }
+    std::vector<NimblecasBsOption> pod;
+    pod.reserve(opts.size());
+    for (const auto& o : opts) {
+        if (o.spot <= 0.0 || o.strike <= 0.0 || o.time < 0.0 || o.volatility < 0.0) {
+            return make_error<std::vector<NimblecasBsOption>>(MathError::domain_error);
+        }
+        pod.push_back(NimblecasBsOption{o.spot, o.strike, o.rate, o.dividend, o.volatility,
+                                        o.time, o.is_call ? 1 : 0});
+    }
+    return pod;
+}
+}  // namespace detail
+
+// Price a batch of Black-Scholes options on the device. Returns one price per option, in
+// order. No device / a CUDA failure -> gpu_error; a non-physical option -> domain_error.
+// The result agrees with pricing::black_scholes_price to floating-point tolerance.
+[[nodiscard]] auto black_scholes_batch(std::span<const BsOption> opts)
+    -> Result<std::vector<double>> {
+    if (!available()) { return make_error<std::vector<double>>(MathError::gpu_error); }
+    if (opts.empty()) { return std::vector<double>{}; }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<double>>(pod.error()); }
+    std::vector<double> out(opts.size());
+    const int rc = nimblecas_gpu_black_scholes_batch(pod->data(), out.data(),
+                                                     static_cast<int>(pod->size()));
+    if (rc != 0) { return make_error<std::vector<double>>(MathError::gpu_error); }
+    return out;
+}
+
+// Identical result to black_scholes_batch, but the kernel is captured into a CUDA graph and
+// replayed `iterations` times (a fixed-shape re-pricing / risk sweep). `iterations < 1` is
+// treated as 1. Same error model.
+[[nodiscard]] auto black_scholes_batch_graphed(std::span<const BsOption> opts, int iterations = 1)
+    -> Result<std::vector<double>> {
+    if (!available()) { return make_error<std::vector<double>>(MathError::gpu_error); }
+    if (opts.empty()) { return std::vector<double>{}; }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<double>>(pod.error()); }
+    std::vector<double> out(opts.size());
+    const int rc = nimblecas_gpu_black_scholes_batch_graphed(
+        pod->data(), out.data(), static_cast<int>(pod->size()), iterations);
+    if (rc != 0) { return make_error<std::vector<double>>(MathError::gpu_error); }
+    return out;
+}
+
 }  // namespace nimblecas::gpu
