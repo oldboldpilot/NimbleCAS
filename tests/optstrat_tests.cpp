@@ -42,6 +42,21 @@ auto main() -> int {
                   t.expect(close(s.pnl_at(95.0), -3.0, 1e-9), "below lower strike: −debit");
                   t.expect(close(s.pnl_at(115.0), 7.0, 1e-9), "above upper strike: max profit");
               })
+        .test("bear put spread is a bearish DEBIT (long hi / short lo put)",
+              [](TestContext& t) {
+                  // Long 100 put @7, short 90 put @2 -> net debit 5, profits as price falls.
+                  const auto s = bear_put_spread(90.0, 2.0, 100.0, 7.0);
+                  const auto a = s.analytics();
+                  t.expect(close(a.net_premium, 5.0, 1e-9), "net DEBIT == 5 (a bear put spread pays up)");
+                  t.expect(close(s.pnl_at(80.0), 5.0, 1e-9), "profits when price falls (max profit below lo)");
+                  t.expect(close(s.pnl_at(110.0), -5.0, 1e-9), "loses the debit when price rises");
+                  t.expect(close(a.max_profit, 5.0, 1e-9) && close(a.max_loss, -5.0, 1e-9),
+                           "max profit == width − debit; max loss == −debit");
+                  t.expect(a.breakevens.size() == 1 && has_be(a, 95.0), "breakeven == hi − debit == 95");
+                  // Its mirror, the bull put spread, is a bullish CREDIT — opposite sign.
+                  t.expect(bull_put_spread(90.0, 2.0, 100.0, 7.0).net_premium() < 0.0,
+                           "bull put spread is a credit (opposite structure)");
+              })
         .test("long straddle: unbounded profit, two breakevens",
               [](TestContext& t) {
                   // Long 100 call @5 + long 100 put @4. Net debit 9.

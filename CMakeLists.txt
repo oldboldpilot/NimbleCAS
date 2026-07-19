@@ -906,6 +906,27 @@ target_sources(nimblecas_optstrat PUBLIC
 target_link_libraries(nimblecas_optstrat
   PUBLIC nimblecas_pricing nimblecas_core std_module)
 
+# ---- nimblecas.fxstrat : currency strategies (Garman-Kohlhagen, CIP, carry trade) ----
+add_library(nimblecas_fxstrat STATIC)
+target_sources(nimblecas_fxstrat PUBLIC
+  FILE_SET CXX_MODULES FILES src/fxstrat/fxstrat.cppm)
+target_link_libraries(nimblecas_fxstrat
+  PUBLIC nimblecas_pricing nimblecas_core std_module)
+
+# ---- nimblecas.bondstrat : bond portfolio construction & relative value ----
+add_library(nimblecas_bondstrat STATIC)
+target_sources(nimblecas_bondstrat PUBLIC
+  FILE_SET CXX_MODULES FILES src/bondstrat/bondstrat.cppm)
+target_link_libraries(nimblecas_bondstrat
+  PUBLIC nimblecas_core std_module)
+
+# ---- nimblecas.mmstrat : money-market strategies (repo, discount, deposit strips) ----
+add_library(nimblecas_mmstrat STATIC)
+target_sources(nimblecas_mmstrat PUBLIC
+  FILE_SET CXX_MODULES FILES src/mmstrat/mmstrat.cppm)
+target_link_libraries(nimblecas_mmstrat
+  PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.analytics : portfolio & risk analytics (Sharpe, VaR/CVaR, MV optimization) ----
 add_library(nimblecas_analytics STATIC)
 target_sources(nimblecas_analytics PUBLIC
@@ -991,6 +1012,22 @@ target_link_libraries(optstrat_tests
   PRIVATE nimblecas_optstrat nimblecas_pricing nimblecas_svgplot nimblecas_rng
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME optstrat_tests COMMAND optstrat_tests)
+
+add_executable(fxstrat_tests tests/fxstrat_tests.cpp)
+target_link_libraries(fxstrat_tests
+  PRIVATE nimblecas_fxstrat nimblecas_pricing nimblecas_svgplot nimblecas_rng
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME fxstrat_tests COMMAND fxstrat_tests)
+
+add_executable(bondstrat_tests tests/bondstrat_tests.cpp)
+target_link_libraries(bondstrat_tests
+  PRIVATE nimblecas_bondstrat nimblecas_core nimblecas_testing std_module)
+add_test(NAME bondstrat_tests COMMAND bondstrat_tests)
+
+add_executable(mmstrat_tests tests/mmstrat_tests.cpp)
+target_link_libraries(mmstrat_tests
+  PRIVATE nimblecas_mmstrat nimblecas_core nimblecas_testing std_module)
+add_test(NAME mmstrat_tests COMMAND mmstrat_tests)
 
 add_executable(analytics_tests tests/analytics_tests.cpp)
 target_link_libraries(analytics_tests
