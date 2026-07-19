@@ -42,7 +42,9 @@ present only when it ships with a passing test.
   interpolation, continuous/annual/semiannual/k-per-year compounding); `zero2disc`/`disc2zero`/
   `zero2fwd`/`fwd2zero`; par↔zero (`par2zero`/`zero2par`) exact inverses; bootstrapping
   (`zbtprice`/`zbtyield`); Nelson-Siegel and Svensson fits; a Hull-White trinomial short-rate
-  lattice calibrated to the input discount curve by Arrow-Debreu forward induction.
+  lattice calibrated to the input discount curve by Arrow-Debreu forward induction, with
+  callable-bond backward induction (`callable_bond_price`) and an option-adjusted-spread solver
+  (`callable_bond_oas`) over a Bermudan call schedule.
 - **Exotic options (`exotics`):** Cox-Ross-Rubinstein binomial (European/American) + escrowed-spot
   discrete dividends; Reiner-Rubinstein analytic single barriers (all 8 types, with rebate);
   Goldman-Sosin-Gatto floating-strike lookback; Crank-Nicolson finite-difference PDE with Rannacher
@@ -62,9 +64,12 @@ present only when it ships with a passing test.
 
 ## Remaining (P1, deferred — no test yet, so honestly not claimed)
 
-- **Callable/puttable bonds + OAS.** The building blocks now exist (the `yieldcurve` Hull-White
-  short-rate lattice and the `fixedincome` cashflow engine); coupling them into an
-  option-adjusted-spread backward induction over a callable schedule is the remaining step.
+- **Puttable bonds + the put side of OAS.** The **callable** case ships: the `yieldcurve`
+  Hull-White lattice now carries a full callable-bond backward induction
+  (`HullWhiteLattice::callable_bond_price`) and an option-adjusted-spread solver
+  (`callable_bond_oas`), tested against the straight-bond, deep-out-of-the-money, and
+  OAS-round-trip invariants. The symmetric **puttable** provision (holder's option, a `max`
+  floor instead of the issuer's `min` cap) is the remaining piece.
 - **Named SDE process constructors.** `sde` integrates any user-supplied `(a, b)`; convenience
   parameterizations for GBM / Ornstein-Uhlenbeck-Vasicek / CIR / Heston / Merton-jump (with
   correlated drivers) are not yet packaged as named factories.

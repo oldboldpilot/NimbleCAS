@@ -8,8 +8,10 @@ The fixed-income **term-structure** layer: a pillar-based zero (spot) curve that
 arbitrary cashflows, the four classical term-structure conversions, sequential bootstrapping
 of a zero curve from bond prices or yields, par-yield ↔ zero conversion, parametric
 Nelson-Siegel and Svensson fits, and a Hull-White one-factor trinomial short-rate lattice
-calibrated to an initial discount curve. Where [`nimblecas.finance`](finance.md) prices *one*
-instrument against a flat scalar yield, this module builds and manipulates the whole **curve**.
+calibrated to an initial discount curve — including callable-bond backward induction and an
+option-adjusted-spread (OAS) solver on that lattice. Where [`nimblecas.finance`](finance.md)
+prices *one* instrument against a flat scalar yield, this module builds and manipulates the
+whole **curve**.
 
 This is the **numerical tier** throughout: times are years (`double`), rates and discount
 factors are `double`, and every fallible entry point returns `Result<T>`. A NaN/inf is
@@ -154,6 +156,8 @@ used in the tests.
 | `build_hull_white` | `auto build_hull_white(const Curve& curve, double a, double sigma, double dt, int steps) -> Result<HullWhiteLattice>` | Calibrate to `curve` with mean reversion `a > 0`, vol `sigma > 0`, step `dt > 0`, and `steps` steps. `steps·dt` must be within the curve's range. `domain_error` on: `a ≤ 0`, `sigma ≤ 0`, `dt ≤ 0`, `steps` outside `[1, kMaxSteps]`, derived half-width `jmax` outside `[1, kMaxJmax]` (`a·dt` too small explodes `jmax`), a negative branching probability from an out-of-range `(a, dt)`, or a curve `discount_factor` failure. |
 | `HullWhiteLattice::discount` | `auto discount(double T) const -> Result<double>` | Zero-coupon bond price to a node time `T = n·dt` (`1 ≤ n ≤ steps`). `T` must land on a node (within tolerance) and within the built horizon; otherwise `domain_error`. |
 | `HullWhiteLattice::bond_price` | `auto bond_price(std::span<const double> times, std::span<const double> cashflows) const -> Result<double>` | `Σ_k cashflows[k]·discount(times[k])`. Empty/mismatched/over-`kMaxPillars` spans → `domain_error`; propagates any `discount` error. |
+| `HullWhiteLattice::callable_bond_price` | `auto callable_bond_price(std::span<const double> times, std::span<const double> cashflows, std::span<const double> call_times, std::span<const double> call_prices, double oas = 0.0) const -> Result<double>` | Callable-bond price by one backward induction carrying the whole cashflow stream: `V_i = coupon_i + (call ? min(continuation_i, call_price_i) : continuation_i)`, each step discounting at the node short rate **plus** `oas`. `call_times`/`call_prices` are the Bermudan call schedule on **distinct** nodes (empty ⇒ straight bond, equal to `bond_price` at `oas = 0`). `domain_error` on: span mismatch, over-`2000` cashflows/calls, an off-node/out-of-range time, a **negative** cashflow (would break monotonicity in `oas`), a negative/duplicate call, or a non-finite `oas`; `overflow` if the value goes non-finite. |
+| `callable_bond_oas` | `auto callable_bond_oas(const HullWhiteLattice& lattice, std::span<const double> times, std::span<const double> cashflows, std::span<const double> call_times, std::span<const double> call_prices, double market_price) -> Result<double>` | The option-adjusted spread: the constant `oas` for which `callable_bond_price` equals `market_price`. Price is monotone non-increasing in the spread, so it brackets on `[-1, 1]` (±10000 bp) and bisects. `market_price` unreachable in that band → `not_converged`; `market_price ≤ 0`/non-finite → `domain_error`; propagates any pricing error. |
 | `HullWhiteLattice::dt` | `auto dt() const noexcept -> double` | The calibration step size. |
 | `HullWhiteLattice::steps` | `auto steps() const noexcept -> int` | The number of steps. |
 | `HullWhiteLattice::j_max` | `auto j_max() const noexcept -> int` | The tree half-width `jmax`. |
@@ -205,10 +209,19 @@ class HullWhiteLattice {            // built only by build_hull_white (its frien
     auto discount(double T) const -> Result<double>;
     auto bond_price(std::span<const double> times,
                     std::span<const double> cashflows) const -> Result<double>;
+    auto callable_bond_price(std::span<const double> times, std::span<const double> cashflows,
+                             std::span<const double> call_times,
+                             std::span<const double> call_prices,
+                             double oas = 0.0) const -> Result<double>;
     auto dt()    const noexcept -> double;
     auto steps() const noexcept -> int;
     auto j_max() const noexcept -> int;
 };
+
+// Free function: option-adjusted spread of a callable bond.
+auto callable_bond_oas(const HullWhiteLattice& lattice, std::span<const double> times,
+                       std::span<const double> cashflows, std::span<const double> call_times,
+                       std::span<const double> call_prices, double market_price) -> Result<double>;
 ```
 
 DoS caps (internal `constexpr`, applied to every untrusted size):
