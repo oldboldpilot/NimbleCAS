@@ -203,8 +203,10 @@ namespace alpaca {
 class Feed {
 public:
     [[nodiscard]] static auto from(DataProvider provider) -> Feed { return Feed{provider}; }
-    // Stamp decoded quotes/series with this asset class (fluent, returns *this).
-    [[nodiscard]] auto as_asset_class(AssetClass a) -> Feed& { default_class_ = a; return *this; }
+    // Stamp decoded quotes/series with this asset class. Immutable builder (Rules 15/47,
+    // matching the with_* idiom): returns a modified COPY, so a Feed carries no shared
+    // mutable state and a single instance is trivially safe to share and reuse.
+    [[nodiscard]] auto as_asset_class(AssetClass a) const -> Feed { auto c = *this; c.default_class_ = a; return c; }
 
     [[nodiscard]] auto provider() const noexcept -> DataProvider { return provider_; }
     [[nodiscard]] auto asset_class() const noexcept -> AssetClass { return default_class_; }
@@ -410,9 +412,11 @@ auto yahoo::parse_chart(std::string_view json) -> Result<BarSeries> {
     out.bars.reserve(n);
     for (std::size_t i = 0; i < n; ++i) {
         const json_value& te = (**ts)[i];
-        // Yahoo pads gaps with null OHLC at a valid timestamp; skip those honestly.
+        // Yahoo pads gaps with null OHLC at a valid timestamp; treat a null OR any
+        // non-numeric open as a gap and skip it, so a wrong-typed open never becomes a
+        // garbage bar (honesty — never coerce a non-number through as_float64).
         const json_value& oe = (**opens)[i];
-        if (te.is_null() || oe.is_null()) { continue; }
+        if (te.is_null() || !oe.is_number()) { continue; }
         Bar b{};
         b.timestamp = te.is_number() ? te.as_int64() : 0;
         b.open = oe.as_float64();
