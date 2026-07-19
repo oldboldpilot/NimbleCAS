@@ -29,6 +29,10 @@ graph TD
     pricing["pricing — options"]
     analytics["analytics — ratios · VaR · MVO"]
     portfolio["portfolio — risk report · ridge MVO"]
+    exotics["exotics — CRR · barriers · PDE · basket"]
+    yieldcurve["yieldcurve — curve · lattice · OAS"]
+    fixedincome["fixedincome — DV01 · odd periods · z-spread"]
+    riskextra["riskextra — QP frontier · CVaR · EW"]
 
     core --> bigint --> bigrational
     bigrational --> bigdecimal
@@ -39,6 +43,11 @@ graph TD
     core --> rng --> pricing
     svgplot --> pricing
     core --> analytics --> portfolio
+    pricing --> exotics
+    rng --> exotics
+    finance --> yieldcurve
+    finance --> fixedincome
+    rng --> riskextra
     finance -. "quantize at boundary" .-> bigdecimal
     pricing -. "reporting boundary" .-> finance
 ```
@@ -242,6 +251,54 @@ flowchart TD
     ret --> rep["Integrated risk report<br/>Sharpe · Sortino · Treynor · α · β · MDD · VaR/CVaR"]
 ```
 
+## 6. Yield curves & callable bonds — the Hull-White lattice and OAS
+
+Where `finance` prices *one* instrument against a flat scalar yield, [`yieldcurve`](../reference/yieldcurve.md)
+builds and manipulates the whole **term structure**, and calibrates a Hull-White short-rate
+lattice to it. On that lattice a **callable bond** is priced by one backward induction — the
+issuer's call caps the holder's continuation value — and its **option-adjusted spread (OAS)**
+is the constant spread that reprices it against the market.
+
+```cpp
+import nimblecas.yieldcurve;
+using namespace nimblecas::yieldcurve;
+
+// A flat 5% continuously-compounded curve, and a Hull-White lattice calibrated to it
+// (the lattice reprices the curve's discount factors by construction).
+const Curve c = Curve::create({0.5, 1, 2, 3, 4, 5}, {0.05, 0.05, 0.05, 0.05, 0.05, 0.05},
+                              Interp::linear_zero, Compounding::continuous).value();
+const HullWhiteLattice hw = build_hull_white(c, /*a=*/0.1, /*sigma=*/0.01, /*dt=*/0.5, 10).value();
+
+// A 5-year 6% annual bond trades at a premium (~103.77) on this 5% curve.
+const std::vector<double> t{1, 2, 3, 4, 5}, cf{6, 6, 6, 6, 106};
+const double straight = hw.bond_price(t, cf).value();               // ~103.77
+
+// Make it callable at par in years 2-4: the issuer's call caps the premium, so the
+// callable bond is worth materially less than the straight bond.
+const std::vector<double> call_t{2, 3, 4}, call_p{100, 100, 100};
+const double callable = hw.callable_bond_price(t, cf, call_t, call_p).value();  // < straight
+
+// The OAS is the spread that reprices a quoted market price. Quote the model price back
+// and the OAS is ~0; a cheaper quote implies a strictly wider (positive) OAS.
+callable_bond_oas(hw, t, cf, call_t, call_p, callable);            // ~0
+callable_bond_oas(hw, t, cf, call_t, call_p, callable * 0.97);     // > 0 (bond trades cheap)
+```
+
+The price is monotone non-increasing in the spread, so `callable_bond_oas` brackets on
+±10000 bp and bisects — and an unreachable quote returns `not_converged`, never a fabricated
+spread. Cashflows must be non-negative (the property that keeps the price monotone) and each
+call sits on a distinct lattice node; anything else is an honest `domain_error`.
+
+```mermaid
+flowchart TD
+    curve["Discount curve DF(t)"] --> hw["Hull-White lattice<br/>(Arrow-Debreu calibrated)"]
+    hw --> bwd["Backward induction<br/>V_i = coupon + min(cont, call)"]
+    bwd --> price["Callable model price(oas)"]
+    mkt["Market price"] --> solve["Bisection on spread<br/>(price ↓ in oas)"]
+    price --> solve
+    solve --> oas["Option-adjusted spread"]
+```
+
 ## GPU acceleration & Python bindings
 
 The whole finance stack is reachable from Python through the nanobind extension
@@ -269,7 +326,9 @@ closed form. See the [Python bindings](../reference/python-bindings.md) and
 - Per-module reference: [bigdecimal](../reference/bigdecimal.md) ·
   [finance](../reference/finance.md) · [currency](../reference/currency.md) ·
   [pricing](../reference/pricing.md) · [analytics](../reference/analytics.md) ·
-  [portfolio](../reference/portfolio.md).
+  [portfolio](../reference/portfolio.md) · [exotics](../reference/exotics.md) ·
+  [yieldcurve](../reference/yieldcurve.md) · [fixedincome](../reference/fixedincome.md) ·
+  [riskextra](../reference/riskextra.md).
 - The full runnable showcase: `examples/finance_showcase.cpp`.
 - Design + remaining parity backlog + convention divergences:
   [finance-parity-roadmap](../technical/finance-parity-roadmap.md).
