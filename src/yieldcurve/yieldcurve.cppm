@@ -228,6 +228,24 @@ public:
     [[nodiscard]] auto bond_price(std::span<const double> times,
                                   std::span<const double> cashflows) const -> Result<double>;
 
+    // Price of a CALLABLE bond by one backward induction that carries the whole cashflow
+    // stream (the call option couples the cashflows, so they cannot be discounted
+    // independently as in bond_price). Each backward step discounts at the node short rate
+    // PLUS the option-adjusted spread `oas` (a continuously-compounded per-step spread), and
+    // on a call date the issuer redeems: the holder's ex-coupon continuation value is capped
+    // at the call price. Convention: V_i = coupon_i + min(continuation_i, call_price_i) at a
+    // call slice, V_i = coupon_i + continuation_i otherwise, so a coupon falling on a call
+    // date is still received alongside the call price. `times`/`cashflows` are the bond's
+    // dated cashflows (final entry carries the redemption); `call_times`/`call_prices` are the
+    // Bermudan call schedule (empty ⇒ a straight bond, and then this equals bond_price at
+    // oas=0). Every time must land on a lattice node within [1, steps]; a coupon and a call on
+    // the same node are both honoured. domain_error on a mismatch/off-node/out-of-range input.
+    [[nodiscard]] auto callable_bond_price(std::span<const double> times,
+                                           std::span<const double> cashflows,
+                                           std::span<const double> call_times,
+                                           std::span<const double> call_prices,
+                                           double oas = 0.0) const -> Result<double>;
+
     [[nodiscard]] auto dt() const noexcept -> double { return dt_; }
     [[nodiscard]] auto steps() const noexcept -> int { return steps_; }
     [[nodiscard]] auto j_max() const noexcept -> int { return jmax_; }
@@ -248,6 +266,20 @@ private:
 // out-of-range (a, dt) is surfaced as domain_error, never silently used.
 [[nodiscard]] auto build_hull_white(const Curve& curve, double a, double sigma, double dt,
                                     int steps) -> Result<HullWhiteLattice>;
+
+// Option-adjusted spread of a callable bond: the constant spread `oas` (continuously
+// compounded, added to every node's short rate) for which the lattice model price of the
+// callable bond equals `market_price`. Since the price is strictly decreasing in the spread,
+// the root is bracketed on [-1, 1] (±10000 bp) and found by bisection; a `market_price`
+// unreachable within that band, or any invalid schedule, returns not_converged / the
+// underlying domain_error. `call_times`/`call_prices` empty ⇒ the OAS of a straight bond
+// (its Z-spread over the lattice's fitted curve). Reuses `callable_bond_price` as the model.
+[[nodiscard]] auto callable_bond_oas(const HullWhiteLattice& lattice,
+                                     std::span<const double> times,
+                                     std::span<const double> cashflows,
+                                     std::span<const double> call_times,
+                                     std::span<const double> call_prices, double market_price)
+    -> Result<double>;
 
 // ---------------------------------------------------------------------------
 // Optional calendar bridge (reuses nimblecas.finance — no new date type).
@@ -1111,6 +1143,126 @@ auto HullWhiteLattice::bond_price(std::span<const double> times, std::span<const
         price += cashflows[i] * *d;
     }
     return price;
+}
+
+auto HullWhiteLattice::callable_bond_price(std::span<const double> times,
+                                           std::span<const double> cashflows,
+                                           std::span<const double> call_times,
+                                           std::span<const double> call_prices, double oas) const
+    -> Result<double> {
+    constexpr std::size_t kMaxCashflows = 2'000;
+    if (alpha_.empty() || !std::isfinite(oas)) {
+        return make_error<double>(MathError::domain_error);
+    }
+    if (times.empty() || times.size() != cashflows.size() || times.size() > kMaxCashflows ||
+        call_times.size() != call_prices.size() || call_times.size() > kMaxCashflows) {
+        return make_error<double>(MathError::domain_error);
+    }
+    // Map a positive node time onto its slice index in [1, steps], enforcing on-node alignment.
+    const auto to_slice = [&](double t) -> std::optional<int> {
+        if (!std::isfinite(t) || t <= 0.0) { return std::nullopt; }
+        const int n = static_cast<int>(std::llround(t / dt_));
+        if (n < 1 || n > steps_ ||
+            std::abs(static_cast<double>(n) * dt_ - t) > 1e-7 * std::max(1.0, t)) {
+            return std::nullopt;
+        }
+        return n;
+    };
+    // Bucket cashflows by slice; N is the final (maturity) slice and the induction's start.
+    int N = 0;
+    for (std::size_t k = 0; k < times.size(); ++k) {
+        const auto s = to_slice(times[k]);
+        if (!s || !std::isfinite(cashflows[k])) {
+            return make_error<double>(MathError::domain_error);
+        }
+        N = std::max(N, *s);
+    }
+    std::vector<double> cf(static_cast<std::size_t>(N) + 1, 0.0);
+    for (std::size_t k = 0; k < times.size(); ++k) {
+        cf[static_cast<std::size_t>(*to_slice(times[k]))] += cashflows[k];
+    }
+    // Bucket the Bermudan call schedule by slice (a call after maturity is meaningless).
+    std::vector<char> is_call(static_cast<std::size_t>(N) + 1, 0);
+    std::vector<double> callp(static_cast<std::size_t>(N) + 1, 0.0);
+    for (std::size_t k = 0; k < call_times.size(); ++k) {
+        const auto s = to_slice(call_times[k]);
+        if (!s || *s > N || !std::isfinite(call_prices[k]) || call_prices[k] < 0.0) {
+            return make_error<double>(MathError::domain_error);
+        }
+        is_call[static_cast<std::size_t>(*s)] = 1;
+        callp[static_cast<std::size_t>(*s)] = call_prices[k];
+    }
+    const double adt = a_ * dt_;
+    // Backward induction from the maturity slice N to the root, carrying the whole stream.
+    // V_i = coupon_i + (call ? min(continuation_i, call_price_i) : continuation_i); each step
+    // discounts at the node short rate plus the option-adjusted spread `oas`.
+    const int wN = std::min(N, jmax_);
+    std::vector<double> V(static_cast<std::size_t>(2 * wN + 1), cf[static_cast<std::size_t>(N)]);
+    for (int i = N - 1; i >= 0; --i) {
+        const int wi = std::min(i, jmax_);
+        const int wchild = std::min(i + 1, jmax_);
+        std::vector<double> Vn(static_cast<std::size_t>(2 * wi + 1), 0.0);
+        for (int k = 0; k <= 2 * wi; ++k) {
+            const int j = k - wi;
+            const double disc = std::exp(-(alpha_[static_cast<std::size_t>(i)] +
+                                           static_cast<double>(j) * dx_ + oas) * dt_);
+            auto br = hw_branch(j, jmax_, adt);
+            if (!br) { return make_error<double>(br.error()); }
+            double cont = 0.0;
+            for (const auto& [off, p] : *br) {
+                const int childk = (j + off) + wchild;
+                if (childk < 0 || childk > 2 * wchild) {
+                    return make_error<double>(MathError::domain_error);
+                }
+                cont += p * V[static_cast<std::size_t>(childk)];
+            }
+            double held = disc * cont;
+            if (is_call[static_cast<std::size_t>(i)]) {
+                held = std::min(held, callp[static_cast<std::size_t>(i)]);
+            }
+            Vn[static_cast<std::size_t>(k)] = cf[static_cast<std::size_t>(i)] + held;
+        }
+        V = std::move(Vn);
+    }
+    if (!std::isfinite(V[0])) { return make_error<double>(MathError::overflow); }
+    return V[0];
+}
+
+auto callable_bond_oas(const HullWhiteLattice& lattice, std::span<const double> times,
+                       std::span<const double> cashflows, std::span<const double> call_times,
+                       std::span<const double> call_prices, double market_price) -> Result<double> {
+    if (!std::isfinite(market_price) || market_price <= 0.0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const auto price_at = [&](double s) {
+        return lattice.callable_bond_price(times, cashflows, call_times, call_prices, s);
+    };
+    // The price is monotone non-increasing in the spread, so bracket on [-1, 1] (±10000 bp):
+    // price(lo) is the highest, price(hi) the lowest. Both evaluations also validate the schedule.
+    double lo = -1.0;
+    double hi = 1.0;
+    const auto plo = price_at(lo);
+    if (!plo) { return make_error<double>(plo.error()); }
+    const auto phi = price_at(hi);
+    if (!phi) { return make_error<double>(phi.error()); }
+    constexpr double ptol = 1e-9;
+    if (market_price > *plo + ptol || market_price < *phi - ptol) {
+        // The market price is unreachable within a ±100% spread — report honestly, never a
+        // fabricated boundary spread.
+        return make_error<double>(MathError::not_converged);
+    }
+    for (int iter = 0; iter < 200; ++iter) {
+        const double mid = 0.5 * (lo + hi);
+        const auto pm = price_at(mid);
+        if (!pm) { return make_error<double>(pm.error()); }
+        if (*pm > market_price) {
+            lo = mid;  // price too high -> need a larger spread
+        } else {
+            hi = mid;
+        }
+        if (hi - lo < 1e-12) { break; }
+    }
+    return 0.5 * (lo + hi);
 }
 
 // --- Calendar bridge --------------------------------------------------------

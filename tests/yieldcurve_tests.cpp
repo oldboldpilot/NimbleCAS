@@ -275,6 +275,64 @@ auto main() -> int {
                            "a==0 -> error");
                   t.expect(!hw.discount(0.3).has_value(), "off-node maturity -> error");
               })
+        .test("callable-bond pricing and option-adjusted spread",
+              [](TestContext& t) {
+                  // A 5-year 6% annual bond on the flat 5% curve trades at a premium (~103.77),
+                  // so a par call is in the money and the issuer's call is valuable.
+                  const Curve c = flat5();
+                  auto lat = build_hull_white(c, 0.1, 0.01, 0.5, 10);
+                  t.expect(lat.has_value(), "Hull-White (10 steps) builds");
+                  const HullWhiteLattice& hw = lat.value();
+                  const std::vector<double> ct{1.0, 2.0, 3.0, 4.0, 5.0};
+                  const std::vector<double> ca{6.0, 6.0, 6.0, 6.0, 106.0};
+                  const double straight = hw.bond_price(ct, ca).value();
+
+                  // (1) No call schedule reproduces the straight-bond price at oas=0.
+                  const std::vector<double> none{};
+                  const double no_call = hw.callable_bond_price(ct, ca, none, none, 0.0).value();
+                  t.expect(close(no_call, straight, 1e-9),
+                           "callable(no calls, oas=0) == straight bond_price");
+
+                  // (2) A par call from years 2-4 caps the premium: callable < straight, > 0.
+                  const std::vector<double> cxt{2.0, 3.0, 4.0};
+                  const std::vector<double> par{100.0, 100.0, 100.0};
+                  const double callable = hw.callable_bond_price(ct, ca, cxt, par, 0.0).value();
+                  t.expect(callable > 0.0 && callable < straight - 0.5,
+                           "callable (par call) is materially below the straight bond");
+
+                  // (3) A deeply out-of-the-money call (price 200) is never exercised.
+                  const std::vector<double> deep{200.0, 200.0, 200.0};
+                  const double otm = hw.callable_bond_price(ct, ca, cxt, deep, 0.0).value();
+                  t.expect(close(otm, straight, 1e-9),
+                           "unreachable call price -> callable == straight");
+
+                  // (4) OAS round-trips: the spread that reprices the oas=0 model price is ~0.
+                  const double oas0 =
+                      callable_bond_oas(hw, ct, ca, cxt, par, callable).value();
+                  t.expect(std::abs(oas0) < 1e-7, "OAS of the model price is ~0");
+
+                  // (5) A cheaper market price implies a strictly positive (wider) OAS, and OAS
+                  //     is monotone: lower price -> higher spread.
+                  const double oas_cheap =
+                      callable_bond_oas(hw, ct, ca, cxt, par, callable * 0.97).value();
+                  t.expect(oas_cheap > oas0, "a cheaper bond has a wider OAS");
+                  t.expect(close(hw.callable_bond_price(ct, ca, cxt, par, oas_cheap).value(),
+                                 callable * 0.97, 1e-6),
+                           "the solved OAS reprices the cheaper market price");
+
+                  // (6) Honest errors: mismatched schedule, off-node time, unreachable price.
+                  t.expect(hw.callable_bond_price(ct, ca, cxt, par, 0.0).has_value(),
+                           "well-formed callable prices");
+                  const std::vector<double> bad_len{2.0};
+                  t.expect(!hw.callable_bond_price(ct, ca, bad_len, par, 0.0).has_value(),
+                           "call_times/call_prices length mismatch -> error");
+                  const std::vector<double> off{2.3};
+                  const std::vector<double> offp{100.0};
+                  t.expect(!hw.callable_bond_price(ct, ca, off, offp, 0.0).has_value(),
+                           "off-node call time -> error");
+                  t.expect(!callable_bond_oas(hw, ct, ca, cxt, par, 1.0e6).has_value(),
+                           "unreachable market price -> not_converged");
+              })
         .test("calendar bridge reuses finance Date/DayCount",
               [](TestContext& t) {
                   using nimblecas::finance::Date;
