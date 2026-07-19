@@ -1088,7 +1088,10 @@ __global__ void black_scholes_kernel(const NimblecasBsOption* __restrict__ opts,
 // Device-sized grid (a small multiple of the SM count), capped at one block per option.
 inline int bs_blocks(int n, int threads) {
     int sm = 0;
-    const int by_n = (n + threads - 1) / threads;
+    // 64-bit intermediate: n can be up to INT_MAX (the wrapper's cap), so `n + threads - 1`
+    // would overflow a signed int. The ceil-divide result fits back in int (<= ~8.4M).
+    const long long by_n64 = (static_cast<long long>(n) + threads - 1) / threads;
+    const int by_n = by_n64 > 0 ? static_cast<int>(by_n64) : 1;
     if (cudaDeviceGetAttribute(&sm, cudaDevAttrMultiProcessorCount, 0) == cudaSuccess && sm > 0) {
         const int cap = sm * 32;
         const int b = cap < by_n ? cap : by_n;
