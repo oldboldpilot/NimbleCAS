@@ -49,6 +49,7 @@ term*, or *numerical with a stated tolerance*. Preserve and extend that boundary
 | `nimblecas.exotics` | CRR binomial, analytic barriers, lookback, Crank-Nicolson PDE, Margrabe/Kirk/basket | numerical |
 | `nimblecas.analytics` / `nimblecas.portfolio` / `nimblecas.riskextra` | Sharpe/Sortino/VaR/CVaR, Markowitz optimization, CVaR-optimal weights | numerical |
 | `nimblecas.marketdata` | **provider-agnostic quote ingestion** — normalised `Quote`/`Bar`/`OptionChain`/`RateQuote` + Yahoo/Alpha Vantage/Alpaca adapters via `fastjson`; fluent `Feed` | data boundary (no fabricated values) |
+| `nimblecas.futures` | cost-of-carry forward/futures valuation (basis, convenience yield, implied carry, MtM) + composable `FuturesStrategy` (outright, calendar/inter-commodity spreads, hedges, cash-and-carry) | numerical |
 
 **Market-data usage** (feeds every valuation engine above):
 
@@ -65,7 +66,7 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
 
 ## Roadmap (this workstream)
 
-1. **Futures/forward valuation** — cost-of-carry, basis, convenience yield, roll, MtM.
+1. ~~**Futures/forward valuation** — cost-of-carry, basis, convenience yield, roll, MtM.~~ ✅ `nimblecas.futures` shipped.
 2. **Trading strategies across five asset classes** — options (covered call, spreads,
    straddle/strangle, butterfly, condor, collar, calendar), futures, FX, bonds, money
    markets — each with strategy analytics (net debit/credit, max profit, max loss,
