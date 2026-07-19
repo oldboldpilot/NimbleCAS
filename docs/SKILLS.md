@@ -51,6 +51,9 @@ term*, or *numerical with a stated tolerance*. Preserve and extend that boundary
 | `nimblecas.marketdata` | **provider-agnostic quote ingestion** — normalised `Quote`/`Bar`/`OptionChain`/`RateQuote` + Yahoo/Alpha Vantage/Alpaca adapters via `fastjson`; fluent `Feed` | data boundary (no fabricated values) |
 | `nimblecas.futures` | cost-of-carry forward/futures valuation (basis, convenience yield, implied carry, MtM) + composable `FuturesStrategy` (outright, calendar/inter-commodity spreads, hedges, cash-and-carry) | numerical |
 | `nimblecas.optstrat` | composable option strategies (covered call, spreads, straddle/strangle, strip/strap, butterfly, condor, collar, box, risk reversal, ratio) + exact piecewise-linear expiry-P&L analytics (net premium, max profit/loss, breakevens) + BS Greeks bridge | exact expiry P&L / numerical Greeks |
+| `nimblecas.fxstrat` | Garman-Kohlhagen FX options, covered-interest-parity forwards/points, covered-interest-arbitrage, fluent `CarryTrade` (breakeven == CIP forward) | numerical |
+| `nimblecas.bondstrat` | portfolio duration/convexity/yield, barbell/butterfly weights, duration-neutral hedge ratio, carry/roll + duration-convexity P&L | exact weighting algebra |
+| `nimblecas.mmstrat` | repo interest, discount price↔rate, bond-equivalent yield, holding-period return, deposit-strip effective rate | exact day-count identities |
 
 **Market-data usage** (feeds every valuation engine above):
 
@@ -68,10 +71,9 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
 ## Roadmap (this workstream)
 
 1. ~~**Futures/forward valuation** — cost-of-carry, basis, convenience yield, roll, MtM.~~ ✅ `nimblecas.futures` shipped.
-2. **Trading strategies across five asset classes** — options (covered call, spreads,
-   straddle/strangle, butterfly, condor, collar, calendar), futures, FX, bonds, money
-   markets — each with strategy analytics (net debit/credit, max profit, max loss,
-   breakevens, payoff/P&L), reusing the valuation engines above.
+2. ~~**Trading strategies across five asset classes** — options, futures, FX, bonds, money
+   markets — each with strategy analytics.~~ ✅ `optstrat`, `futures` strategies, `fxstrat`,
+   `bondstrat`, `mmstrat` shipped.
 3. **GPU acceleration** of compute-heavy paths (Monte Carlo pricing, payoff-grid /
    strategy sweeps, batch valuation) in the `nimblecas.gpu` pattern: **Triton kernel,
    CUDA, CUDA Graphs, and CuTile** variants (opt-in `-DNIMBLECAS_CUDA=ON`). The CPU path
