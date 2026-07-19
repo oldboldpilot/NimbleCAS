@@ -24,6 +24,16 @@ target_sources(nimblecas_core PUBLIC
   FILE_SET CXX_MODULES FILES src/core/core.cppm)
 target_link_libraries(nimblecas_core PUBLIC std_module)
 
+# ---- fastjson : vendored fastestjsoninthewest C++23 JSON parser (Code Policy Rule 37) ----
+# Submodule at external/fastestjsoninthewest. Only the core `import fastjson` module is
+# wired in; the OpenMP-accelerated fastjson_parallel variant is intentionally excluded
+# (the canonical flags are TBB-only and drop -fopenmp, Rule 50/103). Inherits the global
+# canonical flags via add_compile_options so its BMI is config-compatible with the rest.
+add_library(nimblecas_fastjson STATIC)
+target_sources(nimblecas_fastjson PUBLIC
+  FILE_SET CXX_MODULES FILES external/fastestjsoninthewest/modules/fastjson.cppm)
+target_link_libraries(nimblecas_fastjson PUBLIC std_module)
+
 # ---- nimblecas.parallel : fork-join runtime & tree combinators (TBB / PPL) ----
 add_library(nimblecas_parallel STATIC)
 target_sources(nimblecas_parallel PUBLIC
