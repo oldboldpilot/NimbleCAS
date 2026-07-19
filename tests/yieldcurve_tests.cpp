@@ -332,6 +332,15 @@ auto main() -> int {
                            "off-node call time -> error");
                   t.expect(!callable_bond_oas(hw, ct, ca, cxt, par, 1.0e6).has_value(),
                            "unreachable market price -> not_converged");
+                  // A negative cashflow would break monotonicity in oas -> rejected.
+                  const std::vector<double> neg{6.0, 6.0, 6.0, 6.0, -106.0};
+                  t.expect(!hw.callable_bond_price(ct, neg, none, none, 0.0).has_value(),
+                           "negative cashflow -> error (monotonicity precondition)");
+                  // Two call prices on the same node is an order-ambiguous schedule -> rejected.
+                  const std::vector<double> dup_t{2.0, 2.0};
+                  const std::vector<double> dup_p{100.0, 90.0};
+                  t.expect(!hw.callable_bond_price(ct, ca, dup_t, dup_p, 0.0).has_value(),
+                           "duplicate call node -> error");
               })
         .test("calendar bridge reuses finance Date/DayCount",
               [](TestContext& t) {

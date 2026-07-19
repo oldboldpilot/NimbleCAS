@@ -236,10 +236,12 @@ public:
     // at the call price. Convention: V_i = coupon_i + min(continuation_i, call_price_i) at a
     // call slice, V_i = coupon_i + continuation_i otherwise, so a coupon falling on a call
     // date is still received alongside the call price. `times`/`cashflows` are the bond's
-    // dated cashflows (final entry carries the redemption); `call_times`/`call_prices` are the
-    // Bermudan call schedule (empty ⇒ a straight bond, and then this equals bond_price at
+    // dated cashflows (final entry carries the redemption; cashflows must be non-negative so
+    // the price stays monotone in `oas`); `call_times`/`call_prices` are the Bermudan call
+    // schedule on DISTINCT nodes (empty ⇒ a straight bond, and then this equals bond_price at
     // oas=0). Every time must land on a lattice node within [1, steps]; a coupon and a call on
-    // the same node are both honoured. domain_error on a mismatch/off-node/out-of-range input.
+    // the same node are both honoured. domain_error on a mismatch/off-node/negative/duplicate
+    // input.
     [[nodiscard]] auto callable_bond_price(std::span<const double> times,
                                            std::span<const double> cashflows,
                                            std::span<const double> call_times,
@@ -1169,10 +1171,14 @@ auto HullWhiteLattice::callable_bond_price(std::span<const double> times,
         return n;
     };
     // Bucket cashflows by slice; N is the final (maturity) slice and the induction's start.
+    // Cashflows must be non-negative: the price is then a non-negative combination at every
+    // backward step and (with the min-cap) is monotone non-increasing in `oas` — the property
+    // callable_bond_oas relies on to bracket the spread. A signed schedule would break that
+    // monotonicity, so it is refused rather than fed to a solver whose precondition it violates.
     int N = 0;
     for (std::size_t k = 0; k < times.size(); ++k) {
         const auto s = to_slice(times[k]);
-        if (!s || !std::isfinite(cashflows[k])) {
+        if (!s || !std::isfinite(cashflows[k]) || cashflows[k] < 0.0) {
             return make_error<double>(MathError::domain_error);
         }
         N = std::max(N, *s);
@@ -1187,6 +1193,11 @@ auto HullWhiteLattice::callable_bond_price(std::span<const double> times,
     for (std::size_t k = 0; k < call_times.size(); ++k) {
         const auto s = to_slice(call_times[k]);
         if (!s || *s > N || !std::isfinite(call_prices[k]) || call_prices[k] < 0.0) {
+            return make_error<double>(MathError::domain_error);
+        }
+        if (is_call[static_cast<std::size_t>(*s)]) {
+            // Two call prices on the same node is a malformed, order-ambiguous schedule
+            // (last-wins would make the price depend on argument order). Refuse it.
             return make_error<double>(MathError::domain_error);
         }
         is_call[static_cast<std::size_t>(*s)] = 1;
