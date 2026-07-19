@@ -885,6 +885,13 @@ target_sources(nimblecas_pricing PUBLIC
 target_link_libraries(nimblecas_pricing
   PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_core std_module)
 
+# ---- nimblecas.marketdata : provider-agnostic quote ingestion (Yahoo/Alpha Vantage/Alpaca) ----
+add_library(nimblecas_marketdata STATIC)
+target_sources(nimblecas_marketdata PUBLIC
+  FILE_SET CXX_MODULES FILES src/marketdata/marketdata.cppm)
+target_link_libraries(nimblecas_marketdata
+  PUBLIC nimblecas_fastjson nimblecas_core std_module)
+
 # ---- nimblecas.analytics : portfolio & risk analytics (Sharpe, VaR/CVaR, MV optimization) ----
 add_library(nimblecas_analytics STATIC)
 target_sources(nimblecas_analytics PUBLIC
@@ -953,6 +960,12 @@ target_link_libraries(pricing_tests
   PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME pricing_tests COMMAND pricing_tests)
+
+add_executable(marketdata_tests tests/marketdata_tests.cpp)
+target_link_libraries(marketdata_tests
+  PRIVATE nimblecas_marketdata nimblecas_fastjson nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME marketdata_tests COMMAND marketdata_tests)
 
 add_executable(analytics_tests tests/analytics_tests.cpp)
 target_link_libraries(analytics_tests
