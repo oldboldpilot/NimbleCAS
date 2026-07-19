@@ -74,9 +74,33 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `haar_dwt_batch(data, batch, len)` | Batched Haar discrete wavelet transform. |
 | `batched_matmul(a, b, batch, ...)` | Batched dense matrix multiply. |
 | `fft_batch(in, batch, n)` | Batched FFT (power-of-two length). |
+| `black_scholes_batch(opts)` | **Batched Black-Scholes-Merton pricing** — one thread per `BsOption`, grid-stride. Mirrors `pricing::black_scholes_price` to FP tolerance. |
+| `black_scholes_batch_graphed(opts, iterations)` | Same result, captured into a **CUDA graph** and replayed `iterations` times (a fixed-shape risk sweep); the replay is bit-identical to the direct launch. |
 
-All eight kernels (poly-eval plus the seven above) execute and pass on the
-**RTX 5090** (sm_120, CUDA 13.2, nvcc `-arch=native`); see [Testing](#testing).
+All eight numeric kernels plus the batched Black-Scholes pricer execute and pass on the
+**RTX PRO 6000 Blackwell** and **RTX 5090** (sm_120, CUDA 13.2, nvcc `-arch=native`); see
+[Testing](#testing).
+
+### Finance: batched Black-Scholes and the CUDA-graph path
+
+`black_scholes_batch` prices a whole option grid (a chain, or a price-vs-spot sweep) in one
+launch, taking a span of the POD `BsOption { spot, strike, rate, dividend, volatility, time,
+is_call }`. The device formula is identical to
+[`pricing`](pricing.md)'s `black_scholes_greeks` (same `d1`/`d2`, same degenerate
+`T==0`/`σ==0` collapse to discounted intrinsic), so **the GPU is a batch-valuation mirror of
+the authoritative CPU pricer, never a second source of truth**. `black_scholes_batch_graphed`
+captures the kernel launch into a **CUDA graph** and replays it on persistent device buffers,
+amortizing per-launch overhead across repeated re-pricing of a fixed-shape grid — its output
+is bit-identical to the direct launch (a checked invariant). A non-physical option
+(`spot<=0`, `strike<=0`, `time<0`, `σ<0`) → `MathError::domain_error` (validated on the host
+before any launch); no device / a CUDA failure → `MathError::gpu_error`.
+
+Profiling (`nsys`/`ncu`, RTX PRO 6000 Blackwell, CUDA 13.2) confirms the honest picture: at a
+small grid the kernel is **launch-latency-bound** (SM ~0.1 %, DRAM ~0.2 % of peak, ~11 µs) —
+a few transcendentals per option cannot saturate a Blackwell part, so the GPU path is worth
+it only at large batch sizes, and the CUDA-graph replay (visible as repeated
+`cudaGraphLaunch` in the `nsys` timeline) is what removes per-launch overhead when the same
+grid is re-priced many times.
 
 ### Error model
 
@@ -152,8 +176,29 @@ Black-Scholes closed form. Verified on the **RTX 5090** (torch 2.13.0+cu130, tri
 3.7.1): 8,000,000 paths → **10.45238 ± 0.00260**, agreeing with Black-Scholes
 (10.45058) to **0.69 standard errors**.
 
+### Triton batched Black-Scholes (`python/triton/black_scholes.py`)
+
+`black_scholes.py` is the closed-form Triton sibling of `mc_option.py` and the portable
+counterpart of the in-engine CUDA `black_scholes_batch`: a `@triton.jit` kernel that prices
+one `BLOCK_SIZE`-wide tile of options per program (`d1`/`d2`, `Φ` via `tl.erf`, the degenerate
+`T==0`/`σ==0` branch). It **mirrors the CPU closed form** rather than reimplementing the
+model. Verified on the **RTX 5090** (sm_120, torch 2.13.0+cu130, triton 3.7.1): a 10-option
+grid agrees with the CPU closed form to a max `|error|` of **7.1e-15**, with the ATM 1-year
+call at **10.45058** (the textbook value).
+
 The Triton kernels live under `python/triton` and run via the managed venv,
 complementing — not replacing — the in-engine CUDA and CPU paths.
+
+### CuTile variant — status
+
+The GPU acceleration variants requested for the finance path are: **CUDA** (`black_scholes_batch`)
+and **CUDA Graphs** (`black_scholes_batch_graphed`) — both implemented in-engine and validated
+on Blackwell above — and **Triton** (`black_scholes.py` + `mc_option.py`) — verified on the
+RTX 5090. The **CuTile** variant (NVIDIA's tile-based CUDA DSL) is **not yet implemented**: it
+requires the `cuda-python` / cuTile toolchain, which is not currently provisioned in the build
+venvs (only `torch`/`triton` are). It is a bounded follow-up — port the same tile structure as
+the Triton kernel onto cuTile once that toolchain is installed — and is tracked as the one open
+item of ROADMAP §5 GPU for finance. This module does not ship an unverified CuTile kernel.
 
 ## Testing
 

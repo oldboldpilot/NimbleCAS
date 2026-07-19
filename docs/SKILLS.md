@@ -74,14 +74,17 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
 2. ~~**Trading strategies across five asset classes** — options, futures, FX, bonds, money
    markets — each with strategy analytics.~~ ✅ `optstrat`, `futures` strategies, `fxstrat`,
    `bondstrat`, `mmstrat` shipped.
-3. **GPU acceleration** of compute-heavy paths (Monte Carlo pricing, payoff-grid /
-   strategy sweeps, batch valuation) in the `nimblecas.gpu` pattern: **Triton kernel,
-   CUDA, CUDA Graphs, and CuTile** variants (opt-in `-DNIMBLECAS_CUDA=ON`). The CPU path
-   stays authoritative and bit-reproducible; GPU is a performance mirror validated
-   against it.
-4. **Profiling-gated optimization** (Rules 43/58/59): no speedup claim without
-   evidence — **perf / VTune** for CPU hot paths, **nsys / ncu** for GPU kernels,
-   profiled on the servers.
+3. **GPU acceleration** of the batch-valuation path (`nimblecas.gpu`, opt-in
+   `-DNIMBLECAS_CUDA=ON`): batched Black-Scholes as a **CUDA** kernel (`black_scholes_batch`,
+   Blackwell-validated), a **CUDA Graph** replay variant (`black_scholes_batch_graphed`,
+   bit-identical), and a **Triton** kernel (`python/triton/black_scholes.py`, verified 7e-15
+   on the RTX 5090; joins the existing Triton `mc_option.py`). CPU path stays authoritative;
+   GPU is a validated mirror. **CuTile** variant is the one open item — needs the
+   `cuda-python`/cuTile toolchain provisioned (not fabricated).
+4. ✅ **Profiling** (Rules 43/58/59): the batched Black-Scholes kernel profiled with
+   **nsys** (timeline; CUDA-graph replay visible) and **ncu** (SM/DRAM throughput,
+   duration) on Blackwell — honestly latency-bound at small grids. No unevidenced speedup
+   claim. (`perf`/VTune remain for any CPU hot-path claim.)
 
 Keep this table and the [`Index.md`](Index.md) catalog in sync as each module lands.
 
