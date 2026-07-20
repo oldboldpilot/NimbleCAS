@@ -170,5 +170,49 @@ auto main() -> int {
                   std::vector<float> tiny(xs.size() - 1);
                   t.expect(!p.evaluate_batch_into(xs, tiny), "undersized out buffer is rejected");
               })
+        .test("evaluate_batch_parallel_is_bit_identical_to_serial",
+              [](TestContext& t) {
+                  auto p = poly({2, -3, 1, 4});  // 2 - 3x + x^2 + 4x^3
+                  std::vector<float> xs(5000);
+                  for (std::size_t i = 0; i < xs.size(); ++i) {
+                      xs[i] = static_cast<float>(i) * 0.003f - 7.5f;
+                  }
+                  const auto expected = p.evaluate_batch(xs);  // serial reference
+                  // A small grain forces real sharding (n=5000 >> grain=64 -> many sub-ranges).
+                  const auto got = p.evaluate_batch_parallel(xs, /*grain=*/64);
+                  bool same = got.size() == expected.size();
+                  for (std::size_t i = 0; same && i < got.size(); ++i) {
+                      same = std::bit_cast<std::uint32_t>(got[i]) ==
+                             std::bit_cast<std::uint32_t>(expected[i]);
+                  }
+                  t.expect(same, "parallel result is bit-identical to the serial evaluate_batch");
+                  // _into form with a forced-parallel grain, plus the undersized-out guard.
+                  std::vector<float> out(xs.size());
+                  t.expect(p.evaluate_batch_parallel_into(xs, out, /*grain=*/128),
+                           "parallel in-place eval succeeds when out fits");
+                  bool same_into = true;
+                  for (std::size_t i = 0; same_into && i < out.size(); ++i) {
+                      same_into = std::bit_cast<std::uint32_t>(out[i]) ==
+                                  std::bit_cast<std::uint32_t>(expected[i]);
+                  }
+                  t.expect(same_into, "parallel in-place result is bit-identical to serial");
+                  std::vector<float> tiny(xs.size() - 1);
+                  t.expect(!p.evaluate_batch_parallel_into(xs, tiny),
+                           "undersized out buffer is rejected");
+                  // Below-grain (serial fallback), empty span, and the zero polynomial.
+                  const auto small = p.evaluate_batch_parallel(std::span<const float>(xs).first(10));
+                  const auto small_ref = p.evaluate_batch(std::span<const float>(xs).first(10));
+                  bool small_ok = small.size() == 10;
+                  for (std::size_t i = 0; small_ok && i < small.size(); ++i) {
+                      small_ok = std::bit_cast<std::uint32_t>(small[i]) ==
+                                 std::bit_cast<std::uint32_t>(small_ref[i]);
+                  }
+                  t.expect(small_ok, "below-grain input runs serially and matches");
+                  t.expect(p.evaluate_batch_parallel({}).empty(), "empty span -> empty result");
+                  const Polynomial zero;
+                  const auto zeros = zero.evaluate_batch_parallel(xs, /*grain=*/64);
+                  t.expect(std::ranges::all_of(zeros, [](float v) { return v == 0.0f; }),
+                           "zero polynomial evaluates to all zeros in parallel");
+              })
         .run();
 }
