@@ -101,8 +101,14 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
    paths/s)** on 88 threads. Two hot paths, two bottlenecks, two evidence-backed parallel wins.
    Then the transcendentals themselves were **vectorised**: a deterministic AVX-512 **`simd::exp_into`**
    (double, ~1 ulp, bit-identical across ISAs) replaced the scalar libm `exp` in the European GBM
-   payoff — **~1.38× on serial MC** (28.7 → 39.7 M paths/s) and **~1.02 B paths/s** parallel, `exp`
-   confirmed dropped from the hot profile. Still open: the inverse-normal `log` (13 %, tail branches).
+   payoff — **~1.38× on serial MC** (28.7 → 39.7 M paths/s). Next, `normal_fill`'s **inverse-normal
+   transform** was vectorised: an AVX-512 path evaluates Acklam's branchless central rational (~95 %
+   of draws) with `_mm512_fmadd`, scalar-fixes the ~5 % log/sqrt tail lanes, and is **bit-identical
+   to the per-index scalar path** (proven 0 mismatches; MC output bit-unchanged, a pure speedup) —
+   another **~1.33× (→ 53.0 M paths/s serial, ~1.25 B parallel), and it speeds up Asian + LS too**
+   (shared `normal_fill`). Cumulative European MC: **1.85× serial**. Still open: the tail-branch `log`
+   (~5 % of draws) and the Asian/LS per-step exp. Every step stayed deterministic & cross-host
+   reproducible (scalar fallbacks bit-identical to the vector paths — Rule 55).
 
 Keep this table and the [`Index.md`](Index.md) catalog in sync as each module lands.
 

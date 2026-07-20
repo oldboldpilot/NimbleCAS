@@ -33,7 +33,13 @@ exactness.** Concretely:
   pure function of its global index via [`rng`](rng.md)'s `counter_u64`, inheriting
   the design guarantee documented in [`montecarlo`](montecarlo.md) — no time or
   entropy seeding anywhere, so equal seeds reproduce equal results bit-for-bit and
-  any partition of the path range reproduces the serial mean.
+  any partition of the path range reproduces the serial mean. The `bits → N(0,1)`
+  transform (`normal_fill`) and the European GBM `exp` are **dynamically dispatched**
+  (AVX-512 → scalar): the AVX-512 inverse-normal evaluates Acklam's branchless central
+  rational for the ~95 % bulk and scalar-fixes the ~5 % log/sqrt tail lanes, **bit-identical
+  to the per-index scalar path** — a `perf`-gated speedup (all MC pricers ~1.3–1.9× faster on
+  a Skylake-SP Xeon) that changes no result. Off AVX-512, the scalar path is the identical
+  fallback.
 
 All failure rides the railway (`Result<T>` / `MathError`); nothing throws.
 
