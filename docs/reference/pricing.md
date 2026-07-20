@@ -34,12 +34,16 @@ exactness.** Concretely:
   the design guarantee documented in [`montecarlo`](montecarlo.md) — no time or
   entropy seeding anywhere, so equal seeds reproduce equal results bit-for-bit and
   any partition of the path range reproduces the serial mean. The `bits → N(0,1)`
-  transform (`normal_fill`) and the European GBM `exp` are **dynamically dispatched**
+  transform (`normal_fill`) and every GBM `exp` are **dynamically dispatched**
   (AVX-512 → scalar): the AVX-512 inverse-normal evaluates Acklam's branchless central
-  rational for the ~95 % bulk and scalar-fixes the ~5 % log/sqrt tail lanes, **bit-identical
-  to the per-index scalar path** — a `perf`-gated speedup (all MC pricers ~1.3–1.9× faster on
-  a Skylake-SP Xeon) that changes no result. Off AVX-512, the scalar path is the identical
-  fallback.
+  rational for the ~95 % bulk and defers the ~5 % log/sqrt tail lanes into a bounded buffer
+  flushed 8-wide through the deterministic vector `log` ([`simd::log_into`](simd.md)) — so even
+  the tail log runs vectorised, not scalar libm — while the per-step exponentials of the Asian
+  and Longstaff-Schwartz pricers batch through [`simd::exp_into`](simd.md) (the Asian geometric
+  leg additionally drops its per-step `log` for the exact cumulative-log-return identity). Every
+  path is **bit-identical to the per-index scalar path** — a `perf`-gated speedup (European MC
+  ~2.0× cumulative, **Asian ~1.9×**, on a Skylake-SP Xeon) that changes no result to sampling
+  precision. Off AVX-512, the scalar path is the identical fallback.
 
 All failure rides the railway (`Result<T>` / `MathError`); nothing throws.
 

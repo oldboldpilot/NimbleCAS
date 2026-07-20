@@ -106,9 +106,16 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
    of draws) with `_mm512_fmadd`, scalar-fixes the ~5 % log/sqrt tail lanes, and is **bit-identical
    to the per-index scalar path** (proven 0 mismatches; MC output bit-unchanged, a pure speedup) —
    another **~1.33× (→ 53.0 M paths/s serial, ~1.25 B parallel), and it speeds up Asian + LS too**
-   (shared `normal_fill`). Cumulative European MC: **1.85× serial**. Still open: the tail-branch `log`
-   (~5 % of draws) and the Asian/LS per-step exp. Every step stayed deterministic & cross-host
-   reproducible (scalar fallbacks bit-identical to the vector paths — Rule 55).
+   (shared `normal_fill`). Finally the two remaining transcendental hot spots were closed: a
+   deterministic AVX-512 **`simd::log_into`** (bit-identical across ISAs, ~1 ulp) lets `normal_fill`
+   **defer the ~5 % inverse-normal tail lanes into a buffer flushed 8-wide** instead of a scalar
+   libm `log`, and the **Asian / Longstaff-Schwartz per-step `exp`** now batches through
+   `simd::exp_into` (the Asian geometric leg dropping its per-step `log` for the exact
+   cumulative-log-return identity). Measured A/B on the Xeon: **European serial 52.7 → 57.8 M
+   paths/s (2.0× cumulative from 28.7), Asian 29.0 → 55.5 M steps/s (1.9×)**, LS +5 % (it is
+   regression-bound, not exp-bound — reported honestly), all prices unchanged to 6 dp. Every step
+   stayed deterministic & cross-host reproducible (scalar fallbacks bit-identical to the vector
+   paths — Rule 55).
 
 Keep this table and the [`Index.md`](Index.md) catalog in sync as each module lands.
 
