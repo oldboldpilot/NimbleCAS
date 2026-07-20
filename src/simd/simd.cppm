@@ -79,6 +79,21 @@ auto horner_step(std::span<float> acc, std::span<const float> x, float c) noexce
 // saturated inf/0. Callers outside that range must guard or clamp first.
 auto exp_into(std::span<const double> x, std::span<double> out) noexcept -> void;
 
+// log(x) for a single DOUBLE — the scalar reference AND public scalar entry, bit-identical to the
+// per-lane result of log_into (Rule 55). A deterministic (≈1 ulp) natural log: bit-manipulation
+// mantissa/exponent split, an atanh series on s = (m-1)/(m+1), then e*ln2 recombination via std::fma.
+//
+// DOMAIN (honesty boundary): defined for finite, positive, NORMAL x. The reduction reads the raw
+// exponent/mantissa fields, so x <= 0, subnormal, inf or NaN are OUT OF CONTRACT (unspecified value,
+// not a diagnosed error). Callers must guard first — the Monte-Carlo tail uses it on p in (1e-15, 1).
+[[nodiscard]] auto log_one(double x) noexcept -> double;
+
+// out[i] = log(x[i]) in DOUBLE precision, dynamically dispatched (AVX-512 -> scalar). Every ISA path
+// is bit-identical to log_one applied per element, so results are reproducible across hosts. Same
+// positive-normal domain as log_one. The hot path for the Monte-Carlo inverse-normal tail (the ~5 %
+// of draws that need a log) and any batch logarithm.
+auto log_into(std::span<const double> x, std::span<double> out) noexcept -> void;
+
 }  // namespace nimblecas::simd
 
 // ===========================================================================
@@ -131,6 +146,50 @@ inline constexpr double kExpC2 = 0.5;
 auto exp_d_scalar(const double* in, double* out, std::size_t n) noexcept -> void {
     for (std::size_t i = 0; i < n; ++i) {
         out[i] = exp_one(in[i]);
+    }
+}
+
+// --- log(double) constants: reuse the exp ln2 split (kLn2Hi/kLn2Lo) + atanh series 1 + z/3 +
+// z^2/5 + ... on z = s^2, s = (m-1)/(m+1), with the mantissa centred in [sqrt2/2, sqrt2). ---
+inline constexpr double kSqrt2 = 1.4142135623730951;
+inline constexpr double kLogC1 = 1.0 / 3.0;
+inline constexpr double kLogC2 = 1.0 / 5.0;
+inline constexpr double kLogC3 = 1.0 / 7.0;
+inline constexpr double kLogC4 = 1.0 / 9.0;
+inline constexpr double kLogC5 = 1.0 / 11.0;
+inline constexpr double kLogC6 = 1.0 / 13.0;
+inline constexpr double kLogC7 = 1.0 / 15.0;
+inline constexpr double kLogC8 = 1.0 / 17.0;
+
+// Scalar log(double): the correctness reference AND the portable fallback. Bit-identical to the
+// AVX-512 path — same field extraction, same sqrt2 centring, same std::fma order (Rule 55).
+[[nodiscard]] auto log_scalar_one(double x) noexcept -> double {
+    const std::uint64_t bits = std::bit_cast<std::uint64_t>(x);
+    double e = static_cast<double>(static_cast<std::int64_t>((bits >> 52) & 0x7ff) - 1023);
+    double m = std::bit_cast<double>((bits & 0x000fffffffffffffULL) | 0x3ff0000000000000ULL);
+    if (m > kSqrt2) {  // centre the mantissa in [sqrt2/2, sqrt2) so the atanh argument stays small
+        m *= 0.5;
+        e += 1.0;
+    }
+    const double s = (m - 1.0) / (m + 1.0);
+    const double z = s * s;
+    double poly = kLogC8;
+    poly = std::fma(poly, z, kLogC7);
+    poly = std::fma(poly, z, kLogC6);
+    poly = std::fma(poly, z, kLogC5);
+    poly = std::fma(poly, z, kLogC4);
+    poly = std::fma(poly, z, kLogC3);
+    poly = std::fma(poly, z, kLogC2);
+    poly = std::fma(poly, z, kLogC1);
+    poly = std::fma(poly, z, 1.0);
+    const double log_m = (s + s) * poly;  // 2*s exactly (add, no rounding)
+    double res = std::fma(e, kLn2Lo, log_m);
+    res = std::fma(e, kLn2Hi, res);
+    return res;
+}
+auto log_d_scalar(const double* in, double* out, std::size_t n) noexcept -> void {
+    for (std::size_t i = 0; i < n; ++i) {
+        out[i] = log_scalar_one(in[i]);
     }
 }
 
@@ -283,6 +342,47 @@ auto horner_avx2(float* acc, const float* x, float c, std::size_t n) noexcept ->
     }
     exp_d_scalar(in + i, out + i, n - i);
 }
+// AVX-512 log(double), 8 lanes. Bit-identical to log_scalar_one: the same bit-field split, the same
+// sqrt2 mantissa centring (via a compare-mask), the same FMA order. Needs AVX512DQ for
+// _mm512_cvtepi64_pd; the tail falls through to the scalar reference.
+[[gnu::target("avx512f,avx512dq")]] auto log_d_avx512(const double* in, double* out,
+                                                      std::size_t n) noexcept -> void {
+    const __m512i expmask = _mm512_set1_epi64(0x7ff);
+    const __m512i mantmask = _mm512_set1_epi64(0x000fffffffffffffLL);
+    const __m512i mantbias = _mm512_set1_epi64(0x3ff0000000000000LL);
+    const __m512i bias = _mm512_set1_epi64(1023);
+    const __m512d one = _mm512_set1_pd(1.0);
+    const __m512d half = _mm512_set1_pd(0.5);
+    const __m512d sqrt2 = _mm512_set1_pd(kSqrt2);
+    const __m512d ln2hi = _mm512_set1_pd(kLn2Hi);
+    const __m512d ln2lo = _mm512_set1_pd(kLn2Lo);
+    std::size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        const __m512i b = _mm512_loadu_si512(in + i);
+        const __m512i ei = _mm512_sub_epi64(_mm512_and_si512(_mm512_srli_epi64(b, 52), expmask), bias);
+        __m512d e = _mm512_cvtepi64_pd(ei);
+        __m512d m = _mm512_castsi512_pd(_mm512_or_si512(_mm512_and_si512(b, mantmask), mantbias));
+        const __mmask8 k = _mm512_cmp_pd_mask(m, sqrt2, _CMP_GT_OQ);
+        m = _mm512_mask_mul_pd(m, k, m, half);     // m *= 0.5 where m > sqrt2
+        e = _mm512_mask_add_pd(e, k, e, one);      // e += 1 there
+        const __m512d s = _mm512_div_pd(_mm512_sub_pd(m, one), _mm512_add_pd(m, one));
+        const __m512d z = _mm512_mul_pd(s, s);
+        __m512d poly = _mm512_set1_pd(kLogC8);
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC7));
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC6));
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC5));
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC4));
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC3));
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC2));
+        poly = _mm512_fmadd_pd(poly, z, _mm512_set1_pd(kLogC1));
+        poly = _mm512_fmadd_pd(poly, z, one);
+        const __m512d log_m = _mm512_mul_pd(_mm512_add_pd(s, s), poly);
+        __m512d res = _mm512_fmadd_pd(e, ln2lo, log_m);
+        res = _mm512_fmadd_pd(e, ln2hi, res);
+        _mm512_storeu_pd(out + i, res);
+    }
+    log_d_scalar(in + i, out + i, n - i);
+}
 #endif  // __x86_64__ || __i386__
 
 // Runtime CPU capability query, evaluated once. Waterfalls
@@ -311,6 +411,7 @@ struct Dispatch {
     void (*axpy)(float, const float*, const float*, float*, std::size_t);
     void (*horner)(float*, const float*, float, std::size_t);
     void (*exp_d)(const double*, double*, std::size_t);
+    void (*log_d)(const double*, double*, std::size_t);
 };
 
 [[nodiscard]] auto make_dispatch() noexcept -> Dispatch {
@@ -321,21 +422,27 @@ struct Dispatch {
     // platform trips -Wswitch.
     switch (detect_isa()) {
 #if defined(__x86_64__) || defined(__i386__)
-        case Isa::avx512:
-            // exp_d needs AVX512DQ (_mm512_cvtpd_epi64); fall back to the bit-identical scalar
-            // exp on an AVX512F-only part (e.g. KNL) while the float kernels stay vectorised.
+        case Isa::avx512: {
+            // exp_d/log_d need AVX512DQ (_mm512_cvtpd_epi64 / _mm512_cvtepi64_pd); fall back to the
+            // bit-identical scalar transcendentals on an AVX512F-only part (e.g. KNL) while the
+            // float kernels stay vectorised.
+            const bool dq = __builtin_cpu_supports("avx512dq") != 0;
             return {Isa::avx512, &add_avx512, &mul_avx512, &axpy_avx512, &horner_avx512,
-                    (__builtin_cpu_supports("avx512dq") != 0) ? &exp_d_avx512 : &exp_d_scalar};
+                    dq ? &exp_d_avx512 : &exp_d_scalar, dq ? &log_d_avx512 : &log_d_scalar};
+        }
         case Isa::avx2:
-            return {Isa::avx2, &add_avx256, &mul_avx256, &axpy_avx2, &horner_avx2, &exp_d_scalar};
+            return {Isa::avx2, &add_avx256, &mul_avx256, &axpy_avx2, &horner_avx2, &exp_d_scalar,
+                    &log_d_scalar};
         case Isa::avx:
-            return {Isa::avx, &add_avx256, &mul_avx256, &axpy_avx, &horner_avx, &exp_d_scalar};
+            return {Isa::avx, &add_avx256, &mul_avx256, &axpy_avx, &horner_avx, &exp_d_scalar,
+                    &log_d_scalar};
 #endif
         case Isa::scalar:
         default:
             break;
     }
-    return {Isa::scalar, &add_scalar, &mul_scalar, &axpy_scalar, &horner_scalar, &exp_d_scalar};
+    return {Isa::scalar, &add_scalar, &mul_scalar, &axpy_scalar, &horner_scalar, &exp_d_scalar,
+            &log_d_scalar};
 }
 
 const Dispatch g_dispatch = make_dispatch();
@@ -377,6 +484,13 @@ auto horner_step(std::span<float> acc, std::span<const float> x, float c) noexce
 auto exp_into(std::span<const double> x, std::span<double> out) noexcept -> void {
     const std::size_t n = std::min(x.size(), out.size());
     g_dispatch.exp_d(x.data(), out.data(), n);
+}
+
+auto log_one(double x) noexcept -> double { return log_scalar_one(x); }
+
+auto log_into(std::span<const double> x, std::span<double> out) noexcept -> void {
+    const std::size_t n = std::min(x.size(), out.size());
+    g_dispatch.log_d(x.data(), out.data(), n);
 }
 
 }  // namespace nimblecas::simd
