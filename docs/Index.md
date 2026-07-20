@@ -58,7 +58,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
 | `nimblecas.parallel` | [parallel.md](reference/parallel.md) | Deterministic fork–join over TBB/PPL/serial; order-preserving tree combinators. |
-| `nimblecas.simd` | [simd.md](reference/simd.md) | Runtime-dispatched elementwise `float32` SIMD kernels (AVX-512 → AVX2 → scalar). |
+| `nimblecas.simd` | [simd.md](reference/simd.md) | Runtime-dispatched elementwise SIMD kernels (AVX-512 → AVX2 → scalar): `float32` add/mul/axpy/Horner plus deterministic, bit-identical-across-ISAs **double** `exp_into` / `log_into` (≈1 ulp) backing the Monte-Carlo transcendentals. |
 | `nimblecas.gpu` | [gpu.md](reference/gpu.md) | Optional CUDA GPU acceleration (opt-in `-DNIMBLECAS_CUDA=ON`): batch polynomial evaluation on the device, plus a portable Triton kernel. |
 | `nimblecas.polynomial` | [polynomial.md](reference/polynomial.md) | Dense univariate `int64` polynomials: ring ops, gcd, square-free factorization, SIMD batch eval. |
 | `nimblecas.ratpoly` | [ratpoly.md](reference/ratpoly.md) | Exact `Rational` and dense polynomials over `Q[x]`: division-with-remainder, monic Euclidean gcd. |
