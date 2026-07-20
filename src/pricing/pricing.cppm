@@ -323,47 +323,67 @@ namespace {
 // Halley step (measured at ~12% of MC runtime by perf on oluwasanmi-tradingbot-server) is
 // pure waste in the path engine. The public inverse_norm_cdf keeps the refinement for
 // callers that need machine accuracy; only the hot MC path uses this.
+// Acklam inverse-normal coefficients, hoisted so the scalar fast_inv_norm and the AVX-512 batched
+// normal_transform share ONE definition (no drift) and the same explicit-fma evaluation order.
+inline constexpr std::array<double, 6> kAckA{-3.969683028665376e+01, 2.209460984245205e+02,
+    -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00};
+inline constexpr std::array<double, 5> kAckB{-5.447609879822406e+01, 1.615858368580409e+02,
+    -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01};
+inline constexpr std::array<double, 6> kAckC{-7.784894002430293e-03, -3.223964580411365e-01,
+    -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00};
+inline constexpr std::array<double, 4> kAckD{7.784695709041462e-03, 3.224671290700398e-01,
+    2.445134137142996e+00, 3.754408661907416e+00};
+inline constexpr double kAckPlow = 0.02425;
+
+// Central-region rational R(p) for p in [plow, 1-plow]. Explicit std::fma so it is bit-identical
+// to the AVX-512 _mm512_fmadd path in normal_transform_avx512 regardless of -ffp-contract (Rule 55).
+[[nodiscard]] auto acklam_central(double p) -> double {
+    const double q = p - 0.5;
+    const double r = q * q;
+    double num = kAckA[0];
+    num = std::fma(num, r, kAckA[1]);
+    num = std::fma(num, r, kAckA[2]);
+    num = std::fma(num, r, kAckA[3]);
+    num = std::fma(num, r, kAckA[4]);
+    num = std::fma(num, r, kAckA[5]);
+    num = num * q;
+    double den = kAckB[0];
+    den = std::fma(den, r, kAckB[1]);
+    den = std::fma(den, r, kAckB[2]);
+    den = std::fma(den, r, kAckB[3]);
+    den = std::fma(den, r, kAckB[4]);
+    den = std::fma(den, r, 1.0);
+    return num / den;
+}
+
+// Tail rational T(q), q = sqrt(-2 ln p_tail). Explicit std::fma so the scalar fast_inv_norm and the
+// batched path's scalar finish agree bit-for-bit. The caller applies the sign (+ lower, - upper).
+[[nodiscard]] auto acklam_tail(double q) -> double {
+    double num = kAckC[0];
+    num = std::fma(num, q, kAckC[1]);
+    num = std::fma(num, q, kAckC[2]);
+    num = std::fma(num, q, kAckC[3]);
+    num = std::fma(num, q, kAckC[4]);
+    num = std::fma(num, q, kAckC[5]);
+    double den = kAckD[0];
+    den = std::fma(den, q, kAckD[1]);
+    den = std::fma(den, q, kAckD[2]);
+    den = std::fma(den, q, kAckD[3]);
+    den = std::fma(den, q, 1.0);
+    return num / den;
+}
+
+// The ~5 % tails need a log; it is sourced from simd::log_one (deterministic, ~1 ulp, bit-identical
+// to the AVX-512 simd::log_into the batched normal_transform uses) rather than libm, so every ISA
+// path produces the SAME normal draw and the Monte-Carlo engines stay reproducible across hosts.
 [[nodiscard]] auto fast_inv_norm(double p) -> double {
-    static constexpr std::array<double, 6> a{-3.969683028665376e+01, 2.209460984245205e+02,
-        -2.759285104469687e+02, 1.383577518672690e+02, -3.066479806614716e+01,
-        2.506628277459239e+00};
-    static constexpr std::array<double, 5> b{-5.447609879822406e+01, 1.615858368580409e+02,
-        -1.556989798598866e+02, 6.680131188771972e+01, -1.328068155288572e+01};
-    static constexpr std::array<double, 6> c{-7.784894002430293e-03, -3.223964580411365e-01,
-        -2.400758277161838e+00, -2.549732539343734e+00, 4.374664141464968e+00,
-        2.938163982698783e+00};
-    static constexpr std::array<double, 4> d{7.784695709041462e-03, 3.224671290700398e-01,
-        2.445134137142996e+00, 3.754408661907416e+00};
-    constexpr double plow = 0.02425;
-    if (p < plow) {
-        const double q = std::sqrt(-2.0 * std::log(p));
-        return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-               ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
+    if (p < kAckPlow) {
+        return acklam_tail(std::sqrt(-2.0 * simd::log_one(p)));
     }
-    if (p <= 1.0 - plow) {
-        const double q = p - 0.5;
-        const double r = q * q;
-        // Explicit std::fma so the central branch is bit-identical to the AVX-512 batched
-        // normal_fill regardless of -ffp-contract (Rule 55). Under the default contract=on build
-        // this is exactly the value the contracted Horner would produce (verified: 0 mismatches).
-        double num = a[0];
-        num = std::fma(num, r, a[1]);
-        num = std::fma(num, r, a[2]);
-        num = std::fma(num, r, a[3]);
-        num = std::fma(num, r, a[4]);
-        num = std::fma(num, r, a[5]);
-        num = num * q;
-        double den = b[0];
-        den = std::fma(den, r, b[1]);
-        den = std::fma(den, r, b[2]);
-        den = std::fma(den, r, b[3]);
-        den = std::fma(den, r, b[4]);
-        den = std::fma(den, r, 1.0);
-        return num / den;
+    if (p <= 1.0 - kAckPlow) {
+        return acklam_central(p);
     }
-    const double q = std::sqrt(-2.0 * std::log(1.0 - p));
-    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-           ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
+    return -acklam_tail(std::sqrt(-2.0 * simd::log_one(1.0 - p)));
 }
 
 // Map a single raw counter draw to a standard normal. Shared by the scalar and batched paths
@@ -383,10 +403,11 @@ auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
 // --- Batched bits -> standard-normal transform, dynamically dispatched (Rule 29) ---
 // out[i] = bits_to_normal(bits[i]) for every i. The scalar path is the reference and portable
 // fallback; the AVX-512 path vectorises Acklam's CENTRAL region (~95 % of draws: a branchless
-// rational, evaluated with _mm512_fmadd to match the explicit-fma scalar central bit-for-bit)
-// and fixes up the ~5 % tail lanes (which need log/sqrt) with the scalar path. Every ISA path is
-// BIT-IDENTICAL to the per-index scalar bits_to_normal (verified in pricing_tests), so MC stays
-// reproducible across hosts.
+// rational, evaluated with _mm512_fmadd to match the explicit-fma scalar central bit-for-bit) and
+// handles the ~5 % tail lanes (which need a log/sqrt) by DEFERRING them into a bounded buffer that
+// is flushed through the vectorised simd::log_into — so even the tail log is 8-wide, not scalar
+// libm. Every ISA path is BIT-IDENTICAL to the per-index scalar bits_to_normal (verified in
+// pricing_tests), so MC stays reproducible across hosts.
 void normal_transform_scalar(const std::uint64_t* bits, double* out, std::size_t n) noexcept {
     for (std::size_t i = 0; i < n; ++i) {
         out[i] = bits_to_normal(bits[i]);
@@ -396,17 +417,35 @@ void normal_transform_scalar(const std::uint64_t* bits, double* out, std::size_t
 [[gnu::target("avx512f,avx512dq")]] void normal_transform_avx512(const std::uint64_t* bits,
                                                                  double* out,
                                                                  std::size_t n) noexcept {
-    constexpr double kA[6] = {-3.969683028665376e+01, 2.209460984245205e+02,
-                              -2.759285104469687e+02, 1.383577518672690e+02,
-                              -3.066479806614716e+01, 2.506628277459239e+00};
-    constexpr double kB[5] = {-5.447609879822406e+01, 1.615858368580409e+02,
-                              -1.556989798598866e+02, 6.680131188771972e+01,
-                              -1.328068155288572e+01};
-    constexpr double kPlow = 0.02425;
     const __m512d scale = _mm512_set1_pd(1.0 / 9007199254740992.0);  // 1 / 2^53
     const __m512d lo = _mm512_set1_pd(1e-15);
     const __m512d hi = _mm512_set1_pd(1.0 - 1e-15);
     const __m512d half = _mm512_set1_pd(0.5);
+    // Deferred tail-log buffer. The ~5 % of lanes outside [plow, 1-plow] each need a log/sqrt;
+    // instead of a per-lane scalar libm log we collect their tail p-values and flush them through
+    // the vectorised simd::log_into in bounded batches, then finish the cheap tail rational scalar.
+    // kFlush caps stack use, so the function stays allocation-free (noexcept). Every value produced
+    // is bit-identical to fast_inv_norm (shared acklam_tail + simd log), so normal_fill is unchanged.
+    constexpr std::size_t kFlush = 64;
+    alignas(64) double tp[kFlush];   // p_tail = min(u, 1-u)
+    alignas(64) double tlg[kFlush];  // log(p_tail), filled by simd::log_into
+    double* tdst[kFlush];            // destination slot for each deferred tail result
+    double tsign[kFlush];            // +1 lower tail, -1 upper tail
+    std::size_t tc = 0;
+    const auto flush = [&]() {
+        simd::log_into(std::span<const double>(tp, tc), std::span<double>(tlg, tc));
+        for (std::size_t t = 0; t < tc; ++t) {
+            *tdst[t] = tsign[t] * acklam_tail(std::sqrt(-2.0 * tlg[t]));
+        }
+        tc = 0;
+    };
+    const auto push_tail = [&](double uv, double* dst) {
+        const bool lower = uv < 0.5;
+        tp[tc] = lower ? uv : 1.0 - uv;
+        tsign[tc] = lower ? 1.0 : -1.0;
+        tdst[tc] = dst;
+        if (++tc == kFlush) { flush(); }
+    };
     std::size_t i = 0;
     for (; i + 8 <= n; i += 8) {
         const __m512i b = _mm512_loadu_si512(bits + i);
@@ -414,32 +453,38 @@ void normal_transform_scalar(const std::uint64_t* bits, double* out, std::size_t
         u = _mm512_min_pd(_mm512_max_pd(u, lo), hi);  // clamp to (0,1) endpoints
         const __m512d q = _mm512_sub_pd(u, half);
         const __m512d r = _mm512_mul_pd(q, q);
-        __m512d num = _mm512_set1_pd(kA[0]);
-        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[1]));
-        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[2]));
-        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[3]));
-        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[4]));
-        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[5]));
+        __m512d num = _mm512_set1_pd(kAckA[0]);
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kAckA[1]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kAckA[2]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kAckA[3]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kAckA[4]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kAckA[5]));
         num = _mm512_mul_pd(num, q);
-        __m512d den = _mm512_set1_pd(kB[0]);
-        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[1]));
-        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[2]));
-        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[3]));
-        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[4]));
+        __m512d den = _mm512_set1_pd(kAckB[0]);
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kAckB[1]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kAckB[2]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kAckB[3]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kAckB[4]));
         den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(1.0));
         _mm512_storeu_pd(out + i, _mm512_div_pd(num, den));  // central value for all 8 lanes
-        // Overwrite the rare tail lanes (u outside [kPlow, 1-kPlow]) with the scalar tail path.
+        // Defer the rare tail lanes (u outside [kAckPlow, 1-kAckPlow]); flush overwrites them.
         alignas(64) double ub[8];
         _mm512_store_pd(ub, u);
         for (int j = 0; j < 8; ++j) {
-            if (ub[j] < kPlow || ub[j] > 1.0 - kPlow) {
-                out[i + j] = fast_inv_norm(ub[j]);
+            if (ub[j] < kAckPlow || ub[j] > 1.0 - kAckPlow) {
+                push_tail(ub[j], out + i + j);
             }
         }
     }
-    for (; i < n; ++i) {  // ragged tail
-        out[i] = bits_to_normal(bits[i]);
+    for (; i < n; ++i) {  // ragged tail: identical partition, tails deferred to the vector log
+        const double uu = std::min(std::max(uniform_unit(bits[i]), 1e-15), 1.0 - 1e-15);
+        if (uu < kAckPlow || uu > 1.0 - kAckPlow) {
+            push_tail(uu, out + i);
+        } else {
+            out[i] = acklam_central(uu);
+        }
     }
+    if (tc != 0) { flush(); }
 }
 #endif
 
@@ -951,21 +996,33 @@ auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps, s
         geo_closed = *g;
     }
     const std::size_t nsteps = static_cast<std::size_t>(steps);
-    std::vector<double> z(nsteps);
+    const double log_spot = std::log(spec.spot);  // spot > 0 (guarded); constant across paths
+    std::vector<double> z(nsteps);   // normals, then reused in place as the per-step log-returns
+    std::vector<double> ef(nsteps);  // exp(log-return) per step, from the vectorised simd::exp_into
     std::vector<std::uint64_t> zbits(nsteps);
     double sum = 0.0;
     double sum_sq = 0.0;
     for (std::uint64_t i = 0; i < paths; ++i) {
+        normal_fill(key, i * static_cast<std::uint64_t>(steps), z, zbits);
+        // Log-return g[step] = drift + vol_sqrtdt*z[step]; batch its exp 8-wide (simd::exp_into).
+        // The geometric leg needs sum_k log(S_k) = steps*log(spot) + sum_k prefix_k where
+        // prefix_k = cumulative g — an exact identity that removes the per-step scalar log entirely.
+        for (std::size_t step = 0; step < nsteps; ++step) {
+            z[step] = std::fma(vol_sqrtdt, z[step], drift);
+        }
+        simd::exp_into(z, ef);
         double s = spec.spot;
         double arith_sum = 0.0;
-        double log_sum = 0.0;
-        normal_fill(key, i * static_cast<std::uint64_t>(steps), z, zbits);
-        for (int step = 0; step < steps; ++step) {
-            s *= std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(step)]);
+        double cum = 0.0;             // running prefix sum of log-returns = log(S_step / spot)
+        double log_prefix_sum = 0.0;  // sum over steps of those prefix sums
+        for (std::size_t step = 0; step < nsteps; ++step) {
+            s *= ef[step];
             arith_sum += s;
-            log_sum += std::log(s);
+            cum += z[step];
+            log_prefix_sum += cum;
         }
         const double arith_avg = arith_sum / static_cast<double>(steps);
+        const double log_sum = std::fma(static_cast<double>(steps), log_spot, log_prefix_sum);
         const double geo_avg = std::exp(log_sum / static_cast<double>(steps));
         double payoff = spec.type == OptionType::call ? std::max(arith_avg - spec.strike, 0.0)
                                                       : std::max(spec.strike - arith_avg, 0.0);
@@ -1013,12 +1070,16 @@ auto longstaff_schwartz_american(const OptionSpec& spec, std::uint64_t paths, in
     std::vector<double> z(Nn);
     std::vector<std::uint64_t> zbits(Nn);
     for (std::size_t p = 0; p < P; ++p) {
-        S[p * (N + 1)] = spec.spot;
+        double* row = &S[p * (static_cast<std::size_t>(N) + 1)];
+        row[0] = spec.spot;
         normal_fill(key, static_cast<std::uint64_t>(p) * static_cast<std::uint64_t>(N), z, zbits);
-        for (int t = 0; t < N; ++t) {
-            S[p * (N + 1) + static_cast<std::size_t>(t + 1)] =
-                S[p * (N + 1) + static_cast<std::size_t>(t)] *
-                std::exp(drift + vol_sqrtdt * z[static_cast<std::size_t>(t)]);
+        // g[t] = drift + vol_sqrtdt*z[t]; exp it 8-wide in place, then chain the GBM price path.
+        for (std::size_t t = 0; t < Nn; ++t) {
+            z[t] = std::fma(vol_sqrtdt, z[t], drift);
+        }
+        simd::exp_into(z, z);  // in-place: exp_into reads each lane before it writes
+        for (std::size_t t = 0; t < Nn; ++t) {
+            row[t + 1] = row[t] * z[t];
         }
     }
     // Cashflow at expiry, then roll backward regressing continuation on {1,S,S^2}.

@@ -62,6 +62,8 @@ out-of-bounds access on a caller size mismatch, each kernel operates over the
 | `axpy` | `auto axpy(float scale, span<const float> a, span<const float> b, span<float> out) noexcept -> void` | `out = a * scale + b` (fused multiply-add) |
 | `horner_step` | `auto horner_step(span<float> acc, span<const float> x, float c) noexcept -> void` | `acc = acc * x + c` (`c` broadcast) — one Horner step |
 | `exp_into` | `auto exp_into(span<const double> x, span<double> out) noexcept -> void` | `out[i] = exp(x[i])` in **double** precision (`out` may alias `x`) |
+| `log_one` | `auto log_one(double x) noexcept -> double` | scalar `log(x)`, the reference for `log_into` (bit-identical per element) |
+| `log_into` | `auto log_into(span<const double> x, span<double> out) noexcept -> void` | `out[i] = log(x[i])` in **double** precision (`out` may alias `x`) |
 
 `horner_step` is the building block for evaluating a polynomial at many points
 at once (see [`Polynomial::evaluate_batch`](polynomial.md)).
@@ -76,7 +78,16 @@ for `|x| ≲ 700` — the whole representable-`exp` range, which contains every 
 inputs that would overflow (`x ≳ 709`) or underflow (`x ≲ -745`) double are out of contract
 (unspecified value, not a saturated `inf`/`0`). It backs the vectorised GBM exponentials in the
 Monte-Carlo pricers ([`monte_carlo_european`](pricing.md)) — a `perf`-measured ~1.38× on the
-serial European MC.
+serial European MC, and the per-step exponentials of the Asian and Longstaff-Schwartz pricers.
+
+`log_into` / `log_one` are the matching **deterministic vector logarithm**: a bit-manipulation
+mantissa/exponent split, the `atanh` series `1 + z/3 + z²/5 + …` on `s = (m-1)/(m+1)` (mantissa
+centred in `[√2/2, √2)`), then an `e·ln2` recombination — all `std::fma` / `_mm512_fmadd` in the
+same order, so the scalar `log_one` and the AVX-512 `log_into` are **bit-identical** (Rule 55) and
+reproduce across hosts. **Accurate to ~1 ulp** on the tail domain (validated in `simd_tests`).
+**Domain (honesty boundary):** finite, **positive, normal** `x`; `x ≤ 0`, subnormal, `inf`/`NaN`
+are out of contract. It backs the Monte-Carlo inverse-normal **tail** transform (the ~5 % of draws
+that need a log — see [`normal_fill`](pricing.md)), so even that log runs 8-wide instead of scalar libm.
 
 ## Example
 

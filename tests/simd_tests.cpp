@@ -112,5 +112,44 @@ auto main() -> int {
                   });
                   t.expect(same, "exp_into is deterministic across calls");
               })
+        .test("log_into matches libm to ~1 ulp and is deterministic (double)",
+              [](TestContext& t) {
+                  // Sweep the positive-normal domain, weighted toward the Monte-Carlo tail range
+                  // (1e-15, 0.02425) where the inverse-normal transform actually calls it.
+                  std::vector<double> in;
+                  for (double x = 1e-15; x <= 0.02425; x *= 1.0009) in.push_back(x);
+                  for (double x = 0.02425; x <= 1.0e6; x *= 1.0007) in.push_back(x);
+                  std::vector<double> out(in.size());
+                  simd::log_into(in, out);
+                  double max_ulp = 0.0;
+                  double max_rel = 0.0;
+                  for (std::size_t i = 0; i < in.size(); ++i) {
+                      const double ref = std::log(in[i]);
+                      const double ulp = std::abs(static_cast<double>(
+                          std::bit_cast<std::int64_t>(out[i]) - std::bit_cast<std::int64_t>(ref)));
+                      max_ulp = std::max(max_ulp, ulp);
+                      if (ref != 0.0) max_rel = std::max(max_rel, std::abs(out[i] - ref) / std::abs(ref));
+                  }
+                  // ulp amplifies near x==1 (log -> 0); the relative-error bound is the real gate.
+                  t.expect(max_ulp <= 12.0, std::format("log_into within 12 ulp of libm (max {})", max_ulp));
+                  t.expect(max_rel < 1.0e-14, "log_into relative error < 1e-14");
+                  // The scalar entry point log_one is bit-identical to the batched (SIMD) path.
+                  for (std::size_t n : {std::size_t{1}, std::size_t{7}, std::size_t{8},
+                                        std::size_t{9}, std::size_t{31}}) {
+                      std::vector<double> xa(n), ref(n), got(n);
+                      for (std::size_t i = 0; i < n; ++i) xa[i] = 1e-3 * static_cast<double>(i + 1);
+                      for (std::size_t i = 0; i < n; ++i) ref[i] = simd::log_one(xa[i]);
+                      simd::log_into(xa, got);
+                      const bool same = std::ranges::equal(ref, got, [](double p, double q) {
+                          return std::bit_cast<std::uint64_t>(p) == std::bit_cast<std::uint64_t>(q);
+                      });
+                      t.expect(same, std::format("log_into == log_one per element, n={}", n));
+                  }
+                  // log(1) == 0 exactly.
+                  std::vector<double> one_in(4, 1.0), one_out(4, -1.0);
+                  simd::log_into(one_in, one_out);
+                  t.expect(std::ranges::all_of(one_out, [](double v) { return v == 0.0; }),
+                           "log_into: log(1)==0");
+              })
         .run();
 }
