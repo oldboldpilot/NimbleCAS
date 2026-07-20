@@ -883,7 +883,7 @@ add_library(nimblecas_pricing STATIC)
 target_sources(nimblecas_pricing PUBLIC
   FILE_SET CXX_MODULES FILES src/pricing/pricing.cppm)
 target_link_libraries(nimblecas_pricing
-  PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_parallel nimblecas_core std_module)
+  PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_parallel nimblecas_simd nimblecas_core std_module)
 
 # ---- nimblecas.marketdata : provider-agnostic quote ingestion (Yahoo/Alpha Vantage/Alpaca) ----
 add_library(nimblecas_marketdata STATIC)
@@ -992,8 +992,8 @@ add_test(NAME currency_tests COMMAND currency_tests)
 
 add_executable(pricing_tests tests/pricing_tests.cpp)
 target_link_libraries(pricing_tests
-  PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_parallel nimblecas_core
-          nimblecas_testing std_module)
+  PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_parallel nimblecas_simd
+          nimblecas_core nimblecas_testing std_module)
 add_test(NAME pricing_tests COMMAND pricing_tests)
 
 add_executable(marketdata_tests tests/marketdata_tests.cpp)

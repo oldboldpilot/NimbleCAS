@@ -34,6 +34,7 @@ import nimblecas.core;
 import nimblecas.rng;
 import nimblecas.svgplot;
 import nimblecas.parallel;
+import nimblecas.simd;
 
 export namespace nimblecas::pricing {
 
@@ -682,6 +683,45 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
 
 // --- Monte Carlo ------------------------------------------------------------
 
+namespace {
+// (sum, sum_sq) of antithetic European payoffs over the contiguous counter range
+// [base, base+count). Shared by the serial and parallel pricers so both use the identical
+// vectorised exp path. The two GBM exponentials per path are batched through simd::exp_into
+// (deterministic AVX-512 exp, ~1 ulp) instead of scalar libm exp — a perf pass showed the MC
+// hot loop was ~10 % scalar libm exp. `z`, `ep`, `em`, `zbits` are caller scratch (>= tile).
+struct EuroPartial {
+    double sum;
+    double sum_sq;
+};
+[[nodiscard]] auto price_euro_block(const OptionSpec& spec, std::uint64_t key, double drift,
+                                    double vol_sqrtT, double disc, std::uint64_t base,
+                                    std::uint64_t count, std::span<double> z, std::span<double> ep,
+                                    std::span<double> em, std::span<std::uint64_t> zbits)
+    -> EuroPartial {
+    const std::uint64_t tile = z.size();
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (std::uint64_t off = 0; off < count; off += tile) {
+        const std::size_t m = static_cast<std::size_t>(std::min<std::uint64_t>(count - off, tile));
+        normal_fill(key, base + off, z.first(m), zbits);
+        for (std::size_t j = 0; j < m; ++j) {
+            ep[j] = drift + vol_sqrtT * z[j];
+            em[j] = drift - vol_sqrtT * z[j];
+        }
+        simd::exp_into(ep.first(m), ep.first(m));  // in-place (exp_into reads before it writes)
+        simd::exp_into(em.first(m), em.first(m));
+        for (std::size_t j = 0; j < m; ++j) {
+            const double sp = spec.spot * ep[j];
+            const double sm = spec.spot * em[j];
+            const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
+            sum += payoff;
+            sum_sq += payoff * payoff;
+        }
+    }
+    return {sum, sum_sq};
+}
+}  // namespace
+
 auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint64_t seed)
     -> Result<McResult> {
     // Cap paths to bound runtime (O(1) memory, but a ~1e18-iteration loop is an effective hang).
@@ -696,25 +736,17 @@ auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint
     const double disc = std::exp(-spec.rate * T);
     const std::uint64_t key = splitmix64(seed);
     // Antithetic variates: each index i produces the pair (+z, -z), halving variance cheaply.
-    // Draws are the contiguous counter range [0, paths); process them in tiles so the
-    // vectorised RNG core fills each tile at once while memory stays O(tile), not O(paths).
-    double sum = 0.0;
-    double sum_sq = 0.0;
+    // Draws are the contiguous counter range [0, paths); price_euro_block tiles them so the
+    // vectorised RNG core + vectorised exp fill each tile at once while memory stays O(tile).
     constexpr std::size_t kTile = 8192;
     const std::size_t tile = static_cast<std::size_t>(std::min<std::uint64_t>(paths, kTile));
     std::vector<double> z(tile);
+    std::vector<double> ep(tile);
+    std::vector<double> em(tile);
     std::vector<std::uint64_t> zbits(tile);
-    for (std::uint64_t base = 0; base < paths; base += tile) {
-        const std::size_t m = static_cast<std::size_t>(std::min<std::uint64_t>(paths - base, tile));
-        normal_fill(key, base, std::span<double>(z).first(m), zbits);
-        for (std::size_t j = 0; j < m; ++j) {
-            const double sp = spec.spot * std::exp(drift + vol_sqrtT * z[j]);
-            const double sm = spec.spot * std::exp(drift - vol_sqrtT * z[j]);
-            const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
-            sum += payoff;
-            sum_sq += payoff * payoff;
-        }
-    }
+    const auto part = price_euro_block(spec, key, drift, vol_sqrtT, disc, 0, paths, z, ep, em, zbits);
+    const double sum = part.sum;
+    const double sum_sq = part.sum_sq;
     const double n = static_cast<double>(paths);
     const double mean = sum / n;
     const double var = std::max((sum_sq - n * mean * mean) / std::max(n - 1.0, 1.0), 0.0);
@@ -742,38 +774,23 @@ auto monte_carlo_european_parallel(const OptionSpec& spec, std::uint64_t paths, 
     // sequentially. This is numerically equal to the serial running sum (the gap is FP
     // non-associativity, orders of magnitude below the MC standard error) but not bit-identical.
     constexpr std::uint64_t kBlock = std::uint64_t{1} << 18;  // 262144 paths per block
+    constexpr std::size_t kTile_ = 8192;                      // per-block RNG/exp fill tile
     const std::size_t n_blocks = static_cast<std::size_t>((paths + kBlock - 1) / kBlock);
 
-    struct Partial {
-        double sum;
-        double sum_sq;
-    };
     // grain 1: each fixed block is an independent task the backend load-balances across cores
     // (a block is 262144 paths of transcendental work — coarse enough that per-task overhead is
     // negligible). The grain affects only scheduling, never the result: transform_index is
-    // order-preserving, so the combine below stays deterministic regardless of chunking.
-    const auto partials = parallel::transform_index(n_blocks, [&](std::size_t b) -> Partial {
+    // order-preserving, so the combine below stays deterministic regardless of chunking. Each
+    // block runs the SAME price_euro_block (vectorised exp) as the serial pricer.
+    const auto partials = parallel::transform_index(n_blocks, [&](std::size_t b) -> EuroPartial {
         const std::uint64_t base = static_cast<std::uint64_t>(b) * kBlock;
         const std::uint64_t count = std::min<std::uint64_t>(paths - base, kBlock);
-        constexpr std::size_t kTile = 8192;
-        const std::size_t tile = static_cast<std::size_t>(std::min<std::uint64_t>(count, kTile));
+        const std::size_t tile = static_cast<std::size_t>(std::min<std::uint64_t>(count, kTile_));
         std::vector<double> z(tile);
+        std::vector<double> ep(tile);
+        std::vector<double> em(tile);
         std::vector<std::uint64_t> zbits(tile);
-        double s = 0.0;
-        double sq = 0.0;
-        for (std::uint64_t off = 0; off < count; off += tile) {
-            const std::size_t m =
-                static_cast<std::size_t>(std::min<std::uint64_t>(count - off, tile));
-            normal_fill(key, base + off, std::span<double>(z).first(m), zbits);
-            for (std::size_t j = 0; j < m; ++j) {
-                const double sp = spec.spot * std::exp(drift + vol_sqrtT * z[j]);
-                const double sm = spec.spot * std::exp(drift - vol_sqrtT * z[j]);
-                const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
-                s += payoff;
-                sq += payoff * payoff;
-            }
-        }
-        return {s, sq};
+        return price_euro_block(spec, key, drift, vol_sqrtT, disc, base, count, z, ep, em, zbits);
     }, /*grain=*/std::size_t{1});
 
     double sum = 0.0;
