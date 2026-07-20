@@ -57,12 +57,26 @@ auto main() -> int {
         }
     });
 
+    // Parallel in-place variant: same allocation-free buffer, sharded across the fork-join
+    // runtime. Serial evaluate_batch_into is memory-latency bound (perf: IPC 0.31, ~56% of
+    // cycles stalled on L3 misses), so distributing shards across cores hides that latency.
+    std::vector<float> out_par(n);
+    double checksum_par = 0.0;
+    const double t_par = timed([&] {
+        for (int it = 0; it < iters; ++it) {
+            static_cast<void>(p.evaluate_batch_parallel_into(xs, out_par));
+            checksum_par += out_par[static_cast<std::size_t>(it)];
+        }
+    });
+
     const double melem = static_cast<double>(n) * iters / 1.0e6;
     std::cout << std::format(
-        "evaluate_batch      (alloc):    {:.3f}s  {:.1f} Melem/s\n"
-        "evaluate_batch_into (in-place): {:.3f}s  {:.1f} Melem/s   ({:.2f}x speedup)\n"
-        "checksums: {} / {}\n",
+        "evaluate_batch          (alloc):     {:.3f}s  {:>7.1f} Melem/s\n"
+        "evaluate_batch_into     (in-place):  {:.3f}s  {:>7.1f} Melem/s   ({:.2f}x vs alloc)\n"
+        "evaluate_batch_parallel (in-place):  {:.3f}s  {:>7.1f} Melem/s   ({:.2f}x vs serial in-place)\n"
+        "checksums: {} / {} / {}\n",
         t_alloc, melem / t_alloc, t_inplace, melem / t_inplace, t_alloc / t_inplace,
-        checksum_alloc, checksum_inplace);
+        t_par, melem / t_par, t_inplace / t_par,
+        checksum_alloc, checksum_inplace, checksum_par);
     return 0;
 }
