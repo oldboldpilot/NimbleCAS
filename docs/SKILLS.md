@@ -94,6 +94,11 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
    **`evaluate_batch_parallel[_into]`** entry point shards it across the fork-join runtime —
    **bit-identical** to serial, measured **~17–19×** on 88 threads (memory-bandwidth-bound).
    The serial path stays best below `default_batch_grain`. (VTune unavailable on that box.)
+   A second `perf` pass on the **Monte Carlo pricer** (`tools/mc_bench.cpp`) found the *opposite*
+   regime — European MC is **compute/transcendental-bound** (IPC 2.09, L1 miss 1.4 %, ~25 % in
+   scalar libm `log`+`exp`) — so the new **`monte_carlo_european_parallel`** (deterministic fixed
+   block reduction, agrees with serial to ~1.7e-12) scales near-*linearly*: **~29× (28.7 → 840 M
+   paths/s)** on 88 threads. Two hot paths, two bottlenecks, two evidence-backed parallel wins.
 
 Keep this table and the [`Index.md`](Index.md) catalog in sync as each module lands.
 
