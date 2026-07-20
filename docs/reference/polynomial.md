@@ -75,6 +75,11 @@ Each returns `MathError::overflow` if any coefficient computation wraps `int64`.
 ```cpp
 [[nodiscard]] auto evaluate(std::int64_t x) const -> Result<std::int64_t>;
 [[nodiscard]] auto evaluate_batch(std::span<const float> xs) const -> std::vector<float>;
+[[nodiscard]] auto evaluate_batch_into(std::span<const float> xs, std::span<float> out) const -> bool;
+[[nodiscard]] auto evaluate_batch_parallel(std::span<const float> xs,
+                                           std::size_t grain = default_batch_grain) const -> std::vector<float>;
+[[nodiscard]] auto evaluate_batch_parallel_into(std::span<const float> xs, std::span<float> out,
+                                                std::size_t grain = default_batch_grain) const -> bool;
 ```
 
 - **`evaluate(x)`** — exact evaluation at an integer point via Horner's method,
@@ -84,6 +89,33 @@ Each returns `MathError::overflow` if any coefficient computation wraps `int64`.
   Horner kernel ([`simd::horner_step`](simd.md)). Coefficients are taken as
   `float` — this is the numeric path (NFR-1). Returns one `float` result per
   input point.
+- **`evaluate_batch_into(xs, out)`** — the allocation-free fast path: writes
+  `p(xs[i])` into `out[i]`, returning `false` (a no-op) when `out` is smaller
+  than `xs`. Reusing one caller buffer across calls removes the per-call output
+  allocation that `perf` flagged (page faults / sys time) — measured **~1.3×**
+  over the allocating `evaluate_batch` on a large sweep. **Precondition:** `xs`
+  and `out` must not overlap.
+
+### Parallel batch evaluation
+
+- **`evaluate_batch_parallel_into(xs, out, grain)`** / **`evaluate_batch_parallel(xs, grain)`**
+  — shard `[0, xs.size())` across the fork-join runtime
+  ([`nimblecas.parallel`](parallel.md); TBB on Linux/macOS, PPL on Windows) and
+  run the identical serial SIMD Horner on each disjoint slice. The result is
+  **bit-identical** to `evaluate_batch_into` (the shards partition the same
+  indices; each runs the same per-element Horner — no reduction or reordering),
+  a property asserted in `polynomial_tests`.
+
+  These exist because a `perf` pass (Xeon Gold 6152, AVX-512) showed the serial
+  `evaluate_batch_into` is **memory-latency bound** at one thread — IPC 0.31,
+  ~56 % of cycles stalled on L3 misses, 80 % of samples in `horner_avx512` — so
+  the AVX-512 ALU idles waiting on DRAM. Spreading shards across cores hides that
+  latency: the repo's `cpu_bench` harness measures **~17–19×** over the serial
+  in-place path on that 88-thread dual-socket box at 50M elements (default grain,
+  ~46 GB/s aggregate — the memory-bandwidth ceiling). The factor is
+  hardware-dependent; below `grain` (`default_batch_grain = 1<<16`) the call runs
+  serially, so the serial path stays best for small `n`. **Precondition** (as
+  `evaluate_batch_into`): `xs` and `out` must not overlap.
 
 ## Example
 

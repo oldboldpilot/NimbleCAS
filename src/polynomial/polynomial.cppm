@@ -104,9 +104,10 @@ public:
     // the serial SIMD Horner (evaluate_batch_into) on its own disjoint slice. perf on a Xeon
     // Gold 6152 (AVX-512) shows evaluate_batch_into is memory-LATENCY bound at one thread
     // (IPC 0.31, ~56% of cycles stalled on L3 misses), so spreading shards across cores hides
-    // that latency: measured ~5.7x at 16 threads on a 50M-element sweep, saturating there. The
-    // result is BIT-IDENTICAL to evaluate_batch_into — the shards partition the same indices and
-    // each runs the identical Horner; no reduction or reordering is involved.
+    // that latency: cpu_bench measures ~17-19x on that 88-thread dual-socket box at 50M elements
+    // (default grain, ~46 GB/s aggregate — the memory-bandwidth ceiling); the exact factor is
+    // hardware-dependent. The result is BIT-IDENTICAL to evaluate_batch_into — the shards
+    // partition the same indices and each runs the identical Horner; no reduction or reordering.
     //
     // PRECONDITION (as evaluate_batch_into): `xs` and `out` must NOT overlap. `grain` is the
     // minimum shard size; below `grain` items this runs serially (returns identically). Returns
