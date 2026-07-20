@@ -88,7 +88,12 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
 4. ✅ **Profiling** (Rules 43/58/59): the batched Black-Scholes kernel profiled with
    **nsys** (timeline; CUDA-graph replay visible) and **ncu** (SM/DRAM throughput,
    duration) on Blackwell — honestly latency-bound at small grids. No unevidenced speedup
-   claim. (`perf`/VTune remain for any CPU hot-path claim.)
+   claim. **CPU `perf` pass** (Xeon Gold 6152, AVX-512) on the SIMD polynomial batch-eval
+   (`tools/cpu_bench.cpp`): the serial `Polynomial::evaluate_batch_into` is memory-latency
+   bound (IPC 0.31, ~56 % of cycles stalled on L3 misses, 80 % in `horner_avx512`), so a new
+   **`evaluate_batch_parallel[_into]`** entry point shards it across the fork-join runtime —
+   **bit-identical** to serial, measured **~17–19×** on 88 threads (memory-bandwidth-bound).
+   The serial path stays best below `default_batch_grain`. (VTune unavailable on that box.)
 
 Keep this table and the [`Index.md`](Index.md) catalog in sync as each module lands.
 
