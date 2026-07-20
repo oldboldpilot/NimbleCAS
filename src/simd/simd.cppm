@@ -65,12 +65,18 @@ auto axpy(float scale, std::span<const float> a, std::span<const float> b,
 // for evaluating a polynomial at many points at once.
 auto horner_step(std::span<float> acc, std::span<const float> x, float c) noexcept -> void;
 
-// out[i] = exp(x[i]) in DOUBLE precision. A deterministic minimax(≈1 ulp) exponential:
-// Cody-Waite range reduction to |r| <= ln2/2 then a degree-13 Horner polynomial, scaled by
-// 2^k via exponent construction. Every ISA path (AVX-512, scalar) is bit-identical (the scalar
-// fallback uses std::fma to match the vector FMA — Rule 55), so results are reproducible across
-// hosts. Accurate to 1 ulp vs libm over the whole range (validated in simd_tests). The hot path
-// for batch Black-Scholes / Monte-Carlo GBM exponentials.
+// out[i] = exp(x[i]) in DOUBLE precision. A deterministic (≈1 ulp) exponential: Cody-Waite
+// range reduction to |r| <= ln2/2 then a degree-13 Horner polynomial, scaled by 2^k via
+// exponent construction. Every ISA path (AVX-512, scalar) is bit-identical (the scalar fallback
+// uses std::fma to match the vector FMA — Rule 55), so results are reproducible across hosts.
+// Accurate to 1 ulp vs libm (validated in simd_tests). The hot path for batch Black-Scholes /
+// Monte-Carlo GBM exponentials.
+//
+// DOMAIN (honesty boundary): defined for finite x with |x| <~ 700 — the whole representable
+// exp range, which comfortably contains every finance exponential (bounded drift + vol*sqrt(T)*z).
+// The 2^k step is a raw exponent construction, so inputs that would overflow (x >~ 709) or
+// underflow (x <~ -745) double are OUT OF CONTRACT: they return an unspecified value, not a
+// saturated inf/0. Callers outside that range must guard or clamp first.
 auto exp_into(std::span<const double> x, std::span<double> out) noexcept -> void;
 
 }  // namespace nimblecas::simd

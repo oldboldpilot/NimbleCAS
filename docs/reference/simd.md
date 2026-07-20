@@ -61,9 +61,22 @@ out-of-bounds access on a caller size mismatch, each kernel operates over the
 | `mul` | `auto mul(span<const float> a, span<const float> b, span<float> out) noexcept -> void` | `out = a * b` |
 | `axpy` | `auto axpy(float scale, span<const float> a, span<const float> b, span<float> out) noexcept -> void` | `out = a * scale + b` (fused multiply-add) |
 | `horner_step` | `auto horner_step(span<float> acc, span<const float> x, float c) noexcept -> void` | `acc = acc * x + c` (`c` broadcast) — one Horner step |
+| `exp_into` | `auto exp_into(span<const double> x, span<double> out) noexcept -> void` | `out[i] = exp(x[i])` in **double** precision (`out` may alias `x`) |
 
 `horner_step` is the building block for evaluating a polynomial at many points
 at once (see [`Polynomial::evaluate_batch`](polynomial.md)).
+
+`exp_into` is a **deterministic vector exponential** (the one non-float, non-elementwise-trivial
+kernel): Cody-Waite range reduction to `|r| ≤ ln2/2`, a degree-13 Horner polynomial, then a
+`2^k` exponent construction. Like every kernel here it is **bit-identical across ISAs** — the
+AVX-512 path (which additionally needs AVX512DQ; an AVX512F-only part falls back) and the scalar
+reference use the same `std::fma`/`_mm512_fmadd` order, so results reproduce across hosts. It is
+**accurate to 1 ulp** vs libm and validated in `simd_tests`. **Domain (honesty boundary):** defined
+for `|x| ≲ 700` — the whole representable-`exp` range, which contains every finance exponential;
+inputs that would overflow (`x ≳ 709`) or underflow (`x ≲ -745`) double are out of contract
+(unspecified value, not a saturated `inf`/`0`). It backs the vectorised GBM exponentials in the
+Monte-Carlo pricers ([`monte_carlo_european`](pricing.md)) — a `perf`-measured ~1.38× on the
+serial European MC.
 
 ## Example
 

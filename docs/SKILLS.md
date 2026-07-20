@@ -99,6 +99,10 @@ change. Tests drive adapters from **embedded JSON fixtures** — deterministic, 
    scalar libm `log`+`exp`) — so the new **`monte_carlo_european_parallel`** (deterministic fixed
    block reduction, agrees with serial to ~1.7e-12) scales near-*linearly*: **~29× (28.7 → 840 M
    paths/s)** on 88 threads. Two hot paths, two bottlenecks, two evidence-backed parallel wins.
+   Then the transcendentals themselves were **vectorised**: a deterministic AVX-512 **`simd::exp_into`**
+   (double, ~1 ulp, bit-identical across ISAs) replaced the scalar libm `exp` in the European GBM
+   payoff — **~1.38× on serial MC** (28.7 → 39.7 M paths/s) and **~1.02 B paths/s** parallel, `exp`
+   confirmed dropped from the hot profile. Still open: the inverse-normal `log` (13 %, tail branches).
 
 Keep this table and the [`Index.md`](Index.md) catalog in sync as each module lands.
 
