@@ -883,7 +883,7 @@ add_library(nimblecas_pricing STATIC)
 target_sources(nimblecas_pricing PUBLIC
   FILE_SET CXX_MODULES FILES src/pricing/pricing.cppm)
 target_link_libraries(nimblecas_pricing
-  PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_core std_module)
+  PUBLIC nimblecas_svgplot nimblecas_rng nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.marketdata : provider-agnostic quote ingestion (Yahoo/Alpha Vantage/Alpaca) ----
 add_library(nimblecas_marketdata STATIC)
@@ -992,7 +992,7 @@ add_test(NAME currency_tests COMMAND currency_tests)
 
 add_executable(pricing_tests tests/pricing_tests.cpp)
 target_link_libraries(pricing_tests
-  PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_core
+  PRIVATE nimblecas_pricing nimblecas_svgplot nimblecas_rng nimblecas_parallel nimblecas_core
           nimblecas_testing std_module)
 add_test(NAME pricing_tests COMMAND pricing_tests)
 
@@ -1850,6 +1850,11 @@ add_test(NAME feature_applied_linalg_tests COMMAND feature_applied_linalg_tests)
 add_executable(cpu_bench tools/cpu_bench.cpp)
 target_link_libraries(cpu_bench
   PRIVATE nimblecas_polynomial nimblecas_simd nimblecas_core std_module)
+
+# Monte Carlo pricer perf harness (serial vs parallel European, Asian, Longstaff-Schwartz).
+add_executable(mc_bench tools/mc_bench.cpp)
+target_link_libraries(mc_bench
+  PRIVATE nimblecas_pricing nimblecas_core std_module)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests

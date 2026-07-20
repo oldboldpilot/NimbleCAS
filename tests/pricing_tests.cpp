@@ -91,6 +91,29 @@ auto main() -> int {
                   t.expect(cv.std_error < plain.std_error, "geometric CV reduces MC std error");
                   t.expect(cv.price > 0.0 && cv.price < bs, "arithmetic Asian call < vanilla");
               })
+        .test("Parallel European MC: deterministic and agrees with the serial pricer",
+              [](TestContext& t) {
+                  const auto call = atm();
+                  const double bs = black_scholes_price(call).value();
+                  const auto ser = monte_carlo_european(call, 500000, 2024).value();
+                  const auto par = monte_carlo_european_parallel(call, 500000, 2024).value();
+                  // Deterministic: repeated calls are bit-identical (a FIXED block decomposition,
+                  // combined in index order, so the result is independent of thread count).
+                  const auto par2 = monte_carlo_european_parallel(call, 500000, 2024).value();
+                  t.expect(par.price == par2.price && par.std_error == par2.std_error,
+                           "parallel MC is deterministic (bit-identical across calls)");
+                  // Numerically equal to the serial running sum — the only difference is FP
+                  // non-associativity of the reduction, orders of magnitude below the MC error.
+                  t.expect(std::abs(par.price - ser.price) < 1e-6,
+                           "parallel price agrees with the serial pricer to FP tolerance");
+                  t.expect(par.paths == ser.paths, "same path count as the serial pricer");
+                  // Accurate: within a few standard errors of the Black-Scholes closed form.
+                  t.expect(std::abs(par.price - bs) < 4.0 * par.std_error + 1e-9,
+                           "parallel European MC within 4 standard errors of BS");
+                  // Domain guards mirror the serial pricer.
+                  t.expect(!monte_carlo_european_parallel(call, 0, 1).has_value(),
+                           "zero paths -> domain_error");
+              })
         .test("Longstaff-Schwartz American MC is a sensible lower bound",
               [](TestContext& t) {
                   const auto put = atm().with_type(OptionType::put);

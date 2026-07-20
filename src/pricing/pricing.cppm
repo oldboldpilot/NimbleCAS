@@ -33,6 +33,7 @@ import std;
 import nimblecas.core;
 import nimblecas.rng;
 import nimblecas.svgplot;
+import nimblecas.parallel;
 
 export namespace nimblecas::pricing {
 
@@ -156,6 +157,14 @@ struct ExtendedGreeks {
 // determines the draw stream.
 [[nodiscard]] auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths,
                                         std::uint64_t seed) -> Result<McResult>;
+// Parallel European MC: identical model/draws as monte_carlo_european, but the paths are priced
+// in a FIXED block decomposition across the fork-join runtime and the block partials combined in
+// index order. The result depends only on (spec, paths, seed) — NOT on thread count or scheduling
+// (deterministic/reproducible). It equals monte_carlo_european to floating-point tolerance (the
+// difference is FP non-associativity of the sum, far below the MC standard error), NOT bit-for-bit.
+// perf shows European MC is compute/transcendental-bound, so this scales ~linearly with cores.
+[[nodiscard]] auto monte_carlo_european_parallel(const OptionSpec& spec, std::uint64_t paths,
+                                                 std::uint64_t seed) -> Result<McResult>;
 // Arithmetic-average Asian option via MC, using the geometric-average price as a CONTROL
 // VARIATE (exact closed form below) — a large variance reduction. `steps` averaging dates.
 [[nodiscard]] auto monte_carlo_asian(const OptionSpec& spec, std::uint64_t paths, int steps,
@@ -705,6 +714,69 @@ auto monte_carlo_european(const OptionSpec& spec, std::uint64_t paths, std::uint
             sum += payoff;
             sum_sq += payoff * payoff;
         }
+    }
+    const double n = static_cast<double>(paths);
+    const double mean = sum / n;
+    const double var = std::max((sum_sq - n * mean * mean) / std::max(n - 1.0, 1.0), 0.0);
+    return McResult{mean, std::sqrt(var / n), paths};
+}
+
+auto monte_carlo_european_parallel(const OptionSpec& spec, std::uint64_t paths, std::uint64_t seed)
+    -> Result<McResult> {
+    // Same validation and model constants as the serial pricer.
+    constexpr std::uint64_t kMaxPaths = 1'000'000'000;
+    if (paths == 0 || paths > kMaxPaths) { return make_error<McResult>(MathError::domain_error); }
+    if (spec.time_to_expiry < 0.0 || spec.volatility < 0.0 || spec.spot <= 0.0) {
+        return make_error<McResult>(MathError::domain_error);
+    }
+    const double T = spec.time_to_expiry;
+    const double drift = (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * T;
+    const double vol_sqrtT = spec.volatility * std::sqrt(T);
+    const double disc = std::exp(-spec.rate * T);
+    const std::uint64_t key = splitmix64(seed);
+
+    // FIXED block decomposition -> the result depends only on (paths, seed), never on thread
+    // count or scheduling. Each block prices its own contiguous counter sub-range with the exact
+    // antithetic loop of the serial pricer (its own O(tile) scratch, so blocks never share
+    // mutable state); transform_index returns the block partials IN ORDER, and they are combined
+    // sequentially. This is numerically equal to the serial running sum (the gap is FP
+    // non-associativity, orders of magnitude below the MC standard error) but not bit-identical.
+    constexpr std::uint64_t kBlock = std::uint64_t{1} << 18;  // 262144 paths per block
+    const std::size_t n_blocks = static_cast<std::size_t>((paths + kBlock - 1) / kBlock);
+
+    struct Partial {
+        double sum;
+        double sum_sq;
+    };
+    const auto partials = parallel::transform_index(n_blocks, [&](std::size_t b) -> Partial {
+        const std::uint64_t base = static_cast<std::uint64_t>(b) * kBlock;
+        const std::uint64_t count = std::min<std::uint64_t>(paths - base, kBlock);
+        constexpr std::size_t kTile = 8192;
+        const std::size_t tile = static_cast<std::size_t>(std::min<std::uint64_t>(count, kTile));
+        std::vector<double> z(tile);
+        std::vector<std::uint64_t> zbits(tile);
+        double s = 0.0;
+        double sq = 0.0;
+        for (std::uint64_t off = 0; off < count; off += tile) {
+            const std::size_t m =
+                static_cast<std::size_t>(std::min<std::uint64_t>(count - off, tile));
+            normal_fill(key, base + off, std::span<double>(z).first(m), zbits);
+            for (std::size_t j = 0; j < m; ++j) {
+                const double sp = spec.spot * std::exp(drift + vol_sqrtT * z[j]);
+                const double sm = spec.spot * std::exp(drift - vol_sqrtT * z[j]);
+                const double payoff = 0.5 * (spec.payoff(sp) + spec.payoff(sm)) * disc;
+                s += payoff;
+                sq += payoff * payoff;
+            }
+        }
+        return {s, sq};
+    });
+
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (const auto& p : partials) {  // in-order combine -> deterministic
+        sum += p.sum;
+        sum_sq += p.sum_sq;
     }
     const double n = static_cast<double>(paths);
     const double mean = sum / n;
