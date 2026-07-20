@@ -26,6 +26,9 @@
 
 module;
 #include <cassert>
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>  // AVX-512 batched inverse-normal transform (normal_fill hot path)
+#endif
 
 export module nimblecas.pricing;
 
@@ -340,8 +343,23 @@ namespace {
     if (p <= 1.0 - plow) {
         const double q = p - 0.5;
         const double r = q * q;
-        return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
-               (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0);
+        // Explicit std::fma so the central branch is bit-identical to the AVX-512 batched
+        // normal_fill regardless of -ffp-contract (Rule 55). Under the default contract=on build
+        // this is exactly the value the contracted Horner would produce (verified: 0 mismatches).
+        double num = a[0];
+        num = std::fma(num, r, a[1]);
+        num = std::fma(num, r, a[2]);
+        num = std::fma(num, r, a[3]);
+        num = std::fma(num, r, a[4]);
+        num = std::fma(num, r, a[5]);
+        num = num * q;
+        double den = b[0];
+        den = std::fma(den, r, b[1]);
+        den = std::fma(den, r, b[2]);
+        den = std::fma(den, r, b[3]);
+        den = std::fma(den, r, b[4]);
+        den = std::fma(den, r, 1.0);
+        return num / den;
     }
     const double q = std::sqrt(-2.0 * std::log(1.0 - p));
     return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
@@ -362,18 +380,90 @@ auto normal_at(std::uint64_t key, std::uint64_t index) -> double {
     return bits_to_normal(counter_u64(key, index));
 }
 
+// --- Batched bits -> standard-normal transform, dynamically dispatched (Rule 29) ---
+// out[i] = bits_to_normal(bits[i]) for every i. The scalar path is the reference and portable
+// fallback; the AVX-512 path vectorises Acklam's CENTRAL region (~95 % of draws: a branchless
+// rational, evaluated with _mm512_fmadd to match the explicit-fma scalar central bit-for-bit)
+// and fixes up the ~5 % tail lanes (which need log/sqrt) with the scalar path. Every ISA path is
+// BIT-IDENTICAL to the per-index scalar bits_to_normal (verified in pricing_tests), so MC stays
+// reproducible across hosts.
+void normal_transform_scalar(const std::uint64_t* bits, double* out, std::size_t n) noexcept {
+    for (std::size_t i = 0; i < n; ++i) {
+        out[i] = bits_to_normal(bits[i]);
+    }
+}
+#if defined(__x86_64__) || defined(__i386__)
+[[gnu::target("avx512f,avx512dq")]] void normal_transform_avx512(const std::uint64_t* bits,
+                                                                 double* out,
+                                                                 std::size_t n) noexcept {
+    constexpr double kA[6] = {-3.969683028665376e+01, 2.209460984245205e+02,
+                              -2.759285104469687e+02, 1.383577518672690e+02,
+                              -3.066479806614716e+01, 2.506628277459239e+00};
+    constexpr double kB[5] = {-5.447609879822406e+01, 1.615858368580409e+02,
+                              -1.556989798598866e+02, 6.680131188771972e+01,
+                              -1.328068155288572e+01};
+    constexpr double kPlow = 0.02425;
+    const __m512d scale = _mm512_set1_pd(1.0 / 9007199254740992.0);  // 1 / 2^53
+    const __m512d lo = _mm512_set1_pd(1e-15);
+    const __m512d hi = _mm512_set1_pd(1.0 - 1e-15);
+    const __m512d half = _mm512_set1_pd(0.5);
+    std::size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        const __m512i b = _mm512_loadu_si512(bits + i);
+        __m512d u = _mm512_mul_pd(_mm512_cvtepu64_pd(_mm512_srli_epi64(b, 11)), scale);
+        u = _mm512_min_pd(_mm512_max_pd(u, lo), hi);  // clamp to (0,1) endpoints
+        const __m512d q = _mm512_sub_pd(u, half);
+        const __m512d r = _mm512_mul_pd(q, q);
+        __m512d num = _mm512_set1_pd(kA[0]);
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[1]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[2]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[3]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[4]));
+        num = _mm512_fmadd_pd(num, r, _mm512_set1_pd(kA[5]));
+        num = _mm512_mul_pd(num, q);
+        __m512d den = _mm512_set1_pd(kB[0]);
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[1]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[2]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[3]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(kB[4]));
+        den = _mm512_fmadd_pd(den, r, _mm512_set1_pd(1.0));
+        _mm512_storeu_pd(out + i, _mm512_div_pd(num, den));  // central value for all 8 lanes
+        // Overwrite the rare tail lanes (u outside [kPlow, 1-kPlow]) with the scalar tail path.
+        alignas(64) double ub[8];
+        _mm512_store_pd(ub, u);
+        for (int j = 0; j < 8; ++j) {
+            if (ub[j] < kPlow || ub[j] > 1.0 - kPlow) {
+                out[i + j] = fast_inv_norm(ub[j]);
+            }
+        }
+    }
+    for (; i < n; ++i) {  // ragged tail
+        out[i] = bits_to_normal(bits[i]);
+    }
+}
+#endif
+
+using NormalTransformFn = void (*)(const std::uint64_t*, double*, std::size_t);
+[[nodiscard]] auto resolve_normal_transform() noexcept -> NormalTransformFn {
+#if defined(__x86_64__) || defined(__i386__)
+    if (__builtin_cpu_supports("avx512f") != 0 && __builtin_cpu_supports("avx512dq") != 0) {
+        return &normal_transform_avx512;
+    }
+#endif
+    return &normal_transform_scalar;
+}
+const NormalTransformFn g_normal_transform = resolve_normal_transform();  // resolved once
+
 // Batched standard-normal draws: out[j] = normal_at(key, base_index + j) for every j, sourcing
-// the raw bits through counter_u64_batch (AVX-512 when available). BIT-IDENTICAL to calling
-// normal_at per index — this is the hot path that lets the Monte Carlo engines feed the
-// vectorised RNG core instead of one draw at a time. `scratch` must be at least out.size();
-// it holds the raw u64 draws so no allocation happens inside the per-path loop.
+// the raw bits through counter_u64_batch (AVX-512 when available) and transforming them through
+// the dispatched g_normal_transform. BIT-IDENTICAL to calling normal_at per index — this is the
+// hot path that lets the Monte Carlo engines feed the vectorised RNG core instead of one draw at
+// a time. `scratch` must be at least out.size(); it holds the raw u64 draws.
 void normal_fill(std::uint64_t key, std::uint64_t base_index, std::span<double> out,
                  std::span<std::uint64_t> scratch) {
     const std::span<std::uint64_t> bits = scratch.first(out.size());
     counter_u64_batch(key, base_index, bits);
-    for (std::size_t j = 0; j < out.size(); ++j) {
-        out[j] = bits_to_normal(bits[j]);
-    }
+    g_normal_transform(bits.data(), out.data(), out.size());
 }
 }  // namespace
 
