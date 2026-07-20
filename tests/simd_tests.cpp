@@ -76,5 +76,41 @@ auto main() -> int {
                       t.expect(all_bit_equal(acc, acc_ref), std::format("horner_step n={}", n));
                   }
               })
+        .test("exp_into matches libm to ~1 ulp and is deterministic (double)",
+              [](TestContext& t) {
+                  // Dense sweep over the full useful exp domain, incl. ragged tails.
+                  std::vector<double> in;
+                  for (double x = -40.0; x <= 40.0; x += 0.0005) in.push_back(x);
+                  std::vector<double> out(in.size());
+                  simd::exp_into(in, out);
+                  double max_ulp = 0.0;
+                  double max_rel = 0.0;
+                  for (std::size_t i = 0; i < in.size(); ++i) {
+                      const double ref = std::exp(in[i]);
+                      if (ref == 0.0 || !std::isfinite(ref)) continue;
+                      max_rel = std::max(max_rel, std::abs(out[i] - ref) / std::abs(ref));
+                      const double ulp = std::abs(static_cast<double>(
+                          std::bit_cast<std::int64_t>(out[i]) - std::bit_cast<std::int64_t>(ref)));
+                      max_ulp = std::max(max_ulp, ulp);
+                  }
+                  t.expect(max_ulp <= 2.0, std::format("exp_into within 2 ulp of libm (max {})", max_ulp));
+                  t.expect(max_rel < 2.5e-15, "exp_into relative error < 2.5e-15");
+                  // exp(0) == 1 exactly; ragged tail (n not a multiple of 8) still correct.
+                  for (std::size_t n : {std::size_t{0}, std::size_t{1}, std::size_t{7},
+                                        std::size_t{8}, std::size_t{9}, std::size_t{17}}) {
+                      std::vector<double> xa(n, 0.0);
+                      std::vector<double> ya(n, -1.0);
+                      simd::exp_into(xa, ya);
+                      bool ones = std::ranges::all_of(ya, [](double v) { return v == 1.0; });
+                      t.expect(ones, std::format("exp(0)==1 over n={}", n));
+                  }
+                  // Deterministic: identical input twice -> bit-identical output.
+                  std::vector<double> out2(in.size());
+                  simd::exp_into(in, out2);
+                  const bool same = std::ranges::equal(out, out2, [](double p, double q) {
+                      return std::bit_cast<std::uint64_t>(p) == std::bit_cast<std::uint64_t>(q);
+                  });
+                  t.expect(same, "exp_into is deterministic across calls");
+              })
         .run();
 }
