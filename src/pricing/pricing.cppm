@@ -748,6 +748,10 @@ auto monte_carlo_european_parallel(const OptionSpec& spec, std::uint64_t paths, 
         double sum;
         double sum_sq;
     };
+    // grain 1: each fixed block is an independent task the backend load-balances across cores
+    // (a block is 262144 paths of transcendental work — coarse enough that per-task overhead is
+    // negligible). The grain affects only scheduling, never the result: transform_index is
+    // order-preserving, so the combine below stays deterministic regardless of chunking.
     const auto partials = parallel::transform_index(n_blocks, [&](std::size_t b) -> Partial {
         const std::uint64_t base = static_cast<std::uint64_t>(b) * kBlock;
         const std::uint64_t count = std::min<std::uint64_t>(paths - base, kBlock);
@@ -770,7 +774,7 @@ auto monte_carlo_european_parallel(const OptionSpec& spec, std::uint64_t paths, 
             }
         }
         return {s, sq};
-    });
+    }, /*grain=*/std::size_t{1});
 
     double sum = 0.0;
     double sum_sq = 0.0;
