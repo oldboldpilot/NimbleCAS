@@ -496,6 +496,15 @@ target_link_libraries(nimblecas_bigeigen
   PUBLIC nimblecas_bigmatrix nimblecas_bigrational nimblecas_bigint nimblecas_matrix
          nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.bigsplitfield : Trager splitting-field construction over Q (unbounded) -----------
+add_library(nimblecas_bigsplitfield STATIC)
+target_sources(nimblecas_bigsplitfield PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigsplitfield/bigsplitfield.cppm)
+target_link_libraries(nimblecas_bigsplitfield
+  PUBLIC nimblecas_bigalgnum nimblecas_bigalgpoly nimblecas_bigfactor nimblecas_bigresultant
+         nimblecas_bigfrobenius nimblecas_bigmatrix nimblecas_bigratpoly nimblecas_bigrational
+         nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.symconst : symbolic math constants (pi, e, gamma, phi) leaves + numeric bridge ----
 add_library(nimblecas_symconst STATIC)
 target_sources(nimblecas_symconst PUBLIC
@@ -1611,6 +1620,12 @@ target_link_libraries(bigfactor_tests
   PRIVATE nimblecas_bigfactor nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigfactor_tests COMMAND bigfactor_tests)
+
+add_executable(bigsplitfield_tests tests/bigsplitfield_tests.cpp)
+target_link_libraries(bigsplitfield_tests
+  PRIVATE nimblecas_bigsplitfield nimblecas_bigalgnum nimblecas_bigalgpoly nimblecas_bigratpoly
+          nimblecas_bigrational nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigsplitfield_tests COMMAND bigsplitfield_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests
