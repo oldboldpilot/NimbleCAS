@@ -118,6 +118,20 @@ using AlgMat = std::vector<std::vector<AlgebraicNumber>>;
     return true;
 }
 
+// Find the JordanFactorStructure for `target` in a jordan_structure() result's factor
+// list, by exact polynomial equality. Used so tests that don't care about the
+// (implementation-detail-adjacent) canonical order among equal-degree factors can still
+// pin exact expectations per factor.
+[[nodiscard]] auto find_factor(const nimblecas::JordanStructure& s, const RationalPoly& target)
+    -> const nimblecas::JordanFactorStructure* {
+    for (const auto& f : s.factors) {
+        if (f.factor.is_equal(target)) {
+            return &f;
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -475,6 +489,158 @@ auto main() -> int {
                   // Non-square input is a domain_error.
                   const auto rect = mat({{ri(1), ri(2), ri(3)}, {ri(4), ri(5), ri(6)}});
                   t.expect(nimblecas::jordan_form(rect).error() == MathError::domain_error,
+                           "non-square => domain_error");
+              })
+        // ------------------------------------------------------- jordan_structure ----
+        // jordan_structure(A) recovers the Segre characteristic (Jordan block-size
+        // partition per irreducible factor of the char poly) EXACTLY OVER Q, without
+        // ever constructing a splitting field -- valid for irrational/complex
+        // eigenvalues too, unlike jordan_form's Tier 1/2/3 boundary.
+        .test("structure_companion_x3_minus_2_diagonalizable",
+              [](TestContext& t) {
+                  // companion(x^3 - 2): char poly x^3-2 is irreducible over Q (no
+                  // rational root: +/-1, +/-2 all fail). A single irreducible factor of
+                  // degree 3, multiplicity 1: each of its 3 conjugate roots (all
+                  // distinct) is a simple eigenvalue => block_sizes {1}. No field is
+                  // ever constructed to reach this answer.
+                  const auto A = mat({{ri(0), ri(0), ri(2)},
+                                      {ri(1), ri(0), ri(0)},
+                                      {ri(0), ri(1), ri(0)}});
+                  auto r = nimblecas::jordan_structure(A).value();
+                  t.expect(r.factors.size() == 1, "one irreducible factor");
+                  if (r.factors.size() != 1) {
+                      return;
+                  }
+                  const auto& f = r.factors.front();
+                  t.expect(f.factor.is_equal(poly({-2, 0, 0, 1})), "factor == x^3 - 2");
+                  t.expect(f.degree == 3, "degree 3");
+                  t.expect(f.multiplicity == 1, "multiplicity 1");
+                  t.expect(f.block_sizes == std::vector<std::int64_t>{1}, "block_sizes {1}");
+              })
+        .test("structure_companion_x3_minus_3x_minus_1_diagonalizable",
+              [](TestContext& t) {
+                  // companion(x^3 - 3x - 1): char poly x^3-3x-1 is irreducible over Q
+                  // (rational root candidates +/-1 both fail; a cubic with no rational
+                  // root is irreducible). By Cayley-Hamilton m(A) == 0 here (m is the
+                  // whole char poly), so ker(m(A)) is everything => the 3 conjugate
+                  // roots are each simple: block_sizes {1}.
+                  const auto A = mat({{ri(0), ri(0), ri(1)},
+                                      {ri(1), ri(0), ri(3)},
+                                      {ri(0), ri(1), ri(0)}});
+                  auto r = nimblecas::jordan_structure(A).value();
+                  t.expect(r.factors.size() == 1, "one irreducible factor");
+                  if (r.factors.size() != 1) {
+                      return;
+                  }
+                  const auto& f = r.factors.front();
+                  t.expect(f.factor.is_equal(poly({-1, -3, 0, 1})), "factor == x^3 - 3x - 1");
+                  t.expect(f.degree == 3, "degree 3");
+                  t.expect(f.multiplicity == 1, "multiplicity 1");
+                  t.expect(f.block_sizes == std::vector<std::int64_t>{1}, "block_sizes {1}");
+              })
+        .test("structure_defective_6x6_repeated_cubic_factor",
+              [](TestContext& t) {
+                  // A = [[C, I3], [0, C]], C = companion(x^3 - 3x - 1). Char poly is
+                  // (x^3-3x-1)^2: one irreducible factor of degree 3, multiplicity 2.
+                  // Hand-derived: with M = m(A), rank(M) = 3 and rank(M^2) = 0, so
+                  // nu_1 = (6-3)/3 = 1, nu_2 = (6-0)/3 = 2 -- each of the 3 conjugate
+                  // roots has a SINGLE defective 2x2 block (block_sizes {2}), not two
+                  // separate 1x1 blocks. This is exactly the case an extension-field
+                  // construction would be needed for jordan_form/Tier-3 refusal, yet
+                  // jordan_structure answers it exactly over Q.
+                  const auto A = mat({{ri(0), ri(0), ri(1), ri(1), ri(0), ri(0)},
+                                      {ri(1), ri(0), ri(3), ri(0), ri(1), ri(0)},
+                                      {ri(0), ri(1), ri(0), ri(0), ri(0), ri(1)},
+                                      {ri(0), ri(0), ri(0), ri(0), ri(0), ri(1)},
+                                      {ri(0), ri(0), ri(0), ri(1), ri(0), ri(3)},
+                                      {ri(0), ri(0), ri(0), ri(0), ri(1), ri(0)}});
+                  auto r = nimblecas::jordan_structure(A).value();
+                  t.expect(r.factors.size() == 1, "one irreducible factor");
+                  if (r.factors.size() != 1) {
+                      return;
+                  }
+                  const auto& f = r.factors.front();
+                  t.expect(f.factor.is_equal(poly({-1, -3, 0, 1})), "factor == x^3 - 3x - 1");
+                  t.expect(f.degree == 3, "degree 3");
+                  t.expect(f.multiplicity == 2, "multiplicity 2");
+                  t.expect(f.block_sizes == std::vector<std::int64_t>{2}, "block_sizes {2}");
+              })
+        .test("structure_diag_2_2_3_rational_eigenvalues",
+              [](TestContext& t) {
+                  // diag(2,2,3): char poly (x-2)^2(x-3), two rational (degree-1)
+                  // irreducible factors. Already diagonal => eigenvalue 2 has two
+                  // independent 1x1 blocks (block_sizes {1,1}), eigenvalue 3 has one
+                  // 1x1 block (block_sizes {1}).
+                  const auto A = mat({{ri(2), ri(0), ri(0)},
+                                      {ri(0), ri(2), ri(0)},
+                                      {ri(0), ri(0), ri(3)}});
+                  auto r = nimblecas::jordan_structure(A).value();
+                  t.expect(r.factors.size() == 2, "two irreducible factors");
+                  if (r.factors.size() != 2) {
+                      return;
+                  }
+                  // Canonical order: both factors are degree 1, ordered coefficient-lex
+                  // by (constant term) descending significance from the top coefficient
+                  // down -- x^1 coefficients tie (both 1), so the constant term -2 vs
+                  // -3 breaks the tie; verify each factor by content rather than
+                  // assuming which index it lands at.
+                  const auto* f2 = find_factor(r, poly({-2, 1}));  // x - 2
+                  const auto* f3 = find_factor(r, poly({-3, 1}));  // x - 3
+                  t.expect(f2 != nullptr, "factor x - 2 present");
+                  t.expect(f3 != nullptr, "factor x - 3 present");
+                  if (f2 == nullptr || f3 == nullptr) {
+                      return;
+                  }
+                  t.expect(f2->degree == 1 && f2->multiplicity == 2 &&
+                               f2->block_sizes == std::vector<std::int64_t>{1, 1},
+                           "x - 2: degree 1, multiplicity 2, block_sizes {1,1}");
+                  t.expect(f3->degree == 1 && f3->multiplicity == 1 &&
+                               f3->block_sizes == std::vector<std::int64_t>{1},
+                           "x - 3: degree 1, multiplicity 1, block_sizes {1}");
+                  // Canonical order is deterministic: verify it directly too.
+                  t.expect(r.factors[0].factor.is_equal(poly({-3, 1})) &&
+                               r.factors[1].factor.is_equal(poly({-2, 1})),
+                           "canonical order: coefficient-lex among equal-degree factors");
+              })
+        .test("structure_defective_2x2_single_rational_eigenvalue",
+              [](TestContext& t) {
+                  // A = [[5,1],[-1,3]] (reused from defective_2x2_nontrivial_transform):
+                  // char poly (x-4)^2, a single rational eigenvalue 4 with a single 2x2
+                  // defective block (the eigenspace of 4 is 1-dimensional).
+                  const auto A = mat({{ri(5), ri(1)}, {ri(-1), ri(3)}});
+                  auto r = nimblecas::jordan_structure(A).value();
+                  t.expect(r.factors.size() == 1, "one irreducible factor");
+                  if (r.factors.size() != 1) {
+                      return;
+                  }
+                  const auto& f = r.factors.front();
+                  t.expect(f.factor.is_equal(poly({-4, 1})), "factor == x - 4");
+                  t.expect(f.degree == 1, "degree 1");
+                  t.expect(f.multiplicity == 2, "multiplicity 2");
+                  t.expect(f.block_sizes == std::vector<std::int64_t>{2}, "block_sizes {2}");
+              })
+        .test("structure_rotation_irrational_pair_no_field_built",
+              [](TestContext& t) {
+                  // [[0,-1],[1,0]]: char poly x^2+1, irreducible over Q -- the classic
+                  // case jordan_form needs Q(i) for. jordan_structure answers it exactly
+                  // over Q alone: one degree-2 factor, multiplicity 1, block_sizes {1}
+                  // (the two conjugate eigenvalues i, -i are each simple).
+                  const auto A = mat({{ri(0), ri(-1)}, {ri(1), ri(0)}});
+                  auto r = nimblecas::jordan_structure(A).value();
+                  t.expect(r.factors.size() == 1, "one irreducible factor");
+                  if (r.factors.size() != 1) {
+                      return;
+                  }
+                  const auto& f = r.factors.front();
+                  t.expect(f.factor.is_equal(poly({1, 0, 1})), "factor == x^2 + 1");
+                  t.expect(f.degree == 2, "degree 2");
+                  t.expect(f.multiplicity == 1, "multiplicity 1");
+                  t.expect(f.block_sizes == std::vector<std::int64_t>{1}, "block_sizes {1}");
+              })
+        .test("structure_non_square_is_domain_error",
+              [](TestContext& t) {
+                  const auto rect = mat({{ri(1), ri(2), ri(3)}, {ri(4), ri(5), ri(6)}});
+                  t.expect(nimblecas::jordan_structure(rect).error() == MathError::domain_error,
                            "non-square => domain_error");
               })
         .run();

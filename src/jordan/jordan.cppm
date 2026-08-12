@@ -106,6 +106,66 @@ struct AlgebraicJordan {
 //   * overflow — an int64 overflow in the exact arithmetic.
 [[nodiscard]] auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>;
 
+// ---------------------------------------------------------------------------
+// jordan_structure — the exact-over-Q Jordan block STRUCTURE (Segre characteristic),
+// without constructing any extension field.
+// ---------------------------------------------------------------------------
+// For each irreducible factor m_i(x) of the characteristic polynomial (degree d_i,
+// multiplicity e_i in the characteristic polynomial), EVERY one of the d_i conjugate
+// roots of m_i has the SAME Jordan block-size partition of e_i (by Galois symmetry --
+// A is rational, so its char poly's irreducible factors are exactly the minimal
+// polynomials of Galois orbits, and conjugate roots are indistinguishable to any
+// rational invariant such as rank). block_sizes holds that shared partition,
+// descending, summing to e_i.
+struct JordanFactorStructure {
+    RationalPoly factor;   // the irreducible factor m_i(x), as returned by
+                            // factor_over_Q (a primitive integer polynomial lifted
+                            // into Q[x]; not necessarily monic)
+    std::int64_t degree;      // d_i = deg(m_i) -- the number of conjugate roots
+    std::int64_t multiplicity;  // e_i -- the multiplicity of m_i in the char poly
+    std::vector<std::int64_t> block_sizes;  // descending; sum == multiplicity
+};
+
+// The full Jordan block structure of A: one JordanFactorStructure per distinct
+// irreducible factor of the characteristic polynomial, in canonical order (factor
+// degree ascending, then coefficient-lexicographic -- comparing coefficient(d),
+// coefficient(d-1), ..., coefficient(0) in that order -- among equal-degree factors).
+// Deterministic regardless of factor_over_Q's unordered return order.
+struct JordanStructure {
+    std::vector<JordanFactorStructure> factors;
+};
+
+// The exact-over-Q Jordan block structure (Segre characteristic) of A, valid for ANY
+// square rational matrix -- including one whose eigenvalues are irrational or complex
+// -- WITHOUT constructing the splitting field they live in. Complements jordan_form
+// (Tiers 1-3 above), which additionally builds a transforming matrix P and therefore
+// needs the eigenvalues to be representable (rational, or in a single quadratic
+// extension). jordan_structure needs neither: rank is invariant under field
+// extension, so the block-size partition shared by an irreducible factor's conjugate
+// roots is computable entirely over Q from the ranks of powers of m_i(A).
+//
+// ALGORITHM. p = characteristic_polynomial(A); factor p over Q via factor_over_Q into
+// (m_i, e_i) pairs. For each factor of degree d_i: with M = m_i(A) (Horner
+// evaluation over the Matrix ring), nu_k = (n - rank(M^k)) / d_i is the total
+// dimension -- shared out evenly over the d_i conjugate roots -- of the generalized
+// eigenspace at level k; the standard nullity identity
+// #blocks_of_size_k = 2*nu_k - nu_{k-1} - nu_{k+1} (nu_0 = 0) then recovers the Segre
+// characteristic common to every conjugate root of m_i.
+//
+// Fails with:
+//   * domain_error -- A is not square; OR (n - rank(M^k)) is not evenly divisible by
+//     d_i for some computed power (an honest guard -- Rule 32 -- against ever
+//     truncating to a plausible-looking but wrong Segre characteristic; unreachable
+//     for a correct characteristic polynomial and exact arithmetic); OR the recovered
+//     block sizes do not sum to the factor's multiplicity (the same honesty guard,
+//     symmetric case).
+//   * overflow -- an int64 numerator/denominator overflow in the exact arithmetic
+//     (e.g. matrix powers of m_i(A) growing large on big inputs).
+//   * whatever error characteristic_polynomial / factor_over_Q propagate (e.g.
+//     not_implemented if factor_over_Q's Kronecker search exceeds its internal
+//     divisor-tuple budget).
+[[nodiscard]] auto jordan_structure(const Matrix& a) -> Result<JordanStructure>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -710,6 +770,177 @@ auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan> {
     }
 
     return AlgebraicJordan{field, std::move(jmat), std::move(pmat)};
+}
+
+// --- jordan_structure: exact-over-Q Segre characteristic, no extension field --------
+
+namespace {
+
+// a < b for exact Rationals, via a 128-bit cross-multiply (both denominators are
+// canonically positive, so no sign flip is needed and the products cannot overflow
+// int64*int64 widened to __int128). Used only to order jordan_structure's output
+// canonically -- never to compute a returned value -- so this stays outside the
+// checked-Rational arithmetic surface deliberately.
+[[nodiscard]] auto rational_less(const Rational& a, const Rational& b) -> bool {
+    const __int128 lhs = static_cast<__int128>(a.numerator()) * static_cast<__int128>(b.denominator());
+    const __int128 rhs = static_cast<__int128>(b.numerator()) * static_cast<__int128>(a.denominator());
+    return lhs < rhs;
+}
+
+// Canonical factor order: degree ascending, then coefficient-lexicographic --
+// coefficient(d), coefficient(d-1), ..., coefficient(0), highest-degree term first --
+// among factors of equal degree.
+[[nodiscard]] auto factor_less(const RationalPoly& x, const RationalPoly& y) -> bool {
+    const std::int64_t dx = x.degree();
+    const std::int64_t dy = y.degree();
+    if (dx != dy) {
+        return dx < dy;
+    }
+    for (std::int64_t i = dx; i >= 0; --i) {
+        const Rational cx = x.coefficient(static_cast<std::size_t>(i));
+        const Rational cy = y.coefficient(static_cast<std::size_t>(i));
+        if (!(cx == cy)) {
+            return rational_less(cx, cy);
+        }
+    }
+    return false;  // equal
+}
+
+// Horner evaluation of poly(A), n x n, using only the exported Matrix API
+// (identity / scale / multiply / add). poly is never the zero polynomial here (it is
+// always an irreducible factor of a characteristic polynomial, degree >= 1).
+[[nodiscard]] auto matrix_poly_eval(const RationalPoly& poly, const Matrix& a, std::size_t n)
+    -> Result<Matrix> {
+    const std::int64_t deg = poly.degree();
+    if (deg < 0) {
+        return Matrix::zero(n, n);
+    }
+    const Matrix id = Matrix::identity(n);
+    auto lead = id.scale(poly.coefficient(static_cast<std::size_t>(deg)));
+    if (!lead) {
+        return make_error<Matrix>(lead.error());
+    }
+    Matrix m = std::move(*lead);
+    for (std::int64_t i = deg - 1; i >= 0; --i) {
+        auto prod = m.multiply(a);
+        if (!prod) {
+            return make_error<Matrix>(prod.error());
+        }
+        auto shift = id.scale(poly.coefficient(static_cast<std::size_t>(i)));
+        if (!shift) {
+            return make_error<Matrix>(shift.error());
+        }
+        auto sum = prod->add(*shift);
+        if (!sum) {
+            return make_error<Matrix>(sum.error());
+        }
+        m = std::move(*sum);
+    }
+    return m;
+}
+
+}  // namespace
+
+auto jordan_structure(const Matrix& a) -> Result<JordanStructure> {
+    if (!a.is_square()) {
+        return make_error<JordanStructure>(MathError::domain_error);
+    }
+    const std::size_t n = a.rows();
+    if (n == 0) {
+        return JordanStructure{};  // no eigenvalues: the empty structure
+    }
+
+    auto charpoly = characteristic_polynomial(a);
+    if (!charpoly) {
+        return make_error<JordanStructure>(charpoly.error());
+    }
+    auto factors = factor_over_Q(*charpoly);
+    if (!factors) {
+        return make_error<JordanStructure>(factors.error());
+    }
+
+    std::vector<std::pair<RationalPoly, std::int64_t>> sorted = std::move(*factors);
+    std::ranges::sort(sorted, [](const auto& lhs, const auto& rhs) {
+        return factor_less(lhs.first, rhs.first);
+    });
+
+    JordanStructure out;
+    out.factors.reserve(sorted.size());
+    for (const auto& [m, e] : sorted) {
+        const std::int64_t d = m.degree();
+        if (d <= 0) {
+            // An irreducible factor of a characteristic polynomial is never a unit or
+            // the zero polynomial; an honest guard against a malformed factor list.
+            return make_error<JordanStructure>(MathError::domain_error);
+        }
+
+        auto m1 = matrix_poly_eval(m, a, n);
+        if (!m1) {
+            return make_error<JordanStructure>(m1.error());
+        }
+
+        // nu[0] = 0; nu[k] = (n - rank(M^k)) / d for k = 1, 2, ..., grown until it
+        // stops increasing (ker(M^k) == ker(M^{k-1})). p (the largest Jordan-block
+        // size shared by every conjugate root of m) is bounded by e -- since
+        // d*e <= n -- so this converges within n+1 iterations for any correct input;
+        // a safety cap of n+1 turns a hypothetical non-convergence into an honest
+        // error rather than silently trusting an unstabilised tail.
+        std::vector<std::int64_t> nu{0};
+        Matrix power = *m1;  // M^1
+        bool converged = false;
+        for (std::size_t k = 1; k <= n + 1 && !converged; ++k) {
+            const std::int64_t r = power.rank();
+            const std::int64_t num = static_cast<std::int64_t>(n) - r;
+            if (num % d != 0) {
+                // HONESTY GUARD (Rule 32): never truncate-divide to a plausible-
+                // looking but wrong Segre characteristic.
+                return make_error<JordanStructure>(MathError::domain_error);
+            }
+            const std::int64_t nu_k = num / d;
+            nu.push_back(nu_k);
+            if (nu_k == nu[nu.size() - 2]) {
+                converged = true;
+                break;
+            }
+            auto next = power.multiply(*m1);
+            if (!next) {
+                return make_error<JordanStructure>(next.error());
+            }
+            power = std::move(*next);
+        }
+        if (!converged) {
+            return make_error<JordanStructure>(MathError::domain_error);
+        }
+
+        // nu now holds nu_0..nu_{p+1} with nu_{p+1} == nu_p (p = largest block size).
+        const std::size_t p = nu.size() - 2;
+        std::vector<std::int64_t> block_sizes;
+        std::int64_t total = 0;
+        for (std::size_t k = 1; k <= p; ++k) {
+            const std::int64_t count = 2 * nu[k] - nu[k - 1] - nu[k + 1];
+            if (count < 0) {
+                // HONESTY GUARD (Rule 32): a negative block count is impossible for a
+                // correct nullity sequence; refuse rather than emit a nonsensical
+                // partition.
+                return make_error<JordanStructure>(MathError::domain_error);
+            }
+            for (std::int64_t c = 0; c < count; ++c) {
+                block_sizes.push_back(static_cast<std::int64_t>(k));
+            }
+            total += count * static_cast<std::int64_t>(k);
+        }
+        if (total != e) {
+            // HONESTY GUARD (Rule 32): the recovered partition must sum to the
+            // factor's multiplicity in the characteristic polynomial.
+            return make_error<JordanStructure>(MathError::domain_error);
+        }
+        std::ranges::sort(block_sizes, std::greater<>{});
+
+        out.factors.push_back(
+            JordanFactorStructure{m, d, e, std::move(block_sizes)});
+    }
+
+    return out;
 }
 
 }  // namespace nimblecas
