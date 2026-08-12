@@ -641,10 +641,11 @@ auto main() -> int {
               })
         .test("poisson_jump_count_matches_lambda_times_T_on_average",
               [](TestContext& t) {
-                  // Wrap merton_jumps' impulse in a counting shim (a stateful capture is safe
-                  // here: simulate_terminal_jump runs paths strictly sequentially) and check the
-                  // average total jump count per path against its own Poisson standard error
-                  // sqrt(lambda T / paths).
+                  // Wrap merton_jumps' impulse in a counting shim and check the average total
+                  // jump count per path against its own Poisson standard error sqrt(lambda T /
+                  // paths). simulate_terminal_jump fans paths out across the TBB/PPL layer, so
+                  // the shim counter is std::atomic (an internally-synchronising callback, which
+                  // the transform_index concurrency contract permits).
                   const double lambda = 3.0;
                   const double mu_j = 0.0;
                   const double sigma_j = 0.1;
@@ -658,7 +659,7 @@ auto main() -> int {
                   t.expect(base.has_value(), "merton_jumps() succeeds");
                   if (!base) { return; }
 
-                  std::uint64_t jump_count = 0;
+                  std::atomic<std::uint64_t> jump_count{0};
                   auto orig_impulse = base->impulse;
                   JumpSpec counted{base->lambda, base->size_quantile,
                                    [&jump_count, orig_impulse](double x, double J) -> double {
@@ -675,7 +676,7 @@ auto main() -> int {
                            "simulate_terminal_jump (jump-count sanity) succeeds");
                   if (!terminals) { return; }
 
-                  const double average = static_cast<double>(jump_count) / static_cast<double>(paths);
+                  const double average = static_cast<double>(jump_count.load()) / static_cast<double>(paths);
                   const double expected = lambda * T;
                   const double se = std::sqrt(lambda * T / static_cast<double>(paths));
                   t.expect(std::abs(average - expected) <= 5.0 * se,
