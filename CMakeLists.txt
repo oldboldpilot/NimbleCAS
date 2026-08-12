@@ -536,6 +536,15 @@ target_link_libraries(nimblecas_dae
   PUBLIC nimblecas_ode nimblecas_matrix nimblecas_powerseries nimblecas_ratpoly
          nimblecas_core std_module)
 
+# ---- nimblecas.daenl : nonlinear / higher-index DAEs (Pantelides + Tier-1 series) ----
+add_library(nimblecas_daenl STATIC)
+target_sources(nimblecas_daenl PUBLIC
+  FILE_SET CXX_MODULES FILES src/daenl/daenl.cppm)
+target_link_libraries(nimblecas_daenl
+  PUBLIC nimblecas_dae nimblecas_ode nimblecas_powerseries nimblecas_matrix
+         nimblecas_ratpoly nimblecas_nlsolve nimblecas_evalnum nimblecas_diff
+         nimblecas_simplify nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.pde : exact linear evolution PDEs via power series in time ----
 add_library(nimblecas_pde STATIC)
 target_sources(nimblecas_pde PUBLIC
@@ -1597,6 +1606,12 @@ target_link_libraries(dae_tests
   PRIVATE nimblecas_dae nimblecas_ode nimblecas_matrix nimblecas_powerseries nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME dae_tests COMMAND dae_tests)
+
+add_executable(daenl_tests tests/daenl_tests.cpp)
+target_link_libraries(daenl_tests
+  PRIVATE nimblecas_daenl nimblecas_dae nimblecas_powerseries nimblecas_symbolic
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME daenl_tests COMMAND daenl_tests)
 
 add_executable(pde_tests tests/pde_tests.cpp)
 target_link_libraries(pde_tests
