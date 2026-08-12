@@ -257,7 +257,7 @@ add_library(nimblecas_sde STATIC)
 target_sources(nimblecas_sde PUBLIC
   FILE_SET CXX_MODULES FILES src/sde/sde.cppm)
 target_link_libraries(nimblecas_sde
-  PUBLIC nimblecas_rng nimblecas_core std_module)
+  PUBLIC nimblecas_nlsolve nimblecas_parallel nimblecas_rng nimblecas_core std_module)
 
 # ---- nimblecas.montecarlo : Monte Carlo integration & rejection sampling (§7.8) ----
 add_library(nimblecas_montecarlo STATIC)
@@ -1574,7 +1574,8 @@ add_test(NAME bandsolve_tests COMMAND bandsolve_tests)
 
 add_executable(sde_tests tests/sde_tests.cpp)
 target_link_libraries(sde_tests
-  PRIVATE nimblecas_sde nimblecas_rng nimblecas_core nimblecas_testing std_module)
+  PRIVATE nimblecas_sde nimblecas_nlsolve nimblecas_parallel nimblecas_rng nimblecas_core
+          nimblecas_testing std_module)
 add_test(NAME sde_tests COMMAND sde_tests)
 
 add_executable(dae_tests tests/dae_tests.cpp)

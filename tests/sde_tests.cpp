@@ -25,6 +25,15 @@ using nimblecas::srk;
 using nimblecas::stochastic_heun;
 using nimblecas::tamed_euler;
 using nimblecas::terminal_moments_scheme;
+// Jump-diffusion and drift-implicit (theta) additions under test.
+using nimblecas::EnsembleEstimate;
+using nimblecas::JumpSpec;
+using nimblecas::jump_euler_maruyama;
+using nimblecas::jump_theta_euler;
+using nimblecas::merton_jumps;
+using nimblecas::simulate_terminal_jump;
+using nimblecas::terminal_estimate_jump;
+using nimblecas::theta_euler;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 
@@ -447,6 +456,295 @@ auto main() -> int {
                            "both milstein drivers succeed");
                   t.expect(legacy_m && scheme_m && *legacy_m == *scheme_m,
                            "Scheme::milstein == legacy use_milstein=true, bit-for-bit");
+              })
+        // ---------------------------------------------------------------------------
+        // Jump-diffusion (Merton) and drift-implicit (theta) additions: analytic oracles,
+        // reproducibility/partition-independence, domain separation from the Brownian
+        // stream, stiff-OU stabilisation, and Poisson jump-count sanity.
+        // ---------------------------------------------------------------------------
+        .test("merton_jump_diffusion_matches_analytic_mean",
+              [](TestContext& t) {
+                  // Merton (1976) log-normal jump-diffusion: dX = mu X dt + sigma X dW + dJ, dJ a
+                  // compound Poisson process with marks J ~ N(mu_j, sigma_j^2) and multiplicative
+                  // impulse c(x,J) = x(e^J - 1). Analytic terminal mean (standard Merton result):
+                  //   E[X_T] = x0 exp(mu T + lambda T (exp(mu_j + sigma_j^2/2) - 1)).
+                  const double mu = 0.05;
+                  const double sigma = 0.2;
+                  const double lambda = 1.0;
+                  const double mu_j = -0.1;
+                  const double sigma_j = 0.15;
+                  const double x0 = 1.0;
+                  const double T = 1.0;
+                  const std::uint64_t steps = 500;
+                  const std::uint64_t paths = 40000;
+                  const std::uint64_t seed = 20260812;
+
+                  auto a = [mu](double x) { return mu * x; };
+                  auto b = [sigma](double x) { return sigma * x; };
+                  auto jumps = merton_jumps(lambda, mu_j, sigma_j);
+                  t.expect(jumps.has_value(), "merton_jumps() succeeds");
+                  if (!jumps) { return; }
+
+                  auto est = terminal_estimate_jump(a, /*a_prime=*/{}, b, *jumps, x0, T, steps,
+                                                    paths, seed, /*theta=*/0.0);
+                  t.expect(est.has_value(), "terminal_estimate_jump (Merton) succeeds");
+                  if (!est) { return; }
+
+                  const double expected_mean =
+                      x0 * std::exp(mu * T +
+                                    lambda * T * (std::exp(mu_j + 0.5 * sigma_j * sigma_j) - 1.0));
+                  t.expect(std::abs(est->mean - expected_mean) <= 4.0 * est->std_error,
+                           std::format("Merton E[X_T] ~ {} (got {}, std_error {})", expected_mean,
+                                       est->mean, est->std_error));
+                  t.expect(est->variance > 0.0 && std::isfinite(est->variance),
+                           std::format("Merton terminal variance is finite and positive (got {})",
+                                       est->variance));
+                  t.expect(est->paths == paths, "EnsembleEstimate.paths echoes the input paths");
+              })
+        .test("jump_theta_ensemble_is_reproducible_and_matches_single_path",
+              [](TestContext& t) {
+                  // simulate_terminal_jump must rerun bit-identically, and each ensemble element
+                  // p must equal an independent jump_theta_euler call on splitmix64(seed ^ p) —
+                  // exactly simulate_terminal_scheme's partition-independence contract.
+                  const double kappa = 2.0;
+                  const double m = 0.5;
+                  const double sigma = 0.3;
+                  auto a = [kappa, m](double x) { return -kappa * (x - m); };
+                  auto a_prime = [kappa](double) { return -kappa; };
+                  auto b = [sigma](double) { return sigma; };
+                  auto jumps = merton_jumps(/*lambda=*/0.8, /*mu_j=*/0.0, /*sigma_j=*/0.2);
+                  t.expect(jumps.has_value(), "merton_jumps() succeeds");
+                  if (!jumps) { return; }
+
+                  const double x0 = 1.0;
+                  const double T = 1.0;
+                  const double theta = 0.5;
+                  const std::uint64_t steps = 100;
+                  const std::uint64_t paths = 200;
+                  const std::uint64_t seed = 8675309;
+
+                  auto r1 = simulate_terminal_jump(a, a_prime, b, *jumps, x0, T, steps, paths,
+                                                   seed, theta);
+                  auto r2 = simulate_terminal_jump(a, a_prime, b, *jumps, x0, T, steps, paths,
+                                                   seed, theta);
+                  t.expect(r1.has_value() && r2.has_value(),
+                           "both simulate_terminal_jump() runs succeed");
+                  if (!r1 || !r2) { return; }
+
+                  bool same = r1->size() == r2->size() && r1->size() == paths;
+                  for (std::size_t i = 0; i < r1->size() && i < r2->size(); ++i) {
+                      if ((*r1)[i] != (*r2)[i]) same = false;
+                  }
+                  t.expect(same, "simulate_terminal_jump reruns bit-identically");
+
+                  bool matches = true;
+                  for (std::uint64_t p = 0; p < paths; ++p) {
+                      auto one = jump_theta_euler(a, a_prime, b, *jumps, x0, T, steps,
+                                                  splitmix64(seed ^ p), theta);
+                      if (!one || one->values.back() != (*r1)[p]) matches = false;
+                  }
+                  t.expect(matches,
+                           "each ensemble element == independent jump_theta_euler run on its seed");
+              })
+        .test("jump_and_theta_reduce_to_euler_maruyama_bit_for_bit",
+              [](TestContext& t) {
+                  // Domain separation: lambda == 0 keeps the jump-domain stream untouched, and
+                  // theta == 0 is special-cased to the identical Euler expression, so both
+                  // reproduce euler_maruyama BIT-FOR-BIT, not merely "close".
+                  auto a = [](double x) { return 0.2 * x + 0.05; };
+                  auto a_prime = [](double) { return 0.2; };
+                  auto b = [](double x) { return 0.15 * x + 0.02; };
+                  const double x0 = 1.0;
+                  const double T = 1.0;
+                  const std::uint64_t steps = 300;
+                  const std::uint64_t seed = 4242424;
+
+                  auto baseline = euler_maruyama(a, b, x0, T, steps, seed);
+                  t.expect(baseline.has_value(), "euler_maruyama baseline succeeds");
+                  if (!baseline) { return; }
+
+                  JumpSpec no_jumps{};  // lambda == 0.0; size_quantile/impulse never called
+                  auto jp = jump_euler_maruyama(a, b, no_jumps, x0, T, steps, seed);
+                  t.expect(jp.has_value(), "jump_euler_maruyama(lambda=0) succeeds");
+                  if (jp) {
+                      bool identical = jp->values.size() == baseline->values.size();
+                      for (std::size_t i = 0; i < jp->values.size() && i < baseline->values.size();
+                           ++i) {
+                          if (jp->values[i] != baseline->values[i]) identical = false;
+                      }
+                      t.expect(identical, "jump_euler_maruyama(lambda=0) == euler_maruyama bit-for-bit");
+                  }
+
+                  auto th = theta_euler(a, a_prime, b, x0, T, steps, seed, /*theta=*/0.0);
+                  t.expect(th.has_value(), "theta_euler(theta=0) succeeds");
+                  if (th) {
+                      bool identical = th->values.size() == baseline->values.size();
+                      for (std::size_t i = 0; i < th->values.size() && i < baseline->values.size();
+                           ++i) {
+                          if (th->values[i] != baseline->values[i]) identical = false;
+                      }
+                      t.expect(identical, "theta_euler(theta=0) == euler_maruyama bit-for-bit");
+                  }
+              })
+        .test("theta_euler_stabilises_stiff_ou_where_explicit_euler_diverges",
+              [](TestContext& t) {
+                  // Stiff mean-reverting OU: dX = -kappa(X-m) dt + sigma dW. kappa*dt = 50*0.05 =
+                  // 2.5 puts explicit Euler-Maruyama's amplification factor |1 - kappa dt| = 1.5
+                  // outside the stability disc, so its moments diverge; theta_euler(theta=1)
+                  // (fully implicit drift) stays finite and tracks the analytic OU moments at
+                  // T=2: E[X_T] = m + (x0-m) e^{-kappa T}, Var = sigma^2/(2 kappa) (1-e^{-2 kappa T}).
+                  const double kappa = 50.0;
+                  const double m = 0.05;
+                  const double sigma = 0.1;
+                  const double x0 = 1.0;
+                  const double T = 2.0;
+                  const std::uint64_t steps = 40;  // dt = T/steps = 0.05, kappa*dt = 2.5
+                  const std::uint64_t paths = 5000;
+                  const std::uint64_t seed = 990099;
+
+                  auto a = [kappa, m](double x) { return -kappa * (x - m); };
+                  auto a_prime = [kappa](double) { return -kappa; };
+                  auto b = [sigma](double) { return sigma; };
+
+                  auto euler_mom =
+                      terminal_moments(a, b, /*b_prime=*/{}, x0, T, steps, paths, seed, false);
+                  t.expect(euler_mom.has_value(),
+                           "terminal_moments (plain Euler, stiff OU) succeeds");
+                  if (euler_mom) {
+                      t.expect(std::abs(euler_mom->first) > 1000.0,
+                               std::format("plain Euler diverges on the stiff OU (mean = {})",
+                                           euler_mom->first));
+                  }
+
+                  // theta_euler(theta=1), driven through terminal_estimate_jump with lambda=0 so
+                  // it carries a std_error for the tolerance check (theta_euler itself returns a
+                  // single SdePath; simulate_terminal_jump(theta=1, JumpSpec{}) is theta_euler's
+                  // OWN ensemble path — see theta_euler's implementation).
+                  auto est = terminal_estimate_jump(a, a_prime, b, JumpSpec{}, x0, T, steps, paths,
+                                                    seed, /*theta=*/1.0);
+                  t.expect(est.has_value(), "terminal_estimate_jump (theta_euler via theta=1) succeeds");
+                  if (!est) { return; }
+
+                  t.expect(std::isfinite(est->mean) && std::isfinite(est->variance),
+                           "theta_euler(theta=1) stays finite on the stiff OU");
+
+                  const double expected_mean = m + (x0 - m) * std::exp(-kappa * T);
+                  t.expect(std::abs(est->mean - expected_mean) <= 4.0 * est->std_error,
+                           std::format("theta_euler E[X_T] ~ {} (got {}, std_error {})",
+                                       expected_mean, est->mean, est->std_error));
+
+                  const double expected_var =
+                      sigma * sigma / (2.0 * kappa) * (1.0 - std::exp(-2.0 * kappa * T));
+                  t.expect(std::abs(est->variance - expected_var) <= 4.0 * est->std_error,
+                           std::format("theta_euler Var(X_T) ~ {} (got {})", expected_var,
+                                       est->variance));
+              })
+        .test("poisson_jump_count_matches_lambda_times_T_on_average",
+              [](TestContext& t) {
+                  // Wrap merton_jumps' impulse in a counting shim (a stateful capture is safe
+                  // here: simulate_terminal_jump runs paths strictly sequentially) and check the
+                  // average total jump count per path against its own Poisson standard error
+                  // sqrt(lambda T / paths).
+                  const double lambda = 3.0;
+                  const double mu_j = 0.0;
+                  const double sigma_j = 0.1;
+                  const double x0 = 1.0;
+                  const double T = 1.0;
+                  const std::uint64_t steps = 100;
+                  const std::uint64_t paths = 20000;
+                  const std::uint64_t seed = 314159265;
+
+                  auto base = merton_jumps(lambda, mu_j, sigma_j);
+                  t.expect(base.has_value(), "merton_jumps() succeeds");
+                  if (!base) { return; }
+
+                  std::uint64_t jump_count = 0;
+                  auto orig_impulse = base->impulse;
+                  JumpSpec counted{base->lambda, base->size_quantile,
+                                   [&jump_count, orig_impulse](double x, double J) -> double {
+                                       ++jump_count;
+                                       return orig_impulse(x, J);
+                                   }};
+
+                  auto a = [](double) { return 0.0; };
+                  auto b = [](double) { return 0.0; };  // isolate the jump component
+
+                  auto terminals = simulate_terminal_jump(a, /*a_prime=*/{}, b, counted, x0, T,
+                                                          steps, paths, seed, /*theta=*/0.0);
+                  t.expect(terminals.has_value(),
+                           "simulate_terminal_jump (jump-count sanity) succeeds");
+                  if (!terminals) { return; }
+
+                  const double average = static_cast<double>(jump_count) / static_cast<double>(paths);
+                  const double expected = lambda * T;
+                  const double se = std::sqrt(lambda * T / static_cast<double>(paths));
+                  t.expect(std::abs(average - expected) <= 5.0 * se,
+                           std::format("average jump count ~ lambda*T = {} (got {}, se {})",
+                                       expected, average, se));
+              })
+        .test("jump_theta_domain_errors",
+              [](TestContext& t) {
+                  auto a = [](double x) { return x; };
+                  auto a_prime = [](double) { return 1.0; };
+                  auto b = [](double x) { return x; };
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+                  auto neg_lambda = merton_jumps(-1.0, 0.0, 0.1);
+                  t.expect(!neg_lambda.has_value() &&
+                               neg_lambda.error() == nimblecas::MathError::domain_error,
+                           "merton_jumps(lambda<0) yields domain_error");
+                  auto nan_lambda = merton_jumps(nan, 0.0, 0.1);
+                  t.expect(!nan_lambda.has_value() &&
+                               nan_lambda.error() == nimblecas::MathError::domain_error,
+                           "merton_jumps(lambda=NaN) yields domain_error");
+                  auto neg_sigma = merton_jumps(1.0, 0.0, -0.1);
+                  t.expect(!neg_sigma.has_value() &&
+                               neg_sigma.error() == nimblecas::MathError::domain_error,
+                           "merton_jumps(sigma_j<0) yields domain_error");
+
+                  auto jumps = merton_jumps(1.0, -0.1, 0.15);
+                  t.expect(jumps.has_value(), "merton_jumps() succeeds for the remaining checks");
+                  if (!jumps) { return; }
+
+                  auto s0 = jump_euler_maruyama(a, b, *jumps, 1.0, 1.0, 0, 1);
+                  t.expect(!s0.has_value() && s0.error() == nimblecas::MathError::domain_error,
+                           "jump_euler_maruyama(steps==0) yields domain_error");
+                  auto t0 = jump_euler_maruyama(a, b, *jumps, 1.0, 0.0, 10, 1);
+                  t.expect(!t0.has_value() && t0.error() == nimblecas::MathError::domain_error,
+                           "jump_euler_maruyama(T==0) yields domain_error");
+                  auto empty_a = jump_euler_maruyama({}, b, *jumps, 1.0, 1.0, 10, 1);
+                  t.expect(!empty_a.has_value() &&
+                               empty_a.error() == nimblecas::MathError::domain_error,
+                           "jump_euler_maruyama(empty drift) yields domain_error");
+
+                  JumpSpec huge_lambda{1.0e6, jumps->size_quantile, jumps->impulse};  // lambda*dt >> 700
+                  auto overflow = jump_euler_maruyama(a, b, huge_lambda, 1.0, 1.0, 10, 1);
+                  t.expect(!overflow.has_value() &&
+                               overflow.error() == nimblecas::MathError::domain_error,
+                           "jump_euler_maruyama(lambda*dt>700) yields domain_error");
+
+                  JumpSpec no_quantile{1.0, {}, jumps->impulse};
+                  auto missing_q = jump_euler_maruyama(a, b, no_quantile, 1.0, 1.0, 10, 1);
+                  t.expect(!missing_q.has_value() &&
+                               missing_q.error() == nimblecas::MathError::domain_error,
+                           "jump_euler_maruyama(lambda>0, empty size_quantile) yields domain_error");
+
+                  auto bad_theta = theta_euler(a, a_prime, b, 1.0, 1.0, 10, 1, -0.1);
+                  t.expect(!bad_theta.has_value() &&
+                               bad_theta.error() == nimblecas::MathError::domain_error,
+                           "theta_euler(theta<0) yields domain_error");
+                  auto bad_theta2 = theta_euler(a, a_prime, b, 1.0, 1.0, 10, 1, 1.1);
+                  t.expect(!bad_theta2.has_value() &&
+                               bad_theta2.error() == nimblecas::MathError::domain_error,
+                           "theta_euler(theta>1) yields domain_error");
+                  auto bad_theta3 = jump_theta_euler(a, a_prime, b, *jumps, 1.0, 1.0, 10, 1, nan);
+                  t.expect(!bad_theta3.has_value() &&
+                               bad_theta3.error() == nimblecas::MathError::domain_error,
+                           "jump_theta_euler(theta=NaN) yields domain_error");
+
+                  auto p0 = simulate_terminal_jump(a, a_prime, b, *jumps, 1.0, 1.0, 10, 0, 1, 0.5);
+                  t.expect(!p0.has_value() && p0.error() == nimblecas::MathError::domain_error,
+                           "simulate_terminal_jump(paths==0) yields domain_error");
               })
         .run();
 }
