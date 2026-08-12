@@ -444,6 +444,20 @@ target_sources(nimblecas_bigratpoly PUBLIC
 target_link_libraries(nimblecas_bigratpoly
   PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_ratpoly nimblecas_core std_module)
 
+# ---- nimblecas.bigresultant : Euclidean-PRS resultant/discriminant over BigRational (unbounded) --
+add_library(nimblecas_bigresultant STATIC)
+target_sources(nimblecas_bigresultant PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigresultant/bigresultant.cppm)
+target_link_libraries(nimblecas_bigresultant
+  PUBLIC nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
+# ---- nimblecas.bigalgnum : number field / algebraic number over BigRational (unbounded) ----------
+add_library(nimblecas_bigalgnum STATIC)
+target_sources(nimblecas_bigalgnum PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigalgnum/bigalgnum.cppm)
+target_link_libraries(nimblecas_bigalgnum
+  PUBLIC nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.bigmatrix : big-backed dense matrix over BigRational (exact Bareiss determinant) --
 add_library(nimblecas_bigmatrix STATIC)
 target_sources(nimblecas_bigmatrix PUBLIC
@@ -1545,6 +1559,18 @@ target_link_libraries(bigratpoly_tests
   PRIVATE nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigratpoly_tests COMMAND bigratpoly_tests)
+
+add_executable(bigresultant_tests tests/bigresultant_tests.cpp)
+target_link_libraries(bigresultant_tests
+  PRIVATE nimblecas_bigresultant nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigresultant_tests COMMAND bigresultant_tests)
+
+add_executable(bigalgnum_tests tests/bigalgnum_tests.cpp)
+target_link_libraries(bigalgnum_tests
+  PRIVATE nimblecas_bigalgnum nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigalgnum_tests COMMAND bigalgnum_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests
