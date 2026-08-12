@@ -465,6 +465,13 @@ target_sources(nimblecas_bigalgpoly PUBLIC
 target_link_libraries(nimblecas_bigalgpoly
   PUBLIC nimblecas_bigalgnum nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigfactor : Kronecker factorization over Q for BigRationalPoly (unbounded) -------
+add_library(nimblecas_bigfactor STATIC)
+target_sources(nimblecas_bigfactor PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigfactor/bigfactor.cppm)
+target_link_libraries(nimblecas_bigfactor
+  PUBLIC nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.bigmatrix : big-backed dense matrix over BigRational (exact Bareiss determinant) --
 add_library(nimblecas_bigmatrix STATIC)
 target_sources(nimblecas_bigmatrix PUBLIC
@@ -1598,6 +1605,12 @@ target_link_libraries(bigfrobenius_tests
   PRIVATE nimblecas_bigfrobenius nimblecas_bigmatrix nimblecas_bigratpoly nimblecas_bigrational
           nimblecas_bigint nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigfrobenius_tests COMMAND bigfrobenius_tests)
+
+add_executable(bigfactor_tests tests/bigfactor_tests.cpp)
+target_link_libraries(bigfactor_tests
+  PRIVATE nimblecas_bigfactor nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigfactor_tests COMMAND bigfactor_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests
