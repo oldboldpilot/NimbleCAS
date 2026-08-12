@@ -180,6 +180,14 @@ namespace {
     return out;
 }
 
+[[nodiscard]] auto checked_add_i64(std::int64_t a, std::int64_t b) -> std::optional<std::int64_t> {
+    std::int64_t out = 0;
+    if (__builtin_add_overflow(a, b, &out)) {
+        return std::nullopt;
+    }
+    return out;
+}
+
 // Exact a < b for BigRationals. Unlike the int64 tier -- where rational_less cross-multiplies
 // through __int128 to dodge an int64 overflow guard -- BigRational's own operator<=> is exact
 // and unbounded, so the comparison is used directly. Used only to establish a deterministic
@@ -461,7 +469,15 @@ auto factor_over_field(const BigNumberField& l, const BigAlgebraicPoly& f)
         return make_error<Out>(MathError::not_implemented);
     }
     const std::int64_t deg_n = *deg_n_opt;
-    const std::int64_t bound = checked_mul_i64(2, deg_n).value_or(std::numeric_limits<std::int64_t>::max());
+    // The shift bound |s| <= 2*[L:Q]*deg(f) is a pure int64 degree product; a degree large
+    // enough to overflow it is physically unreachable (deg_n alone is checked above), but
+    // report not_implemented honestly rather than silently pinning the bound at INT64_MAX --
+    // matching the deg_n handling two lines up rather than swallowing the overflow.
+    auto bound_opt = checked_mul_i64(2, deg_n);
+    if (!bound_opt) {
+        return make_error<Out>(MathError::not_implemented);
+    }
+    const std::int64_t bound = *bound_opt;
 
     for (std::int64_t k = 0;; ++k) {
         std::int64_t s = 0;
@@ -902,6 +918,14 @@ auto splitting_field(std::span<const BigRationalPoly> irreducibles, std::int64_t
     }
     BigNumberField field = std::move(*trivial_res);
 
+    // Honor the documented contract: the field degree must never exceed max_degree "at any
+    // point (the initial field or any subsequent adjunction)". The trivial field has degree 1,
+    // so a degenerate max_degree < 1 must be refused here -- the growth gate below only guards
+    // adjunctions, which an all-linear input set never triggers.
+    if (field.degree() > max_degree) {
+        return make_error<BigSplittingField>(MathError::not_implemented);
+    }
+
     std::vector<BigAlgebraicPoly> remaining;  // cofactor of each p_i over the CURRENT field
     remaining.reserve(m);
     for (std::size_t i = 0; i < m; ++i) {
@@ -912,8 +936,13 @@ auto splitting_field(std::span<const BigRationalPoly> irreducibles, std::int64_t
     // Bounded outer loop: each adjunction strictly raises [L:Q] (deg target >= 2) toward the
     // max_degree ceiling, so the count is bounded. This cap is a defensive circuit breaker,
     // not the honesty gate itself -- that gate is the max_degree check below.
+    // checked_add_i64 (clamped to INT64_MAX) so a near-INT64_MAX max_degree cannot make this
+    // sum overflow -- signed-integer overflow is UB, and the cap is only a defensive ceiling,
+    // so saturating it is the correct degradation.
+    const std::int64_t cap_base = std::max<std::int64_t>(max_degree, 1);
     const std::int64_t iteration_cap =
-        std::max<std::int64_t>(max_degree, 1) + static_cast<std::int64_t>(m) + 8;
+        checked_add_i64(cap_base, static_cast<std::int64_t>(m) + 8)
+            .value_or(std::numeric_limits<std::int64_t>::max());
 
     for (std::int64_t iter = 0;; ++iter) {
         if (iter > iteration_cap) {

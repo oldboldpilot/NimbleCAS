@@ -569,7 +569,21 @@ struct EigenGroup {
 // on the diagonal and `one` on the superdiagonal within the block.
 template <typename S>
 [[nodiscard]] auto assemble(const std::vector<EigenGroup<S>>& groups, std::size_t n,
-                            const S& zero, const S& one) -> std::pair<Mat<S>, Mat<S>> {
+                            const S& zero, const S& one) -> Result<std::pair<Mat<S>, Mat<S>>> {
+    // Rule 32: the chains must account for EXACTLY n columns. If the eigenvalue list handed to
+    // compute_groups ever double-counts (or omits) a generalized eigenspace, the running column
+    // offset would over- or under-run the n-by-n J/P buffers -- the overrun being an
+    // out-of-bounds write (UB) that corrupts memory before verify() ever runs. Check the total
+    // up front and refuse honestly rather than write past the buffers.
+    std::size_t total = 0;
+    for (const EigenGroup<S>& g : groups) {
+        for (const std::vector<Vec<S>>& chain : g.chains) {
+            total += chain.size();
+        }
+    }
+    if (total != n) {
+        return make_error<std::pair<Mat<S>, Mat<S>>>(MathError::domain_error);
+    }
     Mat<S> j(n, Vec<S>(n, zero));
     Mat<S> p(n, Vec<S>(n, zero));
     std::size_t off = 0;
@@ -588,7 +602,7 @@ template <typename S>
             off += len;
         }
     }
-    return {std::move(j), std::move(p)};
+    return std::pair<Mat<S>, Mat<S>>{std::move(j), std::move(p)};
 }
 
 // Exact self-verification (Rule 32): confirm A*P == P*J entrywise and that P is invertible
@@ -734,7 +748,11 @@ template <typename S>
     if (!groups) {
         return make_error<AlgebraicJordan>(groups.error());
     }
-    auto [jmat, pmat] = assemble(*groups, n, zero, one);
+    auto assembled = assemble(*groups, n, zero, one);
+    if (!assembled) {
+        return make_error<AlgebraicJordan>(assembled.error());
+    }
+    auto& [jmat, pmat] = *assembled;
 
     auto ok = verify(amat, jmat, pmat, n, zero, one);
     if (!ok) {
@@ -800,7 +818,11 @@ auto rational_jordan_form(const Matrix& a) -> Result<RationalJordan> {
     if (!groups) {
         return make_error<RationalJordan>(groups.error());
     }
-    auto [jmat, pmat] = assemble(*groups, n, zero, one);
+    auto assembled = assemble(*groups, n, zero, one);
+    if (!assembled) {
+        return make_error<RationalJordan>(assembled.error());
+    }
+    auto& [jmat, pmat] = *assembled;
 
     auto ok = verify(amat, jmat, pmat, n, zero, one);
     if (!ok) {
@@ -927,7 +949,11 @@ auto jordan_form(const Matrix& a, std::int64_t max_field_degree) -> Result<Algeb
     if (!groups) {
         return make_error<AlgebraicJordan>(groups.error());
     }
-    auto [jmat, pmat] = assemble(*groups, n, zero, one);
+    auto assembled = assemble(*groups, n, zero, one);
+    if (!assembled) {
+        return make_error<AlgebraicJordan>(assembled.error());
+    }
+    auto& [jmat, pmat] = *assembled;
 
     auto ok = verify(amat, jmat, pmat, n, zero, one);
     if (!ok) {
@@ -1044,7 +1070,11 @@ auto jordan_form_bignum(const Matrix& a, std::int64_t max_field_degree)
     if (!groups) {
         return make_error<BigAlgebraicJordan>(groups.error());
     }
-    auto [jmat, pmat] = assemble(*groups, n, zero, one);
+    auto assembled = assemble(*groups, n, zero, one);
+    if (!assembled) {
+        return make_error<BigAlgebraicJordan>(assembled.error());
+    }
+    auto& [jmat, pmat] = *assembled;
 
     auto ok = verify(amat, jmat, pmat, n, zero, one);
     if (!ok) {
