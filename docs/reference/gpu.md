@@ -91,6 +91,7 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `l2_star_discrepancy(points, dimension)` | Warnock L2 star discrepancy of point set (device tree reduction). Matches CPU to ~1e-10 relative (tree reduction last-bit difference). |
 | `sobol_batch(n0, count, dimension)` | **Batched Sobol' point generation** — dyadic-exact double view matching CPU `sobol_point` bit-for-bit (integer Gray-code XOR * 2^-32). |
 | `halton_batch(n0, count, dimension)` | **Batched Halton point generation** — radical inverse double view matching CPU `halton_point` to rounding (~1e-12). |
+| `bicgstab_csr(row_offsets, col_indices, values, b, max_iters, tol)` | **BiCGStab sparse solver** for general (non-symmetric) CSR systems \(A x = b\); recomputes true residual on device, bitwise repeatable, CPU fallback `krylov::bicgstab`. |
 
 
 Every GPU entry point — the numeric kernels, the batched Black-Scholes pricer, the wavelet
@@ -344,6 +345,14 @@ pricer there is nothing to amortize — measured on the 5090 it is **on par with
 is API/structural parity with the in-engine graphed path, the bit-identical guarantee, and being
 the correct substrate once the captured region grows into a multi-kernel pipeline where graph
 amortization pays.
+
+### Sparse Krylov Solvers: `bicgstab_csr`
+
+`bicgstab_csr` solves general (non-symmetric) sparse linear systems \(A x = b\) in CSR format on the GPU, extending `cg_csr` (SPD-only) and mirroring CPU `nimblecas::krylov::bicgstab`.
+
+- **Honesty boundary**: NUMERICAL (`double`). `converged == false` is an outcome (iteration limit reached or breakdown), never an error. At exit, the TRUE residual \(\|b - A x\|\) is recomputed on the device, and `converged` is derived from it. The solver never claims unachieved convergence.
+- **Determinism**: Block/tree order dot reductions sum in device tree order, so the last bits of \(x\) may differ from a sequential CPU solver (each is a valid numerical solution). Bitwise repeatable run-to-run on the same device at fixed launch shape.
+- **CPU Fallback**: When no GPU is present (`!available()`), falls back to CPU `krylov::bicgstab` via `csr_matvec`. Domain validation (monotone offsets, valid column bounds) is applied prior to device/fallback selection.
 
 ## Testing
 

@@ -114,6 +114,21 @@ int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indices, const d
                          int n, int nnz, const double* b, double* x, int max_iters, double tol,
                          int* out_iters, int* out_converged, double* out_resid);
 
+/* BiCGStab solve of a GENERAL (possibly non-symmetric) sparse system A x = b, with A in CSR
+ * form: row_offsets length n+1, col_indices/values length nnz. x is the solution (caller
+ * supplies the initial guess, typically zeros, in x on entry). Iterates until the residual
+ * 2-norm <= tol*||b|| or max_iters is reached; breakdown (rho, r0hat.v, t.t, or omega
+ * collapsing below 1e-300) stops early with *out_converged = 0 — mirrors the CPU
+ * nimblecas::krylov::bicgstab, which remains authoritative. *out_resid is the TRUE
+ * ||b - A x|| recomputed on the device at exit (never the recursive estimate) and
+ * *out_converged is derived from it. Device dot reductions sum in block/tree order, so the
+ * last bits may differ from the sequential CPU solver (each is a valid numerical solution).
+ * Returns 0 on success, or a non-zero CUDA error code. */
+int nimblecas_gpu_bicgstab_csr(const int* row_offsets, const int* col_indices,
+                               const double* values, int n, int nnz, const double* b,
+                               double* x, int max_iters, double tol, int* out_iters,
+                               int* out_converged, double* out_resid);
+
 /* --- FAMILY A: batched derivative pricing (gpu_pricing_kernels.cu) --- */
 
 /* A Monte Carlo estimate in POD form: the price and its standard error. */

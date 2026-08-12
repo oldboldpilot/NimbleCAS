@@ -70,7 +70,8 @@ void host_unregister(const PinnedScope& scope) {
 // work, mirroring the launch policy of poly_eval: occupancy stays high on large problems while
 // small ones never spawn excessive blocks. Grid-stride kernels tolerate any returned value.
 int choose_blocks(int work, int threads) {
-    const int blocks_by_work = (work + threads - 1) / threads;
+    const int blocks_by_work =
+        static_cast<int>((static_cast<long long>(work) + threads - 1) / threads);
     int sm_count = 0;
     int blocks;
     if (cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, 0) == cudaSuccess &&
@@ -1294,6 +1295,18 @@ __global__ void xpby_kernel(const double* __restrict__ r, double beta, double* _
     }
 }
 
+// p[i] = r[i] + beta * (p[i] - omega * v[i]) (grid-stride) — the BiCGStab search-direction update.
+__global__ void bicgstab_p_update_kernel(const double* __restrict__ r, double beta, double omega,
+                                         const double* __restrict__ v, double* __restrict__ p,
+                                         int n) {
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    for (int i = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                 static_cast<int>(threadIdx.x);
+         i < n; i += stride) {
+        p[i] = r[i] + beta * (p[i] - omega * v[i]);
+    }
+}
+
 // Two-stage device dot product a . b over n elements, writing the scalar result to *result (host).
 // Reuses reduce_partials_kernel to fold the block partials, so the sum stays on the device until a
 // single double is copied back. Returns the first failing CUDA error, or cudaSuccess.
@@ -1333,7 +1346,7 @@ extern "C" int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indic
     const int threads = 256;  // power of two: required by the shared-memory dot reductions
     const int blocks = choose_blocks(n, threads);
     const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
-    const size_t row_bytes = static_cast<size_t>(n + 1) * sizeof(int);
+    const size_t row_bytes = (static_cast<size_t>(n) + 1) * sizeof(int);
     const size_t vec_bytes = static_cast<size_t>(n) * sizeof(double);
     const size_t part_bytes = static_cast<size_t>(blocks) * sizeof(double);
     const size_t col_bytes = static_cast<size_t>(nnz) * sizeof(int);
@@ -1509,5 +1522,319 @@ extern "C" int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indic
     if (dev_scalar != nullptr) {
         cudaFree(dev_scalar);
     }
+    return rc;
+}
+
+extern "C" int nimblecas_gpu_bicgstab_csr(const int* row_offsets, const int* col_indices,
+                                        const double* values, int n, int nnz, const double* b,
+                                        double* x, int max_iters, double tol, int* out_iters,
+                                        int* out_converged, double* out_resid) {
+    if (n <= 0 || nnz < 0 || row_offsets == nullptr || b == nullptr || x == nullptr ||
+        out_iters == nullptr || out_converged == nullptr || out_resid == nullptr ||
+        (nnz > 0 && (col_indices == nullptr || values == nullptr))) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    *out_iters = 0;
+    *out_converged = 0;
+    *out_resid = 0.0;
+    const int threads = 256;
+    const int blocks = choose_blocks(n, threads);
+    const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
+    const size_t row_bytes = (static_cast<size_t>(n) + 1) * sizeof(int);
+    const size_t vec_bytes = static_cast<size_t>(n) * sizeof(double);
+    const size_t part_bytes = static_cast<size_t>(blocks) * sizeof(double);
+    const size_t col_bytes = static_cast<size_t>(nnz) * sizeof(int);
+    const size_t val_bytes = static_cast<size_t>(nnz) * sizeof(double);
+    const size_t col_alloc = col_bytes != 0 ? col_bytes : sizeof(int);
+    const size_t val_alloc = val_bytes != 0 ? val_bytes : sizeof(double);
+
+    int* dev_row = nullptr;
+    int* dev_col = nullptr;
+    double* dev_val = nullptr;
+    double* dev_b = nullptr;
+    double* dev_x = nullptr;
+    double* dev_r = nullptr;
+    double* dev_rhat = nullptr;
+    double* dev_p = nullptr;
+    double* dev_v = nullptr;
+    double* dev_s = nullptr;
+    double* dev_t = nullptr;
+    double* dev_partials = nullptr;
+    double* dev_scalar = nullptr;
+
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+
+    if ((err = cudaMalloc(&dev_row, row_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_col, col_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_val, val_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_b, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_x, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_r, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_rhat, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_p, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_v, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_s, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_t, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_partials, part_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_scalar, sizeof(double))) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemset(dev_p, 0, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemset(dev_v, 0, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_row, row_offsets, row_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if (nnz > 0 &&
+               (err = cudaMemcpy(dev_col, col_indices, col_bytes, cudaMemcpyHostToDevice)) !=
+                   cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if (nnz > 0 &&
+               (err = cudaMemcpy(dev_val, values, val_bytes, cudaMemcpyHostToDevice)) !=
+                   cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_b, b, vec_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_x, x, vec_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        csr_spmv_kernel<<<blocks, threads>>>(dev_row, dev_col, dev_val, n, dev_x, dev_t);
+        double bnorm2 = 0.0;
+        double rnorm2 = 0.0;
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(dev_r, dev_b, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                   cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else {
+            axpy_kernel<<<blocks, threads>>>(-1.0, dev_t, dev_r, n);
+            if ((err = cudaGetLastError()) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else if ((err = cudaMemcpy(dev_rhat, dev_r, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                       cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else if ((err = cg_device_dot(dev_b, dev_b, n, blocks, threads, shmem, dev_partials,
+                                            dev_scalar, &bnorm2)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else if ((err = cg_device_dot(dev_r, dev_r, n, blocks, threads, shmem, dev_partials,
+                                            dev_scalar, &rnorm2)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            }
+        }
+
+        if (rc == 0) {
+            const double bnorm = sqrt(bnorm2);
+            const double stop = tol * (bnorm > 0.0 ? bnorm : 1.0);  // match CPU: b==0 -> stop = tol
+            constexpr double tiny = 1e-300;
+
+            double rho_old = 1.0;
+            double alpha = 1.0;
+            double omega = 1.0;
+            int iters = 0;
+
+            const double rnorm = sqrt(rnorm2);
+            if (rnorm > stop) {
+                for (int it = 0; it < max_iters && rc == 0; ++it) {
+                    iters = it + 1;  // count at loop top, mirroring the CPU oracle's ++iter, so a
+                                     // breakdown exit reports the current iteration, not the previous.
+                    // 1. rho = dot(rhat, r)
+                    double rho = 0.0;
+                    if ((err = cg_device_dot(dev_rhat, dev_r, n, blocks, threads, shmem,
+                                            dev_partials, dev_scalar, &rho)) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    if (fabs(rho) <= tiny) {
+                        break;  // breakdown
+                    }
+
+                    // 2. beta = (rho / rho_old) * (alpha / omega)
+                    const double beta = (rho / rho_old) * (alpha / omega);
+
+                    // 3. p = r + beta * (p - omega * v)
+                    bicgstab_p_update_kernel<<<blocks, threads>>>(dev_r, beta, omega, dev_v, dev_p, n);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    // 4. v = A * p
+                    csr_spmv_kernel<<<blocks, threads>>>(dev_row, dev_col, dev_val, n, dev_p, dev_v);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    // 5. rhatv = dot(rhat, v)
+                    double rhatv = 0.0;
+                    if ((err = cg_device_dot(dev_rhat, dev_v, n, blocks, threads, shmem,
+                                            dev_partials, dev_scalar, &rhatv)) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    if (fabs(rhatv) <= tiny) {
+                        break;  // breakdown
+                    }
+
+                    // 6. alpha = rho / rhatv
+                    alpha = rho / rhatv;
+
+                    // 7. s = r - alpha * v
+                    if ((err = cudaMemcpy(dev_s, dev_r, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                        cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    axpy_kernel<<<blocks, threads>>>(-alpha, dev_v, dev_s, n);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    // 8. snorm2 = dot(s, s)
+                    double snorm2 = 0.0;
+                    if ((err = cg_device_dot(dev_s, dev_s, n, blocks, threads, shmem,
+                                            dev_partials, dev_scalar, &snorm2)) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    if (sqrt(snorm2) <= stop) {
+                        axpy_kernel<<<blocks, threads>>>(alpha, dev_p, dev_x, n);
+                        if ((err = cudaGetLastError()) != cudaSuccess) {
+                            rc = static_cast<int>(err);
+                        }
+                        break;  // early exit half-step (iters already set at loop top)
+                    }
+
+                    // 9. t = A * s
+                    csr_spmv_kernel<<<blocks, threads>>>(dev_row, dev_col, dev_val, n, dev_s, dev_t);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    // 10. tt = dot(t, t)
+                    double tt = 0.0;
+                    if ((err = cg_device_dot(dev_t, dev_t, n, blocks, threads, shmem,
+                                            dev_partials, dev_scalar, &tt)) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    if (tt <= tiny) {
+                        break;  // breakdown
+                    }
+
+                    // 11. ts = dot(t, s); omega = ts / tt
+                    double ts = 0.0;
+                    if ((err = cg_device_dot(dev_t, dev_s, n, blocks, threads, shmem,
+                                            dev_partials, dev_scalar, &ts)) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    omega = ts / tt;
+
+                    // 12. x += alpha * p + omega * s
+                    axpy_kernel<<<blocks, threads>>>(alpha, dev_p, dev_x, n);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    axpy_kernel<<<blocks, threads>>>(omega, dev_s, dev_x, n);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    // 13. r = s - omega * t
+                    if ((err = cudaMemcpy(dev_r, dev_s, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                        cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    axpy_kernel<<<blocks, threads>>>(-omega, dev_t, dev_r, n);
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+
+                    // 14. update iteration state
+                    rho_old = rho;
+
+                    // 15. check r norm
+                    if ((err = cg_device_dot(dev_r, dev_r, n, blocks, threads, shmem,
+                                            dev_partials, dev_scalar, &rnorm2)) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                        break;
+                    }
+                    if (sqrt(rnorm2) <= stop) {
+                        break;
+                    }
+
+                    // 16. omega guard
+                    if (fabs(omega) <= tiny) {
+                        break;  // breakdown
+                    }
+                }
+            }
+
+            // TRUE RESIDUAL RECOMPUTE ON DEVICE (mandatory)
+            if (rc == 0) {
+                csr_spmv_kernel<<<blocks, threads>>>(dev_row, dev_col, dev_val, n, dev_x, dev_t);
+                if ((err = cudaGetLastError()) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                } else if ((err = cudaMemcpy(dev_s, dev_b, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                           cudaSuccess) {
+                    rc = static_cast<int>(err);
+                } else {
+                    axpy_kernel<<<blocks, threads>>>(-1.0, dev_t, dev_s, n);
+                    double true_rs = 0.0;
+                    if ((err = cudaGetLastError()) != cudaSuccess) {
+                        rc = static_cast<int>(err);
+                    } else if ((err = cg_device_dot(dev_s, dev_s, n, blocks, threads, shmem,
+                                                    dev_partials, dev_scalar, &true_rs)) !=
+                               cudaSuccess) {
+                        rc = static_cast<int>(err);
+                    } else if ((err = cudaMemcpy(x, dev_x, vec_bytes, cudaMemcpyDeviceToHost)) !=
+                               cudaSuccess) {
+                        rc = static_cast<int>(err);
+                    } else {
+                        const double true_resid = sqrt(true_rs);
+                        *out_iters = iters;
+                        *out_resid = true_resid;
+                        *out_converged = (true_resid <= stop) ? 1 : 0;
+                    }
+                }
+            }
+        }
+    }
+
+    if (dev_row != nullptr) cudaFree(dev_row);
+    if (dev_col != nullptr) cudaFree(dev_col);
+    if (dev_val != nullptr) cudaFree(dev_val);
+    if (dev_b != nullptr) cudaFree(dev_b);
+    if (dev_x != nullptr) cudaFree(dev_x);
+    if (dev_r != nullptr) cudaFree(dev_r);
+    if (dev_rhat != nullptr) cudaFree(dev_rhat);
+    if (dev_p != nullptr) cudaFree(dev_p);
+    if (dev_v != nullptr) cudaFree(dev_v);
+    if (dev_s != nullptr) cudaFree(dev_s);
+    if (dev_t != nullptr) cudaFree(dev_t);
+    if (dev_partials != nullptr) cudaFree(dev_partials);
+    if (dev_scalar != nullptr) cudaFree(dev_scalar);
+
     return rc;
 }

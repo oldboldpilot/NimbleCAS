@@ -2087,14 +2087,14 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   target_include_directories(nimblecas_gpu PRIVATE "${CMAKE_SOURCE_DIR}/src/gpu")
   add_dependencies(nimblecas_gpu nimblecas_gpu_kernels)
   target_link_libraries(nimblecas_gpu
-    PUBLIC nimblecas_core nimblecas_pricing nimblecas_optstrat nimblecas_futures
+    PUBLIC nimblecas_core nimblecas_krylov nimblecas_pricing nimblecas_optstrat nimblecas_futures
            nimblecas_control nimblecas_wavelets nimblecas_qmc
            std_module "${_gpu_lib}" "${NIMBLECAS_CUDART}")
 
   add_executable(gpu_tests tests/gpu_tests.cpp)
   add_dependencies(gpu_tests nimblecas_gpu_kernels)
   target_link_libraries(gpu_tests
-    PRIVATE nimblecas_gpu nimblecas_pricing nimblecas_optstrat nimblecas_futures
+    PRIVATE nimblecas_gpu nimblecas_krylov nimblecas_pricing nimblecas_optstrat nimblecas_futures
             nimblecas_control nimblecas_wavelets nimblecas_qmc
             nimblecas_core nimblecas_testing std_module)
   set_target_properties(gpu_tests PROPERTIES BUILD_RPATH "${_cuda_libdir}")

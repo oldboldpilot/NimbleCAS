@@ -20,6 +20,7 @@ import nimblecas.futures;   // Family B CPU fallback + FuturesLeg
 import nimblecas.control;   // Family F CPU fallback + TransferFunction / BodePoint / NyquistPoint
 import nimblecas.wavelets;  // Wavelet FilterBank + CPU dwt/swt fallback
 import nimblecas.qmc;       // Family H CPU fallback & point generators
+import nimblecas.krylov;    // BiCGStab CPU fallback (csr_matvec + bicgstab)
 
 export namespace nimblecas::gpu {
 
@@ -404,7 +405,7 @@ namespace detail {
 
 // ---------------------------------------------------------------------------
 // Conjugate-gradient solve of a symmetric positive-definite CSR sparse system A x = b — the
-// batch-solve MIRROR of the authoritative CPU nimblecas::krylov::cg.
+// batch-solve MIRROR of the authoritative CPU nimblecas::cg.
 // ---------------------------------------------------------------------------
 struct CgCsrResult {
     std::vector<double> x;    // the solution vector, length n
@@ -421,7 +422,7 @@ struct CgCsrResult {
 //
 // HONESTY: a NUMERICAL (double) iterative solver — GPU acceleration applies only to the regular,
 // data-parallel SpMV and vector work. The exact-rational / symbolic linear-algebra paths cannot run
-// on the device and are unaffected; the CPU nimblecas::krylov::cg remains authoritative.
+// on the device and are unaffected; the CPU nimblecas::cg remains authoritative.
 // DETERMINISM: the device dot-product reductions sum in block/tree order rather than the CPU's
 // strict left-to-right order, so the last bits of x can differ from a sequential CPU CG — each is a
 // valid numerical solution.
@@ -459,12 +460,91 @@ struct CgCsrResult {
 }
 
 // ---------------------------------------------------------------------------
+// BiCGStab solve of a general (possibly non-symmetric) CSR sparse system A x = b — the
+// batch-solve MIRROR of the authoritative CPU nimblecas::bicgstab.
+// ---------------------------------------------------------------------------
+using BicgstabCsrResult = CgCsrResult;
+
+// Solve A x = b for a GENERAL (possibly non-symmetric) sparse A in CSR form on the device or CPU fallback:
+// `row_offsets` has length n+1 and `col_indices`/`values` hold the flattened nonzeros (equal length nnz),
+// with n = b.size(). The solver starts from a zero initial guess and iterates until the true residual
+// 2-norm falls to tol*||b|| or `max_iters` is reached.
+//
+// HONESTY: a NUMERICAL (double) iterative solver — the CPU nimblecas::bicgstab remains authoritative.
+// `converged == false` is a legitimate outcome (budget exhausted or breakdown), never an error. The reported
+// residual is the TRUE ||b - A x|| recomputed at exit.
+// DETERMINISM: device dot-product reductions sum in block/tree order rather than the CPU's strict left-to-right
+// order, so the last bits of x can differ from a sequential CPU BiCGStab — each is a valid numerical solution.
+// Bitwise REPEATABLE run-to-run on the same device at fixed launch shape.
+// DOMAIN: no SPD requirement; singular/ill-conditioned system breakdown is reported honestly.
+//
+// Fails with MathError::domain_error when b is empty (n must be > 0), row_offsets.size() != n+1,
+// col_indices.size() != values.size(), or CSR interior invariants (monotone row_offsets, col index in [0, n))
+// are violated; MathError::overflow when a size exceeds the int kernel bound; and MathError::gpu_error
+// when a CUDA call fails on an available device. When no GPU is present, falls back to CPU krylov::bicgstab.
+[[nodiscard]] auto bicgstab_csr(std::span<const int> row_offsets, std::span<const int> col_indices,
+                                std::span<const double> values, std::span<const double> b,
+                                int max_iters = 1000, double tol = 1e-10) -> Result<CgCsrResult> {
+    if (max_iters < 0 || b.empty() || row_offsets.size() != b.size() + 1 ||
+        col_indices.size() != values.size()) {
+        return make_error<CgCsrResult>(MathError::domain_error);
+    }
+    // Overflow guard runs BEFORE the int truncation of n and the column scan below, so a >2^31
+    // element system is honestly reported as overflow rather than a wrapped-n domain_error. Applied
+    // before the available() branch so accept/reject never depends on device presence (negative
+    // max_iters likewise: it hangs the CPU fallback but no-ops the device — rejected here for both).
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (b.size() > int_max || row_offsets.size() > int_max || values.size() > int_max) {
+        return make_error<CgCsrResult>(MathError::overflow);
+    }
+    if (row_offsets.front() != 0 ||
+        static_cast<std::size_t>(row_offsets.back()) != values.size()) {
+        return make_error<CgCsrResult>(MathError::domain_error);
+    }
+    for (std::size_t i = 0; i + 1 < row_offsets.size(); ++i) {
+        if (row_offsets[i] < 0 || row_offsets[i + 1] < row_offsets[i]) {
+            return make_error<CgCsrResult>(MathError::domain_error);
+        }
+    }
+    const auto n = static_cast<int>(b.size());
+    for (const int c : col_indices) {
+        if (c < 0 || c >= n) {
+            return make_error<CgCsrResult>(MathError::domain_error);
+        }
+    }
+
+    if (!available()) {
+        auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, b.size());
+        auto res = nimblecas::bicgstab(A, b, tol, static_cast<std::size_t>(max_iters));
+        if (!res) {
+            return make_error<CgCsrResult>(res.error());
+        }
+        return CgCsrResult{std::move(res->x), static_cast<int>(res->iterations), res->converged,
+                           res->residual};
+    }
+
+    const auto nnz = static_cast<int>(values.size());
+    std::vector<double> x(b.size(), 0.0);
+    int iterations = 0;
+    int converged = 0;
+    double residual = 0.0;
+    const int rc = nimblecas_gpu_bicgstab_csr(row_offsets.data(), col_indices.data(), values.data(), n,
+                                              nnz, b.data(), x.data(), max_iters, tol, &iterations,
+                                              &converged, &residual);
+    if (rc != 0) {
+        return make_error<CgCsrResult>(MathError::gpu_error);
+    }
+    return CgCsrResult{std::move(x), iterations, converged != 0, residual};
+}
+
+// ---------------------------------------------------------------------------
 // FAMILY A — Batched derivative pricing (gpu_pricing_kernels.cu).
 //
 // Every entry point here is a batch MIRROR of the authoritative CPU nimblecas.pricing
-// implementation, never a second source of truth. NEW FALLBACK CONTRACT (differs from the
-// entries above): when NO device is present these functions compute the result on the CPU
-// via nimblecas.pricing and return real values — an honest fallback, not gpu_error. A CUDA
+// implementation, never a second source of truth. FALLBACK CONTRACT (shared with cg_csr,
+// bicgstab_csr, and the module wrappers above; unlike the raw numeric kernels): when NO device
+// is present these functions compute the result on the CPU via the CPU module and return real
+// values — an honest fallback, not gpu_error. A CUDA
 // failure on a machine that HAS a device is still reported as gpu_error (the device was
 // asked and the device failed; we never silently switch answers).
 // ---------------------------------------------------------------------------

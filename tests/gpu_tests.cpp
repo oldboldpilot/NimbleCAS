@@ -14,6 +14,7 @@ import nimblecas.control;
 import nimblecas.ratpoly;
 import nimblecas.wavelets;
 import nimblecas.qmc;
+import nimblecas.krylov;
 
 namespace gpu = nimblecas::gpu;
 using nimblecas::MathError;
@@ -1422,6 +1423,153 @@ auto main() -> int {
                   auto empty_pts = gpu::l2_star_discrepancy(std::vector<std::vector<double>>{}, dim);
                   t.expect(!empty_pts.has_value() && empty_pts.error() == MathError::domain_error,
                            "empty point set -> domain_error");
+              })
+        .test("bicgstab_csr solves a non-symmetric CSR system",
+              [](TestContext& t) {
+                  // Non-symmetric upwinded convection-diffusion sparse system on a 1D grid of size n = 32.
+                  // Tridiagonal: A[i,i] = 4.0, A[i, i-1] = -1.5 (sub), A[i, i+1] = -0.5 (super).
+                  // Strictly diagonally dominant: |4.0| > |-1.5| + |-0.5| = 2.0.
+                  const int n = 32;
+                  std::vector<int> row_offsets;
+                  std::vector<int> col_indices;
+                  std::vector<double> values;
+                  std::vector<double> b(n);
+                  row_offsets.push_back(0);
+                  for (int i = 0; i < n; ++i) {
+                      b[static_cast<std::size_t>(i)] = std::sin(static_cast<double>(i + 1));
+                      if (i > 0) {
+                          col_indices.push_back(i - 1);
+                          values.push_back(-1.5);
+                      }
+                      col_indices.push_back(i);
+                      values.push_back(4.0);
+                      if (i + 1 < n) {
+                          col_indices.push_back(i + 1);
+                          values.push_back(-0.5);
+                      }
+                      row_offsets.push_back(static_cast<int>(col_indices.size()));
+                  }
+
+                  const double tol = 1e-10;
+                  const int max_iters = 1000;
+
+                  // 1. Solve on GPU / fallback
+                  auto got = gpu::bicgstab_csr(row_offsets, col_indices, values, b, max_iters, tol);
+                  t.expect(got.has_value(), "bicgstab_csr computed");
+                  if (got) {
+                      t.expect(got->x.size() == static_cast<std::size_t>(n), "solution size matches n");
+                      t.expect(got->converged, "bicgstab_csr converged on well-conditioned non-symmetric system");
+                      t.expect(got->residual <= tol * 5.0, "returned true residual norm <= tol * ||b|| bound");
+
+                      // Compute host true residual norm ||b - A x||
+                      double b_norm2 = 0.0;
+                      double res_norm2 = 0.0;
+                      for (int i = 0; i < n; ++i) {
+                          double bi = b[static_cast<std::size_t>(i)];
+                          b_norm2 += bi * bi;
+                          double Ax_i = 0.0;
+                          const int start = row_offsets[static_cast<std::size_t>(i)];
+                          const int end = row_offsets[static_cast<std::size_t>(i + 1)];
+                          for (int e = start; e < end; ++e) {
+                              Ax_i += values[static_cast<std::size_t>(e)] *
+                                      got->x[static_cast<std::size_t>(col_indices[static_cast<std::size_t>(e)])];
+                          }
+                          const double r_i = bi - Ax_i;
+                          res_norm2 += r_i * r_i;
+                      }
+                      const double b_norm = std::sqrt(b_norm2);
+                      const double true_res = std::sqrt(res_norm2);
+                      t.expect(true_res <= tol * b_norm + 1e-12, "host-computed true residual <= tol * ||b||");
+                      t.expect(std::abs(got->residual - true_res) <= 1e-10 * (1.0 + true_res),
+                               "returned residual matches host true residual to 1e-10 relative");
+
+                      // Compare with CPU oracle krylov::bicgstab
+                      auto A_cpu = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
+                      auto cpu_res = nimblecas::bicgstab(A_cpu, b, tol, max_iters);
+                      t.expect(cpu_res.has_value() && cpu_res->converged, "CPU krylov::bicgstab also converged");
+                      if (cpu_res && cpu_res->converged) {
+                          double max_diff = 0.0;
+                          for (int i = 0; i < n; ++i) {
+                              max_diff = std::max(max_diff, std::abs(got->x[static_cast<std::size_t>(i)] -
+                                                                     cpu_res->x[static_cast<std::size_t>(i)]));
+                          }
+                          t.expect(max_diff <= 1e-6, "GPU solution agrees with CPU bicgstab to 1e-6 inf-norm");
+                      }
+                  }
+
+                  // 2. max_iters = 1 non-convergence honesty case
+                  auto got_1 = gpu::bicgstab_csr(row_offsets, col_indices, values, b, 1, tol);
+                  t.expect(got_1.has_value(), "max_iters=1 case computed without error");
+                  if (got_1) {
+                      t.expect(!got_1->converged, "max_iters=1 does not falsely claim convergence");
+                      t.expect(got_1->iterations == 1, "iterations count is 1");
+                  }
+
+                  // 3. Determinism: bitwise repeatability on identical inputs
+                  auto got_repeat = gpu::bicgstab_csr(row_offsets, col_indices, values, b, max_iters, tol);
+                  t.expect(got_repeat.has_value(), "repeat solve computed");
+                  if (got && got_repeat) {
+                      t.expect(got->x == got_repeat->x, "bitwise repeatable solution vector");
+                      t.expect(got->residual == got_repeat->residual, "bitwise repeatable residual");
+                  }
+
+                  // 4. Domain guards
+                  std::vector<double> empty_b;
+                  auto bad_b = gpu::bicgstab_csr(row_offsets, col_indices, values, empty_b, max_iters, tol);
+                  t.expect(!bad_b.has_value() && bad_b.error() == MathError::domain_error,
+                           "empty b yields domain_error");
+
+                  std::vector<int> bad_row_offsets = {0, 2};
+                  auto bad_row = gpu::bicgstab_csr(bad_row_offsets, col_indices, values, b, max_iters, tol);
+                  t.expect(!bad_row.has_value() && bad_row.error() == MathError::domain_error,
+                           "bad row_offsets length yields domain_error");
+
+                  std::vector<int> bad_cols = col_indices;
+                  if (!bad_cols.empty()) bad_cols.pop_back();
+                  auto bad_col = gpu::bicgstab_csr(row_offsets, bad_cols, values, b, max_iters, tol);
+                  t.expect(!bad_col.has_value() && bad_col.error() == MathError::domain_error,
+                           "mismatched col_indices/values length yields domain_error");
+
+                  // 5. Breakdown honesty on a singular (zero) matrix with b != 0: v = A*p = 0 forces an
+                  //    rhatv breakdown in iteration 1. That iteration must be COUNTED (mirroring the CPU
+                  //    oracle's ++iter at loop top) and convergence honestly false.
+                  {
+                      std::vector<int> zero_rows(b.size() + 1, 0);  // all-zero matrix, nnz = 0
+                      std::vector<int> no_cols;
+                      std::vector<double> no_vals;
+                      auto sing = gpu::bicgstab_csr(zero_rows, no_cols, no_vals, b, max_iters, tol);
+                      t.expect(sing.has_value(), "singular (zero) matrix solve returns a value");
+                      if (sing) {
+                          t.expect(!sing->converged, "singular system honestly reports not-converged");
+                          t.expect(sing->iterations == 1, "iteration-1 breakdown is counted as 1, not 0");
+                      }
+                  }
+
+                  // 6. b == 0: converged immediately with x == 0 and zero iterations.
+                  {
+                      std::vector<double> b_zero(b.size(), 0.0);
+                      auto z = gpu::bicgstab_csr(row_offsets, col_indices, values, b_zero, max_iters, tol);
+                      t.expect(z.has_value(), "b == 0 solve returns a value");
+                      if (z) {
+                          t.expect(z->converged && z->iterations == 0, "b == 0 converges at iteration 0");
+                          bool all_zero = true;
+                          for (double xv : z->x) { if (xv != 0.0) { all_zero = false; break; } }
+                          t.expect(all_zero, "b == 0 gives x == 0");
+                      }
+                  }
+
+                  // 7. Device/fallback parity guards: negative max_iters (hangs the CPU path, no-ops the
+                  //    device path if unguarded) and an out-of-range column index must both reject.
+                  auto neg_it = gpu::bicgstab_csr(row_offsets, col_indices, values, b, -1, tol);
+                  t.expect(!neg_it.has_value() && neg_it.error() == MathError::domain_error,
+                           "negative max_iters yields domain_error");
+                  {
+                      std::vector<int> oob_cols = col_indices;
+                      if (!oob_cols.empty()) { oob_cols[0] = static_cast<int>(b.size()); }  // == n, out of range
+                      auto oob = gpu::bicgstab_csr(row_offsets, oob_cols, values, b, max_iters, tol);
+                      t.expect(!oob.has_value() && oob.error() == MathError::domain_error,
+                               "out-of-range column index yields domain_error");
+                  }
               })
         .run();
 }
