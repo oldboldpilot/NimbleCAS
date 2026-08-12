@@ -911,5 +911,81 @@ inline constexpr std::uint64_t kGpuMcMaxPathSteps = 1'000'000'000;
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// FAMILY E — Longstaff-Schwartz American Monte Carlo (gpu_lsm_kernels.cu).
+// ---------------------------------------------------------------------------
+
+// Price a batch of American options by GPU Longstaff-Schwartz Monte Carlo path simulation,
+// returning one pricing::McResult { price, std_error, paths } per option, in order. Every option
+// is priced over the SAME counter stream [0, paths*steps) with key = splitmix64(seed) — step t of
+// path p draws counter index (p*steps + t), matching pricing::longstaff_schwartz_american — so
+// item i estimates the same quantity as longstaff_schwartz_american(spec_i, paths, steps, seed).
+//
+// HONESTY: STATISTICAL (double). Threefry draw BITS are bit-identical to the CPU counter RNG; the
+// normal z is bit-identical in Acklam's central ~95% region, with <=1 ULP differences in the ~5%
+// tail (device libm log vs simd::log_one); forward grid S agrees to ~1e-6 relative. However, the
+// American PRICE matches the CPU oracle only to ~1e-3 relative because (a) the 3x3 normal-equations
+// regression on basis {1, s, s^2} is ill-conditioned and summation-order-sensitive, so regression
+// coefficients differ beyond ULP level, and (b) exercise decisions (ex > cont) are exact threshold
+// checks, so paths near the boundary can flip decisions between GPU and CPU, altering whole-path
+// cashflows. The GPU calculation is itself 100% deterministic (pure function of inputs).
+// CPU fallback (no device): pricing::longstaff_schwartz_american(spec, paths, steps, seed) per option.
+//
+// Fails with MathError::domain_error when paths < 4, steps < 1, steps > kGpuMcMaxSteps,
+// paths > kMaxCells / (steps + 1) [kMaxCells = 500,000,000], or an option is non-physical
+// (spot <= 0, volatility <= 0 [strict <=], time <= 0; strike <= 0 is rejected by shared batch POD);
+// MathError::overflow when opts.size() or ceil(paths/kGpuMcSegPaths) exceeds int bounds;
+// MathError::gpu_error when a device is present but a CUDA call fails.
+[[nodiscard]] auto longstaff_schwartz_american_batch(std::span<const BsOption> opts,
+                                                     std::uint64_t paths, int steps,
+                                                     std::uint64_t seed)
+    -> Result<std::vector<pricing::McResult>> {
+    constexpr std::uint64_t kMaxCells = 500'000'000;
+    if (paths < 4 || steps < 1 || steps > kGpuMcMaxSteps ||
+        paths > kMaxCells / (static_cast<std::uint64_t>(steps) + 1)) {
+        return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+    }
+    // Physical domain matched EXACTLY to pricing::longstaff_schwartz_american (spot>0, vol>0 strict, time>0)
+    // so accept/reject decision never depends on whether a device is present.
+    for (const auto& o : opts) {
+        if (o.spot <= 0.0 || o.volatility <= 0.0 || o.time <= 0.0) {
+            return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+        }
+    }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<pricing::McResult>>(pod.error()); }
+    if (opts.empty()) { return std::vector<pricing::McResult>{}; }
+    const std::uint64_t nseg = (paths + kGpuMcSegPaths - 1) / kGpuMcSegPaths;
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (opts.size() > int_max || nseg > int_max) {
+        return make_error<std::vector<pricing::McResult>>(MathError::overflow);
+    }
+    if (!available()) {
+        std::vector<pricing::McResult> out;
+        out.reserve(opts.size());
+        for (const auto& o : opts) {
+            const auto spec = pricing::OptionSpec{}
+                                  .with_spot(o.spot).with_strike(o.strike).with_rate(o.rate)
+                                  .with_dividend(o.dividend).with_volatility(o.volatility)
+                                  .with_expiry(o.time)
+                                  .with_type(o.is_call ? pricing::OptionType::call
+                                                       : pricing::OptionType::put);
+            auto r = pricing::longstaff_schwartz_american(spec, paths, steps, seed);
+            if (!r) { return make_error<std::vector<pricing::McResult>>(r.error()); }
+            out.push_back(*r);
+        }
+        return out;
+    }
+    std::vector<NimblecasMcEstimate> est(opts.size());
+    const int rc = nimblecas_gpu_lsm_american_batch(pod->data(), static_cast<int>(pod->size()),
+                                                     steps, paths, seed, est.data());
+    if (rc != 0) { return make_error<std::vector<pricing::McResult>>(MathError::gpu_error); }
+    std::vector<pricing::McResult> out;
+    out.reserve(est.size());
+    for (const auto& e : est) { out.push_back(pricing::McResult{e.price, e.std_error, paths}); }
+    return out;
+}
+
 }  // namespace nimblecas::gpu
+
 

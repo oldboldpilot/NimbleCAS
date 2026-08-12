@@ -2065,14 +2065,16 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   set(_gpu_asian_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_asian_kernels.cu")
   set(_gpu_sweep_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_sweep_kernels.cu")
   set(_gpu_barrier_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_barrier_kernels.cu")
+  set(_gpu_lsm_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_lsm_kernels.cu")
   set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
   add_custom_command(
     OUTPUT "${_gpu_lib}"
     COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
             -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib
-            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" -o "${_gpu_lib}"
-    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}"
+            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" -o "${_gpu_lib}"
+    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}"
             "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
+
     VERBATIM
     COMMENT "nvcc: building CUDA GPU kernels (-arch=native)")
   add_custom_target(nimblecas_gpu_kernels DEPENDS "${_gpu_lib}")

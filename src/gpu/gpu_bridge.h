@@ -238,6 +238,24 @@ int nimblecas_gpu_mc_barrier_batch(const NimblecasBsOption* opts, int n, double 
                                    int knock_in, int steps, unsigned long long paths,
                                    unsigned long long seed, NimblecasMcEstimate* out);
 
+/* --- FAMILY E: Longstaff-Schwartz American MC (gpu_lsm_kernels.cu) --- */
+
+/* Batched reproducible Longstaff-Schwartz American option Monte Carlo. Prices each of the n
+ * options over the SAME counter stream [0, paths*steps) with key = splitmix64(seed) — using the
+ * exact per-path per-step counter indexing p*steps + t as pricing::longstaff_schwartz_american.
+ * Forward-simulates and stores the full price grid, then rolls backward t = steps-1..1, discounting
+ * EVERY path each step and regressing continuation on {1,s,s^2} over the in-the-money paths (host
+ * solve3). Fixed kLsmSegPaths (4096) segments + fixed-shape 256-thread reductions and NO atomicAdd
+ * make the result a pure function of (opts, paths, steps, seed). Writes { price, std_error } to
+ * out[i]. HONESTY: the Threefry draw BITS are bit-identical to the CPU counter RNG and the forward
+ * grid matches to ~1e-6, but the American PRICE matches the CPU oracle only to ~1e-3 relative
+ * (ill-conditioned regression + exact exercise-threshold flips). Inputs must be physically valid,
+ * paths >= 4, steps >= 1 (the C++ wrapper validates). Returns 0 on success or a non-zero CUDA
+ * error code. */
+int nimblecas_gpu_lsm_american_batch(const NimblecasBsOption* opts, int n, int steps,
+                                     unsigned long long paths, unsigned long long seed,
+                                     NimblecasMcEstimate* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

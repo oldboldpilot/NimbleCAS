@@ -943,6 +943,167 @@ auto main() -> int {
                   auto r_time = gpu::barrier_option_mc_batch(bad_time, 90.0, false, 1000, 10, 42);
                   t.expect(!r_time.has_value() && r_time.error() == MathError::domain_error, "time <= 0 yields domain_error");
               })
+        .test("longstaff_schwartz_american_batch pricing and invariants",
+              [](TestContext& t) {
+                  namespace pr = nimblecas::pricing;
+
+                  // 1. Bitwise repeatability (same inputs twice -> exact ==).
+                  const std::vector<gpu::BsOption> opts = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, false},  // ATM Put
+                      gpu::BsOption{100.0, 90.0, 0.05, 0.0, 0.2, 1.0, false},   // OTM Put
+                      gpu::BsOption{100.0, 110.0, 0.05, 0.0, 0.2, 1.0, false},  // ITM Put
+                      gpu::BsOption{100.0, 90.0, 0.05, 0.0, 0.2, 1.0, true}    // ITM Call
+                  };
+                  const std::uint64_t paths = 20000;
+                  const int steps = 25;
+                  const std::uint64_t seed = 42;
+
+                  auto run1 = gpu::longstaff_schwartz_american_batch(opts, paths, steps, seed);
+                  auto run2 = gpu::longstaff_schwartz_american_batch(opts, paths, steps, seed);
+                  t.expect(run1.has_value() && run1->size() == opts.size(), "LSM American batch evaluated");
+                  t.expect(run2.has_value() && run2->size() == opts.size(), "second LSM run evaluated");
+
+                  if (run1 && run2 && run1->size() == opts.size() && run2->size() == opts.size()) {
+                      bool repeat_exact = true;
+                      for (std::size_t i = 0; i < opts.size(); ++i) {
+                          if ((*run1)[i].price != (*run2)[i].price || (*run1)[i].std_error != (*run2)[i].std_error) {
+                              repeat_exact = false;
+                          }
+                      }
+                      t.expect(repeat_exact, "repeated LSM batch runs are bit-identical");
+                  }
+
+                  // 2. Intrinsic lower bound: price >= max(S-K, 0) for call, max(K-S, 0) for put (EXACT >=)
+                  if (run1) {
+                      bool bound_ok = true;
+                      for (std::size_t i = 0; i < opts.size(); ++i) {
+                          const double intrinsic = opts[i].is_call ? std::max(opts[i].spot - opts[i].strike, 0.0)
+                                                                   : std::max(opts[i].strike - opts[i].spot, 0.0);
+                          if ((*run1)[i].price < intrinsic) {
+                              bound_ok = false;
+                          }
+                      }
+                      t.expect(bound_ok, "American price >= intrinsic payoff EXACTLY for every option");
+                  }
+
+                  // 3. American put >= European put price - 3*std_error
+                  if (run1) {
+                      bool put_ge_euro = true;
+                      for (std::size_t i = 0; i < opts.size(); ++i) {
+                          if (!opts[i].is_call) {
+                              const auto spec = pr::OptionSpec{}
+                                                    .with_spot(opts[i].spot).with_strike(opts[i].strike)
+                                                    .with_rate(opts[i].rate).with_dividend(opts[i].dividend)
+                                                    .with_volatility(opts[i].volatility).with_expiry(opts[i].time)
+                                                    .with_type(pr::OptionType::put);
+                              const double euro_put = pr::black_scholes_price(spec).value();
+                              if ((*run1)[i].price < euro_put - 3.0 * (*run1)[i].std_error) {
+                                  put_ge_euro = false;
+                              }
+                          }
+                      }
+                      t.expect(put_ge_euro, "American put price >= European put price - 3*std_error");
+                  }
+
+                  // 4. q=0 American CALL ~= European call within 4*std_error (never optimal to early-exercise call when q=0)
+                  if (run1) {
+                      const auto call_spec = pr::OptionSpec{}
+                                                 .with_spot(opts[3].spot).with_strike(opts[3].strike)
+                                                 .with_rate(opts[3].rate).with_dividend(opts[3].dividend)
+                                                 .with_volatility(opts[3].volatility).with_expiry(opts[3].time)
+                                                 .with_type(pr::OptionType::call);
+                      const double euro_call = pr::black_scholes_price(call_spec).value();
+                      const double call_diff = std::abs((*run1)[3].price - euro_call);
+                      t.expect(call_diff <= 4.0 * (*run1)[3].std_error + 1e-4,
+                               "q=0 American call price matches European call within 4*std_error");
+                  }
+
+                  // 5. Strike monotonicity within one shared-draw batch: put price increasing in K
+                  // Opt 1: K=90 put, Opt 0: K=100 put, Opt 2: K=110 put
+                  if (run1) {
+                      const double p90 = (*run1)[1].price;
+                      const double p100 = (*run1)[0].price;
+                      const double p110 = (*run1)[2].price;
+                      t.expect(p90 <= p100 + 3.0 * (*run1)[1].std_error && p100 <= p110 + 3.0 * (*run1)[0].std_error,
+                               "American put prices are monotonic in strike (K=90 <= K=100 <= K=110)");
+                  }
+
+                  // 6. Loose match to CPU longstaff_schwartz_american on ONE well-conditioned fixed-seed ATM put
+                  const std::vector<gpu::BsOption> atm_put = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, false}
+                  };
+                  const std::uint64_t cpu_paths = 50000;
+                  const int cpu_steps = 50;
+                  const std::uint64_t cpu_seed = 42;
+
+                  auto got_atm = gpu::longstaff_schwartz_american_batch(atm_put, cpu_paths, cpu_steps, cpu_seed);
+                  const auto spec_atm = pr::OptionSpec{}
+                                             .with_spot(100.0).with_strike(100.0)
+                                             .with_rate(0.05).with_dividend(0.0)
+                                             .with_volatility(0.2).with_expiry(1.0)
+                                             .with_type(pr::OptionType::put);
+                  auto cpu_atm = pr::longstaff_schwartz_american(spec_atm, cpu_paths, cpu_steps, cpu_seed);
+
+                  t.expect(got_atm.has_value() && cpu_atm.has_value(), "ATM put evaluated on GPU and CPU");
+                  if (got_atm && cpu_atm) {
+                      const double price_diff = std::abs((*got_atm)[0].price - cpu_atm->price);
+                      const double tol = 1e-3 * (1.0 + std::abs(cpu_atm->price));
+                      t.expect(price_diff <= tol, "GPU LSM price matches CPU LSM price within 1e-3 relative tolerance");
+                      // std_error must also track the CPU (a wrong variance divisor would slip past a
+                      // price-only check); a loose relative bound stays robust to the few exercise flips.
+                      const double se_diff = std::abs((*got_atm)[0].std_error - cpu_atm->std_error);
+                      t.expect(se_diff <= 1e-2 * (1.0 + std::abs(cpu_atm->std_error)),
+                               "GPU LSM std_error matches CPU LSM std_error within tolerance");
+                  }
+
+                  // 7. Domain guards — exact parity with pricing::longstaff_schwartz_american, each
+                  //     asserting the error TYPE (domain_error), applied before the device/fallback split.
+                  auto r_paths = gpu::longstaff_schwartz_american_batch(opts, 3, steps, seed);
+                  t.expect(!r_paths.has_value() && r_paths.error() == MathError::domain_error,
+                           "paths < 4 -> domain_error");
+                  auto r_steps0 = gpu::longstaff_schwartz_american_batch(opts, paths, 0, seed);
+                  t.expect(!r_steps0.has_value() && r_steps0.error() == MathError::domain_error,
+                           "steps < 1 -> domain_error");
+                  auto r_bigsteps = gpu::longstaff_schwartz_american_batch(opts, paths, 100001, seed);
+                  t.expect(!r_bigsteps.has_value() && r_bigsteps.error() == MathError::domain_error,
+                           "steps > 100000 -> domain_error");
+                  // paths*(steps+1) > kMaxCells (5e8): steps=100, paths=6e6 -> ~6.06e8 cells.
+                  auto r_cells = gpu::longstaff_schwartz_american_batch(opts, 6'000'000, 100, seed);
+                  t.expect(!r_cells.has_value() && r_cells.error() == MathError::domain_error,
+                           "paths*(steps+1) over kMaxCells -> domain_error");
+
+                  std::vector<gpu::BsOption> bad_vol = {gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.0, 1.0, false}};
+                  auto r_vol = gpu::longstaff_schwartz_american_batch(bad_vol, paths, steps, seed);
+                  t.expect(!r_vol.has_value() && r_vol.error() == MathError::domain_error,
+                           "volatility <= 0 -> domain_error");
+                  std::vector<gpu::BsOption> bad_time = {gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 0.0, false}};
+                  auto r_time = gpu::longstaff_schwartz_american_batch(bad_time, paths, steps, seed);
+                  t.expect(!r_time.has_value() && r_time.error() == MathError::domain_error,
+                           "time <= 0 -> domain_error");
+                  std::vector<gpu::BsOption> bad_spot = {gpu::BsOption{0.0, 100.0, 0.05, 0.0, 0.2, 1.0, false}};
+                  auto r_spot = gpu::longstaff_schwartz_american_batch(bad_spot, paths, steps, seed);
+                  t.expect(!r_spot.has_value() && r_spot.error() == MathError::domain_error,
+                           "spot <= 0 -> domain_error");
+                  std::vector<gpu::BsOption> bad_strike = {gpu::BsOption{100.0, 0.0, 0.05, 0.0, 0.2, 1.0, false}};
+                  auto r_strike = gpu::longstaff_schwartz_american_batch(bad_strike, paths, steps, seed);
+                  t.expect(!r_strike.has_value() && r_strike.error() == MathError::domain_error,
+                           "strike <= 0 -> domain_error (shared batch-POD precondition, both device and fallback)");
+
+                  // 8. Intrinsic-clamp-binding case: deep-ITM low-vol short-T American put, where immediate
+                  //     exercise dominates so price = max(mean, payoff(spot)) is pinned at/above intrinsic and
+                  //     std_error is carried through (NOT zeroed) when the lower bound wins.
+                  std::vector<gpu::BsOption> deep_itm = {gpu::BsOption{100.0, 150.0, 0.05, 0.0, 0.05, 0.1, false}};
+                  auto r_clamp = gpu::longstaff_schwartz_american_batch(deep_itm, paths, steps, seed);
+                  t.expect(r_clamp.has_value(), "deep-ITM put priced");
+                  if (r_clamp) {
+                      const double intrinsic = 150.0 - 100.0;  // 50 — immediate-exercise value
+                      t.expect((*r_clamp)[0].price >= intrinsic,
+                               "deep-ITM American put price >= intrinsic (clamp binds)");
+                      t.expect(std::isfinite((*r_clamp)[0].std_error) && (*r_clamp)[0].std_error >= 0.0,
+                               "std_error finite and >= 0 even when the intrinsic lower bound wins");
+                  }
+              })
         .run();
 }
+
 
