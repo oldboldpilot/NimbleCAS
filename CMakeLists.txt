@@ -2006,7 +2006,8 @@ if(NIMBLECAS_PYTHON)
             nimblecas_cmatrix nimblecas_laurent nimblecas_frobenius nimblecas_dynamics
             nimblecas_algnum nimblecas_jordan nimblecas_matrix nimblecas_complex
             nimblecas_ratpoly nimblecas_diff nimblecas_simplify nimblecas_polyexpr
-            nimblecas_polynomial nimblecas_symbolic nimblecas_simd nimblecas_core std_module)
+            nimblecas_polynomial nimblecas_symbolic nimblecas_simd nimblecas_core
+            nimblecas_svd nimblecas_daenl nimblecas_splitfield nimblecas_evalnum std_module)
 
   # Expose the GPU submodule to Python only when the CUDA kernels are built.
   if(NIMBLECAS_CUDA AND NOT WIN32)
