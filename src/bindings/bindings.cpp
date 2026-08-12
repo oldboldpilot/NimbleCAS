@@ -58,6 +58,7 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/complex.h>
+#include <nanobind/stl/unordered_map.h>
 
 import nimblecas.core;
 import nimblecas.symbolic;
@@ -88,6 +89,10 @@ import nimblecas.jordan;
 import nimblecas.pricing;
 import nimblecas.finance;
 import nimblecas.analytics;
+import nimblecas.svd;
+import nimblecas.daenl;
+import nimblecas.splitfield;
+import nimblecas.evalnum;
 // The GPU module is bound only when the binding TU is compiled with
 // -DNIMBLECAS_EXT_WITH_GPU (and nimblecas_ext is linked against nimblecas_gpu +
 // the CUDA runtime). This keeps the default CPU-only Python build importable.
@@ -122,6 +127,12 @@ using nimblecas::SeriesCF;
 using nimblecas::Stability;
 using nimblecas::StabilityClassification;
 using nimblecas::TestStatistic;
+using nimblecas::NumericPolar;
+using nimblecas::NumericSvd;
+using nimblecas::SplittingField;
+using nimblecas::daenl::DaeSystem;
+using nimblecas::daenl::NlDaeSolution;
+using nimblecas::daenl::StructuralInfo;
 
 namespace {
 
@@ -1678,4 +1689,192 @@ NB_MODULE(nimblecas_ext, m) {
                   },
                   nb::arg("covariance"), nb::arg("mean_returns"), nb::arg("risk_free") = 0.0,
                   "Tangency (max-Sharpe) portfolio weights.");
+
+    // =======================================================================
+    // Numeric SVD & polar decomposition, plus the exact-over-Q companions (svd).
+    // The SVD / polar factors are NUMERIC doubles (no exact irrational singular
+    // value exists over Q); gram_matrix / exact_singular_value_squares stay exact.
+    // =======================================================================
+    // NumericSvd: A = U * diag(singular_values) * V^T, k = min(rows, cols). u is rows x k
+    // and v is cols x k, both row-major with orthonormal columns; singular_values (length k)
+    // is descending and non-negative.
+    nb::class_<NumericSvd>(m, "NumericSvd")
+        .def_ro("rows", &NumericSvd::rows)
+        .def_ro("cols", &NumericSvd::cols)
+        .def_ro("u", &NumericSvd::u, "rows x k orthonormal left factor, row-major (list of float).")
+        .def_ro("singular_values", &NumericSvd::singular_values,
+                "The k = min(rows, cols) singular values, descending and non-negative.")
+        .def_ro("v", &NumericSvd::v, "cols x k orthonormal right factor, row-major (list of float).");
+
+    // NumericPolar: the square polar decomposition A = U * P with U orthogonal and P
+    // symmetric positive semidefinite, both n x n row-major.
+    nb::class_<NumericPolar>(m, "NumericPolar")
+        .def_ro("n", &NumericPolar::n)
+        .def_ro("u", &NumericPolar::u, "n x n orthogonal factor, row-major (list of float).")
+        .def_ro("p", &NumericPolar::p,
+                "n x n symmetric positive-semidefinite factor, row-major (list of float).");
+
+    m.def("svd",
+          [](const Matrix& a, double tol, std::size_t max_sweeps) {
+              return unwrap(nimblecas::svd(a, tol, max_sweeps));
+          },
+          nb::arg("a"), nb::arg("tol") = 1e-12,
+          nb::arg("max_sweeps") = static_cast<std::size_t>(60),
+          "Thin numeric SVD of a Matrix (entries converted to double first) by one-sided "
+          "Jacobi (NumericSvd). LOSSY: use gram_matrix / exact_singular_value_squares to stay "
+          "exact. Raises not_converged when max_sweeps is exhausted.");
+    m.def("svd",
+          [](const std::vector<double>& a, std::size_t rows, std::size_t cols, double tol,
+             std::size_t max_sweeps) {
+              return unwrap(
+                  nimblecas::svd(std::span<const double>(a), rows, cols, tol, max_sweeps));
+          },
+          nb::arg("a"), nb::arg("rows"), nb::arg("cols"), nb::arg("tol") = 1e-12,
+          nb::arg("max_sweeps") = static_cast<std::size_t>(60),
+          "Thin numeric SVD of the row-major rows x cols matrix `a` (length rows*cols) by "
+          "one-sided Jacobi (NumericSvd).");
+    m.def("polar",
+          [](const std::vector<double>& a, std::size_t n, double tol, std::size_t max_sweeps) {
+              return unwrap(nimblecas::polar(std::span<const double>(a), n, tol, max_sweeps));
+          },
+          nb::arg("a"), nb::arg("n"), nb::arg("tol") = 1e-12,
+          nb::arg("max_sweeps") = static_cast<std::size_t>(60),
+          "Numeric polar decomposition A = U*P of the SQUARE row-major n x n matrix `a` "
+          "(length n*n), built from the thin SVD (NumericPolar).");
+    m.def("svd_residual",
+          [](const NumericSvd& d, const std::vector<double>& a) {
+              return unwrap(nimblecas::svd_residual(d, std::span<const double>(a)));
+          },
+          nb::arg("d"), nb::arg("a"),
+          "Frobenius residual ||U*diag(sigma)*V^T - A||_F against the original row-major A.");
+    m.def("polar_residual",
+          [](const NumericPolar& d, const std::vector<double>& a) {
+              return unwrap(nimblecas::polar_residual(d, std::span<const double>(a)));
+          },
+          nb::arg("d"), nb::arg("a"),
+          "Frobenius residual ||U*P - A||_F against the original row-major A.");
+    m.def("gram_matrix",
+          [](const Matrix& a) { return unwrap(nimblecas::gram_matrix(a)); }, nb::arg("a"),
+          "The exact Gram matrix A^T*A (overflow-checked Rational Matrix).");
+    m.def("exact_singular_value_squares",
+          [](const Matrix& a) { return unwrap(nimblecas::exact_singular_value_squares(a)); },
+          nb::arg("a"),
+          "The RATIONAL eigenvalues of A^T*A -- the exact rational squared singular values "
+          "sigma^2 with algebraic multiplicity, descending, as a list of (Rational, int). A "
+          "SLICE: an irrational sigma^2 (the common case) is honestly ABSENT, never approximated.");
+
+    // =======================================================================
+    // Nonlinear/higher-index DAE numerical surface (daenl). The exact power-series
+    // tier returns DaeSolution/PowerSeries (PowerSeries is unbound), so it is skipped.
+    // =======================================================================
+    // DaeSystem: a nonlinear residual system F(t, x, x') = 0. residuals, vars and ders are
+    // positionally matched (ders[j] is the symbol for d(vars[j])/dt).
+    nb::class_<DaeSystem>(m, "DaeSystem")
+        .def(
+            "__init__",
+            [](DaeSystem* self, std::vector<Expr> residuals, std::vector<std::string> vars,
+               std::vector<std::string> ders, std::string time) {
+                new (self) DaeSystem{std::move(residuals), std::move(vars), std::move(ders),
+                                     std::move(time)};
+            },
+            nb::arg("residuals"), nb::arg("vars"), nb::arg("ders"), nb::arg("time") = "t",
+            "residuals[i] is an Expr over the state symbols vars and the derivative symbols "
+            "ders (ders[j] stands for d(vars[j])/dt) plus the independent variable `time`; the "
+            "three lists must have equal length.")
+        .def_ro("residuals", &DaeSystem::residuals)
+        .def_ro("vars", &DaeSystem::vars)
+        .def_ro("ders", &DaeSystem::ders)
+        .def_ro("time", &DaeSystem::time);
+
+    // StructuralInfo: the Pantelides-style structural index/consistency result.
+    nb::class_<StructuralInfo>(m, "StructuralInfo")
+        .def_ro("structural_index", &StructuralInfo::structural_index,
+                "The structural index (differentiation sweeps + 1).")
+        .def_ro("diff_count", &StructuralInfo::diff_count,
+                "diff_count[j] is how many times original equation j was differentiated.")
+        .def_ro("augmented_residuals", &StructuralInfo::augmented_residuals,
+                "The full accumulated equation set (original + differentiated batches) as Expr.");
+
+    // NlDaeSolution: the implicit-Euler / BDF-2 trajectory of solve_nonlinear_dae.
+    nb::class_<NlDaeSolution>(m, "NlDaeSolution")
+        .def_ro("times", &NlDaeSolution::times, "The time grid (list of float).")
+        .def_ro("states", &NlDaeSolution::states,
+                "states[k] is the state x at times[k] (list of list of float, each length n).")
+        .def_ro("structural_index", &NlDaeSolution::structural_index)
+        .def_ro("initial_guess_consistent", &NlDaeSolution::initial_guess_consistent);
+
+    m.def("analyze_structure",
+          [](const DaeSystem& sys, std::size_t max_index) {
+              return unwrap(nimblecas::daenl::analyze_structure(sys, max_index));
+          },
+          nb::arg("sys"), nb::arg("max_index") = static_cast<std::size_t>(3),
+          "The structural (Pantelides-style) index/consistency analysis (StructuralInfo); "
+          "raises not_implemented when no perfect matching is found within max_index sweeps.");
+    m.def("consistent_initial_values",
+          [](const DaeSystem& sys, const std::vector<double>& x_guess,
+             const std::vector<double>& xdot_guess, double t0) {
+              return unwrap(nimblecas::daenl::consistent_initial_values(
+                  sys, std::span<const double>(x_guess), std::span<const double>(xdot_guess), t0));
+          },
+          nb::arg("sys"), nb::arg("x_guess"), nb::arg("xdot_guess"), nb::arg("t0"),
+          "Fix x = x_guess and solve for a consistent derivative via Newton on the "
+          "index-reduced system; returns (x_guess unchanged, corrected xdot). Raises "
+          "not_converged when Newton fails.");
+    m.def("solve_nonlinear_dae",
+          [](const DaeSystem& sys, const std::vector<double>& x0_guess,
+             const std::vector<double>& xdot0_guess, double t0, double t1, std::uint64_t steps) {
+              return unwrap(nimblecas::daenl::solve_nonlinear_dae(
+                  sys, std::span<const double>(x0_guess), std::span<const double>(xdot0_guess), t0,
+                  t1, steps));
+          },
+          nb::arg("sys"), nb::arg("x0_guess"), nb::arg("xdot0_guess"), nb::arg("t0"), nb::arg("t1"),
+          nb::arg("steps"),
+          "Time-step F(t, x, x') = 0 from t0 to t1 over `steps` equal implicit-Euler / BDF-2 "
+          "steps (NlDaeSolution). Only structural_index == 1 systems are integrated; anything "
+          "else, or a Newton non-convergence, raises.");
+    // NOTE: solve_semiexplicit_nonlinear_series not bound (returns DaeSolution carrying an
+    // unbound PowerSeries).
+
+    // =======================================================================
+    // Splitting fields over a number field (splitfield). Only splitting_field is
+    // bound: factor_over_field / roots_in_field / adjoin_root take an unbound
+    // AlgebraicPoly, so they are skipped.
+    // =======================================================================
+    // SplittingField: the splitting field of a batch of Q-irreducibles, plus each
+    // polynomial's roots in that field (in the same order as the input).
+    nb::class_<SplittingField>(m, "SplittingField")
+        .def_ro("field", &SplittingField::field, "The splitting field as a NumberField.")
+        .def_ro("roots", &SplittingField::roots,
+                "A list of (RationalPoly, list[AlgebraicNumber]) pairs: each input polynomial "
+                "with its full set of roots in `field`, in the input order.");
+    m.def("splitting_field",
+          [](const std::vector<RationalPoly>& irreducibles, std::int64_t max_degree) {
+              return unwrap(nimblecas::splitting_field(
+                  std::span<const RationalPoly>(irreducibles), max_degree));
+          },
+          nb::arg("irreducibles"), nb::arg("max_degree"),
+          "The splitting field of `irreducibles` (each assumed Q-irreducible) with every "
+          "polynomial's roots (SplittingField). Refuses (not_implemented) a field of degree "
+          "exceeding max_degree at any point.");
+    // NOTE: factor_over_field / roots_in_field / adjoin_root not bound (take unbound
+    // AlgebraicPoly).
+
+    // =======================================================================
+    // Numerical evaluator (evalnum): sample a symbolic Expr to a double.
+    // =======================================================================
+    m.def("eval_double",
+          [](const Expr& e, const std::string& var, double x) {
+              return unwrap(nimblecas::eval_double(e, var, x));
+          },
+          nb::arg("e"), nb::arg("var"), nb::arg("x"),
+          "Evaluate `e` to a double, substituting `x` for every occurrence of the symbol "
+          "`var`. NUMERICAL (IEEE-754). An unbound symbol or unrecognised function head, or a "
+          "non-finite intermediate, raises.");
+    m.def("eval_double",
+          [](const Expr& e, const std::unordered_map<std::string, double>& bindings) {
+              return unwrap(nimblecas::eval_double(e, bindings));
+          },
+          nb::arg("e"), nb::arg("bindings"),
+          "Evaluate `e` to a double using `bindings` to resolve symbols ('pi' and 'e' resolve "
+          "to their numeric constants unless shadowed). NUMERICAL (IEEE-754).");
 }

@@ -80,6 +80,10 @@ def main() -> int:
     _test_dynamics()
     _test_algnum()
     _test_jordan()
+    _test_svd()
+    _test_daenl()
+    _test_splitfield()
+    _test_evalnum()
     _test_gpu()
 
     print("python bindings OK:", r.to_string())
@@ -591,6 +595,108 @@ def _test_gpu() -> None:
     for i in range(4):
         assert abs(spec[2 * i] - 1.0) < 1e-9, str(spec)   # real part of bin i == 1
         assert abs(spec[2 * i + 1]) < 1e-9, str(spec)      # imag part of bin i == 0
+
+
+def _test_svd() -> None:
+    """Numeric SVD / polar, plus the exact-over-Q Gram matrix and rational sigma^2 slice."""
+    R = ncas.Rational
+    # A = diag(3, 4): singular values are exactly {4, 3} (descending), U/V permutations.
+    A = ncas.Matrix.from_rows(
+        [[R.from_int(3), R.from_int(0)], [R.from_int(0), R.from_int(4)]]
+    )
+    d = ncas.svd(A)
+    assert d.rows == 2 and d.cols == 2, str((d.rows, d.cols))
+    assert len(d.singular_values) == 2, str(d.singular_values)
+    assert abs(d.singular_values[0] - 4.0) < 1e-9, str(d.singular_values)
+    assert abs(d.singular_values[1] - 3.0) < 1e-9, str(d.singular_values)
+    # Reconstruction U*diag(sigma)*V^T == A to numeric tolerance.
+    resid = ncas.svd_residual(d, [3.0, 0.0, 0.0, 4.0])
+    assert resid < 1e-9, str(resid)
+
+    # The exact companions stay in Q: A^T*A = diag(9, 16), rational sigma^2 = {16, 9}.
+    gram = ncas.gram_matrix(A)
+    assert gram.at(0, 0) == R.from_int(9) and gram.at(1, 1) == R.from_int(16), gram.to_string()
+    assert gram.at(0, 1) == R.from_int(0) and gram.at(1, 0) == R.from_int(0), gram.to_string()
+    sq = ncas.exact_singular_value_squares(A)
+    assert [(v.numerator(), v.denominator(), mult) for v, mult in sq] == [
+        (16, 1, 1),
+        (9, 1, 1),
+    ], str([(v.to_string(), mult) for v, mult in sq])
+
+    # A = [[1, 1], [0, 1]] has IRRATIONAL sigma^2 = (3 +/- sqrt(5))/2, so the exact slice
+    # is honestly EMPTY -- product of singular values is |det| = 1, sum of squares = 3.
+    B = ncas.Matrix.from_rows(
+        [[R.from_int(1), R.from_int(1)], [R.from_int(0), R.from_int(1)]]
+    )
+    assert ncas.exact_singular_value_squares(B) == [], str(ncas.exact_singular_value_squares(B))
+    db = ncas.svd(B)
+    s0, s1 = db.singular_values
+    assert abs(s0 * s1 - 1.0) < 1e-9, str(db.singular_values)          # sigma_1 * sigma_2 = |det|
+    assert abs(s0 * s0 + s1 * s1 - 3.0) < 1e-9, str(db.singular_values)  # ||B||_F^2 = 3
+
+    # Polar of A = [[0, -2], [2, 0]] (2 * rotation): P = 2*I, U the rotation. Row-major input.
+    pol = ncas.polar([0.0, -2.0, 2.0, 0.0], 2)
+    assert pol.n == 2, str(pol.n)
+    assert abs(pol.p[0] - 2.0) < 1e-9 and abs(pol.p[3] - 2.0) < 1e-9, str(pol.p)
+    assert abs(pol.p[1]) < 1e-9 and abs(pol.p[2]) < 1e-9, str(pol.p)
+    assert ncas.polar_residual(pol, [0.0, -2.0, 2.0, 0.0]) < 1e-9
+
+
+def _test_daenl() -> None:
+    """The nonlinear-DAE numerical surface on the scalar ODE x' = -x (index 1)."""
+    x = ncas.Expr.symbol("x")
+    xp = ncas.Expr.symbol("xp")
+    # Residual F = x' + x = 0, i.e. x' = -x. vars/ders matched positionally.
+    sys = ncas.DaeSystem([xp + x], ["x"], ["xp"], "t")
+    assert list(sys.vars) == ["x"] and list(sys.ders) == ["xp"], str((sys.vars, sys.ders))
+
+    # Structural analysis: the residual already contains the derivative symbol -> index 1.
+    info = ncas.analyze_structure(sys)
+    assert info.structural_index == 1, info.structural_index
+    assert list(info.diff_count) == [0], str(list(info.diff_count))
+
+    # Consistent initialisation at x = 1 recovers xdot = -1 exactly (F = xp + x = 0).
+    x_out, xdot_out = ncas.consistent_initial_values(sys, [1.0], [0.0], 0.0)
+    assert abs(x_out[0] - 1.0) < 1e-12, str(x_out)
+    assert abs(xdot_out[0] - (-1.0)) < 1e-9, str(xdot_out)
+
+    # Implicit Euler, one unit step from x(0) = 1: (x1 - 1)/1 + x1 = 0 => x1 = 1/2.
+    sol = ncas.solve_nonlinear_dae(sys, [1.0], [-1.0], 0.0, 1.0, 1)
+    assert sol.structural_index == 1 and sol.initial_guess_consistent is True
+    assert sol.times[0] == 0.0 and abs(sol.times[-1] - 1.0) < 1e-12, str(sol.times)
+    assert abs(sol.states[-1][0] - 0.5) < 1e-9, str(sol.states)
+
+
+def _test_splitfield() -> None:
+    """Splitting field of x^2 - 2 is Q(sqrt(2)): degree 2, roots +/- sqrt(2)."""
+    R = ncas.Rational
+    p = ncas.RationalPoly.from_coeffs([R.from_int(-2), R.from_int(0), R.from_int(1)])  # x^2 - 2
+    sf = ncas.splitting_field([p], 24)
+    assert sf.field.degree() == 2, sf.field.to_string()
+
+    assert len(sf.roots) == 1, str(sf.roots)
+    poly, roots = sf.roots[0]
+    assert poly == p, poly.to_string()
+    assert len(roots) == 2, str([r.to_string() for r in roots])
+    # The two roots are +/- sqrt(2): they sum to 0 and multiply to -2, exactly, in the field.
+    assert roots[0].add(roots[1]).is_zero(), roots[0].add(roots[1]).to_string()
+    prod = roots[0].multiply(roots[1])
+    assert prod == sf.field.from_rational(R.from_int(-2)), prod.to_string()
+
+
+def _test_evalnum() -> None:
+    """The numerical evaluator: sample x^2 + 1 at x = 3 -> 10 (both overloads)."""
+    x = ncas.Expr.symbol("x")
+    f = x.pow(ncas.Expr.integer(2)).add(ncas.Expr.integer(1))  # x^2 + 1
+    assert abs(ncas.eval_double(f, "x", 3.0) - 10.0) < 1e-12
+    assert abs(ncas.eval_double(f, {"x": 3.0}) - 10.0) < 1e-12
+
+    # An unbound symbol is an honest domain_error at the boundary, never a silent 0.
+    try:
+        ncas.eval_double(x, "y", 1.0)
+        raise AssertionError("expected an unbound symbol to raise")
+    except ValueError:
+        pass
 
 
 if __name__ == "__main__":
