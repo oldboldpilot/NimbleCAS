@@ -353,6 +353,67 @@ namespace {
     return vec;
 }
 
+// The constant polynomial 1 over `field` -- the "fully split" cofactor sentinel. Built via
+// embed (infallible) rather than from_coeffs, so no Result has to be threaded.
+[[nodiscard]] auto poly_one(const BigNumberField& field) -> BigAlgebraicPoly {
+    return BigAlgebraicPoly::embed(field, BigRationalPoly::constant(BigRational::from_int(1)));
+}
+
+// Re-embed every coefficient of a BigAlgebraicPoly over L into new_field, under the ring
+// homomorphism induced by L's generator |-> image_of_generator. Used by splitting_field to
+// carry a cofactor forward when the field grows.
+[[nodiscard]] auto reembed_poly(const BigAlgebraicPoly& p, const BigNumberField& new_field,
+                                const BigAlgebraicNumber& image_of_generator)
+    -> Result<BigAlgebraicPoly> {
+    if (p.is_zero()) {
+        return BigAlgebraicPoly::zero(new_field);
+    }
+    std::vector<BigAlgebraicNumber> coeffs;
+    coeffs.reserve(static_cast<std::size_t>(p.degree()) + 1);
+    for (std::int64_t i = 0; i <= p.degree(); ++i) {
+        auto c = reembed(p.coefficient(static_cast<std::size_t>(i)), new_field, image_of_generator);
+        if (!c) {
+            return make_error<BigAlgebraicPoly>(c.error());
+        }
+        coeffs.push_back(std::move(*c));
+    }
+    return BigAlgebraicPoly::from_coeffs(new_field, std::move(coeffs));
+}
+
+// The root of a linear factor l = c1*x + c0 over its field: -c0/c1 (c1 != 0 for a genuine
+// degree-1 polynomial).
+[[nodiscard]] auto linear_root(const BigAlgebraicPoly& l) -> Result<BigAlgebraicNumber> {
+    const BigAlgebraicNumber c0 = l.coefficient(0);
+    const BigAlgebraicNumber c1 = l.coefficient(1);
+    auto neg = c0.negate();
+    if (!neg) {
+        return make_error<BigAlgebraicNumber>(neg.error());
+    }
+    return neg->divide(c1);
+}
+
+// poly / (x - root), which must divide exactly over poly's field. A nonzero remainder is an
+// embedding bug, reported as domain_error rather than a fabricated quotient (Rule 32).
+[[nodiscard]] auto divide_out_root(const BigAlgebraicPoly& poly, const BigAlgebraicNumber& root,
+                                   const BigNumberField& field) -> Result<BigAlgebraicPoly> {
+    auto neg = root.negate();
+    if (!neg) {
+        return make_error<BigAlgebraicPoly>(neg.error());
+    }
+    auto lin = BigAlgebraicPoly::from_coeffs(field, std::vector<BigAlgebraicNumber>{*neg, field.one()});
+    if (!lin) {
+        return make_error<BigAlgebraicPoly>(lin.error());
+    }
+    auto dm = poly.divide(*lin);
+    if (!dm) {
+        return make_error<BigAlgebraicPoly>(dm.error());
+    }
+    if (!dm->remainder.is_zero()) {
+        return make_error<BigAlgebraicPoly>(MathError::domain_error);
+    }
+    return std::move(dm->quotient);
+}
+
 }  // namespace
 
 // --- factor_over_field --------------------------------------------------------
@@ -814,110 +875,154 @@ auto splitting_field(std::span<const BigRationalPoly> irreducibles, std::int64_t
         }
     }
 
-    // Canonical order (degree ascending, then coefficient-lexicographic): used only to
-    // pick a deterministic starting field and adjunction order. Results are reported back
-    // in the CALLER's original order (below).
+    // Canonical order (degree ascending, then coefficient-lexicographic): a deterministic
+    // adjunction order only. Results are reported back in the CALLER's original order (below).
     std::vector<std::size_t> order(m);
     std::iota(order.begin(), order.end(), std::size_t{0});
     std::ranges::sort(order, [&](std::size_t a, std::size_t b) {
         return poly_less(irreducibles[a], irreducibles[b]);
     });
 
-    // The trivial degree-1 field Q[t]/(t), representing Q itself, for the all-linear case.
+    // Start at the trivial degree-1 field Q[t]/(t) = Q, and grow it one adjoined root at a
+    // time. NOTE the load-bearing design choice: rather than re-factor the FULL input p_i
+    // over each enlarged field (which, for x^3 - 2 over its degree-6 splitting field, would
+    // demand a Trager norm of degree [L:Q]*deg = 6*3 = 18 -- far beyond factor_over_Q's
+    // Kronecker budget), we keep, per input, only the not-yet-split COFACTOR and divide out
+    // each root the moment it is found. Every polynomial ever handed to factor_over_field is
+    // therefore the reduced cofactor, whose Trager norm stays low (<= 6 for x^3 - 2), so the
+    // construction the int64 tier cannot even reach by overflow runs to completion here.
     auto trivial_res = BigNumberField::create(BigRationalPoly::monomial(BigRational::from_int(1), 1));
     if (!trivial_res) {
         return make_error<BigSplittingField>(trivial_res.error());
     }
     BigNumberField field = std::move(*trivial_res);
 
-    std::optional<std::size_t> first_nonlinear;
-    for (std::size_t idx : order) {
-        if (irreducibles[idx].degree() >= 2) {
-            first_nonlinear = idx;
-            break;
-        }
+    std::vector<BigAlgebraicPoly> remaining;  // cofactor of each p_i over the CURRENT field
+    remaining.reserve(m);
+    for (std::size_t i = 0; i < m; ++i) {
+        remaining.push_back(BigAlgebraicPoly::embed(field, irreducibles[i]));
     }
-    if (first_nonlinear) {
-        auto f0 = BigNumberField::create(irreducibles[*first_nonlinear]);
-        if (!f0) {
-            return make_error<BigSplittingField>(f0.error());
-        }
-        field = std::move(*f0);
-        if (field.degree() > max_degree) {
-            return make_error<BigSplittingField>(MathError::not_implemented);
-        }
-    }
+    std::vector<std::vector<BigAlgebraicNumber>> found(m);  // roots so far, re-embedded forward
 
-    // Bounded outer loop: each adjunction at least doubles [L:Q] (deg g >= 2), so at most
-    // O(log2(max_degree)) extensions are ever needed. This cap is a defensive circuit
-    // breaker, not the honesty gate itself -- that gate is the max_degree check below.
+    // Bounded outer loop: each adjunction strictly raises [L:Q] (deg target >= 2) toward the
+    // max_degree ceiling, so the count is bounded. This cap is a defensive circuit breaker,
+    // not the honesty gate itself -- that gate is the max_degree check below.
     const std::int64_t iteration_cap =
         std::max<std::int64_t>(max_degree, 1) + static_cast<std::int64_t>(m) + 8;
 
-    std::vector<std::vector<BigAlgebraicPoly>> per_factor(m);  // refreshed every pass
     for (std::int64_t iter = 0;; ++iter) {
         if (iter > iteration_cap) {
             return make_error<BigSplittingField>(MathError::not_implemented);
         }
-        std::optional<BigAlgebraicPoly> pending_nonlinear;
+
+        // Sweep every cofactor over the current field: pull out all linear factors (cheap --
+        // no adjunction), and note the first non-linear irreducible piece as the next
+        // adjunction target.
+        std::optional<BigAlgebraicPoly> target_piece;
+        std::size_t target_i = 0;
         for (std::size_t idx : order) {
-            const BigAlgebraicPoly embedded = BigAlgebraicPoly::embed(field, irreducibles[idx]);
-            auto fres = factor_over_field(field, embedded);
-            if (!fres) {
-                return make_error<BigSplittingField>(fres.error());
+            if (remaining[idx].degree() < 1) {
+                continue;  // already fully split
             }
-            per_factor[idx] = std::move(*fres);
-            if (!pending_nonlinear) {
-                for (const BigAlgebraicPoly& piece : per_factor[idx]) {
-                    if (piece.degree() >= 2) {
-                        pending_nonlinear = piece;
-                        break;
+            if (remaining[idx].degree() == 1) {
+                auto r = linear_root(remaining[idx]);
+                if (!r) {
+                    return make_error<BigSplittingField>(r.error());
+                }
+                found[idx].push_back(std::move(*r));
+                remaining[idx] = poly_one(field);
+                continue;
+            }
+            auto facs = factor_over_field(field, remaining[idx]);
+            if (!facs) {
+                return make_error<BigSplittingField>(facs.error());
+            }
+            BigAlgebraicPoly nonlinear_product = poly_one(field);
+            for (const BigAlgebraicPoly& piece : *facs) {
+                if (piece.degree() == 1) {
+                    auto r = linear_root(piece);
+                    if (!r) {
+                        return make_error<BigSplittingField>(r.error());
+                    }
+                    found[idx].push_back(std::move(*r));
+                } else {
+                    auto p = nonlinear_product.multiply(piece);
+                    if (!p) {
+                        return make_error<BigSplittingField>(p.error());
+                    }
+                    nonlinear_product = std::move(*p);
+                    if (!target_piece) {
+                        target_piece = piece;
+                        target_i = idx;
                     }
                 }
             }
+            remaining[idx] = std::move(nonlinear_product);
         }
-        if (!pending_nonlinear) {
-            break;  // every factor splits into linear pieces over `field`
+
+        if (!target_piece) {
+            break;  // every cofactor is fully split into linear factors over `field`
         }
-        auto deg_check = checked_mul_i64(field.degree(), pending_nonlinear->degree());
+
+        // Honest degree gate before growing the field.
+        auto deg_check = checked_mul_i64(field.degree(), target_piece->degree());
         if (!deg_check || *deg_check > max_degree) {
             return make_error<BigSplittingField>(MathError::not_implemented);
         }
-        auto adjoined = adjoin_root(field, *pending_nonlinear);
+        auto adjoined = adjoin_root(field, *target_piece);
         if (!adjoined) {
             return make_error<BigSplittingField>(adjoined.error());
         }
-        field = std::move(adjoined->field);
+        const BigNumberField new_field = adjoined->field;
+        const BigAlgebraicNumber img = adjoined->old_generator;
+        const BigAlgebraicNumber new_root = adjoined->root;
+
+        // Carry every cofactor and every found root forward into the enlarged field.
+        for (std::size_t i = 0; i < m; ++i) {
+            if (remaining[i].degree() >= 1) {
+                auto re = reembed_poly(remaining[i], new_field, img);
+                if (!re) {
+                    return make_error<BigSplittingField>(re.error());
+                }
+                remaining[i] = std::move(*re);
+            } else {
+                remaining[i] = poly_one(new_field);
+            }
+            for (BigAlgebraicNumber& r : found[i]) {
+                auto rr = reembed(r, new_field, img);
+                if (!rr) {
+                    return make_error<BigSplittingField>(rr.error());
+                }
+                r = std::move(*rr);
+            }
+        }
+
+        // Divide the freshly adjoined root out of its cofactor and record it.
+        auto reduced = divide_out_root(remaining[target_i], new_root, new_field);
+        if (!reduced) {
+            return make_error<BigSplittingField>(reduced.error());
+        }
+        remaining[target_i] = std::move(*reduced);
+        found[target_i].push_back(new_root);
+
+        field = new_field;
     }
 
-    // Harvest roots per factor and GUARD: each factor must contribute exactly deg_i
-    // pairwise-distinct linear pieces over the final field.
+    // Completeness guard (Rule 32): each input contributes exactly deg_i pairwise-distinct
+    // roots in the final field.
     std::vector<std::pair<BigRationalPoly, std::vector<BigAlgebraicNumber>>> roots(m);
     for (std::size_t idx = 0; idx < m; ++idx) {
-        std::vector<BigAlgebraicNumber> factor_roots;
-        factor_roots.reserve(per_factor[idx].size());
-        for (const BigAlgebraicPoly& piece : per_factor[idx]) {
-            if (piece.degree() != 1) {
-                return make_error<BigSplittingField>(MathError::domain_error);  // unreachable
-            }
-            const BigAlgebraicNumber c0 = piece.coefficient(0);
-            auto neg = c0.negate();
-            if (!neg) {
-                return make_error<BigSplittingField>(neg.error());
-            }
-            factor_roots.push_back(std::move(*neg));  // piece is monic: root = -c0
-        }
-        if (static_cast<std::int64_t>(factor_roots.size()) != irreducibles[idx].degree()) {
+        if (static_cast<std::int64_t>(found[idx].size()) != irreducibles[idx].degree()) {
             return make_error<BigSplittingField>(MathError::domain_error);
         }
-        for (std::size_t a = 0; a < factor_roots.size(); ++a) {
-            for (std::size_t b = a + 1; b < factor_roots.size(); ++b) {
-                if (factor_roots[a].is_equal(factor_roots[b])) {
+        for (std::size_t a = 0; a < found[idx].size(); ++a) {
+            for (std::size_t b = a + 1; b < found[idx].size(); ++b) {
+                if (found[idx][a].is_equal(found[idx][b])) {
                     return make_error<BigSplittingField>(MathError::domain_error);  // not distinct
                 }
             }
         }
-        roots[idx] = std::make_pair(irreducibles[idx], std::move(factor_roots));
+        roots[idx] = std::make_pair(irreducibles[idx], std::move(found[idx]));
     }
 
     return BigSplittingField{.field = std::move(field), .roots = std::move(roots)};
