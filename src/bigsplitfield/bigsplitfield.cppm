@@ -58,15 +58,20 @@
 //
 // SPLITTING_FIELD. Input factors are sorted into a canonical order (degree ascending, then
 // coefficient-lexicographic) purely to make the field-growth sequence deterministic; results
-// are reported back in the CALLER's original order. The starting field is Q[x]/(first
-// non-linear factor in canonical order), or the trivial degree-1 field Q[t]/(t) (representing
-// Q itself) when every input factor is already linear. Each outer pass re-embeds and
-// re-factors EVERY input factor over the current field via factor_over_field (a fresh
-// recomputation each pass rather than incremental bookkeeping -- simpler and no less
-// correct at the small scale this module targets) and picks the first non-linear
-// irreducible piece encountered as the next adjunction target; adjoin_root extends the
-// field and the pass repeats. The loop stops when every factor splits into exactly deg_i
-// distinct linear pieces, which is re-verified (Rule 32) before the roots are reported.
+// are reported back in the CALLER's original order. The starting field is always the trivial
+// degree-1 field Q[t]/(t) (representing Q itself), grown one adjoined root at a time. The
+// LOAD-BEARING design choice is INCREMENTAL ROOT-DIVISION: rather than re-factor the FULL
+// input p_i over each enlarged field (which for x^3 - 2 over its degree-6 splitting field
+// would demand a Trager norm of degree [L:Q]*deg = 6*3 = 18, far beyond factor_over_Q's
+// Kronecker budget), the driver keeps, per input, only the not-yet-split COFACTOR: each pass
+// pulls out every linear factor cheaply, notes the first non-linear irreducible piece as the
+// next adjunction target, then -- after adjoin_root extends the field -- re-embeds every
+// cofactor and found root forward and DIVIDES the freshly adjoined root out of its cofactor.
+// Every polynomial ever handed to factor_over_field is therefore the reduced cofactor, whose
+// Trager norm stays low (<= 6 for x^3 - 2), so the construction the int64 tier cannot even
+// reach by overflow runs to completion here. The loop stops when every cofactor is fully
+// split into linear factors; the completeness invariant (each input contributes exactly deg_i
+// pairwise-distinct roots) is re-verified (Rule 32) before the roots are reported.
 //
 // HONESTY (Rule 32). Nothing throws; nothing returns a plausible-but-wrong field or root.
 // Because BigRational / BigRationalPoly arithmetic only combines magnitudes, it CANNOT

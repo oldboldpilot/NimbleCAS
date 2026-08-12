@@ -109,6 +109,32 @@ divide-by-zero would propagate), the divisor is always a prior nonzero pivot or
 the seed `1`, so in practice the only error `determinant()` can return is
 `domain_error` from a non-square matrix.
 
+### Solve and rank
+
+```cpp
+[[nodiscard]] auto solve(const BigMatrix& b) const -> Result<BigMatrix>;
+[[nodiscard]] auto rank() const -> std::int64_t;
+```
+
+`solve` solves `A * X = B` for `X`, where `A` is `*this` (square) and `B`
+shares `A`'s row count (`B` may carry several right-hand-side columns at
+once). It runs exact **Gauss-Jordan elimination** over `BigRational`,
+selecting the **first** row with a nonzero pivot entry — exact arithmetic
+needs no numerical pivoting, unlike the floating-point tiers. Dimension
+mismatch (`A` non-square, or `b.rows() != A.rows()`) is `domain_error`; a
+**singular** `A` (a pivot column with no nonzero entry) is
+`MathError::division_by_zero`. Like `determinant`, it is exact and
+**unbounded**: unlike the `int64` `Matrix::solve` it never overflows, and it
+never returns a plausible-but-wrong solution. `solve` is the exact linear
+solve `nimblecas.bigsplitfield`'s primitive-element search relies on to
+recover a field element's coordinates from its multiplication matrix.
+
+`rank()` is the exact rank (the number of linearly independent rows) via
+Gaussian row reduction to echelon form over `BigRational`, counting the
+nonzero pivot rows. **Infallible**: bignum arithmetic cannot overflow, so the
+rank is always well-defined and returned directly as an `std::int64_t`, no
+`Result` involved. `rank()` of a `0` row or `0` column matrix is `0`.
+
 ## Error model
 
 | Condition | Error |
@@ -118,11 +144,15 @@ the seed `1`, so in practice the only error `determinant()` can return is
 | `add` / `subtract` on mismatched shapes | `MathError::domain_error` |
 | `multiply` with inner-dimension mismatch (`cols() != o.rows()`) | `MathError::domain_error` |
 | `determinant` of a non-square matrix | `MathError::domain_error` |
+| `solve` on a non-square `A`, or `b.rows() != A.rows()` | `MathError::domain_error` |
+| `solve` on a singular `A` (a pivot column with no nonzero entry) | `MathError::division_by_zero` |
 
 There is **no `overflow` row**: `BigRational` arithmetic cannot wrap, so the
 `overflow` that `Matrix` can raise is unreachable here. `scale`, `transpose`,
-`identity`, `zero`, and `from_matrix` never fail on their inputs (a singular
-matrix is not an error — its determinant is simply `0`).
+`identity`, `zero`, `from_matrix`, and `rank` never fail on their inputs (a
+singular matrix is not an error for `determinant` or `rank` — its determinant
+is simply `0` and its rank is simply less than full; only `solve` treats
+singularity as an error, since there `A` is meant to be inverted).
 
 ## Worked examples
 
@@ -175,6 +205,17 @@ BigMatrix::from_rows({{bi(1), bi(2), bi(3)}}).value()
 // A zero leading pivot forces a Bareiss row swap and a sign flip.
 BigMatrix::from_rows({{bi(0), bi(1)}, {bi(1), bi(0)}}).value()
     .determinant().value() == bi(-1);              // det [[0,1],[1,0]] = -1
+
+// solve: A * X = B via exact Gauss-Jordan. A = [[1,2],[3,4]], B = [[5],[6]] => X = [[-4],[4.5]].
+auto sol = a.solve(BigMatrix::from_rows({{bi(5)}, {bi(6)}}).value()).value();
+sol.at(0, 0) == bi(-4) && sol.at(1, 0) == brat(9, 2);          // exact solution
+a.multiply(sol).value().at(0, 0) == bi(5);                     // A * X reconstructs B
+
+// solve on a singular A is division_by_zero; rank() is infallible.
+BigMatrix::from_rows({{bi(1), bi(2)}, {bi(2), bi(4)}}).value()
+    .solve(BigMatrix::identity(2)).error();                    // MathError::division_by_zero
+BigMatrix::from_rows({{bi(1), bi(2)}, {bi(2), bi(4)}}).value().rank() == 1;  // rank-1
+BigMatrix::identity(3).rank() == 3;                            // full rank
 
 // Rational entries: det [[1/2,1/3],[1/4,1/5]] = 1/10 - 1/12 = 1/60 (exact).
 BigMatrix::from_rows({{brat(1, 2), brat(1, 3)}, {brat(1, 4), brat(1, 5)}}).value()

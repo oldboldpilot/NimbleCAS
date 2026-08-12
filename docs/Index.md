@@ -94,7 +94,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.probmethod` | [probmethod.md](reference/probmethod.md) | The Probabilistic Method (§7.18, Alon–Spencer): non-constructive existence proofs — first-moment / union-bound / second-moment arguments, the Lovász Local Lemma (symmetric via a rigorous rational enclosure `e_lo < e < e_hi` for a sound 3-way verdict; asymmetric exact), and BigInt Ramsey lower bounds. Sound certificates only; honest `not_certified`/`indeterminate`. |
 | `nimblecas.numeric` | [numeric.md](reference/numeric.md) | Floating-point polynomial root-finders (Newton, bisection, secant) with Horner `eval` / `eval_derivative`; standalone numeric solver depending only on `core`. |
 
-The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Rational → int128 → bigint → bigrational`; `bigfloat`/`doubledouble`; big-backed consumers):
+The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Rational → int128 → bigint → bigrational`; `bigfloat`/`doubledouble`; big-backed consumers, including the algebraic bignum cluster `bigratpoly → {bigresultant, bigalgnum → bigalgpoly, bigfactor, bigmatrix → {bigeigen, bigfrobenius}} → bigsplitfield`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
@@ -108,6 +108,12 @@ The wide-arithmetic tower — lifting the `int64` overflow ceiling (`int64 Ratio
 | `nimblecas.bigpowerseries` | [bigpowerseries.md](reference/bigpowerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `BigRational` — the exact/unbounded mirror of `powerseries`. |
 | `nimblecas.bigmatrix` | [bigmatrix.md](reference/bigmatrix.md) | Dense matrix over `BigRational` with exact fraction-free **Bareiss** determinant + `from_matrix` promotion of an `int64` `Matrix`. |
 | `nimblecas.bigeigen` | [bigeigen.md](reference/bigeigen.md) | Exact characteristic polynomial (Faddeev–LeVerrier) + rational eigenvalues over `BigRational` on `bigmatrix`; irrational/complex eigenvalues honestly omitted. |
+| `nimblecas.bigresultant` | [bigresultant.md](reference/bigresultant.md) | Resultant & discriminant over `BigRational` via the Euclidean PRS — the overflow-free field-norm substrate for the bignum Trager path. |
+| `nimblecas.bigalgnum` | [bigalgnum.md](reference/bigalgnum.md) | `BigNumberField`/`BigAlgebraicNumber` — number-field arithmetic over `BigRational` (residues mod a minimal polynomial); the unbounded mirror of `algnum`. |
+| `nimblecas.bigalgpoly` | [bigalgpoly.md](reference/bigalgpoly.md) | `BigAlgebraicPoly` — dense polynomials over a `BigNumberField` (embed/divide/gcd/monic/evaluate); the unbounded mirror of `algpoly`. |
+| `nimblecas.bigfrobenius` | [bigfrobenius.md](reference/bigfrobenius.md) | Minimal polynomial / invariant factors over `BigRational` via the Smith normal form of `x·I − A` — the unbounded mirror of `frobenius`. |
+| `nimblecas.bigfactor` | [bigfactor.md](reference/bigfactor.md) | `factor_over_Q` over `BigRationalPoly` (Yun → Kronecker) — the overflow-free mirror of `factor`, `not_implemented` past its search budget. |
+| `nimblecas.bigsplitfield` | [bigsplitfield.md](reference/bigsplitfield.md) | Trager splitting-field construction over Q on `BigRational` — builds e.g. the degree-6 splitting field of `x^3−2` that the int64 `splitfield` overflows on. |
 
 Reasoning & algorithmics (search / logic / constraints on the `parallel` runtime; regular workloads GPU-offloadable, irregular ones CPU/distributed):
 
@@ -145,7 +151,7 @@ Additional linear algebra, numerics & simulation:
 | `nimblecas.eigen` | [eigen.md](reference/eigen.md) | Characteristic polynomial + rational eigenvalues/eigenvectors over `Q` (the `int64` tier `bigeigen` big-backs). |
 | `nimblecas.svd` | [svd.md](reference/svd.md) | Singular value decomposition + polar decomposition over `matrix`/`eigen`/`qrschur`: **numeric** thin SVD via one-sided Jacobi and polar decomposition, plus an **exact-over-`Q`** slice — `gram_matrix` (`AᵀA`) and `exact_singular_value_squares` (rational `σ²` with multiplicity; irrational `σ²` honestly absent; no exact irrational `σ` is ever returned). |
 | `nimblecas.frobenius` | [frobenius.md](reference/frobenius.md) | Rational (Frobenius) canonical form over `Q` (§7.2): invariant factors and minimal polynomial via the Smith normal form of `xI − A` over `Q[x]`, and the block-companion RCF — EXACT (needs no eigenvalues, unlike Jordan form); the transforming `P` is deliberately not returned. |
-| `nimblecas.jordan` | [jordan.md](reference/jordan.md) | Jordan canonical form `A = P J P⁻¹` WITH the transforming `P` (§7.2): exact over `Q` when the characteristic polynomial splits (generalized-eigenvector chains), and over a quadratic extension `Q(α)` (via `algnum`) for a conjugate pair — e.g. `[[0,-1],[1,0]] → diag(i,-i)` over `Q(i)`; every `(J,P)` is verified `A·P == P·J` before return, degree-≥3 factors → honest `not_implemented`. `jordan_structure` additionally recovers the exact-over-`Q` Jordan block-size structure (Segre characteristic) for **any** square rational matrix — irrational/complex eigenvalues included — with no extension field ever built, via a Rule-32 divisibility/partition-sum guard. |
+| `nimblecas.jordan` | [jordan.md](reference/jordan.md) | Jordan canonical form `A = P J P⁻¹` WITH the transforming `P` (§7.2): exact over `Q` when the characteristic polynomial splits (generalized-eigenvector chains), and over a quadratic extension `Q(α)` (via `algnum`) for a conjugate pair — e.g. `[[0,-1],[1,0]] → diag(i,-i)` over `Q(i)`; every `(J,P)` is verified `A·P == P·J` before return, degree-≥3/multi-quadratic factors build the general splitting field (`int64`, `not_implemented`/`overflow` past its envelope) or — via `jordan_form_bignum` on `bigsplitfield` — the same field **unbounded**, e.g. the degree-6 splitting field of `x³−2`. `jordan_structure` additionally recovers the exact-over-`Q` Jordan block-size structure (Segre characteristic) for **any** square rational matrix — irrational/complex eigenvalues included — with no extension field ever built, via a Rule-32 divisibility/partition-sum guard. |
 | `nimblecas.numeigen` | [numeigen.md](reference/numeigen.md) | Numeric all-eigenvalue solver for real matrices: structure-aware dispatch (diagonal/triangular direct, Jacobi for symmetric, Francis double-shift real-Schur QR for general); `companion_eigenvalues` is the numeric polynomial root path under `solve`. |
 | `nimblecas.dynamics` | [dynamics.md](reference/dynamics.md) | Equilibria, exact Routh–Hurwitz asymptotic stability, and rational equilibrium classification. |
 | `nimblecas.powerseries` | [powerseries.md](reference/powerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `int64` `Rational`. |
@@ -302,7 +308,15 @@ subsystems layer on top of it along these roots:
 - **Wide-arithmetic tower** — `int128 → bigint → bigrational → {bigfloat,
   bigcombinatorics, bigpowerseries, bigmatrix → bigeigen}`, each tier lifting the
   `int64` overflow ceiling of its `core`/`ratpoly`-based counterpart; `doubledouble`
-  and `constants` sit alongside on `core`/`bigfloat`.
+  and `constants` sit alongside on `core`/`bigfloat`. `bigratpoly` additionally roots
+  an **algebraic bignum cluster**: `bigresultant`, `bigalgnum → bigalgpoly`, and
+  `bigfactor` each depend only on `bigratpoly` (no `bigmatrix`); `bigfrobenius`
+  additionally needs `bigmatrix` (its invariant factors come from the Smith normal
+  form computed there); `bigsplitfield` sits on top of **all six** — it is the
+  unbounded mirror of the `resultant/algnum/algpoly/factor/frobenius/splitfield`
+  chain that `jordan`'s Tier 3 (`jordan_form_bignum`) consumes to build splitting
+  fields no `int64` arithmetic can reach, e.g. the degree-6 splitting field of
+  `x^3 − 2`.
 - **Differential equations** — `ode` builds on `powerseries`; `dde`/`dae`/`pde`/
   `perturbation` build on `ode`/`powerseries`/`ratpoly`; `sde`/`mcmc`/`montecarlo`
   build on the counter-based `rng`.

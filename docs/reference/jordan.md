@@ -31,7 +31,10 @@ import nimblecas.jordan;
 Depends on [`core`](core.md), [`matrix`](matrix.md), [`ratpoly`](ratpoly.md),
 [`roots`](roots.md), [`eigen`](eigen.md), [`factor`](factor.md),
 [`algnum`](algnum.md) and [`splitfield`](splitfield.md) (the Tier-3 general
-splitting field).
+splitting field), plus `bigint`, [`bigrational`](bigrational.md),
+[`bigratpoly`](bigratpoly.md), [`bigalgnum`](bigalgnum.md), and
+[`bigsplitfield`](bigsplitfield.md) (the Tier-3 bignum splitting field
+`jordan_form_bignum` builds on).
 
 ## Honesty boundary — exact, extension, or honest refusal
 
@@ -149,7 +152,63 @@ three tiers; only the *reach* of Tier 3 is bounded by the `int64` substrate.
 > **Substrate note.** This bound is a property of the `int64`-backed `Rational`
 > arithmetic the extension is built on, **not** of the algorithm: the same
 > `splitting_field → compute_groups → assemble → verify` path over a bignum-backed
-> rational would extend Tier 3's reach without any change to `jordan_form`'s logic.
+> rational extends Tier 3's reach without any change to `jordan_form`'s logic — this is
+> exactly what `jordan_form_bignum` below **realizes**.
+
+## Tier 3 (bignum) — the general splitting field, over the UNBOUNDED rationals
+
+`jordan_form_bignum(A)` / `jordan_form_bignum(A, max_field_degree)` is the
+**arbitrary-precision mirror** of `jordan_form`'s general splitting-field path
+(Tier 3 above). It builds the splitting field of the characteristic
+polynomial's non-linear irreducible factors on `BigRational` via
+[`nimblecas.bigsplitfield`](bigsplitfield.md) instead of the `int64`
+[`nimblecas.splitfield`](splitfield.md), so it **never** fails with
+`MathError::overflow` from the splitting-field construction — that is exactly
+the ceiling this tier removes.
+
+```cpp
+struct BigAlgebraicJordan {
+    BigNumberField field;
+    std::vector<std::vector<BigAlgebraicNumber>> jordan;     // J, n x n over `field`
+    std::vector<std::vector<BigAlgebraicNumber>> transform;  // P, n x n over `field`
+};
+
+[[nodiscard]] auto jordan_form_bignum(const Matrix& a) -> Result<BigAlgebraicJordan>;
+[[nodiscard]] auto jordan_form_bignum(const Matrix& a, std::int64_t max_field_degree)
+    -> Result<BigAlgebraicJordan>;
+```
+
+The single-argument overload uses `kDefaultMaxSplittingFieldDegree` (12), same
+as `jordan_form`. The **characteristic polynomial and its `Q`-factorization
+are still computed on the `int64` tier** — their coefficients are small,
+bounded by `A`'s own entries, so overflow does not strike there. Overflow only
+ever struck *later*, inside the splitting-field arithmetic (Trager norms,
+primitive-element multiplication matrices), which is precisely the step this
+tier moves onto `BigRational`. Only the non-linear irreducible factors are
+lifted to `BigRationalPoly` for `bigsplitfield::splitting_field`; `A` and the
+rational eigenvalues are then embedded into the one common field, and the
+**same** `compute_groups → assemble → verify` pipeline that Tiers 2/3 use runs
+again, this time instantiated with `S = BigAlgebraicNumber`.
+
+**Headline.** The companion matrix of `x^3 − 2` — which the `int64`
+`jordan_form` must refuse (its degree-6 splitting field `Q(2^{1/3}, ω)`
+overflows `int64`, see the Tier 3 example above) — **diagonalizes exactly**
+under `jordan_form_bignum`: `J = diag(r1, r2, r3)` with each `ri^3 == 2`,
+`A*P == P*J` verified over `Q(2^{1/3}, ω)` (see the
+`cubic_splitting_field_bignum_diagonalizes` test).
+
+Fails with:
+
+- `domain_error` — `A` is not square or is `0x0`, **or** the characteristic
+  polynomial splits over `Q` (no extension is needed — use
+  `rational_jordan_form` instead);
+- `not_implemented` — the bignum splitting field would exceed
+  `max_field_degree` at some point, or one of `bigsplitfield`'s own internal
+  budgets (Trager's shift search, the primitive-element search,
+  `factor_over_Q`'s budget) is exceeded;
+- `overflow` — **only** from the `int64` `characteristic_polynomial` /
+  `factor_over_Q` pre-pass, **never** from the splitting-field construction
+  itself.
 
 ## Tier 0 — `jordan_structure`: the Segre characteristic over `Q` alone, no extension field
 
@@ -220,6 +279,9 @@ factor at multiplicity 2, which is Tier-3 `not_implemented` for `jordan_form`
 | `AlgebraicJordan` | `struct { NumberField field; vector<vector<AlgebraicNumber>> jordan; vector<vector<AlgebraicNumber>> transform; }` | Tier 2 result: `J` and `P` over `field = Q(alpha)`, with `A*P == P*J` over the field, `P` invertible. |
 | `jordan_form` | `auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>` | Tier 2/3. Single quadratic extension (Tier 2), else the general splitting field capped at `kDefaultMaxSplittingFieldDegree = 12` (Tier 3). Char poly splitting over `Q` (or 0×0, or non-square) ⇒ `domain_error`; splitting-field envelope exceeded ⇒ `not_implemented`; `int64` overflow propagated. |
 | `jordan_form` (capped) | `auto jordan_form(const Matrix& a, std::int64_t max_field_degree) -> Result<AlgebraicJordan>` | As above, with a caller-chosen Tier-3 splitting-field degree cap in place of the default 12. |
+| `BigAlgebraicJordan` | `struct { BigNumberField field; vector<vector<BigAlgebraicNumber>> jordan; vector<vector<BigAlgebraicNumber>> transform; }` | Tier 3 (bignum) result: `J` and `P` over the **unbounded** `field = BigNumberField`, with `A*P == P*J` over the field, `P` invertible. |
+| `jordan_form_bignum` | `auto jordan_form_bignum(const Matrix& a) -> Result<BigAlgebraicJordan>` | Tier 3, over the unbounded splitting field built by [`bigsplitfield`](bigsplitfield.md) — **never** overflows building the field itself (e.g. the companion matrix of `x^3 − 2`, which the `int64` `jordan_form` must refuse). Char poly splitting over `Q` (or 0×0, or non-square) ⇒ `domain_error`; bignum splitting-field envelope exceeded ⇒ `not_implemented`; `overflow` only from the `int64` characteristic-polynomial/`factor_over_Q` pre-pass. |
+| `jordan_form_bignum` (capped) | `auto jordan_form_bignum(const Matrix& a, std::int64_t max_field_degree) -> Result<BigAlgebraicJordan>` | As above, with a caller-chosen Tier-3 splitting-field degree cap in place of the default 12. |
 | `JordanFactorStructure` / `JordanStructure` / `jordan_structure` | see above | Tier 0. Exact-over-`Q` Segre characteristic for **any** square rational matrix; no extension field ever built. |
 
 ## Error model
@@ -231,6 +293,9 @@ factor at multiplicity 2, which is Tier-3 `not_implemented` for `jordan_form`
 | `jordan_form`: characteristic polynomial splits over `Q` (no extension needed) | `MathError::domain_error` |
 | `jordan_form`: 0×0 input (no eigenvalues, no field) | `MathError::domain_error` |
 | `jordan_form`: Tier-3 splitting field would exceed `max_field_degree`, or any `splitfield` internal budget (Trager shift search, primitive-element search) is exhausted | `MathError::not_implemented` (propagated from `splitfield`) |
+| `jordan_form_bignum`: 0×0 input, non-square input, or characteristic polynomial splits over `Q` (no extension needed) | `MathError::domain_error` |
+| `jordan_form_bignum`: bignum splitting field would exceed `max_field_degree`, or any `bigsplitfield` internal budget (Trager shift search, primitive-element search, `factor_over_Q` budget) is exhausted | `MathError::not_implemented` (propagated from `bigsplitfield`) |
+| `jordan_form_bignum`: `int64` overflow in the `characteristic_polynomial` / `factor_over_Q` pre-pass (never in the splitting-field construction itself) | `MathError::overflow` |
 | `jordan_structure`: the divisibility or partition-sum Rule-32 guard trips (unreachable for correct exact arithmetic) | `MathError::domain_error` |
 | `jordan_structure`: propagated `characteristic_polynomial` / `factor_over_Q` errors (e.g. `factor_over_Q`'s Kronecker search exceeding its divisor-tuple budget) | `MathError::not_implemented` (or whatever is propagated) |
 | `int64` numerator/denominator overflow in the exact arithmetic (any of the three functions) | `MathError::overflow` |
@@ -275,6 +340,12 @@ auto e = jordan_form(C);   // x^3-2 splits in the degree-6 field Q(2^{1/3}, w); 
                            // Rational arithmetic overflows -> honest not_implemented / overflow.
                            // jordan_structure(C) still returns the exact Segre data over Q.
 
+// Tier 3 (bignum) — the SAME companion matrix C, exact this time: no int64 ceiling.
+auto f = jordan_form_bignum(C).value();
+// f.field.degree() == 6                             -- Q(2^{1/3}, w), built on BigRational
+// f.jordan == diag(r1, r2, r3), each ri^3 == 2       -- three simple, pairwise-distinct roots
+// A * f.transform == f.transform * f.jordan          -- verified exactly over the bignum field
+
 // Tier 0 — jordan_structure answers the SAME rotation Tier 2 needed Q(i) for,
 // entirely over Q: char poly x^2+1 is irreducible, one degree-2 factor,
 // multiplicity 1, and (i, -i) are each simple => block_sizes {1}. No field built.
@@ -299,6 +370,9 @@ auto s = jordan_structure(R).value();
 - [`nimblecas.splitfield`](splitfield.md) — the general splitting-field construction
   (Trager factoring, root adjunction) that powers Tier 3, and whose `int64`-Rational
   envelope bounds Tier 3's reach.
+- [`nimblecas.bigsplitfield`](bigsplitfield.md) — the unbounded, overflow-free mirror
+  of `splitfield` that `jordan_form_bignum` (Tier 3, bignum) builds its splitting
+  field on; removes Tier 3's `int64` ceiling entirely.
 - [`nimblecas.matrix`](matrix.md) / [`nimblecas.ratpoly`](ratpoly.md) — the exact
   `Rational` matrix and `Q[x]` polynomial substrate.
 - [Documentation hub](../Index.md)
