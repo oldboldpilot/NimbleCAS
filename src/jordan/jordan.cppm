@@ -68,6 +68,11 @@ import nimblecas.eigen;
 import nimblecas.factor;
 import nimblecas.algnum;
 import nimblecas.splitfield;
+import nimblecas.bigint;
+import nimblecas.bigrational;
+import nimblecas.bigratpoly;
+import nimblecas.bigalgnum;
+import nimblecas.bigsplitfield;
 
 export namespace nimblecas {
 
@@ -126,6 +131,44 @@ inline constexpr std::int64_t kDefaultMaxSplittingFieldDegree = 12;
 [[nodiscard]] auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>;
 [[nodiscard]] auto jordan_form(const Matrix& a, std::int64_t max_field_degree)
     -> Result<AlgebraicJordan>;
+
+// ---------------------------------------------------------------------------
+// TIER 3 (bignum) result — Jordan form and transform over the UNBOUNDED splitting field.
+// ---------------------------------------------------------------------------
+// The arbitrary-precision mirror of AlgebraicJordan: field is a BigNumberField (BigRational
+// coefficients, no int64 ceiling), and jordan (J) / transform (P) are dense row-major
+// matrices of BigAlgebraicNumber with A*P == P*J over `field` exactly and P invertible. This
+// tier exists so that splitting fields whose construction OVERFLOWS the int64 AlgebraicJordan
+// tier -- the headline case being the degree-6 splitting field of x^3 - 2 -- still yield an
+// exact Jordan form. Every entry is an exact element of the field, never a float.
+struct BigAlgebraicJordan {
+    BigNumberField field;
+    std::vector<std::vector<BigAlgebraicNumber>> jordan;     // J, n x n over `field`
+    std::vector<std::vector<BigAlgebraicNumber>> transform;  // P, n x n over `field`
+};
+
+// TIER 3 over the UNBOUNDED rationals. The bignum mirror of jordan_form's general splitting-
+// field path: it builds the splitting field of the characteristic polynomial's non-linear
+// irreducible factors on BigRational via nimblecas.bigsplitfield, so it NEVER fails with
+// overflow. A matrix whose eigenvalue splitting field the int64 jordan_form cannot construct
+// without saturating int64 -- e.g. the companion matrix of x^3 - 2, whose splitting field has
+// degree 6 -- is handled exactly here. The characteristic polynomial and its Q-factorization
+// are computed on the int64 tier (their coefficients are small, bounded by the entries of A --
+// overflow strikes only later, inside the splitting-field arithmetic), and only the non-linear
+// factors are lifted to BigRationalPoly for the bignum splitting_field; A and the rational
+// eigenvalues are then embedded into that one common field and the SAME
+// compute_groups -> assemble -> verify pipeline (S = BigAlgebraicNumber) produces J and P.
+// The single-argument overload uses kDefaultMaxSplittingFieldDegree. Fails with:
+//   * domain_error — A is not square or is 0x0, OR the char poly splits over Q (no extension
+//     is needed — use rational_jordan_form);
+//   * not_implemented — the bignum splitting field would exceed `max_field_degree` at some
+//     point, or one of bigsplitfield's own internal budgets (Trager's shift search, the
+//     primitive-element search, factor_over_Q's budget) is exceeded;
+//   * overflow — ONLY from the int64 characteristic_polynomial / factor_over_Q pre-pass, never
+//     from the splitting-field construction itself (that is the ceiling this tier removes).
+[[nodiscard]] auto jordan_form_bignum(const Matrix& a) -> Result<BigAlgebraicJordan>;
+[[nodiscard]] auto jordan_form_bignum(const Matrix& a, std::int64_t max_field_degree)
+    -> Result<BigAlgebraicJordan>;
 
 // ---------------------------------------------------------------------------
 // jordan_structure — the exact-over-Q Jordan block STRUCTURE (Segre characteristic),
@@ -896,6 +939,124 @@ auto jordan_form(const Matrix& a, std::int64_t max_field_degree) -> Result<Algeb
     }
 
     return AlgebraicJordan{field, std::move(jmat), std::move(pmat)};
+}
+
+// --- TIER 3 (bignum): over the UNBOUNDED splitting field --------------------
+
+auto jordan_form_bignum(const Matrix& a) -> Result<BigAlgebraicJordan> {
+    return jordan_form_bignum(a, kDefaultMaxSplittingFieldDegree);
+}
+
+auto jordan_form_bignum(const Matrix& a, std::int64_t max_field_degree)
+    -> Result<BigAlgebraicJordan> {
+    if (!a.is_square()) {
+        return make_error<BigAlgebraicJordan>(MathError::domain_error);
+    }
+    const std::size_t n = a.rows();
+    if (n == 0) {
+        return make_error<BigAlgebraicJordan>(MathError::domain_error);
+    }
+
+    // Rational -> BigRational lift (a valid Rational has a positive denominator, so make
+    // never actually fires division_by_zero; the Result is threaded for a uniform surface).
+    auto to_big = [](const Rational& q) -> Result<BigRational> {
+        return BigRational::make(BigInt::from_i64(q.numerator()), BigInt::from_i64(q.denominator()));
+    };
+
+    // Char poly and its Q-factorization on the INT64 tier: their coefficients are small
+    // (bounded by A's entries), so overflow does not strike here -- it strikes only later,
+    // inside the splitting-field arithmetic, which is exactly what this bignum tier removes.
+    auto charpoly = characteristic_polynomial(a);
+    if (!charpoly) {
+        return make_error<BigAlgebraicJordan>(charpoly.error());
+    }
+    auto factors = factor_over_Q(*charpoly);
+    if (!factors) {
+        return make_error<BigAlgebraicJordan>(factors.error());
+    }
+
+    // The non-linear irreducible factors (degree >= 2), monic, lifted to BigRationalPoly.
+    // No non-linear factor => the char poly splits over Q and no extension is needed.
+    std::vector<BigRationalPoly> nonlinear;
+    for (const auto& [f, mult] : *factors) {
+        (void)mult;
+        if (f.degree() >= 2) {
+            auto fm = f.monic();
+            if (!fm) {
+                return make_error<BigAlgebraicJordan>(fm.error());
+            }
+            nonlinear.push_back(BigRationalPoly::from_ratpoly(*fm));
+        }
+    }
+    if (nonlinear.empty()) {
+        return make_error<BigAlgebraicJordan>(MathError::domain_error);  // splits over Q
+    }
+
+    // Build the splitting field on the UNBOUNDED rationals -- the step the int64
+    // AlgebraicJordan tier cannot complete without overflow for cases like x^3 - 2.
+    auto split = splitting_field(std::span<const BigRationalPoly>(nonlinear), max_field_degree);
+    if (!split) {
+        // Honest propagation (Rule 32): a not_implemented here is NOT fabricated into a
+        // plausible answer. jordan_structure remains the exact-over-Q block-structure fallback.
+        return make_error<BigAlgebraicJordan>(split.error());
+    }
+    const BigNumberField field = std::move(split->field);
+    const BigAlgebraicNumber zero = field.zero();
+    const BigAlgebraicNumber one = field.one();
+
+    // A embedded into the splitting field (each rational entry lifted to BigRational).
+    Mat<BigAlgebraicNumber> amat(n, Vec<BigAlgebraicNumber>(n, zero));
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            auto be = to_big(a.at(i, j));
+            if (!be) {
+                return make_error<BigAlgebraicJordan>(be.error());
+            }
+            amat[i][j] = field.from_bigrational(*be);
+        }
+    }
+
+    // The full DISTINCT eigenvalue list: the rational roots rebuilt in `field`, then every
+    // non-linear factor's harvested roots (already IN `field`) -- each listed exactly once,
+    // exactly as splitting_field_jordan_form does (compute_groups recovers each eigenvalue's
+    // ENTIRE generalized eigenspace from the nullity growth of N = A - lambda*I in one call).
+    std::vector<BigAlgebraicNumber> eigenvalues;
+    auto roots = rational_roots(*charpoly);
+    if (!roots) {
+        return make_error<BigAlgebraicJordan>(roots.error());
+    }
+    for (const auto& [r, mult] : *roots) {
+        (void)mult;
+        auto br = to_big(r);
+        if (!br) {
+            return make_error<BigAlgebraicJordan>(br.error());
+        }
+        eigenvalues.push_back(field.from_bigrational(*br));
+    }
+    for (const auto& [factor_poly, harvested] : split->roots) {
+        (void)factor_poly;
+        for (const BigAlgebraicNumber& root : harvested) {
+            eigenvalues.push_back(root);
+        }
+    }
+
+    auto groups = compute_groups(amat, eigenvalues, n, zero, one);
+    if (!groups) {
+        return make_error<BigAlgebraicJordan>(groups.error());
+    }
+    auto [jmat, pmat] = assemble(*groups, n, zero, one);
+
+    auto ok = verify(amat, jmat, pmat, n, zero, one);
+    if (!ok) {
+        return make_error<BigAlgebraicJordan>(ok.error());
+    }
+    if (!*ok) {
+        // Unreachable for correct exact arithmetic; an honest guard (Rule 32) so a P that
+        // fails the A*P == P*J / invertibility certificate is never returned.
+        return make_error<BigAlgebraicJordan>(MathError::domain_error);
+    }
+
+    return BigAlgebraicJordan{field, std::move(jmat), std::move(pmat)};
 }
 
 // --- jordan_structure: exact-over-Q Segre characteristic, no extension field --------

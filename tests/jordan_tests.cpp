@@ -11,10 +11,17 @@ import nimblecas.core;
 import nimblecas.ratpoly;
 import nimblecas.matrix;
 import nimblecas.algnum;
+import nimblecas.bigint;
+import nimblecas.bigrational;
+import nimblecas.bigalgnum;
 import nimblecas.jordan;
 import nimblecas.testing;
 
 using nimblecas::AlgebraicNumber;
+using nimblecas::BigAlgebraicNumber;
+using nimblecas::BigInt;
+using nimblecas::BigNumberField;
+using nimblecas::BigRational;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::NumberField;
@@ -102,6 +109,79 @@ using AlgMat = std::vector<std::vector<AlgebraicNumber>>;
 // eigenvectors: A*P == P*J makes each column an eigenvector of its block's eigenvalue, and a
 // set of nonzero eigenvectors for DISTINCT eigenvalues is automatically linearly independent.
 [[nodiscard]] auto columns_all_nonzero(const AlgMat& p) -> bool {
+    const std::size_t n = p.size();
+    for (std::size_t j = 0; j < n; ++j) {
+        bool nonzero = false;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!p[i][j].is_zero()) {
+                nonzero = true;
+                break;
+            }
+        }
+        if (!nonzero) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// --- helpers for exact linear algebra over the UNBOUNDED bignum splitting field ----
+// The BigAlgebraicNumber mirror of the AlgMat helpers above, used to independently re-check
+// A*P == P*J for jordan_form_bignum without trusting the module's internal verify.
+
+using BigAlgMat = std::vector<std::vector<BigAlgebraicNumber>>;
+
+[[nodiscard]] auto big_from_rational(const Rational& q, const BigNumberField& field)
+    -> BigAlgebraicNumber {
+    return field.from_bigrational(
+        BigRational::make(BigInt::from_i64(q.numerator()), BigInt::from_i64(q.denominator())).value());
+}
+
+[[nodiscard]] auto big_embed(const Matrix& a, const BigNumberField& field) -> BigAlgMat {
+    BigAlgMat out;
+    out.reserve(a.rows());
+    for (std::size_t i = 0; i < a.rows(); ++i) {
+        std::vector<BigAlgebraicNumber> row;
+        row.reserve(a.cols());
+        for (std::size_t j = 0; j < a.cols(); ++j) {
+            row.push_back(big_from_rational(a.at(i, j), field));
+        }
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+[[nodiscard]] auto big_mul(const BigAlgMat& x, const BigAlgMat& y) -> BigAlgMat {
+    const std::size_t n = x.size();
+    const BigAlgebraicNumber zero = x.front().front().field().zero();
+    BigAlgMat out(n, std::vector<BigAlgebraicNumber>(n, zero));
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            BigAlgebraicNumber acc = zero;
+            for (std::size_t k = 0; k < n; ++k) {
+                acc = acc.add(x[i][k].multiply(y[k][j]).value()).value();
+            }
+            out[i][j] = acc;
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] auto big_eq(const BigAlgMat& x, const BigAlgMat& y) -> bool {
+    if (x.size() != y.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        for (std::size_t j = 0; j < x[i].size(); ++j) {
+            if (!x[i][j].is_equal(y[i][j])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] auto big_columns_all_nonzero(const BigAlgMat& p) -> bool {
     const std::size_t n = p.size();
     for (std::size_t j = 0; j < n; ++j) {
         bool nonzero = false;
@@ -488,6 +568,72 @@ auto main() -> int {
                   }
                   t.expect(s->factors.front().block_sizes == std::vector<std::int64_t>{1},
                            "block_sizes {1} (diagonalizable over the splitting field)");
+              })
+        // -------------------------------------------------- Tier 3 (bignum) ----
+        .test("cubic_splitting_field_bignum_diagonalizes",
+              [](TestContext& t) {
+                  // Companion of x^3 - 2 -- the SAME matrix the int64 jordan_form refuses
+                  // (degree_three_factor_not_implemented above) because building its degree-6
+                  // splitting field Q(cbrt2, omega) overflows int64. jordan_form_bignum builds
+                  // that field on BigRational instead, so it COMPLETES: J is diagonal with the
+                  // three cube roots of 2 (each simple, so block size 1), and A*P == P*J holds
+                  // exactly over the bignum field.
+                  const auto A = mat({{ri(0), ri(0), ri(2)},
+                                      {ri(1), ri(0), ri(0)},
+                                      {ri(0), ri(1), ri(0)}});
+                  auto jf = nimblecas::jordan_form_bignum(A);
+                  const bool ok = jf.has_value();
+                  t.expect(ok, "jordan_form_bignum(companion x^3-2) succeeds where int64 refuses");
+                  if (!ok) {
+                      return;
+                  }
+                  const auto& r = *jf;
+                  t.expect(r.field.degree() == 6, "splitting field Q(cbrt2, omega) has degree 6");
+                  t.expect(r.jordan.size() == 3 && r.transform.size() == 3, "3x3 J and P");
+                  if (r.jordan.size() != 3) {
+                      return;
+                  }
+
+                  // J is diagonal (three simple eigenvalues) and each diagonal entry cubes to 2.
+                  const BigAlgebraicNumber two = big_from_rational(ri(2), r.field);
+                  bool off_zero = true;
+                  bool diag_cubes_to_two = true;
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      for (std::size_t j = 0; j < 3; ++j) {
+                          if (i != j && !r.jordan[i][j].is_zero()) {
+                              off_zero = false;
+                          }
+                      }
+                      const BigAlgebraicNumber cube = r.jordan[i][i].pow(3).value();
+                      if (!cube.is_equal(two)) {
+                          diag_cubes_to_two = false;
+                      }
+                  }
+                  t.expect(off_zero, "J is diagonal (all eigenvalues simple)");
+                  t.expect(diag_cubes_to_two, "each diagonal eigenvalue cubes to 2");
+
+                  // The three eigenvalues are pairwise distinct (the three genuine cube roots).
+                  t.expect(!r.jordan[0][0].is_equal(r.jordan[1][1]) &&
+                               !r.jordan[0][0].is_equal(r.jordan[2][2]) &&
+                               !r.jordan[1][1].is_equal(r.jordan[2][2]),
+                           "the three cube roots of 2 are pairwise distinct");
+
+                  // The correctness property over the bignum field, re-derived here.
+                  const BigAlgMat ap = big_mul(big_embed(A, r.field), r.transform);
+                  const BigAlgMat pj = big_mul(r.transform, r.jordan);
+                  t.expect(big_eq(ap, pj), "A*P == P*J over the bignum splitting field");
+                  t.expect(big_columns_all_nonzero(r.transform),
+                           "P columns are nonzero eigenvectors (P invertible)");
+              })
+        .test("bignum_rational_split_is_domain_error",
+              [](TestContext& t) {
+                  // A matrix whose char poly SPLITS over Q needs no extension: jordan_form_bignum
+                  // refuses it as domain_error (use rational_jordan_form), symmetric with the
+                  // int64 tier. A = diag(2, 3): char poly (x-2)(x-3).
+                  const auto A = mat({{ri(2), ri(0)}, {ri(0), ri(3)}});
+                  auto jf = nimblecas::jordan_form_bignum(A);
+                  t.expect(!jf.has_value() && jf.error() == MathError::domain_error,
+                           "char poly splits over Q => domain_error");
               })
         .test("two_distinct_quadratics_splitting_field",
               [](TestContext& t) {

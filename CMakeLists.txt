@@ -946,7 +946,9 @@ target_sources(nimblecas_jordan PUBLIC
   FILE_SET CXX_MODULES FILES src/jordan/jordan.cppm)
 target_link_libraries(nimblecas_jordan
   PUBLIC nimblecas_splitfield nimblecas_algnum nimblecas_eigen nimblecas_factor nimblecas_roots
-         nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial nimblecas_core std_module)
+         nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+         nimblecas_bigsplitfield nimblecas_bigalgnum nimblecas_bigratpoly nimblecas_bigrational
+         nimblecas_bigint nimblecas_core std_module)
 
 # ---- nimblecas.probmethod : the Probabilistic Method — existence proofs, LLL, Ramsey (§7.18) ----
 add_library(nimblecas_probmethod STATIC)
@@ -1313,6 +1315,7 @@ add_executable(jordan_tests tests/jordan_tests.cpp)
 target_link_libraries(jordan_tests
   PRIVATE nimblecas_jordan nimblecas_splitfield nimblecas_algnum nimblecas_eigen nimblecas_factor
           nimblecas_roots nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
+          nimblecas_bigsplitfield nimblecas_bigalgnum nimblecas_bigrational nimblecas_bigint
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME jordan_tests COMMAND jordan_tests)
 
