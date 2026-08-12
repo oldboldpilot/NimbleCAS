@@ -61,7 +61,8 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.parallel` | [parallel.md](reference/parallel.md) | Deterministic fork–join over TBB/PPL/serial; order-preserving tree combinators. |
 | `nimblecas.taskdag` | [taskdag.md](reference/taskdag.md) | Deterministic **single-node** task-DAG scheduler over `parallel`: an acyclic-by-construction `TaskGraph`, wavefront `serial_executor`/`local_parallel_executor` (bit-identical outputs), and deterministic error poisoning — a documented backend seam, explicitly **not distributed**. |
 | `nimblecas.simd` | [simd.md](reference/simd.md) | Runtime-dispatched elementwise SIMD kernels (AVX-512 → AVX2 → scalar): `float32` add/mul/axpy/Horner plus deterministic, bit-identical-across-ISAs **double** `exp_into` / `log_into` (≈1 ulp) backing the Monte-Carlo transcendentals. |
-| `nimblecas.gpu` | [gpu.md](reference/gpu.md) | Optional CUDA GPU acceleration (opt-in `-DNIMBLECAS_CUDA=ON`): batch polynomial evaluation on the device, plus a portable Triton kernel. |
+| `nimblecas.gpu` | [gpu.md](reference/gpu.md) | Optional CUDA GPU acceleration (opt-in `-DNIMBLECAS_CUDA=ON`): batch polynomial evaluation, batched matmul/FFT/Black-Scholes, and **`cg_csr`** (a conjugate-gradient solver over CSR sparse matrices — the GPU mirror of the CPU `krylov::cg`), plus portable Triton kernels. |
+| Triton CSR SpMV | [triton-csr-spmv.md](reference/triton-csr-spmv.md) | GPU/Triton mirror of `krylov::csr_matvec` (`python/triton/csr_spmv.py`), with the profiling-gated Feature-7 finding: a correctness-verified numerical mirror (matches `torch.sparse` to machine precision on the RTX 5090), and the reasoned decision **not** to ship a CPU SIMD `csr_matvec` (its fused-fma reduction cannot be bit-identically vectorized by the elementwise-only `nimblecas.simd`). |
 | `nimblecas.polynomial` | [polynomial.md](reference/polynomial.md) | Dense univariate `int64` polynomials: ring ops, gcd, square-free factorization, SIMD batch eval. |
 | `nimblecas.ratpoly` | [ratpoly.md](reference/ratpoly.md) | Exact `Rational` and dense polynomials over `Q[x]`: division-with-remainder, monic Euclidean gcd. |
 | `nimblecas.polyexpr` | [polyexpr.md](reference/polyexpr.md) | Bridge between `Expr` and `Polynomial`; polynomial gcd / square-free factor at the `Expr` level. |
@@ -239,7 +240,7 @@ Tooling, front-end & integration:
 | `nimblecas.webexport` | [webexport.md](reference/webexport.md) | JSON export bridge — serializes plot data + documents to the contract the `web/` front-end renders (the JSON analogue of `svgplot`). |
 | `nimblecas.execdoc` | [execdoc.md](reference/execdoc.md) | Executable document engine (§7.13): runs ` ```nimblecas ` cells over `reader`+`simplify`+`diff`, incremental cache, HTML/MathJax render — a data bridge, honest exact results with captured cell errors. |
 | `nimblecas.webkernel` | [webkernel.md](reference/webkernel.md) | Freestanding `wasm32` compute kernel (clang, no Emscripten) the browser front-end loads for live in-page sampling. See also [WASM build](architecture/wasm-build.md). |
-| `nimblecas_ext` (Python) | [python-bindings.md](reference/python-bindings.md) | nanobind bindings: the `Expr` API, module functions, and `MathError`→exception translation. |
+| `nimblecas_ext` (Python) | [python-bindings.md](reference/python-bindings.md) | nanobind bindings: the `Expr` API, module functions, and `MathError`→exception translation — including the research-grade surface `svd`/`polar`, `daenl` (numerical DAE), `splitfield`, and `evalnum`. |
 
 ## Worked examples
 
