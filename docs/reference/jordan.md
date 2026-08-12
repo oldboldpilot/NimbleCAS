@@ -29,8 +29,9 @@ import nimblecas.jordan;
 ```
 
 Depends on [`core`](core.md), [`matrix`](matrix.md), [`ratpoly`](ratpoly.md),
-[`roots`](roots.md), [`eigen`](eigen.md), [`factor`](factor.md) and
-[`algnum`](algnum.md).
+[`roots`](roots.md), [`eigen`](eigen.md), [`factor`](factor.md),
+[`algnum`](algnum.md) and [`splitfield`](splitfield.md) (the Tier-3 general
+splitting field).
 
 ## Honesty boundary — exact, extension, or honest refusal
 
@@ -45,7 +46,7 @@ tiers (Rule 32 throughout — an **exact, verified** result or an honest
 | :--- | :--- | :--- | :--- |
 | **1** | `rational_jordan_form` | char poly **splits over `Q`** (all eigenvalues rational) | `J`, `P` exact over `Q` |
 | **2** | `jordan_form` | the only non-linear irreducible factor is a **single quadratic** `q(x)` (possibly repeated) | `J`, `P` exact over `Q(alpha) = Q[x]/(q)` |
-| **3** | `jordan_form` | an irreducible factor of **degree ≥ 3**, or **two or more distinct** quadratic factors | `MathError::not_implemented` |
+| **3** | `jordan_form` / `jordan_form(A, max_field_degree)` | an irreducible factor of **degree ≥ 3**, or **two or more distinct** quadratic factors | `J`, `P` exact over the **general splitting field** built by [`splitfield`](splitfield.md) — capped at `max_field_degree` (default 12); honest `not_implemented` / `overflow` when that arithmetic envelope is exceeded |
 
 For **every** returned `(J, P)`, the module **verifies exactly** that
 `A * P == P * J` and that `P` is invertible (its kernel is trivial) *before*
@@ -109,21 +110,46 @@ is an exact residue in `Q(alpha)` — never a floating-point stand-in.
 `[[C, I₂],[0, C]]` with `C = [[0,-1],[1,0]]` → char poly `(x^2+1)^2`, a **defective**
 repeated complex pair whose `J` has one size-2 Jordan block for each of `i` and `−i`.
 
-## Tier 3 — the precise refusal boundary
+## Tier 3 — the general splitting field, bounded by an exact-arithmetic envelope
 
-`jordan_form` returns `MathError::not_implemented` when, and only when, the exact
-factorization of the characteristic polynomial over `Q` contains either
+When the factorization of the characteristic polynomial over `Q` does **not** fit
+the single-quadratic Tier 2 case — because it contains either
 
-1. an irreducible factor of **degree ≥ 3** — a general splitting field, which
-   would require an algebraic extension beyond a single quadratic; or
-2. **two or more distinct** irreducible quadratic factors — even if they happen
-   to share a splitting field, this module does not attempt to unify them into a
-   common `Q(alpha)`, so it refuses rather than risk an unsupported or composite
-   extension.
+1. an irreducible factor of **degree ≥ 3**, or
+2. **two or more distinct** irreducible quadratic factors —
 
-This boundary is deliberately conservative: everything inside it is computed and
-**verified exactly**; everything outside it is refused honestly. No wrong or
-decimalized answer is ever produced.
+`jordan_form` does **not** simply refuse. It builds the **one common splitting
+field** of *every* non-linear factor at once via
+[`splitfield`](splitfield.md)`::splitting_field`, rebuilds every eigenvalue (the
+rational ones and every harvested root of every non-linear factor) as an
+[`AlgebraicNumber`](algnum.md) in that single field, and runs the **same**
+`compute_groups → assemble → verify` pipeline as Tier 2 — so a returned `(J, P)`
+is verified exactly (`A * P == P * J`, `P` invertible) over the extension, just as
+in Tiers 1 and 2.
+
+The splitting-field construction is **capped at `max_field_degree`**
+(`jordan_form(A)` uses `kDefaultMaxSplittingFieldDegree = 12`; the
+`jordan_form(A, max_field_degree)` overload lets the caller raise or lower it).
+The cap exists because the splitting field's degree can grow fast — a quartic with
+Galois group `S₄` needs degree 24 — and because the field is built with **exact
+`int64`-backed `Rational` arithmetic**: Trager's norm/resultant construction and
+the primitive-element search inflate coefficients quickly, so even fields whose
+*degree* is within the cap (e.g. the degree-6 splitting field of `x³ − 2`) can
+exhaust the `int64` numerator/denominator range.
+
+When either bound is hit, `jordan_form` returns an **honest** error —
+`MathError::not_implemented` when `splitting_field`'s degree/budget envelope is
+exceeded, or `MathError::overflow` on an `int64` overflow in the exact arithmetic
+— propagated verbatim from `splitfield`, never fabricated. In every such case
+**`jordan_structure` (Tier 0) remains the exact-over-`Q` fallback**: it needs no
+splitting field and so is unaffected by this envelope. No wrong, unverified, or
+decimalized `(J, P)` is ever produced — the guarantee is identical across all
+three tiers; only the *reach* of Tier 3 is bounded by the `int64` substrate.
+
+> **Substrate note.** This bound is a property of the `int64`-backed `Rational`
+> arithmetic the extension is built on, **not** of the algorithm: the same
+> `splitting_field → compute_groups → assemble → verify` path over a bignum-backed
+> rational would extend Tier 3's reach without any change to `jordan_form`'s logic.
 
 ## Tier 0 — `jordan_structure`: the Segre characteristic over `Q` alone, no extension field
 
@@ -192,7 +218,8 @@ factor at multiplicity 2, which is Tier-3 `not_implemented` for `jordan_form`
 | `RationalJordan` | `struct { Matrix jordan; Matrix transform; }` | Tier 1 result: exact `Q` matrices `J` and `P` with `A*P == P*J`, `P` invertible. |
 | `rational_jordan_form` | `auto rational_jordan_form(const Matrix& a) -> Result<RationalJordan>` | Tier 1. Char poly splits over `Q`. The 0×0 matrix yields empty `J`, `P`. Non-square **or** non-splitting ⇒ `domain_error`; overflow propagated. |
 | `AlgebraicJordan` | `struct { NumberField field; vector<vector<AlgebraicNumber>> jordan; vector<vector<AlgebraicNumber>> transform; }` | Tier 2 result: `J` and `P` over `field = Q(alpha)`, with `A*P == P*J` over the field, `P` invertible. |
-| `jordan_form` | `auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>` | Tier 2/3. Single quadratic extension. Degree-≥3 factor or ≥2 distinct quadratics ⇒ `not_implemented`; char poly splitting over `Q` (or 0×0, or non-square) ⇒ `domain_error`; overflow propagated. |
+| `jordan_form` | `auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>` | Tier 2/3. Single quadratic extension (Tier 2), else the general splitting field capped at `kDefaultMaxSplittingFieldDegree = 12` (Tier 3). Char poly splitting over `Q` (or 0×0, or non-square) ⇒ `domain_error`; splitting-field envelope exceeded ⇒ `not_implemented`; `int64` overflow propagated. |
+| `jordan_form` (capped) | `auto jordan_form(const Matrix& a, std::int64_t max_field_degree) -> Result<AlgebraicJordan>` | As above, with a caller-chosen Tier-3 splitting-field degree cap in place of the default 12. |
 | `JordanFactorStructure` / `JordanStructure` / `jordan_structure` | see above | Tier 0. Exact-over-`Q` Segre characteristic for **any** square rational matrix; no extension field ever built. |
 
 ## Error model
@@ -203,7 +230,7 @@ factor at multiplicity 2, which is Tier-3 `not_implemented` for `jordan_form`
 | `rational_jordan_form`: characteristic polynomial does not split over `Q` | `MathError::domain_error` |
 | `jordan_form`: characteristic polynomial splits over `Q` (no extension needed) | `MathError::domain_error` |
 | `jordan_form`: 0×0 input (no eigenvalues, no field) | `MathError::domain_error` |
-| `jordan_form`: irreducible factor of degree ≥ 3, or ≥ 2 distinct quadratic factors | `MathError::not_implemented` |
+| `jordan_form`: Tier-3 splitting field would exceed `max_field_degree`, or any `splitfield` internal budget (Trager shift search, primitive-element search) is exhausted | `MathError::not_implemented` (propagated from `splitfield`) |
 | `jordan_structure`: the divisibility or partition-sum Rule-32 guard trips (unreachable for correct exact arithmetic) | `MathError::domain_error` |
 | `jordan_structure`: propagated `characteristic_polynomial` / `factor_over_Q` errors (e.g. `factor_over_Q`'s Kronecker search exceeding its divisor-tuple budget) | `MathError::not_implemented` (or whatever is propagated) |
 | `int64` numerator/denominator overflow in the exact arithmetic (any of the three functions) | `MathError::overflow` |
@@ -239,11 +266,14 @@ auto k = jordan_form(R).value();
 // k.field      == Q[x]/(x^2 + 1)
 // k.jordan     == diag(i, -i),  k.transform == [[i,-i],[1,1]]   over Q(i)
 
-// Tier 3 — an honest refusal.
+// Tier 3 — the general splitting-field path, honestly bounded by the int64 substrate.
 auto C = mat({{ri(0), ri(0), ri(2)},                // companion of x^3 - 2
               {ri(1), ri(0), ri(0)},
               {ri(0), ri(1), ri(0)}});
-auto e = jordan_form(C);                             // error == MathError::not_implemented
+auto e = jordan_form(C);   // x^3-2 splits in the degree-6 field Q(2^{1/3}, w); that degree
+                           // is within the default cap of 12, but building it in int64
+                           // Rational arithmetic overflows -> honest not_implemented / overflow.
+                           // jordan_structure(C) still returns the exact Segre data over Q.
 
 // Tier 0 — jordan_structure answers the SAME rotation Tier 2 needed Q(i) for,
 // entirely over Q: char poly x^2+1 is irreducible, one degree-2 factor,
@@ -265,7 +295,10 @@ auto s = jordan_structure(R).value();
 - [`nimblecas.eigen`](eigen.md) — the characteristic polynomial (reused here) and
   the exact rational eigenvalues.
 - [`nimblecas.factor`](factor.md) — factorization over `Q`, used to detect the
-  quadratic factor and the out-of-scope high-degree / multiple-quadratic cases.
+  quadratic factor and route the high-degree / multiple-quadratic cases to Tier 3.
+- [`nimblecas.splitfield`](splitfield.md) — the general splitting-field construction
+  (Trager factoring, root adjunction) that powers Tier 3, and whose `int64`-Rational
+  envelope bounds Tier 3's reach.
 - [`nimblecas.matrix`](matrix.md) / [`nimblecas.ratpoly`](ratpoly.md) — the exact
   `Rational` matrix and `Q[x]` polynomial substrate.
 - [Documentation hub](../Index.md)
