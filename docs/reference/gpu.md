@@ -76,6 +76,11 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `fft_batch(in, batch, n)` | Batched FFT (power-of-two length). |
 | `black_scholes_batch(opts)` | **Batched Black-Scholes-Merton pricing** — one thread per `BsOption`, grid-stride. Mirrors `pricing::black_scholes_price` to FP tolerance. |
 | `black_scholes_batch_graphed(opts, iterations)` | Same result, captured into a **CUDA graph** and replayed `iterations` times (a fixed-shape risk sweep); the replay is bit-identical to the direct launch. |
+| `monte_carlo_european_batch(opts, paths, seed)` | **Batched reproducible European Monte Carlo** — price ± standard error per option; bit-identical Threefry draws vs the CPU counter RNG, fixed-segment index-order reduction, result a pure function of (opts, paths, seed). Equals `pricing::monte_carlo_european` to 1e-6 (documented FP-reassociation/device-libm bound), never bit-for-bit. CPU fallback: `monte_carlo_european_parallel`. |
+| `black_scholes_greeks_batch(opts)` | Batched analytic BS Greeks (price/delta/gamma/vega/theta/rho), mirror of `pricing::black_scholes_greeks` incl. the degenerate `T==0`/`σ==0` branch; matches the CPU to 1e-9 relative. CPU fallback: the CPU closed form. |
+| `black_scholes_extended_greeks_batch(opts)` | Batched 13-field extended Greeks, mirror of `pricing::black_scholes_extended_greeks` **including** its central-finite-difference charm/color/veta/vera; matches the CPU to 1e-7. CPU fallback: the CPU implementation. |
+| `strategy_payoff_grid(legs, grid)` / `strategy_pnl_grid(legs, grid)` | **Exact piecewise-linear strategy sweep** — aggregate expiry payoff / P&L of an `optstrat` leg bag at every grid price; non-contracted device arithmetic reproduces the CPU double evaluation bit-for-bit (validated to 1e-12, expected equal). CPU fallback: `OptionStrategy::payoff_at`/`pnl_at`. |
+| `futures_pnl_grid(legs, grid)` | Exact linear futures-strategy sweep, mirror of `FuturesStrategy::pnl_at_uniform`, same bit-equality contract. CPU fallback: the CPU evaluation. |
 
 All eight numeric kernels plus the batched Black-Scholes pricer execute and pass on the
 **RTX PRO 6000 Blackwell** and **RTX 5090** (sm_120, CUDA 13.2, nvcc `-arch=native`); see
@@ -101,6 +106,48 @@ a few transcendentals per option cannot saturate a Blackwell part, so the GPU pa
 it only at large batch sizes, and the CUDA-graph replay (visible as repeated
 `cudaGraphLaunch` in the `nsys` timeline) is what removes per-launch overhead when the same
 grid is re-priced many times.
+
+### Derivatives batch pricing: reproducible Monte Carlo and batch Greeks
+
+`monte_carlo_european_batch` prices a batch of European options by device path simulation.
+Its honesty boundary is STATISTICAL: each estimate is returned with its standard error, and
+the reproducibility contract of the CPU engines is preserved on the device — the kernel
+ports `nimblecas.rng`'s Threefry-2x64-20 counter core bit-for-bit (pure integer ops), draws
+path `i` from counter index `i` under `key = splitmix64(seed)` exactly like
+`pricing::monte_carlo_european`, decomposes the path range into FIXED 4096-path segments
+summed serially in index order, and folds segment partials with a fixed-shape 256-thread
+reduction. The result is therefore a pure function of `(opts, paths, seed)` — independent
+of grid/block geometry, identical across repeated calls — and equals the CPU pricer to a
+DOCUMENTED 1e-6 absolute bound (sources of divergence: summation association order, plus
+last-bit differences of the device `exp`/`log` against the CPU's `simd::exp`/`simd::log_one`
+in the ~5 % Acklam tail region; the central ~95 % of inverse-normal values are bit-identical
+`fma` chains). It is validated against BOTH the CPU MC (1e-6) and the Black-Scholes closed
+form (4 standard errors). `black_scholes_greeks_batch` and
+`black_scholes_extended_greeks_batch` are elementwise closed-form mirrors of the CPU
+`pricing` functions (the extended set reproduces the CPU's central-finite-difference
+charm/color/veta/vera rather than re-deriving them), validated to 1e-9 and 1e-7.
+
+**Fallback contract (new with these entry points):** when NO CUDA device is present, these
+functions compute the result on the CPU via `nimblecas.pricing` and return real values —
+the GPU remains a mirror, never a gatekeeper. A CUDA failure on a machine that has a device
+is still an honest `MathError::gpu_error`. With `-DNIMBLECAS_CUDA=OFF` the module is not
+built at all (unchanged).
+### Strategy payoff / P&L grid sweeps (exactly reproducible)
+
+`strategy_payoff_grid` / `strategy_pnl_grid` sweep an `optstrat` leg bag (calls, puts,
+underlying — pass `strategy.legs()`) across a grid of terminal prices, one thread per grid
+point, legs summed in span order; `futures_pnl_grid` does the same for a `futures` leg bag
+under uniform settlement. Unlike the statistical Monte Carlo path, this is an
+EXACTLY-REPRODUCIBLE computation: the expiry P&L is exactly piecewise-linear (optstrat's
+honesty boundary), the kernels use only non-contracted IEEE-754 double intrinsics
+(`__dadd_rn`/`__dsub_rn`/`__dmul_rn`/`fmax`) in the same operation order as
+`OptionStrategy::payoff_at`/`pnl_at` and `FuturesStrategy::pnl_at_uniform`. Those CPU
+accumulators are themselves pinned non-contracted (`#pragma clang fp contract(off)`), so
+pinning *both* sides to the identical rounding sequence makes the device values EQUAL to the
+CPU reference **bit-for-bit**, independent of the compiler's default FMA contraction (tests
+validate to 1e-12, pin hand-computed breakeven/floor/cap points with exact `==`, and include
+a non-representable-product book asserted bit-exact against the CPU oracle). The same fallback
+contract applies: no device → the CPU optstrat/futures evaluation, real values returned.
 
 ### Error model
 

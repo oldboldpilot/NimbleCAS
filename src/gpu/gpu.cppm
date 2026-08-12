@@ -14,6 +14,9 @@ export module nimblecas.gpu;
 
 import std;
 import nimblecas.core;
+import nimblecas.pricing;   // Family A CPU fallback + result types (McResult, Greeks, ExtendedGreeks)
+import nimblecas.optstrat;  // Family B CPU fallback + StrategyLeg (the exact piecewise-linear oracle)
+import nimblecas.futures;   // Family B CPU fallback + FuturesLeg
 
 export namespace nimblecas::gpu {
 
@@ -450,6 +453,309 @@ struct CgCsrResult {
         return make_error<CgCsrResult>(MathError::gpu_error);
     }
     return CgCsrResult{std::move(x), iterations, converged != 0, residual};
+}
+
+// ---------------------------------------------------------------------------
+// FAMILY A — Batched derivative pricing (gpu_pricing_kernels.cu).
+//
+// Every entry point here is a batch MIRROR of the authoritative CPU nimblecas.pricing
+// implementation, never a second source of truth. NEW FALLBACK CONTRACT (differs from the
+// entries above): when NO device is present these functions compute the result on the CPU
+// via nimblecas.pricing and return real values — an honest fallback, not gpu_error. A CUDA
+// failure on a machine that HAS a device is still reported as gpu_error (the device was
+// asked and the device failed; we never silently switch answers).
+// ---------------------------------------------------------------------------
+
+// Paths per Monte-Carlo segment: one device thread serially prices one segment's contiguous
+// counter sub-range in index order, making the partial a pure function of the segment index.
+// Must match kMcSegPaths in gpu_pricing_kernels.cu.
+inline constexpr std::uint64_t kGpuMcSegPaths = 4096;
+// Path-count cap, mirroring pricing::monte_carlo_european's kMaxPaths bound.
+inline constexpr std::uint64_t kGpuMcMaxPaths = 1'000'000'000;
+
+// Price a batch of European options by GPU Monte Carlo path simulation, returning one
+// pricing::McResult { price, std_error, paths } per option, in order. Every option is priced
+// over the SAME counter stream [0, paths) with key = splitmix64(seed) — exactly the draw
+// indexing of pricing::monte_carlo_european — with antithetic variates, so item i estimates
+// the same quantity as monte_carlo_european(spec_i, paths, seed).
+//
+// HONESTY: STATISTICAL (double) — the estimate carries its standard error. REPRODUCIBILITY:
+// the device result is a pure function of (opts, paths, seed): the counter-based Threefry
+// draws are bit-identical to nimblecas.rng's counter_u64, segments are a FIXED decomposition
+// of the path range summed in index order, and the segment partials are folded by a
+// fixed-shape (256-thread, one block per option) reduction — so the result is independent of
+// grid/block geometry and identical across repeated calls on the same device/toolkit. It
+// EQUALS the CPU monte_carlo_european to floating-point tolerance (documented at 1e-6
+// absolute: the divergence sources are the reduction association order plus last-bit
+// differences of the device exp/log versus the CPU simd::exp/simd::log_one in the ~5%
+// Acklam tail region — orders of magnitude below the MC standard error), NOT bit-for-bit.
+// CPU fallback (no device): pricing::monte_carlo_european_parallel per option, which carries
+// the same (spec, paths, seed)-only reproducibility contract.
+//
+// Fails with MathError::domain_error when paths == 0, paths > kGpuMcMaxPaths, or an option is
+// non-physical (spot<=0, strike<=0, time<0, volatility<0 — note strike>0 is required here,
+// slightly stricter than the CPU MC, and honestly rejected rather than silently accepted);
+// MathError::overflow when opts.size() or opts.size()*ceil(paths/kGpuMcSegPaths) exceeds the
+// int kernel bound; MathError::gpu_error when a device is present but a CUDA call fails.
+[[nodiscard]] auto monte_carlo_european_batch(std::span<const BsOption> opts,
+                                              std::uint64_t paths, std::uint64_t seed)
+    -> Result<std::vector<pricing::McResult>> {
+    if (paths == 0 || paths > kGpuMcMaxPaths) {
+        return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+    }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<pricing::McResult>>(pod.error()); }
+    if (opts.empty()) { return std::vector<pricing::McResult>{}; }
+    const std::uint64_t nseg = (paths + kGpuMcSegPaths - 1) / kGpuMcSegPaths;
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (opts.size() > int_max || nseg > int_max ||
+        opts.size() > static_cast<std::size_t>(int_max / nseg)) {
+        return make_error<std::vector<pricing::McResult>>(MathError::overflow);
+    }
+    if (!available()) {
+        // Honest CPU fallback: the authoritative reproducible CPU pricer, option by option.
+        std::vector<pricing::McResult> out;
+        out.reserve(opts.size());
+        for (const auto& o : opts) {
+            const auto spec = pricing::OptionSpec{}
+                                  .with_spot(o.spot).with_strike(o.strike).with_rate(o.rate)
+                                  .with_dividend(o.dividend).with_volatility(o.volatility)
+                                  .with_expiry(o.time)
+                                  .with_type(o.is_call ? pricing::OptionType::call
+                                                       : pricing::OptionType::put);
+            auto r = pricing::monte_carlo_european_parallel(spec, paths, seed);
+            if (!r) { return make_error<std::vector<pricing::McResult>>(r.error()); }
+            out.push_back(*r);
+        }
+        return out;
+    }
+    std::vector<NimblecasMcEstimate> est(opts.size());
+    const int rc = nimblecas_gpu_mc_european_batch(pod->data(), static_cast<int>(pod->size()),
+                                                   paths, seed, est.data());
+    if (rc != 0) { return make_error<std::vector<pricing::McResult>>(MathError::gpu_error); }
+    std::vector<pricing::McResult> out;
+    out.reserve(est.size());
+    for (const auto& e : est) { out.push_back(pricing::McResult{e.price, e.std_error, paths}); }
+    return out;
+}
+
+// Batch analytic Black-Scholes-Merton Greeks on the device — the batch mirror of
+// pricing::black_scholes_greeks (same d1/d2, same degenerate T==0/vol==0 collapse with
+// limit delta), one pricing::Greeks per option, in order.
+//
+// HONESTY: a NUMERICAL closed form; the device result agrees with the CPU closed form to
+// 1e-9 relative (the only divergence is last-bit differences of the device erfc/exp/log/sqrt
+// versus glibc's). DETERMINISM: elementwise, no reduction — fully deterministic.
+// CPU fallback (no device): pricing::black_scholes_greeks per option.
+//
+// A non-physical option -> domain_error; too many options -> overflow; a CUDA failure with a
+// device present -> gpu_error.
+[[nodiscard]] auto black_scholes_greeks_batch(std::span<const BsOption> opts)
+    -> Result<std::vector<pricing::Greeks>> {
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<pricing::Greeks>>(pod.error()); }
+    if (opts.empty()) { return std::vector<pricing::Greeks>{}; }
+    if (!available()) {
+        std::vector<pricing::Greeks> out;
+        out.reserve(opts.size());
+        for (const auto& o : opts) {
+            const auto spec = pricing::OptionSpec{}
+                                  .with_spot(o.spot).with_strike(o.strike).with_rate(o.rate)
+                                  .with_dividend(o.dividend).with_volatility(o.volatility)
+                                  .with_expiry(o.time)
+                                  .with_type(o.is_call ? pricing::OptionType::call
+                                                       : pricing::OptionType::put);
+            auto g = pricing::black_scholes_greeks(spec);
+            if (!g) { return make_error<std::vector<pricing::Greeks>>(g.error()); }
+            out.push_back(*g);
+        }
+        return out;
+    }
+    std::vector<NimblecasBsGreeks> pg(opts.size());
+    const int rc = nimblecas_gpu_bs_greeks_batch(pod->data(), pg.data(),
+                                                 static_cast<int>(pod->size()));
+    if (rc != 0) { return make_error<std::vector<pricing::Greeks>>(MathError::gpu_error); }
+    std::vector<pricing::Greeks> out;
+    out.reserve(pg.size());
+    for (const auto& g : pg) {
+        out.push_back(pricing::Greeks{g.price, g.delta, g.gamma, g.vega, g.theta, g.rho});
+    }
+    return out;
+}
+
+// Batch extended (higher-order) Black-Scholes Greeks on the device — the batch mirror of
+// pricing::black_scholes_extended_greeks, INCLUDING its algorithm choices: closed forms for
+// vanna/vomma/speed/zomma/lambda/dual_delta/dual_gamma/epsilon/ultima and CENTRAL FINITE
+// DIFFERENCES of the analytic Greeks for charm/color/veta (h = 1e-4*T) and vera
+// (hv = 1e-4*sig) — mirrored, not re-derived, so the two implementations cannot drift.
+//
+// HONESTY: NUMERICAL. The finite-difference fields divide last-bit noise by 2e-4-scale
+// steps, so the validated agreement bound is 1e-7 * max(1, |cpu|) per field (four orders of
+// magnitude of margin over the measured ulp-level divergence, and four orders tighter than
+// any real formula error). DETERMINISM: elementwise, no reduction.
+// CPU fallback (no device): pricing::black_scholes_extended_greeks per option.
+//
+// Requires T > 0 and volatility > 0 for every option (the CPU guard) -> domain_error
+// otherwise; too many options -> overflow; a CUDA failure with a device present -> gpu_error.
+[[nodiscard]] auto black_scholes_extended_greeks_batch(std::span<const BsOption> opts)
+    -> Result<std::vector<pricing::ExtendedGreeks>> {
+    // Validate the full domain (basic physicality via to_bridge's checks, plus the extended
+    // set's strict time>0/vol>0 guard) BEFORE any repacking or the available() split, so the
+    // error model is identical with or without a device (Rule 32, device-independent errors).
+    for (const auto& o : opts) {  // the extended set needs the strict CPU guard
+        if (o.time <= 0.0 || o.volatility <= 0.0) {
+            return make_error<std::vector<pricing::ExtendedGreeks>>(MathError::domain_error);
+        }
+    }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<pricing::ExtendedGreeks>>(pod.error()); }
+    if (opts.empty()) { return std::vector<pricing::ExtendedGreeks>{}; }
+    if (!available()) {
+        std::vector<pricing::ExtendedGreeks> out;
+        out.reserve(opts.size());
+        for (const auto& o : opts) {
+            const auto spec = pricing::OptionSpec{}
+                                  .with_spot(o.spot).with_strike(o.strike).with_rate(o.rate)
+                                  .with_dividend(o.dividend).with_volatility(o.volatility)
+                                  .with_expiry(o.time)
+                                  .with_type(o.is_call ? pricing::OptionType::call
+                                                       : pricing::OptionType::put);
+            auto g = pricing::black_scholes_extended_greeks(spec);
+            if (!g) { return make_error<std::vector<pricing::ExtendedGreeks>>(g.error()); }
+            out.push_back(*g);
+        }
+        return out;
+    }
+    std::vector<NimblecasBsExtGreeks> pg(opts.size());
+    const int rc = nimblecas_gpu_bs_extended_greeks_batch(pod->data(), pg.data(),
+                                                          static_cast<int>(pod->size()));
+    if (rc != 0) {
+        return make_error<std::vector<pricing::ExtendedGreeks>>(MathError::gpu_error);
+    }
+    std::vector<pricing::ExtendedGreeks> out;
+    out.reserve(pg.size());
+    for (const auto& g : pg) {
+        out.push_back(pricing::ExtendedGreeks{g.vanna, g.charm, g.vomma, g.veta, g.speed,
+                                              g.zomma, g.color, g.lambda, g.dual_delta,
+                                              g.dual_gamma, g.epsilon, g.vera, g.ultima});
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// FAMILY B — Strategy payoff / P&L grid sweeps (gpu_sweep_kernels.cu).
+//
+// The expiry P&L of a vanilla option book is EXACTLY a continuous piecewise-linear function
+// of the terminal price (optstrat's honesty boundary), and a futures book is exactly linear
+// — so unlike the statistical Family A these sweeps are EXACTLY-REPRODUCIBLE computations.
+// The device kernel executes the same IEEE-754 double operation sequence as the CPU
+// reference (explicit __dadd_rn/__dmul_rn/__dsub_rn/fmax, no FMA contraction), AND the CPU
+// reference is itself pinned non-contracted (optstrat::payoff_at / net_premium carry
+// `#pragma clang fp contract(off)`) — pinning BOTH sides to the same rounding sequence makes
+// the GPU value at every grid point EQUAL to the CPU value BIT-FOR-BIT, independent of the
+// compiler's default contraction (tests validate to 1e-12 and pin hand values with exact ==).
+// FALLBACK CONTRACT: as in Family A, no device -> the CPU (optstrat / futures) computes the
+// result and real values are returned; a CUDA failure with a device present -> gpu_error.
+// ---------------------------------------------------------------------------
+
+namespace detail {
+// Flatten optstrat legs into the POD bridge encoding (right: 0 call, 1 put, 2 underlying).
+[[nodiscard]] inline auto legs_to_bridge(std::span<const optstrat::StrategyLeg> legs)
+    -> std::vector<NimblecasSweepLeg> {
+    std::vector<NimblecasSweepLeg> pod;
+    pod.reserve(legs.size());
+    for (const auto& l : legs) {
+        pod.push_back(NimblecasSweepLeg{l.strike, l.quantity, l.premium,
+                                        static_cast<int>(l.kind)});
+    }
+    return pod;
+}
+// The shared sweep driver: validates sizes, falls back to the exact CPU optstrat evaluation
+// when no device is present, otherwise crosses the bridge. net_of_premium selects P&L
+// (payoff - net premium) versus gross payoff.
+[[nodiscard]] inline auto strategy_grid(std::span<const optstrat::StrategyLeg> legs,
+                                        std::span<const double> grid, bool net_of_premium)
+    -> Result<std::vector<double>> {
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (legs.size() > int_max || grid.size() > int_max) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    std::vector<double> out(grid.size());
+    if (grid.empty()) { return out; }
+    if (!available()) {
+        // Exact CPU fallback: rebuild the strategy and evaluate the authoritative
+        // piecewise-linear payoff_at / pnl_at point by point (reuse, not re-derivation).
+        auto strat = optstrat::OptionStrategy::create();
+        for (const auto& l : legs) { std::ignore = strat.with_leg(l); }
+        for (std::size_t i = 0; i < grid.size(); ++i) {
+            out[i] = net_of_premium ? strat.pnl_at(grid[i]) : strat.payoff_at(grid[i]);
+        }
+        return out;
+    }
+    const auto pod = legs_to_bridge(legs);
+    const int rc = nimblecas_gpu_strategy_grid(pod.data(), static_cast<int>(pod.size()),
+                                               grid.data(), static_cast<int>(grid.size()),
+                                               net_of_premium ? 1 : 0, out.data());
+    if (rc != 0) { return make_error<std::vector<double>>(MathError::gpu_error); }
+    return out;
+}
+}  // namespace detail
+
+// Gross expiry payoff Σ quantity·terminal_value(s) of a signed option/underlying leg bag at
+// every grid point, in grid order — the batch mirror of optstrat::OptionStrategy::payoff_at.
+// Legs are summed in span order on both CPU and GPU (fixed ordering -> deterministic).
+// Empty legs -> a vector of zeros; empty grid -> an empty vector; a span exceeding the int
+// kernel bound -> overflow; a CUDA failure with a device present -> gpu_error.
+[[nodiscard]] auto strategy_payoff_grid(std::span<const optstrat::StrategyLeg> legs,
+                                        std::span<const double> grid)
+    -> Result<std::vector<double>> {
+    return detail::strategy_grid(legs, grid, /*net_of_premium=*/false);
+}
+
+// Expiry P&L (payoff − net premium) at every grid point — the batch mirror of
+// optstrat::OptionStrategy::pnl_at, computed as the SAME two in-order sums (payoff, then
+// Σ leg cost) followed by one subtraction, so the device value equals the CPU double
+// evaluation exactly. Same error model as strategy_payoff_grid.
+[[nodiscard]] auto strategy_pnl_grid(std::span<const optstrat::StrategyLeg> legs,
+                                     std::span<const double> grid)
+    -> Result<std::vector<double>> {
+    return detail::strategy_grid(legs, grid, /*net_of_premium=*/true);
+}
+
+// Uniform-settlement P&L of a futures leg bag at every grid point — the batch mirror of
+// futures::FuturesStrategy::pnl_at_uniform: Σ (quantityᵢ·contract_sizeᵢ)·(s − entryᵢ) with
+// the CPU's association (q·cs first, on the host; then ·(s − entry) on the device), summed
+// in span order. Exactly linear, exactly reproducible (1e-12-validated, expected equal).
+// Empty legs -> zeros; empty grid -> empty; span too large -> overflow; a CUDA failure with
+// a device present -> gpu_error.
+[[nodiscard]] auto futures_pnl_grid(std::span<const futures::FuturesLeg> legs,
+                                    std::span<const double> grid)
+    -> Result<std::vector<double>> {
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (legs.size() > int_max || grid.size() > int_max) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    std::vector<double> out(grid.size());
+    if (grid.empty()) { return out; }
+    if (!available()) {
+        auto strat = futures::FuturesStrategy::create();
+        for (const auto& l : legs) { std::ignore = strat.with_leg(l); }
+        for (std::size_t i = 0; i < grid.size(); ++i) {
+            out[i] = strat.pnl_at_uniform(grid[i]);
+        }
+        return out;
+    }
+    std::vector<NimblecasFuturesSweepLeg> pod;
+    pod.reserve(legs.size());
+    for (const auto& l : legs) {
+        // q*cs on the host mirrors FuturesLeg::pnl_at's left-to-right association exactly.
+        pod.push_back(NimblecasFuturesSweepLeg{l.quantity * l.contract_size, l.entry_price});
+    }
+    const int rc = nimblecas_gpu_futures_grid(pod.data(), static_cast<int>(pod.size()),
+                                              grid.data(), static_cast<int>(grid.size()),
+                                              out.data());
+    if (rc != 0) { return make_error<std::vector<double>>(MathError::gpu_error); }
+    return out;
 }
 
 }  // namespace nimblecas::gpu

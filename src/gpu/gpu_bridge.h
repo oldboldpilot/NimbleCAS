@@ -114,6 +114,106 @@ int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indices, const d
                          int n, int nnz, const double* b, double* x, int max_iters, double tol,
                          int* out_iters, int* out_converged, double* out_resid);
 
+/* --- FAMILY A: batched derivative pricing (gpu_pricing_kernels.cu) --- */
+
+/* A Monte Carlo estimate in POD form: the price and its standard error. */
+typedef struct {
+    double price;
+    double std_error;
+} NimblecasMcEstimate;
+
+/* Batched reproducible European Monte Carlo. Prices each of the n options over the SAME
+ * counter stream [0, paths) with key = splitmix64(seed) — the identical Threefry-2x64-20
+ * draw indexing as nimblecas.rng's counter_u64 — using antithetic variates, and writes
+ * { price, std_error } to out[i]. The path range is decomposed into FIXED segments of
+ * kMcSegPaths (4096) paths; one thread sums one segment serially in index order, and a
+ * fixed-shape 256-thread block per option folds the segment partials — so the result is a
+ * pure function of (opts, paths, seed), independent of launch geometry. Inputs must be
+ * physically valid and paths in [1, 1e9] (the C++ wrapper validates). Returns 0 on success
+ * or a non-zero CUDA error code. */
+int nimblecas_gpu_mc_european_batch(const NimblecasBsOption* opts, int n,
+                                    unsigned long long paths, unsigned long long seed,
+                                    NimblecasMcEstimate* out);
+
+/* Black-Scholes first-order Greeks in POD form (fields mirror pricing::Greeks). */
+typedef struct {
+    double price;
+    double delta;
+    double gamma;
+    double vega;
+    double theta;
+    double rho;
+} NimblecasBsGreeks;
+
+/* Batched analytic Black-Scholes Greeks, one thread per option (grid-stride). Mirrors
+ * pricing::black_scholes_greeks exactly (same d1/d2, same degenerate T==0/vol==0 collapse
+ * with limit delta). Inputs must be physically valid — the C++ wrapper validates. Returns
+ * 0 on success or a non-zero CUDA error code. */
+int nimblecas_gpu_bs_greeks_batch(const NimblecasBsOption* opts, NimblecasBsGreeks* out,
+                                  int n);
+
+/* Extended Black-Scholes Greeks in POD form (fields mirror pricing::ExtendedGreeks). */
+typedef struct {
+    double vanna;
+    double charm;
+    double vomma;
+    double veta;
+    double speed;
+    double zomma;
+    double color;
+    double lambda;
+    double dual_delta;
+    double dual_gamma;
+    double epsilon;
+    double vera;
+    double ultima;
+} NimblecasBsExtGreeks;
+
+/* Batched extended Greeks, one thread per option (grid-stride). Mirrors
+ * pricing::black_scholes_extended_greeks INCLUDING its central-finite-difference fields
+ * (charm/color/veta with h = 1e-4*T; vera with hv = 1e-4*sig). Requires T > 0 and vol > 0
+ * for every option — the C++ wrapper validates. Returns 0 on success or a non-zero CUDA
+ * error code. */
+int nimblecas_gpu_bs_extended_greeks_batch(const NimblecasBsOption* opts,
+                                           NimblecasBsExtGreeks* out, int n);
+/* --- FAMILY B: strategy payoff / P&L grid sweeps (gpu_sweep_kernels.cu) --- */
+
+/* One signed strategy leg in POD form. Fields mirror optstrat::StrategyLeg; right is
+ * 0 = call, 1 = put, 2 = underlying (strike ignored for underlying). */
+typedef struct {
+    double strike;
+    double quantity;   /* signed: long (+) / short (-) */
+    double premium;    /* per-unit price paid (option premium / underlying entry) */
+    int right;         /* 0 call, 1 put, 2 underlying */
+} NimblecasSweepLeg;
+
+/* Aggregate expiry payoff / P&L sweep, one thread per grid point (grid-stride). For each
+ * grid price s the thread sums quantity*terminal_value(s) over the legs IN ARRAY ORDER and,
+ * when net_of_premium is non-zero, separately sums quantity*premium in array order and
+ * subtracts — the exact operation sequence of optstrat's payoff_at/pnl_at. All arithmetic
+ * uses the non-contracted __dadd_rn/__dsub_rn/__dmul_rn/fmax intrinsics so the result is
+ * bit-equal to the CPU double evaluation (whose optstrat oracle is likewise pinned
+ * FP_CONTRACT off) -- an exactly-reproducible piecewise-linear
+ * computation, not a statistical one). Returns 0 on success or a non-zero CUDA error code. */
+int nimblecas_gpu_strategy_grid(const NimblecasSweepLeg* legs, int n_legs,
+                                const double* grid, int n_grid, int net_of_premium,
+                                double* out);
+
+/* One futures leg in POD form: scaled_quantity = quantity * contract_size (precomputed on
+ * the host to preserve the CPU association), entry_price the per-unit entry. */
+typedef struct {
+    double scaled_quantity;
+    double entry_price;
+} NimblecasFuturesSweepLeg;
+
+/* Uniform-settlement futures P&L sweep, one thread per grid point (grid-stride):
+ * out[j] = sum_i scaled_quantity_i * (grid[j] - entry_price_i), legs in array order, with
+ * the non-contracted __dsub_rn/__dmul_rn/__dadd_rn intrinsics — bit-equal to the CPU
+ * FuturesStrategy::pnl_at_uniform evaluation. Returns 0 on success or a non-zero CUDA
+ * error code. */
+int nimblecas_gpu_futures_grid(const NimblecasFuturesSweepLeg* legs, int n_legs,
+                               const double* grid, int n_grid, double* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

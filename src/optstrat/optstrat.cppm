@@ -205,12 +205,22 @@ private:
 namespace nimblecas::optstrat {
 
 auto OptionStrategy::payoff_at(double s) const noexcept -> double {
+    // FP-contraction is disabled here so the per-leg accumulation is a sequence of
+    // separately-rounded IEEE-754 doubles (no fused multiply-add). This makes payoff_at
+    // the exact bit-for-bit reference for the nimblecas.gpu strategy-sweep kernels, which
+    // deliberately use the non-contracted __dmul_rn/__dadd_rn intrinsics — pinning both
+    // sides to the same rounding sequence guarantees GPU==CPU regardless of the compiler's
+    // default contraction (Rule 55 FP-parity discipline). Representable integer P&L values
+    // (the analytics oracle) are unaffected.
+#pragma clang fp contract(off)
     double total = 0.0;
     for (const auto& leg : legs_) { total += leg.quantity * leg.terminal_value(s); }
     return total;
 }
 
 auto OptionStrategy::net_premium() const noexcept -> double {
+    // Non-contracted for the same GPU bit-for-bit parity reason as payoff_at above.
+#pragma clang fp contract(off)
     double total = 0.0;
     for (const auto& leg : legs_) { total += leg.cost(); }
     return total;

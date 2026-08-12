@@ -2061,12 +2061,16 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   get_filename_component(_cuda_libdir "${NIMBLECAS_CUDART}" DIRECTORY)
 
   set(_gpu_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_kernels.cu")
+  set(_gpu_pricing_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_pricing_kernels.cu")
+  set(_gpu_sweep_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_sweep_kernels.cu")
   set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
   add_custom_command(
     OUTPUT "${_gpu_lib}"
     COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
-            -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib "${_gpu_src}" -o "${_gpu_lib}"
-    DEPENDS "${_gpu_src}" "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
+            -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib
+            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_sweep_src}" -o "${_gpu_lib}"
+    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_sweep_src}"
+            "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
     VERBATIM
     COMMENT "nvcc: building CUDA GPU kernels (-arch=native)")
   add_custom_target(nimblecas_gpu_kernels DEPENDS "${_gpu_lib}")
@@ -2076,12 +2080,14 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   target_include_directories(nimblecas_gpu PRIVATE "${CMAKE_SOURCE_DIR}/src/gpu")
   add_dependencies(nimblecas_gpu nimblecas_gpu_kernels)
   target_link_libraries(nimblecas_gpu
-    PUBLIC nimblecas_core std_module "${_gpu_lib}" "${NIMBLECAS_CUDART}")
+    PUBLIC nimblecas_core nimblecas_pricing nimblecas_optstrat nimblecas_futures
+           std_module "${_gpu_lib}" "${NIMBLECAS_CUDART}")
 
   add_executable(gpu_tests tests/gpu_tests.cpp)
   add_dependencies(gpu_tests nimblecas_gpu_kernels)
   target_link_libraries(gpu_tests
-    PRIVATE nimblecas_gpu nimblecas_core nimblecas_testing std_module)
+    PRIVATE nimblecas_gpu nimblecas_pricing nimblecas_optstrat nimblecas_futures
+            nimblecas_core nimblecas_testing std_module)
   set_target_properties(gpu_tests PROPERTIES BUILD_RPATH "${_cuda_libdir}")
   add_test(NAME gpu_tests COMMAND gpu_tests)
 endif()

@@ -6,6 +6,9 @@
 import std;
 import nimblecas.core;
 import nimblecas.gpu;
+import nimblecas.pricing;
+import nimblecas.optstrat;
+import nimblecas.futures;
 import nimblecas.testing;
 
 namespace gpu = nimblecas::gpu;
@@ -556,6 +559,243 @@ auto main() -> int {
                       t.expect(!got.has_value() && got.error() == MathError::gpu_error,
                                "CUDA-disabled path returns the documented gpu_error");
                   }
+              })
+        .test("monte_carlo_european_batch mirrors the CPU counter-based MC",
+              [](TestContext& t) {
+                  namespace pr = nimblecas::pricing;
+                  // Three contracts sharing r=5%, vol=20%, T=1: ATM call, OTM call, ITM put.
+                  std::vector<gpu::BsOption> opts = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, true},
+                      gpu::BsOption{100.0, 110.0, 0.05, 0.0, 0.2, 1.0, true},
+                      gpu::BsOption{100.0, 110.0, 0.05, 0.0, 0.2, 1.0, false}};
+                  const std::uint64_t paths = 200000;
+                  const std::uint64_t seed = 42;
+                  auto got = gpu::monte_carlo_european_batch(opts, paths, seed);
+                  t.expect(got.has_value() && got->size() == opts.size(), "batch MC priced");
+                  bool mirror = got.has_value();
+                  bool stat = got.has_value();
+                  for (std::size_t i = 0; i < opts.size() && mirror; ++i) {
+                      const auto spec = pr::OptionSpec{}
+                                            .with_spot(opts[i].spot).with_strike(opts[i].strike)
+                                            .with_rate(opts[i].rate).with_dividend(opts[i].dividend)
+                                            .with_volatility(opts[i].volatility)
+                                            .with_expiry(opts[i].time)
+                                            .with_type(opts[i].is_call ? pr::OptionType::call
+                                                                       : pr::OptionType::put);
+                      const auto cpu = pr::monte_carlo_european(spec, paths, seed).value();
+                      // FP-reassociation + device-libm last bits only: far below the MC std error.
+                      mirror = std::abs((*got)[i].price - cpu.price) < 1e-6 &&
+                               std::abs((*got)[i].std_error - cpu.std_error) < 1e-6;
+                      const double bs = pr::black_scholes_price(spec).value();
+                      stat = stat && std::abs((*got)[i].price - bs) <
+                                         4.0 * (*got)[i].std_error + 1e-9;
+                  }
+                  t.expect(mirror, "every GPU MC estimate equals the CPU counter-based MC to 1e-6");
+                  t.expect(stat, "every estimate within 4 standard errors of Black-Scholes");
+                  // Reproducibility: a second identical call is bit-identical (pure function of
+                  // (opts, paths, seed) — never of launch geometry, threads, or time).
+                  auto again = gpu::monte_carlo_european_batch(opts, paths, seed);
+                  bool identical = again.has_value() && again->size() == got->size();
+                  for (std::size_t i = 0; i < got->size() && identical; ++i) {
+                      identical = (*again)[i].price == (*got)[i].price &&
+                                  (*again)[i].std_error == (*got)[i].std_error;
+                  }
+                  t.expect(identical, "repeated batch MC is bit-identical (equal seeds, equal bits)");
+                  // Domain guards ride the railway.
+                  t.expect(!gpu::monte_carlo_european_batch(opts, 0, seed).has_value(),
+                           "zero paths -> error");
+                  std::vector<gpu::BsOption> bad{gpu::BsOption{-1.0, 100.0, 0.05, 0.0, 0.2, 1.0, true}};
+                  auto br = gpu::monte_carlo_european_batch(bad, paths, seed);
+                  t.expect(!br.has_value() && br.error() == MathError::domain_error,
+                           "non-physical spot -> domain_error");
+              })
+        .test("black_scholes_greeks_batch matches the CPU closed form field by field",
+              [](TestContext& t) {
+                  namespace pr = nimblecas::pricing;
+                  std::vector<gpu::BsOption> opts;
+                  for (double s : {80.0, 100.0, 120.0}) {
+                      opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.01, 0.2, 1.0, true});
+                      opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.01, 0.2, 1.0, false});
+                  }
+                  opts.push_back(gpu::BsOption{100.0, 90.0, 0.05, 0.0, 0.2, 0.0, true});  // T==0 branch
+                  auto got = gpu::black_scholes_greeks_batch(opts);
+                  t.expect(got.has_value() && got->size() == opts.size(), "batch Greeks computed");
+                  auto near = [](double a, double b) {
+                      return std::abs(a - b) <= 1e-9 * (1.0 + std::abs(b));
+                  };
+                  bool all = got.has_value();
+                  for (std::size_t i = 0; i < opts.size() && all; ++i) {
+                      const auto spec = pr::OptionSpec{}
+                                            .with_spot(opts[i].spot).with_strike(opts[i].strike)
+                                            .with_rate(opts[i].rate).with_dividend(opts[i].dividend)
+                                            .with_volatility(opts[i].volatility)
+                                            .with_expiry(opts[i].time)
+                                            .with_type(opts[i].is_call ? pr::OptionType::call
+                                                                       : pr::OptionType::put);
+                      const auto cpu = pr::black_scholes_greeks(spec).value();
+                      const auto& g = (*got)[i];
+                      all = near(g.price, cpu.price) && near(g.delta, cpu.delta) &&
+                            near(g.gamma, cpu.gamma) && near(g.vega, cpu.vega) &&
+                            near(g.theta, cpu.theta) && near(g.rho, cpu.rho);
+                  }
+                  t.expect(all, "every field of every option matches the CPU closed form to 1e-9");
+                  // Hand oracle: the ATM 1y call (r=5%, q=1%, vol=20%): d1 = (0.04 + 0.02)/0.2 = 0.3,
+                  // delta = e^{-0.01} * N(0.3) ~= 0.99005 * 0.61791 ~= 0.61177.
+                  t.expect(std::abs((*got)[2].delta - 0.61177) < 1e-4,
+                           "hand-checked ATM call delta ~= 0.61177");
+                  // T==0 degenerate: price is the intrinsic 10, delta is the limit e^{-q*0} = 1.
+                  t.expect(near((*got)[6].price, 10.0) && near((*got)[6].delta, 1.0),
+                           "T==0 ITM call collapses to intrinsic 10 with limit delta 1");
+              })
+        .test("black_scholes_extended_greeks_batch matches the CPU extended set",
+              [](TestContext& t) {
+                  namespace pr = nimblecas::pricing;
+                  std::vector<gpu::BsOption> opts = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, true},
+                      gpu::BsOption{100.0, 110.0, 0.03, 0.02, 0.35, 0.5, false},
+                      gpu::BsOption{90.0, 100.0, 0.01, 0.0, 0.15, 2.0, true}};
+                  auto got = gpu::black_scholes_extended_greeks_batch(opts);
+                  t.expect(got.has_value() && got->size() == opts.size(), "extended batch computed");
+                  auto near7 = [](double a, double b) {
+                      return std::abs(a - b) <= 1e-7 * std::max(1.0, std::abs(b));
+                  };
+                  bool all = got.has_value();
+                  for (std::size_t i = 0; i < opts.size() && all; ++i) {
+                      const auto spec = pr::OptionSpec{}
+                                            .with_spot(opts[i].spot).with_strike(opts[i].strike)
+                                            .with_rate(opts[i].rate).with_dividend(opts[i].dividend)
+                                            .with_volatility(opts[i].volatility)
+                                            .with_expiry(opts[i].time)
+                                            .with_type(opts[i].is_call ? pr::OptionType::call
+                                                                       : pr::OptionType::put);
+                      const auto cpu = pr::black_scholes_extended_greeks(spec).value();
+                      const auto& g = (*got)[i];
+                      all = near7(g.vanna, cpu.vanna) && near7(g.charm, cpu.charm) &&
+                            near7(g.vomma, cpu.vomma) && near7(g.veta, cpu.veta) &&
+                            near7(g.speed, cpu.speed) && near7(g.zomma, cpu.zomma) &&
+                            near7(g.color, cpu.color) && near7(g.lambda, cpu.lambda) &&
+                            near7(g.dual_delta, cpu.dual_delta) && near7(g.dual_gamma, cpu.dual_gamma) &&
+                            near7(g.epsilon, cpu.epsilon) && near7(g.vera, cpu.vera) &&
+                            near7(g.ultima, cpu.ultima);
+                  }
+                  t.expect(all, "all 13 extended fields match the CPU set to 1e-7");
+                  // T == 0 violates the strict extended-set domain -> domain_error, never a number.
+                  std::vector<gpu::BsOption> bad{gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 0.0, true}};
+                  auto br = gpu::black_scholes_extended_greeks_batch(bad);
+                  t.expect(!br.has_value() && br.error() == MathError::domain_error,
+                           "T == 0 -> domain_error for the extended set");
+              })
+        .test("strategy_pnl_grid equals the exact piecewise-linear CPU oracle",
+              [](TestContext& t) {
+                  namespace os = nimblecas::optstrat;
+                  // Bull call spread 95/105, premiums 6.5/2.5 -> net debit 4. Exact P&L:
+                  // s <= 95: -4; s = 99: 0 (the breakeven 95 + 4); s >= 105: +6 (width 10 - 4).
+                  const auto spread = os::bull_call_spread(95.0, 6.5, 105.0, 2.5);
+                  const std::vector<double> grid = {80.0, 90.0, 95.0, 99.0, 100.0, 105.0, 110.0, 120.0};
+                  auto got = gpu::strategy_pnl_grid(spread.legs(), grid);
+                  t.expect(got.has_value() && got->size() == grid.size(), "one P&L per grid point");
+                  bool all = got.has_value();
+                  for (std::size_t j = 0; j < grid.size() && all; ++j) {
+                      const double cpu = spread.pnl_at(grid[j]);
+                      all = std::abs((*got)[j] - cpu) <= 1e-12 * std::max(1.0, std::abs(cpu));
+                  }
+                  t.expect(all, "GPU sweep equals OptionStrategy::pnl_at at every grid point");
+                  // Hand-computed exact values (all representable doubles): breakeven, floor, cap.
+                  t.expect(got && (*got)[3] == 0.0, "P&L at the exact breakeven 99 is exactly 0");
+                  t.expect(got && (*got)[0] == -4.0 && (*got)[7] == 6.0,
+                           "floor -4 below 95 and cap +6 above 105, exactly");
+                  // Gross payoff sweep: max(s-95,0) - max(s-105,0); at 110 that is 15 - 5 = 10.
+                  auto pay = gpu::strategy_payoff_grid(spread.legs(), grid);
+                  t.expect(pay.has_value() && (*pay)[6] == 10.0 && (*pay)[0] == 0.0,
+                           "gross payoff sweep: 0 below, exactly 10 at/above the cap");
+                  // Empty grid -> empty result on the same railway.
+                  t.expect(gpu::strategy_pnl_grid(spread.legs(), std::vector<double>{})
+                               .value().empty(),
+                           "empty grid yields an empty sweep");
+              })
+        .test("strategy grids handle underlying legs and multi-leg books",
+              [](TestContext& t) {
+                  namespace os = nimblecas::optstrat;
+                  // Covered call: long underlying at 100, short 105 call at 3. Exact P&L:
+                  // s = 90: -7; breakeven 97: 0; s >= 105: capped at 8 (105 - 100 + 3).
+                  const auto cc = os::covered_call(100.0, 105.0, 3.0);
+                  const std::vector<double> grid = {90.0, 97.0, 100.0, 105.0, 130.0};
+                  auto got = gpu::strategy_pnl_grid(cc.legs(), grid);
+                  t.expect(got.has_value(), "covered-call sweep computed");
+                  t.expect(got && (*got)[0] == -7.0 && (*got)[1] == 0.0 && (*got)[3] == 8.0 &&
+                               (*got)[4] == 8.0,
+                           "hand-checked covered-call P&L: -7 / 0 at breakeven 97 / capped 8");
+                  // Iron condor 90/95/105/110 (premiums 1, 2.5, 2.6, 1.1): cross-check every point
+                  // against the exact CPU analytics oracle, including between and beyond strikes.
+                  const auto ic = os::iron_condor(90.0, 1.0, 95.0, 2.5, 105.0, 2.6, 110.0, 1.1);
+                  std::vector<double> wide;
+                  for (double s = 80.0; s <= 120.0; s += 1.0) { wide.push_back(s); }
+                  auto sweep = gpu::strategy_pnl_grid(ic.legs(), wide);
+                  t.expect(sweep.has_value() && sweep->size() == wide.size(), "condor sweep sized");
+                  bool all = sweep.has_value();
+                  for (std::size_t j = 0; j < wide.size() && all; ++j) {
+                      const double cpu = ic.pnl_at(wide[j]);
+                      all = std::abs((*sweep)[j] - cpu) <= 1e-12 * std::max(1.0, std::abs(cpu));
+                  }
+                  t.expect(all, "iron-condor sweep equals the exact piecewise-linear oracle");
+              })
+        .test("strategy sweep is bit-exact vs the CPU oracle on non-representable products",
+              [](TestContext& t) {
+                  namespace os = nimblecas::optstrat;
+                  // Deliberately "ugly" book: quantities/strikes/premiums whose products are
+                  // NOT exactly representable, so a fused-vs-unfused accumulation would diverge
+                  // in the last bit. Both the GPU kernel (non-contracted __d*_rn) and the CPU
+                  // optstrat oracle (pinned FP_CONTRACT off) round identically, so every grid
+                  // point must match BIT-FOR-BIT. This is the test that would catch a
+                  // regression in that parity — exact ==, not a tolerance.
+                  auto book = os::OptionStrategy::create();
+                  std::ignore = book.with_leg(os::StrategyLeg{os::LegKind::call, 100.3, 0.3, 1.1});
+                  std::ignore = book.with_leg(os::StrategyLeg{os::LegKind::put, 95.7, -0.7, 2.9});
+                  std::ignore =
+                      book.with_leg(os::StrategyLeg{os::LegKind::underlying, 0.0, 0.1, 100.9});
+                  std::vector<double> grid;
+                  for (double s = 80.3; s <= 120.0; s += 1.7) { grid.push_back(s); }
+                  auto pnl = gpu::strategy_pnl_grid(book.legs(), grid);
+                  auto pay = gpu::strategy_payoff_grid(book.legs(), grid);
+                  t.expect(pnl.has_value() && pay.has_value() &&
+                               pnl->size() == grid.size() && pay->size() == grid.size(),
+                           "ugly-book sweeps computed");
+                  bool exact = pnl.has_value() && pay.has_value();
+                  for (std::size_t j = 0; j < grid.size() && exact; ++j) {
+                      exact = (*pnl)[j] == book.pnl_at(grid[j]) &&
+                              (*pay)[j] == book.payoff_at(grid[j]);
+                  }
+                  t.expect(exact, "GPU sweep is bit-for-bit identical to the CPU oracle (exact ==)");
+              })
+        .test("futures_pnl_grid mirrors FuturesStrategy::pnl_at_uniform",
+              [](TestContext& t) {
+                  namespace fu = nimblecas::futures;
+                  // Outright: long 2 contracts, size 50, entry 100 -> P&L = 100*(s - 100) exactly.
+                  const auto outright = fu::long_futures("CLZ6", 100.0, 2.0, 50.0);
+                  const std::vector<double> grid = {95.0, 100.0, 101.0, 110.0};
+                  auto got = gpu::futures_pnl_grid(outright.legs(), grid);
+                  t.expect(got.has_value() && got->size() == grid.size(), "one P&L per grid point");
+                  t.expect(got && (*got)[0] == -500.0 && (*got)[1] == 0.0 && (*got)[2] == 100.0 &&
+                               (*got)[3] == 1000.0,
+                           "hand-checked outright futures P&L: 100*(s-100) exactly");
+                  // Matched calendar spread (long near at 102, short far at 100, qty 1, size 1):
+                  // net exposure is zero, so the uniform-settlement P&L is a locked CONSTANT
+                  // (1*(s-102) - 1*(s-100) = -2) at EVERY price. Validate against the CPU oracle
+                  // rather than the hand constant to stay robust to the builder's leg convention.
+                  const auto cal = fu::calendar_spread("CLZ6", 102.0, "CLM7", 100.0);
+                  auto sweep = gpu::futures_pnl_grid(cal.legs(), grid);
+                  t.expect(sweep.has_value(), "calendar-spread sweep computed");
+                  bool all = sweep.has_value();
+                  for (std::size_t j = 0; j < grid.size() && all; ++j) {
+                      const double cpu = cal.pnl_at_uniform(grid[j]);
+                      all = std::abs((*sweep)[j] - cpu) <= 1e-12 * std::max(1.0, std::abs(cpu));
+                  }
+                  t.expect(all, "matched spread sweep equals pnl_at_uniform at every point");
+                  // Empty legs -> a well-defined all-zero sweep (the empty book's P&L).
+                  const auto empty = fu::FuturesStrategy::create();
+                  auto zs = gpu::futures_pnl_grid(empty.legs(), grid);
+                  t.expect(zs.has_value() && (*zs)[0] == 0.0 && (*zs)[3] == 0.0,
+                           "empty book sweeps to exactly zero");
               })
         .run();
 }
