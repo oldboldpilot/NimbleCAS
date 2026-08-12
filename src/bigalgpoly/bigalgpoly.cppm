@@ -41,6 +41,7 @@ export module nimblecas.bigalgpoly;
 
 import std;
 import nimblecas.core;
+import nimblecas.bigrational;
 import nimblecas.bigratpoly;
 import nimblecas.bigalgnum;
 
