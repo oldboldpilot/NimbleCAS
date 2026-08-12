@@ -842,6 +842,13 @@ target_link_libraries(nimblecas_algnum
   PUBLIC nimblecas_factor nimblecas_matrix nimblecas_ratpoly nimblecas_polynomial
          nimblecas_core std_module)
 
+# ---- nimblecas.algpoly : dense univariate polynomials over Q(alpha) (§7 substrate) ----
+add_library(nimblecas_algpoly STATIC)
+target_sources(nimblecas_algpoly PUBLIC
+  FILE_SET CXX_MODULES FILES src/algpoly/algpoly.cppm)
+target_link_libraries(nimblecas_algpoly
+  PUBLIC nimblecas_algnum nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.jordan : Jordan canonical form A = P J P^-1, over Q and over Q(alpha) (§7.2) ----
 add_library(nimblecas_jordan STATIC)
 target_sources(nimblecas_jordan PUBLIC
@@ -1187,6 +1194,12 @@ target_link_libraries(algnum_tests
   PRIVATE nimblecas_algnum nimblecas_factor nimblecas_matrix nimblecas_ratpoly
           nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME algnum_tests COMMAND algnum_tests)
+
+add_executable(algpoly_tests tests/algpoly_tests.cpp)
+target_link_libraries(algpoly_tests
+  PRIVATE nimblecas_algpoly nimblecas_algnum nimblecas_factor nimblecas_matrix
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME algpoly_tests COMMAND algpoly_tests)
 
 add_executable(jordan_tests tests/jordan_tests.cpp)
 target_link_libraries(jordan_tests
