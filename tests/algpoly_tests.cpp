@@ -76,51 +76,62 @@ auto main() -> int {
         .test("(x - alpha)(x + alpha) == x^2 + 1 over Q(i)",
               [&](TestContext& t) {
                   auto pr = linear_pair(qi);
-                  if (!t.expect(pr.has_value(), "built linear factors")) return;
+                  t.expect(pr.has_value(), "built linear factors");
+                  if (!pr) return;
                   auto prod = pr->first.multiply(pr->second);
-                  if (!t.expect(prod.has_value(), "multiply succeeded")) return;
+                  t.expect(prod.has_value(), "multiply succeeded");
+                  if (!prod) return;
                   const AlgebraicPoly target = AlgebraicPoly::embed(qi, poly_x2_plus_1());
                   t.expect(prod->is_equal(target), "product equals x^2 + 1");
               })
         .test("divide: (x^2+1) / (x - alpha) == (x + alpha) rem 0",
               [&](TestContext& t) {
                   auto pr = linear_pair(qi);
-                  if (!t.expect(pr.has_value(), "built linear factors")) return;
+                  t.expect(pr.has_value(), "built linear factors");
+                  if (!pr) return;
                   const AlgebraicPoly target = AlgebraicPoly::embed(qi, poly_x2_plus_1());
                   auto dm = target.divide(pr->first);
-                  if (!t.expect(dm.has_value(), "divide succeeded")) return;
+                  t.expect(dm.has_value(), "divide succeeded");
+                  if (!dm) return;
                   t.expect(dm->remainder.is_zero(), "remainder is zero");
                   t.expect(dm->quotient.is_equal(pr->second), "quotient is x + alpha");
               })
         .test("gcd(x^2+1, x - alpha) == x - alpha (monic) over Q(i)",
               [&](TestContext& t) {
                   auto pr = linear_pair(qi);
-                  if (!t.expect(pr.has_value(), "built linear factors")) return;
+                  t.expect(pr.has_value(), "built linear factors");
+                  if (!pr) return;
                   const AlgebraicPoly target = AlgebraicPoly::embed(qi, poly_x2_plus_1());
                   auto g = target.gcd(pr->first);
-                  if (!t.expect(g.has_value(), "gcd succeeded")) return;
+                  t.expect(g.has_value(), "gcd succeeded");
+                  if (!g) return;
                   // x - alpha is already monic, so the monic gcd equals it exactly.
                   t.expect(g->is_equal(pr->first), "gcd equals x - alpha");
               })
         .test("evaluate at the root alpha is zero",
               [&](TestContext& t) {
                   auto alpha = qi.generator();
-                  if (!t.expect(alpha.has_value(), "generator")) return;
+                  t.expect(alpha.has_value(), "generator");
+                  if (!alpha) return;
                   auto pr = linear_pair(qi);
-                  if (!t.expect(pr.has_value(), "built linear factors")) return;
+                  t.expect(pr.has_value(), "built linear factors");
+                  if (!pr) return;
                   auto v1 = pr->first.evaluate(*alpha);  // (x - alpha) at alpha
-                  if (!t.expect(v1.has_value(), "evaluate x-alpha")) return;
+                  t.expect(v1.has_value(), "evaluate x-alpha");
+                  if (!v1) return;
                   t.expect(v1->is_zero(), "(x - alpha)(alpha) == 0");
                   const AlgebraicPoly target = AlgebraicPoly::embed(qi, poly_x2_plus_1());
                   auto v2 = target.evaluate(*alpha);  // alpha^2 + 1 == 0
-                  if (!t.expect(v2.has_value(), "evaluate x^2+1")) return;
+                  t.expect(v2.has_value(), "evaluate x^2+1");
+                  if (!v2) return;
                   t.expect(v2->is_zero(), "alpha^2 + 1 == 0");
               })
         .test("derivative of x^2 + 1 is 2x",
               [&](TestContext& t) {
                   const AlgebraicPoly target = AlgebraicPoly::embed(qi, poly_x2_plus_1());
                   auto d = target.derivative();
-                  if (!t.expect(d.has_value(), "derivative succeeded")) return;
+                  t.expect(d.has_value(), "derivative succeeded");
+                  if (!d) return;
                   t.expect(d->degree() == 1, "derivative has degree 1");
                   const AlgebraicNumber two = qi.from_rational(Rational::from_int(2));
                   t.expect(d->coefficient(1).is_equal(two), "coeff of x is 2");
@@ -129,23 +140,29 @@ auto main() -> int {
         .test("monic normalises 3(x - alpha) back to x - alpha",
               [&](TestContext& t) {
                   auto pr = linear_pair(qi);
-                  if (!t.expect(pr.has_value(), "built linear factors")) return;
+                  t.expect(pr.has_value(), "built linear factors");
+                  if (!pr) return;
                   const AlgebraicNumber three = qi.from_rational(Rational::from_int(3));
                   auto scaled = pr->first.scale(three);  // 3x - 3alpha
-                  if (!t.expect(scaled.has_value(), "scale succeeded")) return;
+                  t.expect(scaled.has_value(), "scale succeeded");
+                  if (!scaled) return;
                   t.expect(!scaled->leading_coefficient().is_one(), "scaled is not monic");
                   auto m = scaled->monic();
-                  if (!t.expect(m.has_value(), "monic succeeded")) return;
+                  t.expect(m.has_value(), "monic succeeded");
+                  if (!m) return;
                   t.expect(m->is_equal(pr->first), "monic(3(x-alpha)) == x - alpha");
               })
         .test("field mismatch and divide-by-zero are honest errors",
               [&](TestContext& t) {
                   auto pr = linear_pair(qi);
-                  if (!t.expect(pr.has_value(), "built Q(i) factors")) return;
+                  t.expect(pr.has_value(), "built Q(i) factors");
+                  if (!pr) return;
                   auto beta = q2.generator();
-                  if (!t.expect(beta.has_value(), "Q(sqrt2) generator")) return;
+                  t.expect(beta.has_value(), "Q(sqrt2) generator");
+                  if (!beta) return;
                   auto other = AlgebraicPoly::from_coeffs(q2, {*beta, q2.one()});  // x + sqrt2
-                  if (!t.expect(other.has_value(), "built Q(sqrt2) factor")) return;
+                  t.expect(other.has_value(), "built Q(sqrt2) factor");
+                  if (!other) return;
                   auto bad = pr->first.add(*other);  // different fields
                   t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
                            "add across fields -> domain_error");
