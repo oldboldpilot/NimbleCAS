@@ -61,6 +61,17 @@
     .cas-input { font: inherit; font-family: ui-monospace, monospace; padding: 0.55rem 0.7rem;
       border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); width: 100%; }
     .cas-out { min-height: 2rem; }
+    /* block editing (cell CRUD) */
+    .block { position: relative; }
+    .block-tools { display: flex; gap: 0.25rem; justify-content: flex-end; opacity: 0; transition: opacity 0.12s; }
+    .block:hover .block-tools, .block:focus-within .block-tools { opacity: 1; }
+    .block-btn { font: inherit; font-size: 0.8rem; line-height: 1; padding: 0.15rem 0.45rem; border-radius: 4px;
+      border: 1px solid var(--line); background: var(--bg); color: var(--ink-soft); cursor: pointer; }
+    .block-btn:hover { color: var(--ink); border-color: var(--accent); }
+    .addcell { align-items: stretch; }
+    .cell-kind, .cell-input { font: inherit; padding: 0.45rem 0.6rem; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--bg); color: var(--ink); }
+    .cell-input { flex: 1; min-width: 12rem; font-family: ui-monospace, monospace; }
   </style>
 </head>
 <body>

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Build the NimbleCAS "full-CAS to WASM" slice: the exact symbolic core (core, symbolic,
 # cache, simplify, diff, latex, reader) PLUS the numeric / linear-algebra chain (simd,
-# polynomial, ratpoly, matrix, roots, numeric, matdecomp, bandsolve, eigen), compiled with
-# Emscripten and exposed to the browser via the tiny C ABI in src/wasm/wasm_entry.cpp
-# (text -> parse -> simplify -> LaTeX, and a matrix-determinant endpoint exercising the
-# linear-algebra chain).
+# polynomial, ratpoly, matrix, roots, numeric, matdecomp, bandsolve, eigen) and the numeric
+# evaluator (evalnum), compiled with Emscripten and exposed to the browser via the tiny C ABI
+# in src/wasm/wasm_entry.cpp: text -> parse -> simplify -> LaTeX; a matrix-determinant endpoint
+# exercising the linear-algebra chain; and a function-sampling endpoint
+# (nimblecas_sample_function_json: y = f(x) over [x0,x1] -> JSON plot points via evalnum).
 #
 # Uses the proven two-phase C++23-module recipe from docs/architecture/wasm-build.md rather
 # than CMake's module scanning under emscripten (which is not yet reliable). Excludes gpu
@@ -35,7 +36,7 @@ em++ "${F[@]}" -fmodule-file=std=std.pcm -c std.pcm -o std.o
 # 2. Each CAS module in dependency order: source -> BMI (.pcm) -> object (.o), passing every
 #    already-built module-file (over-providing is harmless; the importer uses what it needs).
 MODS=(core parallel simd polynomial ratpoly matrix roots numeric matdecomp bandsolve eigen
-      symbolic cache simplify diff latex reader)
+      symbolic cache simplify diff latex reader evalnum)
 MF=(-fmodule-file=std=std.pcm)
 OBJS=(std.o)
 for m in "${MODS[@]}"; do
@@ -63,7 +64,7 @@ echo "[wasm] link nimblecas.js / nimblecas.wasm"
 em++ "${F[@]}" "${OBJS[@]}" -o nimblecas.js \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=NimbleCAS \
   -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=0 \
-  -sEXPORTED_FUNCTIONS=_nimblecas_eval_latex,_nimblecas_matrix_det_latex,_malloc,_free \
+  -sEXPORTED_FUNCTIONS=_nimblecas_eval_latex,_nimblecas_matrix_det_latex,_nimblecas_sample_function_json,_malloc,_free \
   -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
 
 echo "[wasm] built: $OUT/nimblecas.js  $OUT/nimblecas.wasm"

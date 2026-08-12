@@ -194,13 +194,18 @@ function buildLiveControls() {
 //   nimblecas_matrix_det_latex(m)  "a,b;c,d" (semicolon rows, comma cells) -> exact
 //                                  determinant -> LaTeX (exercises the linalg chain)
 // Degrades gracefully to "engine unavailable" if nimblecas.js / nimblecas.wasm are not served.
-const CAS = { ready: false, evalLatex: null, det: null };
+const CAS = { ready: false, evalLatex: null, det: null, sampleFn: null };
 async function initCAS() {
   try {
     const { default: NimbleCAS } = await import('./nimblecas.js');
     const mod = await NimbleCAS();
     CAS.evalLatex = (src) => mod.ccall('nimblecas_eval_latex', 'string', ['string'], [src]);
     CAS.det = (src) => mod.ccall('nimblecas_matrix_det_latex', 'string', ['string'], [src]);
+    // Sample y = f(x) across [x0, x1] at n points through the exact engine (evalnum).
+    // Returns the parsed JSON { points: [[x, y], ...] } or { error: "..." }.
+    CAS.sampleFn = (expr, x0, x1, n) => JSON.parse(mod.ccall(
+      'nimblecas_sample_function_json', 'string',
+      ['string', 'number', 'number', 'number'], [expr, x0, x1, n]));
     CAS.ready = true;
   } catch (e) {
     CAS.ready = false;  // no engine served -> CAS cells/REPL show an inline hint
@@ -266,8 +271,106 @@ function buildCasRepl() {
   return box;
 }
 
+// Render one executable function-plot cell: sample y = f(x) across a range through the exact
+// engine (nimblecas_sample_function_json -> evalnum) and plot it via the active renderer.
+// block: { kind:'plot-fn', expr:'sin(x)*x', xRange:[x0,x1]?, n:240?, title?, color? }
+function renderFnPlot(host, block) {
+  const fig = document.createElement('figure'); fig.className = 'plot'; host.appendChild(fig);
+  const expr = String(block.expr || '').trim();
+  const range = Array.isArray(block.xRange) && block.xRange.length === 2 ? block.xRange : [-4, 4];
+  const x0 = Number(range[0]), x1 = Number(range[1]);
+  const n = Number.isFinite(block.n) ? Math.max(2, Math.min(4000, block.n | 0)) : 240;
+  const fail = (msg) => { const c = document.createElement('figcaption'); c.textContent = msg; fig.appendChild(c); };
+  if (!expr) { fail('Empty function expression.'); return; }
+  if (!CAS.ready || !CAS.sampleFn) { fail('CAS engine not loaded — cannot sample f(x). Serve nimblecas.js + nimblecas.wasm.'); return; }
+  let res;
+  try { res = CAS.sampleFn(expr, x0, x1, n); }
+  catch (e) { fail('sample failed: ' + e.message); return; }
+  if (!res || res.error || !Array.isArray(res.points) || res.points.length === 0) {
+    fail('f(x) = ' + expr + ' — ' + ((res && res.error) || 'no finite samples')); return;
+  }
+  const title = block.title || ('f(x) = ' + expr);
+  const spec = { type: 'plot', title, xLabel: 'x', yLabel: 'f(x)', xRange: [x0, x1], yRange: null,
+    series: [{ kind: 'line', label: expr, color: block.color || '#0ea5e9', points: res.points }] };
+  try { renderPlot(fig, spec, { onBackendChange: () => setBadge('cpu') }); }
+  catch (e) { fail('render failed: ' + e.message); return; }
+  const cap = document.createElement('figcaption');
+  cap.textContent = title + ' · ' + res.points.length + ' samples via nimblecas.wasm (evalnum)';
+  fig.appendChild(cap);
+}
+
 // --- document renderer ------------------------------------------------------
 let CURRENT_DOC = null;
+
+// Render a single block's CONTENT into `host` (no editing chrome).
+function renderBlockContent(host, block) {
+  if (block.kind === 'prose') { const d = document.createElement('div'); d.className = 'prose'; d.innerHTML = renderProse(block.text || ''); host.appendChild(d); }
+  else if (block.kind === 'math') renderMath(host, block.latex || '');
+  else if (block.kind === 'nimblecas') renderCasCell(host, block.source || '');
+  else if (block.kind === 'nimblecas-det') renderDetCell(host, block.source || '');
+  else if (block.kind === 'plot-fn') renderFnPlot(host, block);
+  else if (block.kind === 'plot' && block.plot) {
+    const fig = document.createElement('figure'); fig.className = 'plot'; host.appendChild(fig);
+    renderPlot(fig, block.plot, { onBackendChange: () => setBadge('cpu') });
+    if (block.plot.title) { const cap = document.createElement('figcaption'); cap.textContent = block.plot.title; fig.appendChild(cap); }
+  }
+}
+
+// --- block CRUD (mutate CURRENT_DOC.blocks in place, then re-render) ---------
+function moveBlock(i, delta) {
+  const b = CURRENT_DOC && CURRENT_DOC.blocks; if (!Array.isArray(b)) return;
+  const j = i + delta; if (j < 0 || j >= b.length) return;
+  [b[i], b[j]] = [b[j], b[i]]; renderDocument(CURRENT_DOC);
+}
+function deleteBlock(i) {
+  const b = CURRENT_DOC && CURRENT_DOC.blocks; if (!Array.isArray(b)) return;
+  b.splice(i, 1); renderDocument(CURRENT_DOC);
+}
+function addBlock(block) {
+  if (!CURRENT_DOC) return;
+  if (!Array.isArray(CURRENT_DOC.blocks)) CURRENT_DOC.blocks = [];
+  CURRENT_DOC.blocks.push(block); renderDocument(CURRENT_DOC);
+}
+
+// The "add a cell" toolbar: pick a kind, type its content, append it to the document.
+function buildAddCell() {
+  const box = document.createElement('div'); box.className = 'controls addcell';
+  const sel = document.createElement('select'); sel.className = 'cell-kind';
+  [['prose', 'Prose'], ['math', 'Math (LaTeX)'], ['nimblecas', 'CAS cell'],
+   ['nimblecas-det', 'Determinant'], ['plot-fn', 'Plot f(x)']].forEach(([v, l]) => {
+    const o = document.createElement('option'); o.value = v; o.textContent = l; sel.appendChild(o);
+  });
+  const input = document.createElement('input'); input.className = 'cell-input'; input.type = 'text';
+  const placeholders = {
+    prose: 'markdown text (headings, **bold**, `code`, - lists)',
+    math: 'LaTeX, e.g.  e^x = \\sum x^n/n!',
+    nimblecas: 'expression, e.g.  (a + b)*(a - b)',
+    'nimblecas-det': 'matrix "a,b;c,d", e.g.  1,2;3,4',
+    'plot-fn': 'function of x, e.g.  sin(x)*x   (plotted over [-4, 4])',
+  };
+  input.placeholder = placeholders[sel.value];
+  sel.addEventListener('change', () => { input.placeholder = placeholders[sel.value] || ''; });
+  const add = document.createElement('button'); add.className = 'btn'; add.textContent = 'Add cell';
+  const doAdd = () => {
+    const kind = sel.value; const v = input.value.trim();
+    if (!v && kind !== 'prose') return;
+    let block;
+    if (kind === 'prose') block = { kind: 'prose', text: v };
+    else if (kind === 'math') block = { kind: 'math', latex: v };
+    else if (kind === 'nimblecas') block = { kind: 'nimblecas', source: v };
+    else if (kind === 'nimblecas-det') block = { kind: 'nimblecas-det', source: v };
+    else if (kind === 'plot-fn') block = { kind: 'plot-fn', expr: v, xRange: [-4, 4], n: 240 };
+    else return;
+    input.value = ''; addBlock(block);
+  };
+  add.addEventListener('click', doAdd);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+  const hint = document.createElement('span'); hint.className = 'hint';
+  hint.textContent = 'Add a cell to the document (edits live in the browser; use “Open document…” to load JSON, or the buttons above each block to reorder/remove).';
+  box.append(sel, input, add, hint);
+  return box;
+}
+
 function renderDocument(doc) {
   const app = document.getElementById('app');
   app.innerHTML = '';
@@ -278,22 +381,30 @@ function renderDocument(doc) {
   }
   if (doc.title) { const h = document.createElement('div'); h.className = 'doc-title'; h.textContent = doc.title; app.appendChild(h); }
   const blocks = Array.isArray(doc.blocks) ? doc.blocks : [];
-  for (const block of blocks) {
-    if (!block || !block.kind) continue;
-    try {
-      if (block.kind === 'prose') { const d = document.createElement('div'); d.className = 'prose'; d.innerHTML = renderProse(block.text || ''); app.appendChild(d); }
-      else if (block.kind === 'math') renderMath(app, block.latex || '');
-      else if (block.kind === 'nimblecas') renderCasCell(app, block.source || '');
-      else if (block.kind === 'nimblecas-det') renderDetCell(app, block.source || '');
-      else if (block.kind === 'plot' && block.plot) {
-        const fig = document.createElement('figure'); fig.className = 'plot'; app.appendChild(fig);
-        renderPlot(fig, block.plot, { onBackendChange: () => setBadge('cpu') });
-        if (block.plot.title) { const cap = document.createElement('figcaption'); cap.textContent = block.plot.title; fig.appendChild(cap); }
-      }
-    } catch (e) {
-      const err = document.createElement('div'); err.className = 'notice'; err.textContent = 'Skipped a malformed ' + block.kind + ' block: ' + e.message; app.appendChild(err);
+  blocks.forEach((block, idx) => {
+    if (!block || !block.kind) return;
+    const wrap = document.createElement('div'); wrap.className = 'block';
+    const tools = document.createElement('div'); tools.className = 'block-tools';
+    const mk = (label, title, fn) => {
+      const b = document.createElement('button'); b.className = 'block-btn'; b.type = 'button';
+      b.textContent = label; b.title = title; b.setAttribute('aria-label', title);
+      b.addEventListener('click', fn); return b;
+    };
+    tools.append(
+      mk('↑', 'Move cell up', () => moveBlock(idx, -1)),
+      mk('↓', 'Move cell down', () => moveBlock(idx, 1)),
+      mk('✕', 'Delete cell', () => deleteBlock(idx)));
+    wrap.appendChild(tools);
+    const content = document.createElement('div'); content.className = 'block-content';
+    try { renderBlockContent(content, block); }
+    catch (e) {
+      const err = document.createElement('div'); err.className = 'notice';
+      err.textContent = 'Skipped a malformed ' + block.kind + ' block: ' + e.message; content.appendChild(err);
     }
-  }
+    wrap.appendChild(content);
+    app.appendChild(wrap);
+  });
+  app.appendChild(buildAddCell());
   app.appendChild(buildLiveControls());
   app.appendChild(buildCasRepl());
 }
@@ -358,6 +469,8 @@ function buildSampleDocument() {
       { kind: 'nimblecas-det', source: '1,2;3,4' },
       { kind: 'nimblecas-det', source: '2,0,0;0,3,0;0,0,4' },
       { kind: 'nimblecas-det', source: '1/2,1;1,1' },
+      { kind: 'prose', text: '## Plot a function through the exact engine\n\nThis `plot-fn` cell samples `f(x)` across a range by calling the WASM engine\'s `nimblecas_sample_function_json` endpoint — every sample evaluated by `evalnum` (exact ℚ, collapsed to a double only at the leaves) — then drawn through the same WebGPU/Canvas2D renderer. Add your own with the **Plot f(x)** cell type below.' },
+      { kind: 'plot-fn', expr: 'x^3 - 3*x', xRange: [-3, 3], n: 240, title: 'f(x) = x³ − 3x' },
       { kind: 'prose', text: '## Live compute\n\nType your own expression in the CAS box below, or sample a polynomial through the plot renderer. The CAS runs `nimblecas.wasm` (the whole symbolic engine); the polynomial control runs the freestanding `kernel.wasm` if present, else JavaScript.' },
     ],
   };

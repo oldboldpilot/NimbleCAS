@@ -37,22 +37,35 @@ cache, simplify, diff, latex, reader` — compiled with Emscripten (see
   expression → it is parsed, simplified, and rendered as LaTeX (MathJax). Because it
   fetches `nimblecas.wasm`, serve it over `http(s)://` (e.g. `python -m http.server`),
   not `file://`.
-- **API:** two C exports:
+- **API:** three C exports:
   - `nimblecas_eval_latex(const char*) -> const char*` — text → parse → simplify →
     LaTeX, exact over ℚ. `2/4 + 1/4` yields `\frac{3}{4}`, not a float.
   - `nimblecas_matrix_det_latex(const char*) -> const char*` — `"a,b;c,d"` (semicolon
     rows, comma cells) → the exact determinant → LaTeX, exercising the linear-algebra
     chain (`matrix → ratpoly → polynomial → simd`). `1,2;3,4` yields `-2`;
     `1/2,1;1,1` yields `-\frac{1}{2}`.
+  - `nimblecas_sample_function_json(const char* expr, double x0, double x1, int n) ->
+    const char*` — sample `y = f(x)` at `n` points evenly spanning `[x0, x1]`, each
+    evaluated through the exact engine's numeric evaluator (`evalnum`: exact ℚ collapsed
+    to an IEEE double only at the leaves), returning `{"points":[[x,y],...]}` — the
+    `points` array a `PlotSpec` series consumes. The independent variable is `"x"`. A
+    sample that cannot be evaluated (unbound symbol, domain error, non-finite) is
+    **omitted, never fabricated**; a parse failure, `n < 1`, a non-finite range, or a
+    function with no finite sample returns `{"error":"…"}`. Call via
+    `Module.ccall('nimblecas_sample_function_json', 'string', ['string','number','number','number'], [expr, x0, x1, n])`.
 
-  Call either as `Module.ccall('<name>', 'string', ['string'], [arg])`. Both are total —
-  a parse/eval failure or a non-square/non-numeric matrix returns a LaTeX `\text{…}`
-  marker rather than throwing or guessing.
+  Call the string endpoints as `Module.ccall('<name>', 'string', ['string'], [arg])`. All
+  are total — a parse/eval failure or a non-square/non-numeric matrix returns a LaTeX
+  `\text{…}` marker (or a JSON `{"error":…}` for the sampler) rather than throwing or
+  guessing.
 
-This is the substrate a future WebGPU document front-end will call to evaluate live
-`nimblecas` cells (the [`execdoc`](../docs/reference/execdoc.md) engine's browser
-counterpart); wiring it into `app.js` alongside the plot renderer is the remaining
-front-end step.
+The served `app.html` build wires this engine into the document front-end (the
+[`execdoc`](../docs/reference/execdoc.md) engine's browser counterpart): executable
+`nimblecas` / `nimblecas-det` cells, a live CAS box, **`plot-fn` cells** that sample
+`f(x)` through `nimblecas_sample_function_json` and draw it via the WebGPU/Canvas2D
+renderer, and **cell CRUD** — per-block move-up/down/delete tools plus an add-cell
+toolbar (prose / math / CAS / determinant / plot-f(x)). Edits are live in the browser;
+`index.html` remains the zero-dependency static viewer (no engine, no editing).
 
 ## Browser requirements
 

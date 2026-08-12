@@ -31,8 +31,10 @@ import nimblecas.simplify;
 import nimblecas.latex;
 import nimblecas.ratpoly;
 import nimblecas.matrix;
+import nimblecas.evalnum;
 
 using nimblecas::ConstantNode;
+using nimblecas::eval_double;
 using nimblecas::Expr;
 using nimblecas::make_error;
 using nimblecas::MathError;
@@ -163,5 +165,76 @@ extern "C" [[gnu::used]] auto nimblecas_matrix_det_latex(const char* input) -> c
         return out.c_str();
     }
     out = to_latex(*e);
+    return out.c_str();
+}
+
+namespace {
+
+// Shortest round-trip decimal for a finite double (locale-independent, no allocation churn
+// beyond the result string). Used to build the plot-points JSON.
+[[nodiscard]] auto dtoa(double v) -> std::string {
+    std::array<char, 32> buf{};
+    auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+    return std::string(buf.data(), ptr);
+}
+
+}  // namespace
+
+// Exported to JS as `_nimblecas_sample_function_json`. Samples the symbolic function
+// y = f(x) at `n` points evenly spanning [x0, x1] and returns a JSON object
+// {"points":[[x,y],...]} — exactly the `points` array a PlotSpec series consumes — with each
+// sample evaluated through the exact engine's numeric evaluator (evalnum: exact Q arithmetic
+// collapsed to an IEEE double only at the leaves). The independent variable is "x".
+//
+// Honesty: a sample that fails to evaluate (an unbound symbol, a domain error such as ln of a
+// negative, or a non-finite result) is OMITTED, never fabricated. A parse failure, n < 1, a
+// non-finite range, or a function with no finite sample anywhere returns {"error":"..."}
+// instead of a misleading empty/zero curve.
+extern "C" [[gnu::used]] auto nimblecas_sample_function_json(const char* input, double x0,
+                                                             double x1, int n) -> const char* {
+    static std::string out;
+    const std::string_view text = input != nullptr ? std::string_view{input} : std::string_view{};
+
+    if (n < 1) {
+        out = R"({"error":"n must be >= 1"})";
+        return out.c_str();
+    }
+    if (!std::isfinite(x0) || !std::isfinite(x1)) {
+        out = R"({"error":"non-finite range"})";
+        return out.c_str();
+    }
+    auto parsed = parse(text);
+    if (!parsed) {
+        out = R"({"error":"parse error"})";
+        return out.c_str();
+    }
+
+    std::string points = "{\"points\":[";
+    bool any = false;
+    for (int i = 0; i < n; ++i) {
+        const double x =
+            n == 1 ? x0
+                   : x0 + (x1 - x0) * (static_cast<double>(i) / static_cast<double>(n - 1));
+        auto y = eval_double(*parsed, "x", x);
+        if (!y || !std::isfinite(*y)) {
+            continue;  // omit the point rather than invent one (Rule 32)
+        }
+        if (any) {
+            points += ',';
+        }
+        any = true;
+        points += '[';
+        points += dtoa(x);
+        points += ',';
+        points += dtoa(*y);
+        points += ']';
+    }
+    points += "]}";
+
+    if (!any) {
+        out = R"({"error":"no finite samples: unbound variable, domain error, or non-finite result"})";
+        return out.c_str();
+    }
+    out = std::move(points);
     return out.c_str();
 }
