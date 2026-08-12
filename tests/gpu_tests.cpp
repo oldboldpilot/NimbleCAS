@@ -526,5 +526,36 @@ auto main() -> int {
                                "CUDA-disabled path returns gpu_error");
                   }
               })
+        .test("cg_csr_solves_small_spd_system",
+              [](TestContext& t) {
+                  // SPD A = [[4,1],[1,3]], b = [1,2] in CSR. The exact solution is
+                  //   x = A^{-1} b = [1/11, 7/11] ~= [0.0909090909, 0.6363636364]
+                  // (check: 4*(1/11) + 1*(7/11) = 11/11 = 1; 1*(1/11) + 3*(7/11) = 22/11 = 2).
+                  const std::vector<int> row_offsets = {0, 2, 4};
+                  const std::vector<int> col_indices = {0, 1, 0, 1};
+                  const std::vector<double> values = {4.0, 1.0, 1.0, 3.0};
+                  const std::vector<double> b = {1.0, 2.0};
+                  if (gpu::available()) {
+                      auto got = gpu::cg_csr(row_offsets, col_indices, values, b, 100, 1e-12);
+                      t.expect(got.has_value(), "CG solve computed on the device");
+                      t.expect(got && got->x.size() == 2, "one solution entry per unknown");
+                      const double x0 = 1.0 / 11.0;  // 0.09090909...
+                      const double x1 = 7.0 / 11.0;  // 0.63636363...
+                      t.expect(got && std::abs(got->x[0] - x0) < 1e-9 &&
+                                   std::abs(got->x[1] - x1) < 1e-9,
+                               "GPU CG matches the hand-verified exact solution [1/11, 7/11]");
+                      t.expect(got && got->converged, "CG reports convergence on the SPD system");
+                      // Malformed CSR (row_offsets length != n+1) rides the railway.
+                      const std::vector<int> bad_row = {0, 2};
+                      auto bad = gpu::cg_csr(bad_row, col_indices, values, b, 100, 1e-12);
+                      t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
+                               "row_offsets length mismatch yields domain_error");
+                  } else {
+                      // CUDA-disabled path returns the documented error so the default build passes.
+                      auto got = gpu::cg_csr(row_offsets, col_indices, values, b, 100, 1e-12);
+                      t.expect(!got.has_value() && got.error() == MathError::gpu_error,
+                               "CUDA-disabled path returns the documented gpu_error");
+                  }
+              })
         .run();
 }

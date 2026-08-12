@@ -102,6 +102,18 @@ int nimblecas_gpu_black_scholes_batch(const NimblecasBsOption* opts, double* out
 int nimblecas_gpu_black_scholes_batch_graphed(const NimblecasBsOption* opts, double* out,
                                               int n, int iterations);
 
+// Conjugate-gradient solve of a SYMMETRIC POSITIVE-DEFINITE sparse system A x = b, with A in
+// CSR form: row_offsets length n+1, col_indices/values length nnz. x is the solution (the
+// caller supplies an initial guess, typically zeros, in x on entry). Iterates until the
+// residual 2-norm <= tol*||b|| or max_iters is reached. Writes the iteration count to
+// *out_iters, 1/0 (converged?) to *out_converged, and the final residual 2-norm to *out_resid.
+// Returns 0 on success, or a non-zero CUDA error code. NOTE: device dot-product reductions sum
+// in block/tree order, so the last bits may differ from a sequential CPU CG (each is a valid
+// numerical solution) -- the CPU krylov::cg remains authoritative; this is a numerical mirror.
+int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indices, const double* values,
+                         int n, int nnz, const double* b, double* x, int max_iters, double tol,
+                         int* out_iters, int* out_converged, double* out_resid);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -1209,3 +1209,305 @@ extern "C" int nimblecas_gpu_black_scholes_batch_graphed(const NimblecasBsOption
     }
     return rc;
 }
+
+// ---------------------------------------------------------------------------
+// Conjugate-gradient solve of a symmetric positive-definite CSR system A x = b (ROADMAP 5).
+//
+// Standard CG: a self-contained CSR SpMV kernel plus elementwise vector kernels (axpy, xpby)
+// and a two-stage dot-product reduction (dot_partials_kernel folds each block's slice into a
+// partial, reduce_partials_kernel above folds the partials into one device scalar). The host
+// driver controls the iteration, copying only the scalar dot results back to compute alpha and
+// beta. This is the batch-solve MIRROR of the authoritative CPU nimblecas::krylov::cg: the
+// device dot reductions sum in block/tree order, so the last bits of x can differ from a
+// sequential CPU CG — each is a valid numerical solution, neither is "more correct".
+// ---------------------------------------------------------------------------
+namespace {
+
+// CSR sparse matrix-vector product y = A*x, one thread per row (grid-stride over rows). Each
+// thread accumulates over its row's nnz: y[row] = sum_{e in [row_offsets[row], row_offsets[row+1])}
+// values[e] * x[col_indices[e]].
+__global__ void csr_spmv_kernel(const int* __restrict__ row_offsets,
+                               const int* __restrict__ col_indices,
+                               const double* __restrict__ values, int n,
+                               const double* __restrict__ x, double* __restrict__ y) {
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    for (int row = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                   static_cast<int>(threadIdx.x);
+         row < n; row += stride) {
+        const int begin = row_offsets[row];
+        const int end = row_offsets[row + 1];
+        double acc = 0.0;
+        for (int e = begin; e < end; ++e) {
+            acc += values[e] * x[col_indices[e]];
+        }
+        y[row] = acc;
+    }
+}
+
+// Partial dot product: each block reduces its grid-stride slice of a[i]*b[i] through shared
+// memory and thread 0 writes the block total to partials[blockIdx.x]; reduce_partials_kernel
+// (defined above) folds the block partials into a single device scalar. blockDim.x is a power of
+// two (256), so the halving tree is exact. Block/tree summation order, so the last bits can
+// differ from a sequential CPU dot — the documented CG determinism note.
+__global__ void dot_partials_kernel(const double* __restrict__ a, const double* __restrict__ b,
+                                   int n, double* __restrict__ partials) {
+    extern __shared__ double sdata[];
+    const int tid = static_cast<int>(threadIdx.x);
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    double local = 0.0;
+    for (int i = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) + tid; i < n;
+         i += stride) {
+        local += a[i] * b[i];
+    }
+    sdata[tid] = local;
+    __syncthreads();
+    for (int s = static_cast<int>(blockDim.x) / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        partials[blockIdx.x] = sdata[0];
+    }
+}
+
+// y[i] += alpha * x[i] (grid-stride) — the CG update/residual step (x += alpha*p, r -= alpha*Ap).
+__global__ void axpy_kernel(double alpha, const double* __restrict__ x, double* __restrict__ y,
+                           int n) {
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    for (int i = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                 static_cast<int>(threadIdx.x);
+         i < n; i += stride) {
+        y[i] += alpha * x[i];
+    }
+}
+
+// p[i] = r[i] + beta * p[i] (grid-stride) — the CG search-direction update.
+__global__ void xpby_kernel(const double* __restrict__ r, double beta, double* __restrict__ p,
+                           int n) {
+    const int stride = static_cast<int>(gridDim.x) * static_cast<int>(blockDim.x);
+    for (int i = static_cast<int>(blockIdx.x) * static_cast<int>(blockDim.x) +
+                 static_cast<int>(threadIdx.x);
+         i < n; i += stride) {
+        p[i] = r[i] + beta * p[i];
+    }
+}
+
+// Two-stage device dot product a . b over n elements, writing the scalar result to *result (host).
+// Reuses reduce_partials_kernel to fold the block partials, so the sum stays on the device until a
+// single double is copied back. Returns the first failing CUDA error, or cudaSuccess.
+cudaError_t cg_device_dot(const double* a, const double* b, int n, int blocks, int threads,
+                          size_t shmem, double* dev_partials, double* dev_scalar, double* result) {
+    dot_partials_kernel<<<blocks, threads, shmem>>>(a, b, n, dev_partials);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        return err;
+    }
+    reduce_partials_kernel<<<1, threads, shmem>>>(dev_partials, blocks, dev_scalar);
+    if ((err = cudaGetLastError()) != cudaSuccess) {
+        return err;
+    }
+    if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+        return err;
+    }
+    return cudaMemcpy(result, dev_scalar, sizeof(double), cudaMemcpyDeviceToHost);
+}
+
+}  // namespace
+
+extern "C" int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indices,
+                                    const double* values, int n, int nnz, const double* b,
+                                    double* x, int max_iters, double tol, int* out_iters,
+                                    int* out_converged, double* out_resid) {
+    // Honest input validation: a degenerate shape or a null buffer is an invalid argument, never a
+    // wrong answer. col_indices/values may be null only when there are no nonzeros.
+    if (n <= 0 || nnz < 0 || row_offsets == nullptr || b == nullptr || x == nullptr ||
+        out_iters == nullptr || out_converged == nullptr || out_resid == nullptr ||
+        (nnz > 0 && (col_indices == nullptr || values == nullptr))) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    *out_iters = 0;
+    *out_converged = 0;
+    *out_resid = 0.0;
+    const int threads = 256;  // power of two: required by the shared-memory dot reductions
+    const int blocks = choose_blocks(n, threads);
+    const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
+    const size_t row_bytes = static_cast<size_t>(n + 1) * sizeof(int);
+    const size_t vec_bytes = static_cast<size_t>(n) * sizeof(double);
+    const size_t part_bytes = static_cast<size_t>(blocks) * sizeof(double);
+    const size_t col_bytes = static_cast<size_t>(nnz) * sizeof(int);
+    const size_t val_bytes = static_cast<size_t>(nnz) * sizeof(double);
+    // A zero-nonzero matrix still needs a valid (unused) device allocation for the CSR arrays.
+    const size_t col_alloc = col_bytes != 0 ? col_bytes : sizeof(int);
+    const size_t val_alloc = val_bytes != 0 ? val_bytes : sizeof(double);
+    int* dev_row = nullptr;
+    int* dev_col = nullptr;
+    double* dev_val = nullptr;
+    double* dev_b = nullptr;
+    double* dev_x = nullptr;
+    double* dev_r = nullptr;
+    double* dev_p = nullptr;
+    double* dev_ap = nullptr;
+    double* dev_partials = nullptr;
+    double* dev_scalar = nullptr;
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+    if ((err = cudaMalloc(&dev_row, row_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_col, col_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_val, val_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_b, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_x, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_r, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_p, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_ap, vec_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_partials, part_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_scalar, sizeof(double))) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_row, row_offsets, row_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if (nnz > 0 &&
+               (err = cudaMemcpy(dev_col, col_indices, col_bytes, cudaMemcpyHostToDevice)) !=
+                   cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if (nnz > 0 &&
+               (err = cudaMemcpy(dev_val, values, val_bytes, cudaMemcpyHostToDevice)) !=
+                   cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_b, b, vec_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_x, x, vec_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        // r = b - A*x (Ap holds A*x here), p = r.
+        csr_spmv_kernel<<<blocks, threads>>>(dev_row, dev_col, dev_val, n, dev_x, dev_ap);
+        double bnorm2 = 0.0;
+        double rsold = 0.0;
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(dev_r, dev_b, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                   cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else {
+            axpy_kernel<<<blocks, threads>>>(-1.0, dev_ap, dev_r, n);  // r = b - A*x
+            if ((err = cudaGetLastError()) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else if ((err = cudaMemcpy(dev_p, dev_r, vec_bytes, cudaMemcpyDeviceToDevice)) !=
+                       cudaSuccess) {
+                rc = static_cast<int>(err);  // p = r
+            } else if ((err = cg_device_dot(dev_b, dev_b, n, blocks, threads, shmem, dev_partials,
+                                            dev_scalar, &bnorm2)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            } else if ((err = cg_device_dot(dev_r, dev_r, n, blocks, threads, shmem, dev_partials,
+                                            dev_scalar, &rsold)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            }
+        }
+        if (rc == 0) {
+            const double bnorm = sqrt(bnorm2);
+            const double threshold = tol * bnorm;
+            double resid = sqrt(rsold);
+            int iters = 0;
+            int converged = resid <= threshold ? 1 : 0;
+            for (int it = 0; it < max_iters && converged == 0 && rc == 0; ++it) {
+                // Ap = A*p; pAp = p . Ap.
+                csr_spmv_kernel<<<blocks, threads>>>(dev_row, dev_col, dev_val, n, dev_p, dev_ap);
+                double pap = 0.0;
+                if ((err = cudaGetLastError()) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                    break;
+                }
+                if ((err = cg_device_dot(dev_p, dev_ap, n, blocks, threads, shmem, dev_partials,
+                                         dev_scalar, &pap)) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                    break;
+                }
+                // For an SPD A, p.Ap > 0; a non-positive value is a numerical breakdown. Stop
+                // honestly (leaving converged == 0) rather than divide and emit a wrong x.
+                if (!(pap > 0.0)) {
+                    break;
+                }
+                const double alpha = rsold / pap;
+                axpy_kernel<<<blocks, threads>>>(alpha, dev_p, dev_x, n);  // x += alpha*p
+                if ((err = cudaGetLastError()) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                    break;
+                }
+                axpy_kernel<<<blocks, threads>>>(-alpha, dev_ap, dev_r, n);  // r -= alpha*Ap
+                if ((err = cudaGetLastError()) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                    break;
+                }
+                double rsnew = 0.0;
+                if ((err = cg_device_dot(dev_r, dev_r, n, blocks, threads, shmem, dev_partials,
+                                         dev_scalar, &rsnew)) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                    break;
+                }
+                resid = sqrt(rsnew);
+                iters = it + 1;
+                if (resid <= threshold) {
+                    converged = 1;
+                    break;
+                }
+                const double beta = rsnew / rsold;
+                xpby_kernel<<<blocks, threads>>>(dev_r, beta, dev_p, n);  // p = r + beta*p
+                if ((err = cudaGetLastError()) != cudaSuccess) {
+                    rc = static_cast<int>(err);
+                    break;
+                }
+                rsold = rsnew;
+            }
+            if (rc == 0 &&
+                (err = cudaMemcpy(x, dev_x, vec_bytes, cudaMemcpyDeviceToHost)) != cudaSuccess) {
+                rc = static_cast<int>(err);
+            }
+            if (rc == 0) {
+                *out_iters = iters;
+                *out_converged = converged;
+                *out_resid = resid;
+            }
+        }
+    }
+    if (dev_row != nullptr) {
+        cudaFree(dev_row);
+    }
+    if (dev_col != nullptr) {
+        cudaFree(dev_col);
+    }
+    if (dev_val != nullptr) {
+        cudaFree(dev_val);
+    }
+    if (dev_b != nullptr) {
+        cudaFree(dev_b);
+    }
+    if (dev_x != nullptr) {
+        cudaFree(dev_x);
+    }
+    if (dev_r != nullptr) {
+        cudaFree(dev_r);
+    }
+    if (dev_p != nullptr) {
+        cudaFree(dev_p);
+    }
+    if (dev_ap != nullptr) {
+        cudaFree(dev_ap);
+    }
+    if (dev_partials != nullptr) {
+        cudaFree(dev_partials);
+    }
+    if (dev_scalar != nullptr) {
+        cudaFree(dev_scalar);
+    }
+    return rc;
+}

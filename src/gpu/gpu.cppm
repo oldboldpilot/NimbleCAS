@@ -396,4 +396,60 @@ namespace detail {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Conjugate-gradient solve of a symmetric positive-definite CSR sparse system A x = b — the
+// batch-solve MIRROR of the authoritative CPU nimblecas::krylov::cg.
+// ---------------------------------------------------------------------------
+struct CgCsrResult {
+    std::vector<double> x;    // the solution vector, length n
+    int iterations;           // CG iterations actually performed
+    bool converged;           // whether ||r|| <= tol*||b|| was reached within max_iters
+    double residual;          // final residual 2-norm ||b - A x||
+};
+
+// Solve A x = b for a SYMMETRIC POSITIVE-DEFINITE sparse A in CSR form on the device: `row_offsets`
+// has length n+1 and `col_indices`/`values` hold the flattened nonzeros (equal length nnz), with
+// n = b.size(). The solver starts from a zero initial guess and iterates until the residual 2-norm
+// falls to tol*||b|| or `max_iters` is reached, returning the solution together with the iteration
+// count, a converged flag, and the final residual norm.
+//
+// HONESTY: a NUMERICAL (double) iterative solver — GPU acceleration applies only to the regular,
+// data-parallel SpMV and vector work. The exact-rational / symbolic linear-algebra paths cannot run
+// on the device and are unaffected; the CPU nimblecas::krylov::cg remains authoritative.
+// DETERMINISM: the device dot-product reductions sum in block/tree order rather than the CPU's
+// strict left-to-right order, so the last bits of x can differ from a sequential CPU CG — each is a
+// valid numerical solution.
+//
+// Fails with MathError::gpu_error when no device is present or a CUDA call fails;
+// MathError::domain_error when b is empty (n must be > 0), row_offsets.size() != n+1, or
+// col_indices.size() != values.size(); and MathError::overflow when a size exceeds the int kernel
+// bound.
+[[nodiscard]] auto cg_csr(std::span<const int> row_offsets, std::span<const int> col_indices,
+                          std::span<const double> values, std::span<const double> b,
+                          int max_iters = 1000, double tol = 1e-10) -> Result<CgCsrResult> {
+    if (!available()) {
+        return make_error<CgCsrResult>(MathError::gpu_error);
+    }
+    if (b.empty() || row_offsets.size() != b.size() + 1 || col_indices.size() != values.size()) {
+        return make_error<CgCsrResult>(MathError::domain_error);
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (row_offsets.size() > int_max || values.size() > int_max) {
+        return make_error<CgCsrResult>(MathError::overflow);
+    }
+    const auto n = static_cast<int>(b.size());
+    const auto nnz = static_cast<int>(values.size());
+    std::vector<double> x(b.size(), 0.0);  // zero initial guess, as documented
+    int iterations = 0;
+    int converged = 0;
+    double residual = 0.0;
+    const int rc = nimblecas_gpu_cg_csr(row_offsets.data(), col_indices.data(), values.data(), n,
+                                        nnz, b.data(), x.data(), max_iters, tol, &iterations,
+                                        &converged, &residual);
+    if (rc != 0) {
+        return make_error<CgCsrResult>(MathError::gpu_error);
+    }
+    return CgCsrResult{std::move(x), iterations, converged != 0, residual};
+}
+
 }  // namespace nimblecas::gpu
