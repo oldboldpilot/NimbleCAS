@@ -48,6 +48,23 @@ namespace {
 
 auto main() -> int {
     return TestSuite("nimblecas.integrate")
+        .test("extended_algebraic_residue_1_over_x2_plus_1",
+              [](TestContext& t) {
+                  // int 1/(x^2+1) dx: the residues +-i/2 are irrational, so
+                  // integrate_rational_extended routes them through log_part_extended as ONE
+                  // conjugate-sum algebraic term over Q[t]/(t^2+1/4) — no rational logs, no
+                  // rational part. (The term's exact content is verified in rothstein_tests;
+                  // here we confirm the integrate wrapper carries it through.)
+                  auto a = ipoly({1});
+                  auto d = ipoly({1, 0, 1});  // x^2 + 1 (palindromic: coefficient order agnostic)
+                  auto r = nimblecas::integrate_rational_extended(a, d);
+                  t.expect(r.has_value(), "integrate_rational_extended(1/(x^2+1)) succeeds");
+                  if (!r) return;
+                  t.expect(r->log_terms.empty(), "no rational log terms");
+                  t.expect(r->algebraic_log_terms.size() == 1,
+                           "exactly one algebraic conjugate-sum term");
+                  t.expect(r->rational_num.is_zero(), "purely logarithmic: no rational part");
+              })
         .test("pure_rational",
               [](TestContext& t) {
                   // int 1/(x-1)^2 dx = -1/(x-1): rational part only, no logs.
