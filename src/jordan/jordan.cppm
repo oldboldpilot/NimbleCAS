@@ -1,5 +1,7 @@
 // NimbleCAS Jordan canonical form WITH the transforming matrix P (A = P*J*P^{-1}),
-// exact over Q and over a simple quadratic extension field Q(alpha) (ROADMAP §7.10).
+// exact over Q, over a simple quadratic extension field Q(alpha), and over the general
+// splitting field of the characteristic polynomial's non-linear irreducible factors
+// (ROADMAP §7.10).
 // @author Olumuyiwa Oluwasanmi
 //
 // The Jordan canonical form J of a square matrix A is block-diagonal, one Jordan block
@@ -36,11 +38,19 @@
 //           and the invertibility of P are VERIFIED exactly. J and P are returned as
 //           matrices of AlgebraicNumber that carry their NumberField (see AlgebraicJordan).
 //
-//   TIER 3  honest refusal — jordan_form returns MathError::not_implemented when an
-//           irreducible factor of the char poly has degree >= 3 (a general splitting field,
-//           out of scope) OR when two or more DISTINCT irreducible quadratic factors appear
-//           (a possibly-composite extension, out of scope). No wrong or decimalized answer
-//           is ever produced.
+//   TIER 3  jordan_form(A) / jordan_form(A, max_field_degree) — when the char poly's
+//           non-linear irreducible factors do NOT fit the single-quadratic Tier 2 case (an
+//           irreducible factor of degree >= 3 is present, OR two or more DISTINCT
+//           irreducible quadratic factors appear), the GENERAL splitting field of every
+//           non-linear factor is built via nimblecas.splitfield::splitting_field, capped at
+//           `max_field_degree` (default kDefaultMaxSplittingFieldDegree = 12; e.g. a quartic
+//           with Galois group S4 needs degree 24 and is refused). Every eigenvalue -- the
+//           rational ones and every harvested root of every non-linear factor -- is rebuilt
+//           in that ONE common field, and the SAME compute_groups -> assemble -> verify
+//           pipeline as Tier 2 produces J and P. Fails honestly with
+//           MathError::not_implemented when splitting_field's own envelope is exceeded (a
+//           possibility for large or high-Galois-group factors); jordan_structure remains
+//           the exact-over-Q fallback in that case -- never a wrong or decimalized answer.
 //
 // The tier boundary is documented precisely in docs/reference/jordan.md.
 
@@ -57,6 +67,7 @@ import nimblecas.roots;
 import nimblecas.eigen;
 import nimblecas.factor;
 import nimblecas.algnum;
+import nimblecas.splitfield;
 
 export namespace nimblecas {
 
@@ -93,18 +104,28 @@ struct AlgebraicJordan {
 //   * overflow — an int64 numerator/denominator overflow in the exact arithmetic.
 [[nodiscard]] auto rational_jordan_form(const Matrix& a) -> Result<RationalJordan>;
 
-// TIER 2 / TIER 3. The Jordan canonical form J and transforming matrix P of A over a
-// simple quadratic extension Q(alpha), valid when the characteristic polynomial's only
-// non-linear irreducible factor over Q is a single quadratic q(x) (possibly repeated).
-// Returns {field, J, P} with A*P == P*J over Q(alpha) and P invertible, verified exactly.
-// Fails with:
+// The default cap on the degree of the splitting field the TIER 3 general path is willing
+// to build (see jordan_form(a, max_field_degree) below). 12 comfortably covers e.g. two or
+// three independent quadratics (degree <= 8) or a cubic with an S3 Galois group (degree 6);
+// a quartic with Galois group S4 (degree 24) is out of this default's reach.
+inline constexpr std::int64_t kDefaultMaxSplittingFieldDegree = 12;
+
+// TIER 2 / TIER 3. The Jordan canonical form J and transforming matrix P of A over the field
+// its eigenvalues live in: the simple quadratic extension Q(alpha) when the char poly's only
+// non-linear irreducible factor is a single quadratic (possibly repeated) -- TIER 2 -- or
+// else the GENERAL splitting field of every non-linear irreducible factor, built via
+// nimblecas.splitfield and capped at `max_field_degree` -- TIER 3. Returns {field, J, P}
+// with A*P == P*J over `field` and P invertible, verified exactly. The single-argument
+// overload uses kDefaultMaxSplittingFieldDegree. Fails with:
 //   * domain_error — A is not square or is 0x0, OR the char poly splits over Q (no
 //     extension is needed — use rational_jordan_form instead);
-//   * not_implemented — an irreducible factor of degree >= 3 is present, OR two or more
-//     DISTINCT irreducible quadratic factors are present (out of scope: a general or
-//     composite splitting field);
+//   * not_implemented — building the splitting field of the non-linear factors would exceed
+//     `max_field_degree` at some point, or any of splitting_field's own internal budgets is
+//     exceeded (an honest refusal — jordan_structure remains the exact-over-Q fallback);
 //   * overflow — an int64 overflow in the exact arithmetic.
 [[nodiscard]] auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>;
+[[nodiscard]] auto jordan_form(const Matrix& a, std::int64_t max_field_degree)
+    -> Result<AlgebraicJordan>;
 
 // ---------------------------------------------------------------------------
 // jordan_structure — the exact-over-Q Jordan block STRUCTURE (Segre characteristic),
@@ -586,6 +607,105 @@ template <typename S>
     return groups;
 }
 
+// TIER 3: the general splitting-field path. Builds the splitting field of every non-linear
+// irreducible factor of `charpoly` via nimblecas.splitfield::splitting_field, rebuilds the
+// full DISTINCT eigenvalue list (every rational root, plus every harvested root of every
+// non-linear factor) in that one common field, embeds A into it, and reuses the exact same
+// compute_groups -> assemble -> verify pipeline the single-quadratic Tier 2 path uses
+// (S = AlgebraicNumber). Each eigenvalue is listed exactly ONCE regardless of its algebraic
+// multiplicity in the characteristic polynomial -- exactly as Tier 1/2 already do (see e.g.
+// Tier 2's `eigenvalues.push_back(alpha)` a single time even for a repeated quadratic
+// factor): compute_groups' jordan_chains(N = A - lambda*I) recovers that eigenvalue's ENTIRE
+// generalized eigenspace (however many Jordan blocks, summing to the full multiplicity) from
+// the nullity growth of N, N^2, ... in ONE call, so listing the same eigenvalue twice would
+// double-count its blocks. `factors` is factor_over_Q(charpoly)'s own result; splitting_field
+// reports each non-linear factor's roots back in the SAME order they were submitted in.
+// Fails with:
+//   * whatever error splitting_field propagates -- most notably MathError::not_implemented
+//     when the splitting field's degree would exceed max_field_degree at any point, or any
+//     of splitting_field's own internal budgets (Trager's shift search, the primitive-
+//     element search, factor_over_Q's own budget) is exceeded. This is the honest Tier 3
+//     boundary: jordan_structure remains the exact-over-Q fallback.
+//   * domain_error -- the unreachable self-verification guard (Rule 32), symmetric with the
+//     other tiers.
+[[nodiscard]] auto splitting_field_jordan_form(
+    const Matrix& a, const RationalPoly& charpoly,
+    const std::vector<std::pair<RationalPoly, std::int64_t>>& factors, std::size_t n,
+    std::int64_t max_field_degree) -> Result<AlgebraicJordan> {
+    // Collect the non-linear irreducible factors (degree >= 2), monic, in factor_over_Q's
+    // own order; splitting_field reports roots back in this same order (per its contract).
+    // Only the DISTINCT factors matter here -- multiplicity plays no role in which
+    // eigenvalues get listed (see the function comment above).
+    std::vector<RationalPoly> nonlinear;
+    nonlinear.reserve(factors.size());
+    for (const auto& [f, mult] : factors) {
+        (void)mult;
+        if (f.degree() >= 2) {
+            auto fm = f.monic();
+            if (!fm) {
+                return make_error<AlgebraicJordan>(fm.error());
+            }
+            nonlinear.push_back(std::move(*fm));
+        }
+    }
+
+    auto split = splitting_field(nonlinear, max_field_degree);
+    if (!split) {
+        // Honest propagation (Rule 32): a not_implemented / overflow here is NOT fabricated
+        // into a plausible-looking answer. jordan_structure remains the exact-over-Q
+        // fallback for the block STRUCTURE alone.
+        return make_error<AlgebraicJordan>(split.error());
+    }
+    const NumberField field = std::move(split->field);
+    const AlgebraicNumber zero = field.zero();
+    const AlgebraicNumber one = field.one();
+
+    // A embedded into the splitting field.
+    Mat<AlgebraicNumber> amat(n, Vec<AlgebraicNumber>(n, zero));
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            amat[i][j] = field.from_rational(a.at(i, j));
+        }
+    }
+
+    // The full DISTINCT eigenvalue list: the rational roots (from the linear factors)
+    // rebuilt in `field`, then every non-linear factor's harvested roots (already IN
+    // `field`) -- each listed exactly once (see the function comment above).
+    std::vector<AlgebraicNumber> eigenvalues;
+    auto roots = rational_roots(charpoly);
+    if (!roots) {
+        return make_error<AlgebraicJordan>(roots.error());
+    }
+    for (const auto& [r, mult] : *roots) {
+        (void)mult;
+        eigenvalues.push_back(field.from_rational(r));
+    }
+    for (const auto& [factor_poly, harvested] : split->roots) {
+        (void)factor_poly;
+        for (const AlgebraicNumber& root : harvested) {
+            eigenvalues.push_back(root);
+        }
+    }
+
+    auto groups = compute_groups(amat, eigenvalues, n, zero, one);
+    if (!groups) {
+        return make_error<AlgebraicJordan>(groups.error());
+    }
+    auto [jmat, pmat] = assemble(*groups, n, zero, one);
+
+    auto ok = verify(amat, jmat, pmat, n, zero, one);
+    if (!ok) {
+        return make_error<AlgebraicJordan>(ok.error());
+    }
+    if (!*ok) {
+        // Unreachable for correct exact arithmetic; an honest guard (Rule 32) so a P that
+        // fails the A*P == P*J / invertibility certificate is never returned.
+        return make_error<AlgebraicJordan>(MathError::domain_error);
+    }
+
+    return AlgebraicJordan{field, std::move(jmat), std::move(pmat)};
+}
+
 }  // namespace
 
 // --- TIER 1: over Q ---------------------------------------------------------
@@ -660,9 +780,13 @@ auto rational_jordan_form(const Matrix& a) -> Result<RationalJordan> {
     return RationalJordan{std::move(*jout), std::move(*pout)};
 }
 
-// --- TIER 2 / TIER 3: over Q(alpha) -----------------------------------------
+// --- TIER 2 / TIER 3: over Q(alpha) or the general splitting field ----------
 
 auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan> {
+    return jordan_form(a, kDefaultMaxSplittingFieldDegree);
+}
+
+auto jordan_form(const Matrix& a, std::int64_t max_field_degree) -> Result<AlgebraicJordan> {
     if (!a.is_square()) {
         return make_error<AlgebraicJordan>(MathError::domain_error);
     }
@@ -682,12 +806,14 @@ auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan> {
     }
 
     // Classify the irreducible factors. Degree 1 -> rational eigenvalue; degree 2 -> a
-    // conjugate pair in a quadratic extension; degree >= 3 -> out of scope (Tier 3).
+    // conjugate pair in a quadratic extension; degree >= 3, or a second DISTINCT quadratic,
+    // hands off to the general splitting-field path (TIER 3) covering every non-linear
+    // factor at once.
     std::optional<RationalPoly> quad;   // the single distinct quadratic factor (monic)
     for (const auto& [f, mult] : *factors) {
         const std::int64_t d = f.degree();
         if (d >= 3) {
-            return make_error<AlgebraicJordan>(MathError::not_implemented);  // Tier 3
+            return splitting_field_jordan_form(a, *charpoly, *factors, n, max_field_degree);
         }
         if (d == 2) {
             auto fm = f.monic();
@@ -697,8 +823,8 @@ auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan> {
             if (!quad) {
                 quad = std::move(*fm);
             } else if (!quad->is_equal(*fm)) {
-                // Two distinct quadratic factors: a possibly-composite extension (Tier 3).
-                return make_error<AlgebraicJordan>(MathError::not_implemented);
+                // Two distinct quadratic factors: the general splitting-field path.
+                return splitting_field_jordan_form(a, *charpoly, *factors, n, max_field_degree);
             }
         }
     }

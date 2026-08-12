@@ -457,27 +457,85 @@ auto main() -> int {
         .test("degree_three_factor_not_implemented",
               [](TestContext& t) {
                   // Companion of x^3 - 2 = [[0,0,2],[1,0,0],[0,1,0]]: char poly x^3 - 2 is
-                  // irreducible of degree 3 (a cubic splitting field, out of scope).
+                  // irreducible of degree 3. Its splitting field Q(cbrt2, omega) has degree 6
+                  // (Galois group S3); building it drives factor_over_field's Trager norm to a
+                  // degree deg(L)*deg(f) = 3*3 = 9 polynomial over Q, beyond factor_over_Q's
+                  // own practical budget -- so even though 6 <= the default cap of 12, the
+                  // general splitting-field path honestly refuses (not_implemented), a real
+                  // boundary of the int64-exact envelope, not a fabricated field or root.
                   const auto A = mat({{ri(0), ri(0), ri(2)},
                                       {ri(1), ri(0), ri(0)},
                                       {ri(0), ri(1), ri(0)}});
                   t.expect(nimblecas::jordan_form(A).error() == MathError::not_implemented,
-                           "degree-3 irreducible factor => not_implemented");
+                           "cubic splitting field beyond the exact envelope => not_implemented");
                   // And rational_jordan_form refuses it (no rational eigenvalue) as domain_error.
                   t.expect(nimblecas::rational_jordan_form(A).error() == MathError::domain_error,
                            "x^3 - 2 does not split over Q => domain_error");
+                  // jordan_structure needs no splitting field at all, so it still answers
+                  // exactly over Q: the honest fallback when jordan_form must refuse.
+                  auto s = nimblecas::jordan_structure(A);
+                  t.expect(s.has_value(), "jordan_structure still succeeds where jordan_form refuses");
+                  if (!s) {
+                      return;
+                  }
+                  t.expect(s->factors.size() == 1, "one irreducible factor");
+                  if (s->factors.size() != 1) {
+                      return;
+                  }
+                  t.expect(s->factors.front().block_sizes == std::vector<std::int64_t>{1},
+                           "block_sizes {1} (diagonalizable over the splitting field)");
               })
-        .test("two_distinct_quadratics_not_implemented",
+        .test("two_distinct_quadratics_splitting_field",
               [](TestContext& t) {
-                  // block diag( companion(x^2+1), companion(x^2-2) ): char poly
-                  // (x^2+1)(x^2-2) has TWO distinct irreducible quadratic factors (a possibly
-                  // composite extension), which is out of scope.
-                  const auto A = mat({{ri(0), ri(-1), ri(0), ri(0)},
+                  // block diag( companion(x^2-2), companion(x^2-3) ): char poly
+                  // (x^2-2)(x^2-3) has TWO distinct irreducible quadratic factors. This used
+                  // to be an honest not_implemented (Tier 3 refusal); it is now within the
+                  // general splitting-field path's default envelope: Q(sqrt2, sqrt3) has
+                  // degree [Q(sqrt2):Q]*[Q(sqrt3):Q] = 4 (sqrt2, sqrt3 are independent
+                  // quadratic irrationalities), well under kDefaultMaxSplittingFieldDegree.
+                  const auto A = mat({{ri(0), ri(2), ri(0), ri(0)},
                                       {ri(1), ri(0), ri(0), ri(0)},
-                                      {ri(0), ri(0), ri(0), ri(2)},
+                                      {ri(0), ri(0), ri(0), ri(3)},
                                       {ri(0), ri(0), ri(1), ri(0)}});
-                  t.expect(nimblecas::jordan_form(A).error() == MathError::not_implemented,
-                           "two distinct quadratic factors => not_implemented");
+                  auto r = nimblecas::jordan_form(A).value();
+                  t.expect(r.field.degree() == 4, "splitting field Q(sqrt2, sqrt3) has degree 4");
+                  t.expect(r.jordan.size() == 4 && r.transform.size() == 4, "4x4 J and P");
+
+                  // J must be diagonal (all four eigenvalues are simple): each diagonal entry
+                  // squares to 2 or 3 (canonical order is unspecified, so check by content,
+                  // not position), and off-diagonal entries are zero.
+                  const AlgebraicNumber two = r.field.from_rational(ri(2));
+                  const AlgebraicNumber three = r.field.from_rational(ri(3));
+                  bool off_zero = true;
+                  int c2 = 0;
+                  int c3 = 0;
+                  int cother = 0;
+                  for (std::size_t i = 0; i < 4; ++i) {
+                      for (std::size_t j = 0; j < 4; ++j) {
+                          if (i != j && !r.jordan[i][j].is_zero()) {
+                              off_zero = false;
+                          }
+                      }
+                      const AlgebraicNumber sq = r.jordan[i][i].multiply(r.jordan[i][i]).value();
+                      if (sq.is_equal(two)) {
+                          ++c2;
+                      } else if (sq.is_equal(three)) {
+                          ++c3;
+                      } else {
+                          ++cother;
+                      }
+                  }
+                  t.expect(off_zero, "J is diagonal (all eigenvalues simple)");
+                  t.expect(c2 == 2 && c3 == 2 && cother == 0,
+                           "J diagonal squares to the multiset {2, 2, 3, 3} (+/-sqrt2, +/-sqrt3)");
+
+                  // The correctness property, re-derived here rather than trusting the
+                  // module's own internal verification: A*P == P*J over the splitting field.
+                  const AlgMat ap = alg_mul(embed(A, r.field), r.transform);
+                  const AlgMat pj = alg_mul(r.transform, r.jordan);
+                  t.expect(alg_eq(ap, pj), "A*P == P*J over Q(sqrt2, sqrt3)");
+                  t.expect(columns_all_nonzero(r.transform),
+                           "P columns are nonzero eigenvectors (P invertible)");
               })
         .test("jordan_form_boundaries",
               [](TestContext& t) {
