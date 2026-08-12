@@ -30,6 +30,20 @@ import triton
 import triton.language as tl
 
 
+def _spmv_configs():
+    """Autotune space: (BLOCK_SIZE, num_warps). The original kernel fixed a
+    128-wide, 4-warp program per row, so a row of ~16 nonzeros left ~112 lanes
+    (and 3 of 4 warps) idle. Including a 1-warp / 32-lane point lets the tuner
+    pick a genuine warp-per-row program for short rows while still covering long
+    rows with wider, multi-warp configs."""
+    configs = []
+    for bs in (32, 64, 128, 256):
+        for nw in (1, 2, 4):
+            configs.append(triton.Config({"BLOCK_SIZE": bs}, num_warps=nw))
+    return configs
+
+
+@triton.autotune(configs=_spmv_configs(), key=["avg_nnz"])
 @triton.jit
 def _csr_spmv_kernel(
     row_ptr_ptr,   # *i32 : CSR row offsets, length n_rows + 1
@@ -37,6 +51,7 @@ def _csr_spmv_kernel(
     val_ptr,       # *T   : nonzero values, length nnz
     x_ptr,         # *T   : dense input vector
     y_ptr,         # *T   : dense output vector, length n_rows
+    avg_nnz,       # i32  : nnz // n_rows, the autotune key (not read in-kernel)
     BLOCK_SIZE: tl.constexpr,
 ):
     """Dot one CSR row against x: y[row] = sum_k vals[k] * x[cols[k]].
@@ -45,7 +60,9 @@ def _csr_spmv_kernel(
     [start, end) slice of the value/column arrays, strides over it in
     BLOCK_SIZE-wide chunks masking the ragged tail with idx < (end - start),
     gathers x at the chunk's column indices, and folds the products into a
-    scalar accumulator via tl.sum.
+    scalar accumulator via tl.sum. BLOCK_SIZE and the warp count are chosen by
+    ``@triton.autotune`` keyed on the mean nonzeros-per-row, so short rows run as
+    a tight warp-per-row program instead of a mostly-idle 128-lane block.
     """
     row = tl.program_id(axis=0)
     start = tl.load(row_ptr_ptr + row)
@@ -91,7 +108,9 @@ def csr_spmv(
         already floating point, otherwise float32. float32 and float64 are both
         supported (float64 exercises the double-precision path).
     block_size : int
-        Nonzeros processed per chunk within a row. Must be a power of two.
+        Advisory only. The chunk width (and warp count) is now chosen by
+        ``@triton.autotune`` keyed on the mean nonzeros-per-row; this argument is
+        kept for API stability and otherwise ignored.
 
     Returns
     -------
@@ -131,6 +150,10 @@ def csr_spmv(
         y.zero_()
         return y
 
+    # BLOCK_SIZE and num_warps are chosen by @triton.autotune (keyed on the mean
+    # nonzeros-per-row); the `block_size` argument is retained for API stability
+    # but is advisory only. grid is one program per row.
+    avg_nnz = int(val_t.numel() // n_rows)
     grid = (n_rows,)
     _csr_spmv_kernel[grid](
         row_ptr_t,
@@ -138,7 +161,7 @@ def csr_spmv(
         val_t,
         x_t,
         y,
-        BLOCK_SIZE=block_size,
+        avg_nnz,
     )
     return y
 
