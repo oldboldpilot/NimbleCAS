@@ -31,15 +31,21 @@ import triton.language as tl
 
 
 def _spmv_configs():
-    """Autotune space: (BLOCK_SIZE, num_warps). The original kernel fixed a
-    128-wide, 4-warp program per row, so a row of ~16 nonzeros left ~112 lanes
-    (and 3 of 4 warps) idle. Including a 1-warp / 32-lane point lets the tuner
-    pick a genuine warp-per-row program for short rows while still covering long
-    rows with wider, multi-warp configs."""
+    """Autotune space: (ROWS_PER_PROG, BLOCK_SIZE, num_warps).
+
+    ncu on the earlier one-row-per-program kernel (BLOCK_SIZE=32, num_warps=1)
+    showed theoretical occupancy capped at 50 % — block-count-limited: a 1-warp
+    block admits only 24 warps/SM (of 48). Letting each program own several rows
+    (`ROWS_PER_PROG`) with a 2-D [ROWS_PER_PROG, BLOCK_SIZE] tile puts more warps
+    in a block (raising occupancy) and amortizes launch + reduction latency,
+    while the BLOCK_SIZE dimension still vectorizes each row's nonzeros. The
+    tuner picks the point per mean-nnz/row."""
     configs = []
-    for bs in (32, 64, 128, 256):
-        for nw in (1, 2, 4):
-            configs.append(triton.Config({"BLOCK_SIZE": bs}, num_warps=nw))
+    for rows in (1, 2, 4, 8, 16):
+        for bs in (16, 32, 64):
+            for nw in (1, 2, 4):
+                configs.append(
+                    triton.Config({"ROWS_PER_PROG": rows, "BLOCK_SIZE": bs}, num_warps=nw))
     return configs
 
 
@@ -51,34 +57,40 @@ def _csr_spmv_kernel(
     val_ptr,       # *T   : nonzero values, length nnz
     x_ptr,         # *T   : dense input vector
     y_ptr,         # *T   : dense output vector, length n_rows
+    n_rows,        # i32  : number of rows
     avg_nnz,       # i32  : nnz // n_rows, the autotune key (not read in-kernel)
+    ROWS_PER_PROG: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """Dot one CSR row against x: y[row] = sum_k vals[k] * x[cols[k]].
+    """SpMV over a tile of ROWS_PER_PROG rows: y[r] = sum_k vals[k]*x[cols[k]].
 
-    A single program owns the row given by program_id(0). It reads the row's
-    [start, end) slice of the value/column arrays, strides over it in
-    BLOCK_SIZE-wide chunks masking the ragged tail with idx < (end - start),
-    gathers x at the chunk's column indices, and folds the products into a
-    scalar accumulator via tl.sum. BLOCK_SIZE and the warp count are chosen by
-    ``@triton.autotune`` keyed on the mean nonzeros-per-row, so short rows run as
-    a tight warp-per-row program instead of a mostly-idle 128-lane block.
+    program_id(0) owns rows [row0, row0 + ROWS_PER_PROG). It loads each row's
+    [start, end), then walks the widest row in the tile in BLOCK_SIZE-wide
+    chunks, forming a 2-D [ROWS_PER_PROG, BLOCK_SIZE] index masked per row by
+    `k < len[r]`, gathering vals and x[cols], and reducing along the nonzero
+    axis into a per-row accumulator. Owning several rows per program raises the
+    warps-per-block (hence occupancy) that the one-row kernel left on the table.
     """
-    row = tl.program_id(axis=0)
-    start = tl.load(row_ptr_ptr + row)
-    end = tl.load(row_ptr_ptr + row + 1)
-    n = end - start
+    pid = tl.program_id(axis=0)
+    rows = pid * ROWS_PER_PROG + tl.arange(0, ROWS_PER_PROG)       # [R]
+    row_mask = rows < n_rows
+    starts = tl.load(row_ptr_ptr + rows, mask=row_mask, other=0)   # [R]
+    ends = tl.load(row_ptr_ptr + rows + 1, mask=row_mask, other=0)  # [R]
+    lens = ends - starts                                            # [R]
+    maxlen = tl.max(lens, axis=0)                                   # scalar loop bound
 
-    acc = tl.zeros((), dtype=val_ptr.dtype.element_ty)
-    for base in range(0, n, BLOCK_SIZE):
-        idx = base + tl.arange(0, BLOCK_SIZE)
-        mask = idx < n
-        cols = tl.load(col_ptr + start + idx, mask=mask, other=0)
-        vals = tl.load(val_ptr + start + idx, mask=mask, other=0.0)
-        xs = tl.load(x_ptr + cols, mask=mask, other=0.0)
-        acc += tl.sum(vals * xs, axis=0)
+    acc = tl.zeros([ROWS_PER_PROG], dtype=val_ptr.dtype.element_ty)
+    kcol = tl.arange(0, BLOCK_SIZE)                                 # [B]
+    for base in range(0, maxlen, BLOCK_SIZE):
+        k = base + kcol                                            # [B]
+        mask = (k[None, :] < lens[:, None]) & row_mask[:, None]    # [R, B]
+        idx = starts[:, None] + k[None, :]                         # [R, B]
+        cols = tl.load(col_ptr + idx, mask=mask, other=0)          # [R, B]
+        vals = tl.load(val_ptr + idx, mask=mask, other=0.0)        # [R, B]
+        xs = tl.load(x_ptr + cols, mask=mask, other=0.0)          # [R, B]
+        acc += tl.sum(vals * xs, axis=1)                          # [R]
 
-    tl.store(y_ptr + row, acc)
+    tl.store(y_ptr + rows, acc, mask=row_mask)
 
 
 def csr_spmv(
@@ -150,17 +162,19 @@ def csr_spmv(
         y.zero_()
         return y
 
-    # BLOCK_SIZE and num_warps are chosen by @triton.autotune (keyed on the mean
-    # nonzeros-per-row); the `block_size` argument is retained for API stability
-    # but is advisory only. grid is one program per row.
+    # ROWS_PER_PROG, BLOCK_SIZE and num_warps are chosen by @triton.autotune
+    # (keyed on the mean nonzeros-per-row); the `block_size` argument is retained
+    # for API stability but is advisory only. Each program owns ROWS_PER_PROG
+    # rows, so the grid divides the row count by that tile height.
     avg_nnz = int(val_t.numel() // n_rows)
-    grid = (n_rows,)
+    grid = lambda meta: (triton.cdiv(n_rows, meta["ROWS_PER_PROG"]),)
     _csr_spmv_kernel[grid](
         row_ptr_t,
         col_t,
         val_t,
         x_t,
         y,
+        n_rows,
         avg_nnz,
     )
     return y

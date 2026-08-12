@@ -29,21 +29,56 @@ in the last bits — each a valid double. **The CPU path stays authoritative**; 
 GPU kernel is a numerical mirror, exactly as `gpu::cg_csr` and the other
 `nimblecas.gpu` kernels are.
 
+### Tiling — an ncu-guided, rows-per-program 2-D kernel
+
+The kernel is wrapped in `@triton.autotune` over
+`ROWS_PER_PROG ∈ {1,2,4,8,16}` × `BLOCK_SIZE ∈ {16,32,64}` × `num_warps ∈ {1,2,4}`,
+keyed on the mean nonzeros-per-row. Each program owns a **tile of
+`ROWS_PER_PROG` rows** and processes them with a 2-D `[ROWS_PER_PROG, BLOCK_SIZE]`
+index (per-row masking `k < len[r]`), reducing along the nonzero axis.
+
+This shape was chosen from **`ncu` evidence**, not guesswork. A first
+one-row-per-program version (`BLOCK_SIZE=32, num_warps=1`) profiled at:
+
+| | one-row-per-program | rows-per-program (2-D) |
+| :--- | ---: | ---: |
+| Theoretical occupancy | 50 % (block-count-limited) | **100 %** |
+| Achieved occupancy | 29.8 % | **91.6 %** |
+| DRAM throughput (% of peak) | 35.5 % | **84.9 %** |
+
+`ncu` showed the one-row kernel was **block-count-limited**: a 1-warp block admits
+only 24 warps/SM (of 48), capping occupancy at 50 %. Giving each program several
+rows raises the warps-per-block, so occupancy reaches 100 % / 91.6 % achieved and
+the kernel becomes **DRAM-bandwidth-bound at ~85 % of peak** — which is the
+optimum for a memory-bound operation like SpMV (compute-SM % is correspondingly
+low, as it should be). Counters were collected with `sudo ncu` (the driver
+restricts GPU performance counters to admin users); `nsys` needs no such elevation.
+
 ### Measured evidence (RTX 5090, sm_120, CUDA 12.9, fp64)
+
+Kernel-only timing on **GPU-resident** tensors (CUDA events; inputs placed on the
+device once, so the figure is the kernel, not host↔device transfer):
 
 | Check | Result |
 | :--- | :--- |
-| Correctness vs `torch.sparse` CSR SpMV (200k rows, 3.2M nnz) | max abs diff **7.1e-15** (machine precision) |
+| Correctness vs `torch.sparse` CSR SpMV | max abs diff **5–9e-15** (machine precision) |
 | Correctness vs dense oracle `A=[[2,0,1],[0,3,0],[1,0,4]] · [1,2,3]` | `[5,6,13]` exact (fp32 & fp64) |
-| Throughput (200k rows, 16 nnz/row, fp64) | **~6.2 ms/call, ~6.7 GB/s** |
+| Throughput, 200k rows × 16 nnz (3.2M nnz), fp64 | **35.8 µs/call, ~1162 GB/s** (tuner: `ROWS_PER_PROG=4, BLOCK=16, warps=2`) |
+| Throughput, 500k rows × 32 nnz (16M nnz), fp64 | **211 µs/call, ~948 GB/s** (tuner: `ROWS_PER_PROG=16, BLOCK=32, warps=2`) |
 
-**Interpretation (honest).** 6.7 GB/s is a small fraction of the 5090's ~1.7 TB/s
-peak: the one-program-per-row tiling is **memory-latency-bound on the random
-`x[col]` gather** (poor coalescing, low occupancy for small `nnz/row`). So the
-kernel is shipped as a **correctness-verified, portable GPU mirror** — *not* a
-demonstrated speedup over the CPU. A performance-competitive version would need a
-warp-per-row (or vectorized/coalesced) tiling and is deliberately left as future
-work rather than claimed here.
+**Interpretation.** ~1162 GB/s is **~68 % of the 5090's ~1.7 TB/s peak** — a **2.7×**
+gain over the one-row kernel (436 GB/s), corroborated by the occupancy/throughput
+counters above. (An early end-to-end measurement of ~6.7 GB/s was an artifact of
+timing the *convenience wrapper*, which re-uploads all inputs on every call — that
+rate is the ~64 MB host↔device marshaling, not the kernel.)
+
+**Using it in a loop (e.g. CG).** Because `csr_spmv(...)` moves its arguments to
+the device on each call, iterative use should keep `row_ptr`/`col_indices`/
+`values`/`x` **GPU-resident** and launch `_csr_spmv_kernel` directly, so the
+per-iteration cost is the kernel, not a repeated upload.
+
+It remains a **numerical mirror** (the `tl.sum` tree reorders the CPU's sequential
+`std::fma`), so the CPU `csr_matvec` stays authoritative.
 
 ## The SIMD leg — an evidence-backed *non*-deliverable
 
