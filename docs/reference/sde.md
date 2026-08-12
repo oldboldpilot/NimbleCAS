@@ -9,7 +9,13 @@ differential equations `dX = a(X) dt + b(X) dW_t`, `X(0) = x0`, on `[0, T]` with
 `steps` uniform steps `dt = T / steps` and standard-normal Wiener increments
 `dW = sqrt(dt) · Z`, `Z ~ N(0, 1)`. Five single-path schemes are provided
 (Euler-Maruyama, Milstein, stochastic Heun, derivative-free SRK, tamed Euler),
-plus ensemble drivers that average their terminal values.
+plus ensemble drivers that average their terminal values. Layered on top:
+**jump-diffusion** (`jump_euler_maruyama`, a Merton log-normal jump
+specification via `merton_jumps`), a **drift-implicit theta scheme**
+(`theta_euler`/`jump_theta_euler`, for stiff drift) driven through
+[`nlsolve`](nlsolve.md)'s Newton solver, and an `EnsembleEstimate` reduction
+whose multi-path ensemble now fans out over [`nimblecas.parallel`](parallel.md)
+(TBB/PPL) — bit-identically to a serial reduction.
 
 The honest boundary is this: **these are NUMERICAL IEEE-754 double-precision
 approximations, NOT exact symbolic results.** Unlike the exact power-series
@@ -44,9 +50,12 @@ agree only when `b b' ≡ 0` (e.g. additive noise). For geometric Brownian motio
 import nimblecas.sde;
 ```
 
-Depends on [`core`](core.md) (the `Result<T>` / `MathError` railway) and
+Depends on [`core`](core.md) (the `Result<T>` / `MathError` railway),
 `nimblecas.rng` (the stateless counter-based RNG substrate — `counter_u64`,
-`uniform_unit`, `splitmix64`).
+`uniform_unit`, `splitmix64`), [`nlsolve`](nlsolve.md) (`newton`, the implicit
+solver `theta_euler`/`jump_theta_euler` drive per step), and
+[`parallel`](parallel.md) (the TBB/PPL fork-join layer the jump-ensemble
+drivers fan paths out over).
 
 ## `SdePath` — a single simulated sample path
 
@@ -231,6 +240,187 @@ for every other scheme it is ignored (pass `{}`). `Scheme::euler_maruyama` and
 | `simulate_terminal_scheme` | Terminal `X_T` of each of `paths` seeded paths under the chosen `scheme`. |
 | `terminal_moments_scheme` | `{ sample mean, unbiased (n−1) sample variance }` of `X_T` under the chosen `scheme`. |
 
+## Jump-diffusion and drift-implicit (theta) additions
+
+These are **additive only**: none of the five schemes above change, and every
+routine here consumes the Brownian stream **exactly** as `euler_maruyama`
+does — `standard_normal(key, n)` at counter indices `2n`/`2n+1` of
+`key = splitmix64(seed)` — so a variable jump count or an implicit drift solve
+can never shift a Brownian draw. All jump randomness (Poisson counts and jump
+marks) lives on a **separate, domain-separated** sub-key derived from the same
+path key (`counter_u64(key, kJumpDomain)` for the Poisson count,
+further separated by step and mark index for each mark), so it is likewise a
+pure function of `(seed, path, step, mark index)` and never touches the
+Brownian indices. Two consequences are both **bit-for-bit** and tested:
+`lambda == 0` makes `jump_euler_maruyama` **identical** to `euler_maruyama`,
+and `theta == 0` makes `theta_euler` **identical** to `euler_maruyama` — both
+special-cased to the exact same arithmetic expression, not merely "close".
+
+### `JumpSpec` and `merton_jumps` — a compound-Poisson jump specification
+
+For a jump-diffusion SDE `dX = a(X) dt + b(X) dW + dJ`, `dJ` a compound
+Poisson process with intensity `lambda` (jumps per unit time):
+
+```cpp
+struct JumpSpec {
+    double lambda{0.0};                                // jump intensity (jumps / unit time)
+    std::function<double(double)> size_quantile{};      // u in (0,1) -> jump mark J
+    std::function<double(double, double)> impulse{};    // (x, J) -> state increment c(x, J)
+};
+```
+
+`size_quantile(u)` maps a uniform `u in (0,1)` to a jump mark `J` via the
+inverse CDF of the mark distribution (marks are drawn by inversion, one
+uniform per mark); `impulse(x, J)` maps the **pre-jump** state `x` and a mark
+`J` to the state increment applied at a jump. `lambda == 0.0` (the default)
+disables jumps entirely; `size_quantile`/`impulse` may then be empty.
+
+```cpp
+[[nodiscard]] auto merton_jumps(double lambda, double mu_j, double sigma_j) -> Result<JumpSpec>;
+```
+
+Builds a **Merton (1976)** log-normal jump specification: marks
+`J ~ N(mu_j, sigma_j^2)` drawn by the inverse-normal quantile transform of a
+single uniform, applied to a price-like process via the multiplicative
+impulse `c(x, J) = x·(e^J − 1) = x·expm1(J)` (a jump multiplies the pre-jump
+state by `e^J`). `domain_error` if `lambda` is negative/non-finite, `mu_j` is
+non-finite, or `sigma_j` is negative/non-finite.
+
+### `jump_euler_maruyama` — Euler-Maruyama plus an explicit jump sum
+
+```cpp
+[[nodiscard]] auto jump_euler_maruyama(std::function<double(double)> a,
+                                       std::function<double(double)> b, const JumpSpec& jumps,
+                                       double x0, double T, std::uint64_t steps,
+                                       std::uint64_t seed) -> Result<SdePath>;
+```
+
+```
+X_{n+1} = X_n + a(X_n) dt + b(X_n) dW_n + sum_{i=1}^{N_n} impulse(X_n, J_{n,i}),
+N_n ~ Poisson(lambda dt).
+```
+
+`dW_n` is exactly `euler_maruyama`'s draw; `N_n` and every mark `J_{n,i}` come
+from the domain-separated jump sub-key, so they never perturb the Brownian
+stream. With `jumps.lambda == 0.0` this is **bit-for-bit identical** to
+`euler_maruyama`. `domain_error` if `steps == 0`, `T` non-finite/`<= 0`, `x0`
+non-finite, `a`/`b` empty, `jumps.lambda` negative/non-finite,
+`jumps.lambda * dt > 700` (the point past which `e^{-lambda dt}` underflows to
+`0` in double precision), or `jumps.lambda > 0` with an empty
+`size_quantile`/`impulse`.
+
+### `theta_euler` — drift-implicit (theta) Euler-Maruyama for stiff SDEs
+
+```cpp
+[[nodiscard]] auto theta_euler(std::function<double(double)> a,
+                               std::function<double(double)> a_prime,
+                               std::function<double(double)> b, double x0, double T,
+                               std::uint64_t steps, std::uint64_t seed, double theta)
+    -> Result<SdePath>;
+```
+
+Diffusion **explicit** (Itô), drift **implicit** by a `theta`-blend, solved
+per step for `xi` via `nlsolve::newton` on the 1-D residual:
+
+```
+xi = X_n + (theta a(xi) + (1-theta) a(X_n)) dt + b(X_n) dW_n,   X_{n+1} = xi.
+```
+
+The analytic Jacobian `1 - theta a'(xi) dt` is used when `a_prime` is
+supplied; an empty `a_prime` falls back to `nlsolve`'s finite-difference
+Jacobian. `theta == 1` is fully implicit backward Euler on the drift
+(unconditionally A-stable in the deterministic/linear sense); `theta == 0.5`
+is the (drift) trapezoidal/Crank-Nicolson rule; **`theta == 0.0` is exactly
+`euler_maruyama`**, special-cased to the identical arithmetic expression
+rather than routed through Newton on a trivial linear residual, so the two
+are bit-for-bit identical.
+
+**Stability motivation.** For stiff linear mean reversion `a(x) = -kappa(x -
+m)` with `kappa·dt >> 1` (e.g. a fast-reverting short-rate or variance process
+on a coarse grid), explicit Euler-Maruyama's amplification factor
+`|1 - kappa dt|` exceeds `1` and the scheme oscillates/blows up; `theta >=
+1/2` keeps the implicit drift step stable regardless of `kappa dt`.
+
+**Newton's `converged == false`** (stagnation, singular Jacobian, iteration
+budget exhausted) is a **hard `not_converged` for the whole path** — an
+unconverged iterate is never accepted as a step. `domain_error` if
+`steps == 0`, `T` non-finite/`<= 0`, `x0` non-finite, `a`/`b` empty, or
+`theta` outside `[0, 1]` or non-finite.
+
+### `jump_theta_euler` — theta-implicit drift plus jumps
+
+```cpp
+[[nodiscard]] auto jump_theta_euler(std::function<double(double)> a,
+                                    std::function<double(double)> a_prime,
+                                    std::function<double(double)> b, const JumpSpec& jumps,
+                                    double x0, double T, std::uint64_t steps,
+                                    std::uint64_t seed, double theta) -> Result<SdePath>;
+```
+
+`theta_euler`'s drift-implicit, diffusion-explicit step **plus**
+`jump_euler_maruyama`'s explicit compound-Poisson jump sum (marks and impulse
+applied to the pre-step state `X_n`, exactly as in `jump_euler_maruyama`).
+`theta == 0` and `jumps.lambda == 0` together reduce this to
+`euler_maruyama` bit-for-bit. Domain-error conditions are the union of
+`theta_euler`'s and `jump_euler_maruyama`'s.
+
+### `EnsembleEstimate` and the jump/theta ensemble drivers
+
+```cpp
+struct EnsembleEstimate {
+    double mean{0.0};
+    double variance{0.0};
+    double std_error{0.0};   // sqrt(variance / paths) -- the standard error of the MEAN
+    std::uint64_t paths{0};
+};
+
+[[nodiscard]] auto simulate_terminal_jump(std::function<double(double)> a,
+                                          std::function<double(double)> a_prime,
+                                          std::function<double(double)> b, const JumpSpec& jumps,
+                                          double x0, double T, std::uint64_t steps,
+                                          std::uint64_t paths, std::uint64_t seed, double theta)
+    -> Result<std::vector<double>>;
+
+[[nodiscard]] auto terminal_estimate_jump(std::function<double(double)> a,
+                                          std::function<double(double)> a_prime,
+                                          std::function<double(double)> b, const JumpSpec& jumps,
+                                          double x0, double T, std::uint64_t steps,
+                                          std::uint64_t paths, std::uint64_t seed, double theta)
+    -> Result<EnsembleEstimate>;
+```
+
+`EnsembleEstimate` carries its **own** Monte Carlo statistical error, in the
+same spirit as `nimblecas::pricing::McResult`: `mean`/`variance` are the
+sample mean and unbiased (`n−1`) sample variance of `X_T` over `paths` seeded
+`jump_theta_euler` paths, and `std_error = sqrt(variance / paths)` is the
+standard error **of the mean** (not of a single draw). `theta == 0` and
+`jumps.lambda == 0` together recover plain `euler_maruyama`.
+`simulate_terminal_jump` returns the raw terminal values; `terminal_estimate_jump`
+reduces them to an `EnsembleEstimate`. **Partition-independence**: path `p` is
+seeded `splitmix64(seed ^ p)` — exactly `simulate_terminal_scheme`'s contract
+— so `X_T` for path `p` is a pure function of `(seed, p)`, independent of
+`paths` and of how `0..paths-1` is partitioned across workers. **If any
+path's implicit solve fails to converge the whole call returns
+`not_converged`** — a partially-valid ensemble is never returned.
+
+### Ensemble parallelism over `nimblecas.parallel`
+
+`simulate_terminal_jump` fans its `paths` iterations out over
+`nimblecas.parallel::transform_index` (TBB on Linux/macOS, PPL on Windows)
+instead of a serial loop. Because `transform_index` is **order-preserving**
+and each path index `p` writes only its own output slot, and because every
+path is already a pure function of `(seed, p)` (the partition-independence
+contract above), the parallel result is **bit-identical to a serial
+reduction** regardless of worker count or scheduling — the same
+determinism guarantee [`taskdag`](taskdag.md) and [`montecarlo`](montecarlo.md)
+give for their own parallel fan-outs. The callback closures (`a`, `b`,
+`a_prime`, and the `JumpSpec`'s `size_quantile`/`impulse`) must be **pure**,
+since they are invoked concurrently for distinct path indices — the same
+purity requirement `nimblecas.taskdag`'s `TaskFn` places on its callers. A
+single failing path's `not_converged` is detected deterministically: the
+**lowest-index** failing path is reported, independent of which worker
+happened to finish it first.
+
 ## Error model
 
 Every entry point rejects invalid input on the railway with
@@ -245,13 +435,20 @@ silently producing an all-NaN "success" path (`T <= 0` alone is `false` for
 | `x0` non-finite (`NaN` / `inf`) | `MathError::domain_error` |
 | `a` or `b` an empty `std::function` | `MathError::domain_error` |
 | Milstein requested with an empty `b_prime` (`milstein`, `simulate_terminal` with `use_milstein == true`, or `simulate_terminal_scheme` with `Scheme::milstein`) | `MathError::domain_error` |
-| `paths == 0` (any ensemble driver) | `MathError::domain_error` |
+| `paths == 0` (any ensemble driver, including `simulate_terminal_jump`/`terminal_estimate_jump`) | `MathError::domain_error` |
+| `merton_jumps`: `lambda` negative/non-finite, `mu_j` non-finite, or `sigma_j` negative/non-finite | `MathError::domain_error` |
+| `jump_euler_maruyama`/`jump_theta_euler`/`simulate_terminal_jump`/`terminal_estimate_jump`: `jumps.lambda` negative/non-finite, or `jumps.lambda * dt > 700` | `MathError::domain_error` |
+| `jumps.lambda > 0` with an empty `size_quantile` or `impulse` | `MathError::domain_error` |
+| `theta_euler`/`jump_theta_euler`/`simulate_terminal_jump`/`terminal_estimate_jump`: `theta` outside `[0, 1]` or non-finite | `MathError::domain_error` |
+| The implicit Newton solve fails to converge (stagnation, singular Jacobian, iteration budget exhausted), anywhere in the path or ensemble | `MathError::not_converged` |
 
 Requesting the Milstein scheme without a `b_prime` is a **domain error on the
 railway**, never a `std::bad_function_call` thrown off-railway. Derivative-free
 schemes never consult `b_prime`, so an empty `b_prime` is fine for them. The
 ensemble drivers propagate the per-path domain error unchanged. There is no
-`overflow` or `division_by_zero` path.
+`overflow` or `division_by_zero` path. `not_converged` from an implicit
+(`theta`) step is a **hard failure for the whole call** — never a partial
+path or a partially-valid ensemble.
 
 ## Worked examples
 
@@ -313,6 +510,54 @@ milstein(a, b, bp, std::numeric_limits<double>::quiet_NaN(), 1.0, 10, 1).error()
 simulate_terminal(a, b, {}, 1.0, 1.0, 10, 0, 1, false).error();     // domain_error (paths == 0)
 simulate_terminal(a, b, {}, 1.0, 1.0, 10, 5, 1, /*use_milstein=*/true).error();  // domain_error (no b')
 simulate_terminal_scheme(a, b, {}, 1.0, 1.0, 10, 5, 1, Scheme::milstein).error();  // domain_error (no b')
+
+// --- Jump-diffusion (Merton) ---
+// dX = mu X dt + sigma X dW + dJ, dJ compound Poisson with marks J ~ N(mu_j, sigma_j^2)
+// and multiplicative impulse c(x,J) = x(e^J - 1). Analytic terminal mean (Merton 1976):
+//   E[X_T] = x0 exp(mu T + lambda T (exp(mu_j + sigma_j^2/2) - 1)).
+const double mu2 = 0.05, sigma2 = 0.2, lambda = 1.0, mu_j = -0.1, sigma_j = 0.15;
+auto a2 = [mu2](double x) { return mu2 * x; };
+auto b2 = [sigma2](double x) { return sigma2 * x; };
+auto jumps = merton_jumps(lambda, mu_j, sigma_j).value();
+auto est = terminal_estimate_jump(a2, /*a_prime=*/{}, b2, jumps, 1.0, 1.0, 500, 40000,
+                                  20260812, /*theta=*/0.0).value();
+const double expected_mean =
+    std::exp(mu2 * 1.0 + lambda * 1.0 * (std::exp(mu_j + 0.5 * sigma_j * sigma_j) - 1.0));
+std::abs(est.mean - expected_mean) <= 4.0 * est.std_error;  // true (Monte Carlo agreement)
+est.paths == 40000;                                          // true — echoes the input paths
+
+// --- Drift-implicit (theta) Euler-Maruyama stabilises a stiff mean-reverting OU ---
+// dX = -kappa(X-m) dt + sigma dW, kappa=50, dt=0.05 => kappa*dt=2.5 puts explicit
+// Euler-Maruyama's amplification factor |1-kappa*dt|=1.5 outside the stability disc:
+// plain Euler diverges, theta_euler(theta=1) (fully implicit drift) stays finite and
+// tracks the analytic OU moments E[X_T]=m+(x0-m)e^{-kappa T}, Var=sigma^2/(2kappa)(1-e^{-2kappa T}).
+const double kappa = 50.0, m = 0.05, sig = 0.1;
+auto a3 = [kappa, m](double x) { return -kappa * (x - m); };
+auto a3p = [kappa](double) { return -kappa; };
+auto b3 = [sig](double) { return sig; };
+
+auto euler_mom = terminal_moments(a3, b3, {}, 1.0, 2.0, 40, 5000, 990099, false).value();
+std::abs(euler_mom.first) > 1000.0;   // true — plain Euler diverges on the stiff OU
+
+auto est2 = terminal_estimate_jump(a3, a3p, b3, JumpSpec{}, 1.0, 2.0, 40, 5000, 990099,
+                                   /*theta=*/1.0).value();
+std::isfinite(est2.mean);             // true — theta_euler(theta=1) stays finite
+// est2.mean ~ m + (x0-m)*exp(-kappa*T), est2.variance ~ sigma^2/(2kappa)(1-exp(-2kappa*T)),
+// both within 4*std_error.
+
+// theta==0 and lambda==0 both reduce bit-for-bit to euler_maruyama.
+auto baseline = euler_maruyama(a, b, 1.0, 1.0, 300, 4242424).value();
+auto th0 = theta_euler(a, /*a_prime=*/[](double){return mu;}, b, 1.0, 1.0, 300, 4242424, 0.0).value();
+auto jp0 = jump_euler_maruyama(a, b, JumpSpec{}, 1.0, 1.0, 300, 4242424).value();
+// baseline.values == th0.values == jp0.values, element-wise, EXACTLY.
+
+// Ensemble parallelism: simulate_terminal_jump fans out over nimblecas.parallel and is
+// bit-identical to the serial per-path reconstruction (partition-independence).
+auto ens = simulate_terminal_jump(a3, a3p, b3, jumps, 1.0, 1.0, 100, 200, 8675309, 0.5).value();
+auto ens_again = simulate_terminal_jump(a3, a3p, b3, jumps, 1.0, 1.0, 100, 200, 8675309, 0.5).value();
+// ens == ens_again element-wise (reruns bit-identically), and ens[p] equals an
+// independent jump_theta_euler(a3, a3p, b3, jumps, 1.0, 1.0, 100, splitmix64(8675309 ^ p), 0.5)
+// for every p.
 ```
 
 ## See also
@@ -321,6 +566,14 @@ simulate_terminal_scheme(a, b, {}, 1.0, 1.0, 10, 5, 1, Scheme::milstein).error()
   per-chain-index seeding contract this module mirrors.
 - `nimblecas.rng` ([rng.md](rng.md)) — the stateless counter-based RNG substrate
   (`counter_u64`, `uniform_unit`, `splitmix64`) that drives every path.
+- [`nimblecas.nlsolve`](nlsolve.md) — the Newton solver (`newton`)
+  `theta_euler`/`jump_theta_euler` drive per step for the implicit drift.
+- [`nimblecas.parallel`](parallel.md) — the deterministic TBB/PPL fork-join
+  layer `simulate_terminal_jump`/`terminal_estimate_jump` fan paths out over,
+  bit-identically to a serial reduction.
+- [`nimblecas.taskdag`](taskdag.md) — a sibling single-node deterministic
+  scheduler over the same `parallel` layer, with an analogous
+  serial/parallel bit-identity contract.
 - [`nimblecas.ode`](ode.md), [`nimblecas.dde`](dde.md), [`nimblecas.dae`](dae.md),
   [`nimblecas.pde`](pde.md) — the **exact** (rational / power-series) differential-
   equation layers, in contrast to this numerical one.

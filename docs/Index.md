@@ -52,12 +52,14 @@ The symbolic chain (`core → symbolic → {simplify, cache} → diff → vector
 | `nimblecas.forms` | [forms.md](reference/forms.md) | Exterior calculus over `Q`: p-forms, wedge `∧`, exterior derivative `d` (with `d²=0`), Hodge star `⋆` (Euclidean; `not_implemented` off it), interior product, closed/exact. |
 | `nimblecas.reader` | [reader.md](reference/reader.md) | Text → `Expr` parser (the eval surface): precedence-climbing, exact-only (rationals never reals), round-trips `to_string`; malformed input → honest `MathError::syntax_error`. |
 | `nimblecas.latex` | [latex.md](reference/latex.md) | Precedence-aware LaTeX math export: `to_latex(Expr)` rendering `\frac`/`\sqrt`, Greek letters, and function control words. |
+| `nimblecas.evalnum` | [evalnum.md](reference/evalnum.md) | **Numerical** (IEEE-754 double) sampling companion to the exact `symbolic` engine: `eval_double(Expr, ...)` over a whitelisted elementary-function set; unbound symbol / unrecognised function / non-finite intermediate → honest `domain_error`, never a silent `0` or a propagated `NaN`. |
 
 The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratpoly → {pfd → ratint, resultant → rothstein} → integrate}}`; `parallel`):
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
 | `nimblecas.parallel` | [parallel.md](reference/parallel.md) | Deterministic fork–join over TBB/PPL/serial; order-preserving tree combinators. |
+| `nimblecas.taskdag` | [taskdag.md](reference/taskdag.md) | Deterministic **single-node** task-DAG scheduler over `parallel`: an acyclic-by-construction `TaskGraph`, wavefront `serial_executor`/`local_parallel_executor` (bit-identical outputs), and deterministic error poisoning — a documented backend seam, explicitly **not distributed**. |
 | `nimblecas.simd` | [simd.md](reference/simd.md) | Runtime-dispatched elementwise SIMD kernels (AVX-512 → AVX2 → scalar): `float32` add/mul/axpy/Horner plus deterministic, bit-identical-across-ISAs **double** `exp_into` / `log_into` (≈1 ulp) backing the Monte-Carlo transcendentals. |
 | `nimblecas.gpu` | [gpu.md](reference/gpu.md) | Optional CUDA GPU acceleration (opt-in `-DNIMBLECAS_CUDA=ON`): batch polynomial evaluation on the device, plus a portable Triton kernel. |
 | `nimblecas.polynomial` | [polynomial.md](reference/polynomial.md) | Dense univariate `int64` polynomials: ring ops, gcd, square-free factorization, SIMD batch eval. |
@@ -66,8 +68,8 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.pfd` | [pfd.md](reference/pfd.md) | Square-free partial-fraction decomposition over `Q[x]`: Yun factorization, Bezout split, base-`b` power expansion. |
 | `nimblecas.ratint` | [ratint.md](reference/ratint.md) | Hermite reduction of `int A/B dx` over `Q`: exact rational part plus a square-free-denominator logarithmic integrand. |
 | `nimblecas.resultant` | [resultant.md](reference/resultant.md) | Resultant and discriminant over `Q[x]` via the Euclidean remainder sequence: common-factor / repeated-root detection. |
-| `nimblecas.rothstein` | [rothstein.md](reference/rothstein.md) | Rothstein–Trager logarithmic integration over `Q(x)`: the residue resultant `R(t) = res_x(D, A − t·D')`, rational-residue logarithms of a square-free-denominator integrand. |
-| `nimblecas.integrate` | [integrate.md](reference/integrate.md) | Rational-function integration capstone over `Q(x)`: Hermite reduction then Rothstein–Trager, assembling `int A/B dx = rational part + sum of residue-weighted logarithms`. |
+| `nimblecas.rothstein` | [rothstein.md](reference/rothstein.md) | Rothstein–Trager logarithmic integration over `Q(x)`: the residue resultant `R(t) = res_x(D, A − t·D')`; `log_part` gives rational-residue logarithms of a square-free-denominator integrand, and `log_part_extended` (over `algnum`/`algpoly`) additionally expresses irrational/complex residues exactly as conjugate-sum `AlgebraicLogTerm` blocks over the extension field each irreducible resultant factor generates, with a mandatory completeness check. |
+| `nimblecas.integrate` | [integrate.md](reference/integrate.md) | Rational-function integration capstone over `Q(x)`: Hermite reduction then Rothstein–Trager, assembling `int A/B dx = rational part + sum of residue-weighted logarithms` (`integrate_rational`, rational residues only) or the same with algebraic residues included exactly (`integrate_rational_extended`, mirroring `log_part_extended`). |
 | `nimblecas.symint` | [symint.md](reference/symint.md) | Expr-level symbolic integration (§7.19): linearity, power rule, an elementary table (exp/sin/cos/atan/asin/…) with linear substitution, and a bridge to the exact rational integrator; every antiderivative differentiates back to the integrand, else `not_implemented`. |
 | `nimblecas.matrix` | [matrix.md](reference/matrix.md) | Dense matrices over exact `Rational`: add/multiply/transpose/trace, exact determinant, `A x = b` solve, inverse, and rank via Gaussian / Gauss-Jordan elimination over `Q`. |
 | `nimblecas.kronprod` | [kronprod.md](reference/kronprod.md) | Structured matrix products over exact `Rational` (§7.2): Kronecker product / sum, direct sum, Hadamard product, and column-major `vec`/`unvec` — all exact, with the mixed-product and `vec(AXB)=(Bᵀ⊗A)vec(X)` identities. |
@@ -81,6 +83,7 @@ The runtime and numeric chain (`core → simd → polynomial → {polyexpr, ratp
 | `nimblecas.recurrence` | [recurrence.md](reference/recurrence.md) | Linear homogeneous constant-coefficient recurrences: characteristic polynomial over `Q[x]` and its rational roots via `roots` (rational-root case; irrational e.g. Fibonacci deferred). |
 | `nimblecas.complex` | [complex.md](reference/complex.md) | Exact complex numbers over `Q` — the Gaussian rationals `Q + Qi`: overflow-checked add/subtract/multiply/divide/conjugate/reciprocal and the exact squared modulus (modulus and argument omitted as irrational). |
 | `nimblecas.algnum` | [algnum.md](reference/algnum.md) | Exact arithmetic in a simple algebraic extension field `Q(α) = Q[x]/(m)` for monic irreducible `m` (§7.1): represents irrational/complex algebraic numbers (√2, i, ∛2) exactly; extended-Euclid inverse, `norm`/`trace` via the multiplication map, irreducibility enforced at construction. The substrate for Jordan form over an extension field. |
+| `nimblecas.algpoly` | [algpoly.md](reference/algpoly.md) | Dense univariate polynomials over a single algebraic extension field `L = Q(α)` (`AlgebraicPoly`, built on `algnum` + `ratpoly`): exact ring ops, Euclidean division, monic gcd, evaluation — the `L[x]` substrate for Rothstein–Trager over `Q(α)` (`rothstein`) and Jordan form over a splitting field (`jordan`). Field-mismatch is `domain_error`, never a silent coercion. |
 | `nimblecas.stats` | [stats.md](reference/stats.md) | Exact descriptive statistics over the rationals: mean, sample/population variance and covariance, and the symmetric covariance matrix `Σ` (returned as a `nimblecas.matrix` `Matrix`, its diagonal each variable's variance). |
 | `nimblecas.lp` | [lp.md](reference/lp.md) | Exact-rational linear programming via single-phase Simplex: `maximize(A, b, c)` for `max c·x s.t. A x <= b, x >= 0` (`b >= 0`), Bland's rule anti-cycling, exact optimum / unbounded detection. |
 | `nimblecas.ipm` | [ipm.md](reference/ipm.md) | Interior-point LP (§7.22): Mehrotra predictor–corrector primal–dual path-following for `min c·x s.t. A x = b, x >= 0` — the numerical (double-precision) companion to the exact Simplex, gap-certified to tolerance. |
@@ -122,7 +125,7 @@ Differential equations (exact power-series over `Q`, except `sde` which is numer
 | :--- | :--- | :--- |
 | `nimblecas.ode` | [ode.md](reference/ode.md) | Exact power-series solution of first-order ODE **systems** + higher-order via companion-system reduction. |
 | `nimblecas.dde` | [dde.md](reference/dde.md) | Delay differential equations via the exact method of steps (piecewise polynomial per delay interval). |
-| `nimblecas.sde` | [sde.md](reference/sde.md) | Stochastic DEs (Euler–Maruyama, Milstein, Heun, SRK, tamed Euler) on the counter-based RNG — **numerical**, per-path seeded for determinism. |
+| `nimblecas.sde` | [sde.md](reference/sde.md) | Stochastic DEs (Euler–Maruyama, Milstein, Heun, SRK, tamed Euler) on the counter-based RNG — **numerical**, per-path seeded for determinism; plus Merton jump-diffusion (`jump_euler_maruyama`, `merton_jumps`), a drift-implicit theta scheme (`theta_euler`/`jump_theta_euler` via `nlsolve`, `not_converged` on Newton failure), and an `EnsembleEstimate` reduction whose multi-path ensemble fans out over `parallel` bit-identically to serial. |
 | `nimblecas.dae` | [dae.md](reference/dae.md) | Linear DAEs: index-1 semi-explicit + arbitrary-index via shuffle-algorithm index reduction, reduced onto `ode`. Exact over `Q`. |
 | `nimblecas.pde` | [pde.md](reference/pde.md) | Linear (Cauchy–Kovalevskaya) + nonlinear (Adomian time-series) evolution PDEs + an exact 1-D Poisson/Dirichlet BVP. |
 | `nimblecas.perturbation` | [perturbation.md](reference/perturbation.md) | ADM / HPM / HAM perturbation methods, exact in `Q[[x]]/(xᴺ)` on the `powerseries` substrate. |
@@ -138,8 +141,9 @@ Additional linear algebra, numerics & simulation:
 | `nimblecas.bandsolve` | [bandsolve.md](reference/bandsolve.md) | Thomas + banded-LU direct solvers for tridiagonal/banded systems + parallel multi-RHS batch. |
 | `nimblecas.matexp` | [matexp.md](reference/matexp.md) | Matrix exponential via Taylor / Padé / scaling-and-squaring. |
 | `nimblecas.eigen` | [eigen.md](reference/eigen.md) | Characteristic polynomial + rational eigenvalues/eigenvectors over `Q` (the `int64` tier `bigeigen` big-backs). |
+| `nimblecas.svd` | [svd.md](reference/svd.md) | Singular value decomposition + polar decomposition over `matrix`/`eigen`/`qrschur`: **numeric** thin SVD via one-sided Jacobi and polar decomposition, plus an **exact-over-`Q`** slice — `gram_matrix` (`AᵀA`) and `exact_singular_value_squares` (rational `σ²` with multiplicity; irrational `σ²` honestly absent; no exact irrational `σ` is ever returned). |
 | `nimblecas.frobenius` | [frobenius.md](reference/frobenius.md) | Rational (Frobenius) canonical form over `Q` (§7.2): invariant factors and minimal polynomial via the Smith normal form of `xI − A` over `Q[x]`, and the block-companion RCF — EXACT (needs no eigenvalues, unlike Jordan form); the transforming `P` is deliberately not returned. |
-| `nimblecas.jordan` | [jordan.md](reference/jordan.md) | Jordan canonical form `A = P J P⁻¹` WITH the transforming `P` (§7.2): exact over `Q` when the characteristic polynomial splits (generalized-eigenvector chains), and over a quadratic extension `Q(α)` (via `algnum`) for a conjugate pair — e.g. `[[0,-1],[1,0]] → diag(i,-i)` over `Q(i)`; every `(J,P)` is verified `A·P == P·J` before return, degree-≥3 factors → honest `not_implemented`. |
+| `nimblecas.jordan` | [jordan.md](reference/jordan.md) | Jordan canonical form `A = P J P⁻¹` WITH the transforming `P` (§7.2): exact over `Q` when the characteristic polynomial splits (generalized-eigenvector chains), and over a quadratic extension `Q(α)` (via `algnum`) for a conjugate pair — e.g. `[[0,-1],[1,0]] → diag(i,-i)` over `Q(i)`; every `(J,P)` is verified `A·P == P·J` before return, degree-≥3 factors → honest `not_implemented`. `jordan_structure` additionally recovers the exact-over-`Q` Jordan block-size structure (Segre characteristic) for **any** square rational matrix — irrational/complex eigenvalues included — with no extension field ever built, via a Rule-32 divisibility/partition-sum guard. |
 | `nimblecas.numeigen` | [numeigen.md](reference/numeigen.md) | Numeric all-eigenvalue solver for real matrices: structure-aware dispatch (diagonal/triangular direct, Jacobi for symmetric, Francis double-shift real-Schur QR for general); `companion_eigenvalues` is the numeric polynomial root path under `solve`. |
 | `nimblecas.dynamics` | [dynamics.md](reference/dynamics.md) | Equilibria, exact Routh–Hurwitz asymptotic stability, and rational equilibrium classification. |
 | `nimblecas.powerseries` | [powerseries.md](reference/powerseries.md) | `Q[[x]]/(xᴺ)` truncated power series over `int64` `Rational`. |
@@ -161,7 +165,7 @@ Applied linear algebra & operators (exact over `Q` unless noted):
 | :--- | :--- | :--- |
 | `nimblecas.matstruct` | [matstruct.md](reference/matstruct.md) | Structured matrices + exact `LDL^T`/Cholesky/rational-Hessenberg factorizations; block builders & predicates. |
 | `nimblecas.lie` | [lie.md](reference/lie.md) | Matrix Lie algebras: bracket, structure constants, Killing form, exponential map, truncated Lie transforms/series. |
-| `nimblecas.krylov` | [krylov.md](reference/krylov.md) | Krylov methods: exact-over-`Q` conjugate gradient (SPD) + rational Arnoldi/Lanczos; numerical GMRES/MINRES/BiCGSTAB. |
+| `nimblecas.krylov` | [krylov.md](reference/krylov.md) | Krylov methods: exact-over-`Q` conjugate gradient (SPD) + rational Arnoldi/Lanczos; numerical GMRES/MINRES/BiCGSTAB/CG (matrix-free via `MatVec`, including a sparse `csr_matvec` factory) — the true residual is always recomputed at exit, `converged == false` is an honest result, and an indefinite input is never reported as converged. |
 | `nimblecas.semigroup` | [semigroup.md](reference/semigroup.md) | Functional analysis + C₀-semigroups (finite-dim): resolvent, spectrum, `e^{tA}`, Cauchy problem, Hille–Yosida, Sylvester/Lyapunov. |
 
 Variational & analytical mechanics (exact symbolic):
@@ -311,6 +315,17 @@ subsystems layer on top of it along these roots:
   `Q`, quantizing to `BigDecimal` at the boundary; Tier-B numerical root-finding
   on `double`); `pricing` builds on the counter-based `rng` + `svgplot`
   (numerical/statistical), and `analytics` stands on `core` alone.
+- **Algebraic-extension polynomial substrate** — `algpoly` builds on `algnum` +
+  `ratpoly` (dense `L[x]` polynomials over `L = Q(α)`); `rothstein`'s
+  `log_part_extended` and `jordan`'s Tier 2 (`jordan_form`) both consume it for
+  their respective extension-field constructions.
+- **Numeric decomposition layer** — `svd` builds on `matrix` + `eigen` +
+  `qrschur` (one-sided-Jacobi thin SVD / polar decomposition numerically, plus
+  an exact-over-`Q` `AᵀA` spectral slice).
+- **Task scheduling** — `taskdag` builds on `parallel` alone (a deterministic,
+  single-node wavefront scheduler; explicitly not a distributed layer).
+- **Numeric expression sampling** — `evalnum` builds on `symbolic` alone (the
+  IEEE-754 double-precision counterpart to the exact `Expr` tree).
 
 See the [architecture overview](architecture/overview.md) for the exact `import`
 edges and the rationale.

@@ -125,6 +125,66 @@ This boundary is deliberately conservative: everything inside it is computed and
 **verified exactly**; everything outside it is refused honestly. No wrong or
 decimalized answer is ever produced.
 
+## Tier 0 — `jordan_structure`: the Segre characteristic over `Q` alone, no extension field
+
+`jordan_structure(A)` is a **fourth, independent** answer: the exact-over-`Q`
+Jordan block **structure** (the *Segre characteristic* — the multiset of
+block sizes per eigenvalue) of **any** square rational matrix, including one
+whose eigenvalues are irrational or complex — **without constructing the
+splitting field they live in**. It complements `jordan_form` (Tiers 1–3
+above), which additionally builds the transforming matrix `P` and therefore
+*needs* the eigenvalues to be representable (rational, or in a single
+quadratic extension); `jordan_structure` needs neither, because **rank is
+invariant under field extension**.
+
+For each irreducible factor `m_i(x)` of the characteristic polynomial (degree
+`d_i`, multiplicity `e_i`), every one of `m_i`'s `d_i` conjugate roots has the
+**same** Jordan block-size partition of `e_i` — by Galois symmetry: `A` is
+rational, so `m_i`'s conjugate roots are indistinguishable to any rational
+invariant such as rank. `jordan_structure` therefore returns one shared
+partition per irreducible factor rather than one per numbered eigenvalue:
+
+```cpp
+struct JordanFactorStructure {
+    RationalPoly factor;                    // the irreducible factor m_i(x)
+    std::int64_t degree;                     // d_i = deg(m_i) -- number of conjugate roots
+    std::int64_t multiplicity;               // e_i -- multiplicity in the characteristic poly
+    std::vector<std::int64_t> block_sizes;   // descending; sum == multiplicity
+};
+struct JordanStructure {
+    std::vector<JordanFactorStructure> factors;  // one per distinct irreducible factor,
+                                                   // canonical order: degree ascending, then
+                                                   // coefficient-lexicographic among ties
+};
+```
+
+**Algorithm.** With `p` the characteristic polynomial, factored over `Q` into
+`(m_i, e_i)` pairs: for each factor of degree `d_i`, with `M = m_i(A)`
+(Horner-evaluated in the `Matrix` ring), `nu_k = (n − rank(M^k)) / d_i` is the
+total generalized-eigenspace dimension at level `k`, shared out evenly over
+the `d_i` conjugate roots; the standard nullity identity
+`#blocks_of_size_k = 2·nu_k − nu_{k−1} − nu_{k+1}` (`nu_0 = 0`) then recovers
+the Segre characteristic common to every conjugate root of `m_i`.
+
+**Rule-32 divisibility guard.** `(n − rank(M^k))` must divide evenly by `d_i`
+at every step, and the recovered block-size partition must sum exactly to
+`e_i`; either check failing returns `MathError::domain_error` rather than
+truncate-dividing to a plausible-looking but wrong Segre characteristic. Both
+are unreachable for a correct characteristic polynomial and exact arithmetic
+— they exist purely as an honesty tripwire, not an expected code path.
+
+`jordan_structure` answers cases `jordan_form` cannot: e.g. the defective
+repeated-cubic matrix `A = [[C, I₃], [0, C]]` with `C = companion(x³ − 3x − 1)`
+has characteristic polynomial `(x³ − 3x − 1)²` — a single degree-3 irreducible
+factor at multiplicity 2, which is Tier-3 `not_implemented` for `jordan_form`
+(degree ≥ 3) — yet `jordan_structure` computes its exact Segre characteristic
+(`block_sizes == {2}`: each of the 3 conjugate roots carries one defective
+2×2 block) entirely over `Q`.
+
+| Function / type | Signature | Behavior |
+| :--- | :--- | :--- |
+| `jordan_structure` | `auto jordan_structure(const Matrix& a) -> Result<JordanStructure>` | The exact-over-`Q` Jordan block structure of `A` — valid for any square rational matrix, irrational/complex eigenvalues included, without building a splitting field. The `0×0` matrix yields the empty structure. |
+
 ## API
 
 | Function / type | Signature | Behavior |
@@ -133,17 +193,20 @@ decimalized answer is ever produced.
 | `rational_jordan_form` | `auto rational_jordan_form(const Matrix& a) -> Result<RationalJordan>` | Tier 1. Char poly splits over `Q`. The 0×0 matrix yields empty `J`, `P`. Non-square **or** non-splitting ⇒ `domain_error`; overflow propagated. |
 | `AlgebraicJordan` | `struct { NumberField field; vector<vector<AlgebraicNumber>> jordan; vector<vector<AlgebraicNumber>> transform; }` | Tier 2 result: `J` and `P` over `field = Q(alpha)`, with `A*P == P*J` over the field, `P` invertible. |
 | `jordan_form` | `auto jordan_form(const Matrix& a) -> Result<AlgebraicJordan>` | Tier 2/3. Single quadratic extension. Degree-≥3 factor or ≥2 distinct quadratics ⇒ `not_implemented`; char poly splitting over `Q` (or 0×0, or non-square) ⇒ `domain_error`; overflow propagated. |
+| `JordanFactorStructure` / `JordanStructure` / `jordan_structure` | see above | Tier 0. Exact-over-`Q` Segre characteristic for **any** square rational matrix; no extension field ever built. |
 
 ## Error model
 
 | Condition | Error |
 | :--- | :--- |
-| Non-square input to either function | `MathError::domain_error` |
+| Non-square input to any of the three functions | `MathError::domain_error` |
 | `rational_jordan_form`: characteristic polynomial does not split over `Q` | `MathError::domain_error` |
 | `jordan_form`: characteristic polynomial splits over `Q` (no extension needed) | `MathError::domain_error` |
 | `jordan_form`: 0×0 input (no eigenvalues, no field) | `MathError::domain_error` |
 | `jordan_form`: irreducible factor of degree ≥ 3, or ≥ 2 distinct quadratic factors | `MathError::not_implemented` |
-| `int64` numerator/denominator overflow in the exact arithmetic | `MathError::overflow` |
+| `jordan_structure`: the divisibility or partition-sum Rule-32 guard trips (unreachable for correct exact arithmetic) | `MathError::domain_error` |
+| `jordan_structure`: propagated `characteristic_polynomial` / `factor_over_Q` errors (e.g. `factor_over_Q`'s Kronecker search exceeding its divisor-tuple budget) | `MathError::not_implemented` (or whatever is propagated) |
+| `int64` numerator/denominator overflow in the exact arithmetic (any of the three functions) | `MathError::overflow` |
 
 ## Examples
 
@@ -156,6 +219,12 @@ using namespace nimblecas;
 auto ri  = [](std::int64_t v) { return Rational::from_int(v); };
 auto mat = [](std::vector<std::vector<Rational>> r) {
     return Matrix::from_rows(std::move(r)).value();
+};
+// Low-degree-first integer coefficients, e.g. poly({1, 0, 1}) == x^2 + 1.
+auto poly = [](std::vector<std::int64_t> c) {
+    std::vector<Rational> rc;
+    for (auto v : c) rc.push_back(ri(v));
+    return RationalPoly::from_coeffs(std::move(rc));
 };
 
 // Tier 1 — a defective 2x2 block over Q.
@@ -175,6 +244,15 @@ auto C = mat({{ri(0), ri(0), ri(2)},                // companion of x^3 - 2
               {ri(1), ri(0), ri(0)},
               {ri(0), ri(1), ri(0)}});
 auto e = jordan_form(C);                             // error == MathError::not_implemented
+
+// Tier 0 — jordan_structure answers the SAME rotation Tier 2 needed Q(i) for,
+// entirely over Q: char poly x^2+1 is irreducible, one degree-2 factor,
+// multiplicity 1, and (i, -i) are each simple => block_sizes {1}. No field built.
+auto s = jordan_structure(R).value();
+// s.factors.size() == 1
+// s.factors[0].factor.is_equal(poly({1, 0, 1}))   -- x^2 + 1
+// s.factors[0].degree == 2, s.factors[0].multiplicity == 1
+// s.factors[0].block_sizes == std::vector<std::int64_t>{1}
 ```
 
 ## See also

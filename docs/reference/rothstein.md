@@ -26,29 +26,67 @@ substrate of [`ratpoly`](ratpoly.md).
 import nimblecas.rothstein;
 ```
 
-Depends on [`core`](core.md), [`ratpoly`](ratpoly.md), and
-[`resultant`](resultant.md).
+Depends on [`core`](core.md), [`ratpoly`](ratpoly.md),
+[`resultant`](resultant.md), [`factor`](factor.md) (the complete
+factorization `log_part_extended` runs `R(t)` through),
+[`algnum`](algnum.md) (the extension field `Q(alpha)` an irreducible factor
+of degree `>= 2` generates), and [`algpoly`](algpoly.md) (the `L[x]` gcd
+`log_part_extended` computes the logarithm argument with).
 
 ## The rational/algebraic boundary
 
-This is the single most important thing to understand about the output. Only
-**rational** residues are handled. The Rothstein–Trager resultant `R(t)` may have
-roots that are irrational or complex, and each such residue names a logarithm
-whose argument lives in an **algebraic extension** of `Q` — machinery this pass
-does not yet build. When every residue of `R` is rational the logarithmic part is
-returned in full; when any residue is not, `log_part` returns
-`MathError::not_implemented`.
+There are **two** entry points with two different boundaries, and the
+difference between them is the single most important thing to understand
+about this module.
+
+`log_part` handles only **rational** residues. The Rothstein–Trager resultant
+`R(t)` may have roots that are irrational or complex, and each such residue
+names a logarithm whose argument lives in an **algebraic extension** of `Q`
+that `log_part` does not build. When every residue of `R` is rational the
+logarithmic part is returned in full; when any residue is not, `log_part`
+returns `MathError::not_implemented`:
 
 - `int 1/(x^2 + 1) dx = arctan(x)` — the residues are `±i/2`, **complex**. `R(t)`
-  has no rational root, so this is `not_implemented`.
+  has no rational root, so `log_part` returns `not_implemented`.
 - `int 1/(x^2 - 2) dx` — the residues are `±1/(2 sqrt 2)`, **irrational**. Again
-  `not_implemented`.
+  `not_implemented` from `log_part`.
 
 A non-rational residue is detected by **completeness**: after stripping every
 rational linear factor `(t - c)` from `R(t)`, a non-constant remainder means `R`
-still has a root that is not rational, so the answer would be incomplete. That
-extension-field case is deferred; expressing algebraic residues is the job of a
-later pass, not this module.
+still has a root that is not rational, so `log_part`'s answer would be
+incomplete.
+
+`log_part_extended` **lifts that restriction**. It factors `R(t)` **completely**
+over `Q` ([`factor`](factor.md)) instead of only reading off its rational
+roots, and handles every irreducible factor honestly:
+
+- a **degree-1** factor is a rational residue `c`, handled exactly as in
+  `log_part` — it becomes a `LogTerm` in `rational_terms`;
+- a factor of **degree `d >= 2`** names a residue that is irrational or
+  complex. `log_part_extended` builds the number field `K = Q(alpha) =
+  Q[t]/(factor)` that factor generates ([`algnum`](algnum.md)) and computes
+  the logarithm argument as `gcd_x(A - alpha*D', D)` over `K[x]`
+  ([`algpoly`](algpoly.md)) — a **conjugate-sum block**: `alpha` ranges
+  implicitly over every root (conjugate) of that irreducible factor, with
+  `alpha`'s canonical representative being `field.generator()`. The block is
+  packed into an `AlgebraicLogTerm` in `algebraic_terms`.
+
+Both integrals above are now expressed **exactly**, no `not_implemented`:
+
+- `int 1/(x^2 + 1) dx`: one conjugate-sum block over `K = Q[t]/(t^2 + 1/4)`
+  (`alpha^2 = -1/4`), argument `x + 2*alpha` — the algebraic residue is
+  `alpha` itself (the canonical representative of the conjugate pair `±i/2`).
+- `int 1/(x^2 - 2) dx`: one conjugate-sum block over `K = Q[t]/(t^2 - 1/8)`
+  (`alpha^2 = 1/8`), argument `x - 4*alpha`.
+
+`log_part_extended` still refuses honestly rather than guess: a **completeness
+identity** — the sum, over every emitted term, of `field_degree *
+argument_degree` (rational terms count as `field_degree = 1`) — must equal
+`deg D` exactly, or the call fails with `MathError::domain_error` instead of
+returning a partial answer. And `log_part_extended`'s own factorization step
+(`factor_over_Q`) can still exhaust its internal search budget on a
+sufficiently adversarial input, which surfaces honestly as
+`MathError::not_implemented` rather than a silent "no algebraic residues".
 
 ## The overflow contract
 
@@ -166,6 +204,48 @@ Error model:
 | a residue of `R(t)` is irrational or complex | `MathError::not_implemented` |
 | an `int64` coefficient computation wraps | `MathError::overflow` |
 
+### `log_part_extended(numerator, denominator)`
+
+```cpp
+[[nodiscard]] auto log_part_extended(const RationalPoly& numerator,
+                                      const RationalPoly& denominator)
+    -> Result<ExtendedLogarithmicPart>;
+```
+
+Rothstein–Trager logarithmic integration with **every** residue expressed
+exactly — rational or algebraic:
+
+```cpp
+// A conjugate-sum block contributed by an irreducible factor of R(t) of degree >= 2:
+// the residues are the FULL set of conjugates beta of `residue` (the roots of
+// field.modulus()), standing for  sum over conjugates beta of  beta * log(argument
+// with alpha -> beta).  `residue` is always field.generator() (alpha itself).
+struct AlgebraicLogTerm {
+    NumberField field;
+    AlgebraicNumber residue;
+    AlgebraicPoly argument;      // monic in x over field, deg >= 1
+};
+
+// int A/D dx = sum over rational_terms of coefficient*log(argument)
+//            + sum over algebraic_terms of its conjugate-sum block.
+struct ExtendedLogarithmicPart {
+    std::vector<LogTerm> rational_terms;
+    std::vector<AlgebraicLogTerm> algebraic_terms;
+};
+```
+
+`rational_terms` is identical to `log_part`'s output when every residue
+happens to be rational (see the regression example below). Error model:
+
+| Condition | Error |
+| :--- | :--- |
+| `denominator` is the zero polynomial | `MathError::division_by_zero` |
+| improper input (`deg A >= deg D` after reduction) | `MathError::not_implemented` |
+| the internal factorization (`factor_over_Q`) exhausts its search budget | `MathError::not_implemented` |
+| the completeness identity (`sum of field_degree * argument_degree == deg D`) fails | `MathError::domain_error` (never returned alongside a partial result) |
+| a trivial (degree-0) gcd argument for a degree `>= 2` factor | `MathError::domain_error` (would silently drop x-degree from the completeness check) |
+| an `int64` coefficient computation wraps | `MathError::overflow` |
+
 ## Examples
 
 Worked from the tests (`tests/rothstein_tests.cpp`). Inputs are built
@@ -214,10 +294,11 @@ auto lp5 = log_part(ipoly({1}), d5).value();
 auto lp6 = log_part(ipoly({0, 1}), ipoly({0, -1, 1})).value();
 // one term: log(x - 1).
 
-// Complex residues ±i/2 — int 1/(x^2 + 1) = arctan(x): not_implemented.
+// Complex residues ±i/2 — int 1/(x^2 + 1) = arctan(x): log_part punts (not_implemented),
+// but log_part_extended below expresses it exactly.
 auto e1 = log_part(ipoly({1}), ipoly({1, 0, 1}));  // not_implemented
 
-// Irrational residues ±1/(2 sqrt 2) — int 1/(x^2 - 2): not_implemented.
+// Irrational residues ±1/(2 sqrt 2) — int 1/(x^2 - 2): same story.
 auto e2 = log_part(ipoly({1}), ipoly({-2, 0, 1}));  // not_implemented
 
 // Zero denominator fails.
@@ -232,19 +313,61 @@ The tests verify correctness by **differentiating back**: for
 cross-multiplying the two rational functions (`num * D == A * den`) — no factoring
 or floating point involved.
 
+## Examples — `log_part_extended`
+
+Worked from the tests (`tests/rothstein_tests.cpp`).
+
+```cpp
+import nimblecas.rothstein;
+import nimblecas.ratpoly;
+import nimblecas.algnum;
+using namespace nimblecas;
+
+// int 1/(x^2+1) dx: the residues +-i/2 are irrational, so log_part punts to
+// not_implemented, but log_part_extended expresses them exactly as ONE
+// conjugate-sum block over K = Q[t]/(t^2 + 1/4), alpha^2 = -1/4:
+//     gcd_x(x^2+1, 1 - 2*alpha*x) == x + 2*alpha.
+auto elp1 = log_part_extended(ipoly({1}), ipoly({1, 0, 1})).value();
+elp1.rational_terms.empty();                              // true — no rational residues
+elp1.algebraic_terms.size() == 1;                          // true — one conjugate-sum block
+const AlgebraicLogTerm& t1 = elp1.algebraic_terms.front();
+// t1.field.modulus() == t^2 + 1/4  (RationalPoly {1/4, 0, 1}, low-degree first)
+// t1.residue == t1.field.generator()  (alpha, the canonical representative)
+// t1.argument.degree() == 1, coefficient(0) == 2*alpha, coefficient(1) == 1
+
+// int 1/(x^2-2) dx: residues +-1/(2 sqrt2) are irrational; one conjugate-sum
+// block over K = Q[t]/(t^2 - 1/8), alpha^2 = 1/8:
+//     gcd_x(x^2-2, 1 - 2*alpha*x) == x - 4*alpha.
+auto elp2 = log_part_extended(ipoly({1}), ipoly({-2, 0, 1})).value();
+elp2.rational_terms.empty();                               // true
+elp2.algebraic_terms.size() == 1;                           // true
+const AlgebraicLogTerm& t2 = elp2.algebraic_terms.front();
+// t2.field.modulus() == t^2 - 1/8  (RationalPoly {-1/8, 0, 1})
+// t2.argument.degree() == 1, coefficient(0) == -4*alpha, coefficient(1) == 1
+
+// Regression: every residue of int 1/(x(x^2+1)) dx is RATIONAL (1 at x=0, and
+// the shared -1/2 at the +-i poles), so R(t) splits completely over Q and
+// log_part_extended must NOT manufacture an extension field.
+auto d3 = ipoly({0, 1}).multiply(ipoly({1, 0, 1})).value();   // x(x^2+1)
+auto elp3 = log_part_extended(ipoly({1}), d3).value();
+elp3.algebraic_terms.empty();                               // true — no field manufactured
+elp3.rational_terms.size() == 2;                             // 1*log(x) and (-1/2)*log(x^2+1)
+```
+
 ## Relationship to integration
 
 Rothstein–Trager is the **logarithmic-part half** of rational-function
 integration (ROADMAP §7.19). Together with [`ratint`](ratint.md)'s Hermite
 reduction — which computes the exact rational part and hands over precisely the
-proper, square-free-denominator integrand this module requires — it completes
-rational-function integration for the **rational-residue** class. The
-Rothstein–Trager resultant `R(t) = res_x(D, A - t*D')` is built on
-[`nimblecas.resultant`](resultant.md) (§7.17). A combined Hermite +
-Rothstein–Trager `integrate_rational` capstone is the natural next step,
-returning the rational part, the rational-residue logarithms, and
-`not_implemented` for the algebraic-residue remainder until an extension field
-lands.
+proper, square-free-denominator integrand this module requires — `log_part`
+completes rational-function integration for the **rational-residue** class,
+and `log_part_extended` completes it for **every** residue class (rational or
+algebraic) that its factorization budget can reach. The Rothstein–Trager
+resultant `R(t) = res_x(D, A - t*D')` is built on
+[`nimblecas.resultant`](resultant.md) (§7.17). The combined Hermite +
+Rothstein–Trager capstones — `integrate_rational` (rational residues only) and
+`integrate_rational_extended` (every residue, mirroring `log_part_extended`) —
+live in [`nimblecas.integrate`](integrate.md).
 
 ## See also
 
@@ -255,4 +378,12 @@ lands.
 - [`nimblecas.ratpoly`](ratpoly.md) — the exact `Q[x]` substrate (`Rational`,
   `RationalPoly`, division-with-remainder, monic Euclidean gcd, derivative) this
   module is built on.
+- [`nimblecas.factor`](factor.md) — the complete factorization over `Q` that
+  `log_part_extended` runs `R(t)` through.
+- [`nimblecas.algnum`](algnum.md) / [`nimblecas.algpoly`](algpoly.md) — the
+  extension field `Q(alpha)` and its `L[x]` polynomial arithmetic that
+  `log_part_extended` builds the algebraic-residue logarithm arguments on.
+- [`nimblecas.integrate`](integrate.md) — the capstone that assembles this
+  module's logarithmic part with `ratint`'s rational part into a complete
+  indefinite integral.
 - [Documentation hub](../Index.md)

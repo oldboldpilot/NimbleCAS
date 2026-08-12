@@ -25,7 +25,9 @@ import nimblecas.integrate;
 ```
 
 Depends on [`core`](core.md), [`ratpoly`](ratpoly.md), [`ratint`](ratint.md), and
-[`rothstein`](rothstein.md).
+[`rothstein`](rothstein.md) (whose `log_part_extended` — and transitively
+[`factor`](factor.md), [`algnum`](algnum.md), [`algpoly`](algpoly.md) — backs
+`integrate_rational_extended` below).
 
 ## The pipeline
 
@@ -120,6 +122,67 @@ Error model:
 | a residue of the logarithmic part is irrational or complex | `MathError::not_implemented` |
 | an `int64` coefficient computation wraps | `MathError::overflow` |
 
+## `integrate_rational_extended` — every residue, rational or algebraic
+
+`integrate_rational_extended` **mirrors `integrate_rational`** exactly, wiring
+the same [`ratint`](ratint.md) Hermite reduction into
+[`rothstein`](rothstein.md)'s `log_part_extended` instead of `log_part`, so
+irrational/complex residues are expressed exactly via algebraic extension
+fields (see [`rothstein`](rothstein.md#the-rationalalgebraic-boundary))
+instead of being punted to `not_implemented`:
+
+```cpp
+[[nodiscard]] auto integrate_rational_extended(const RationalPoly& numerator,
+                                               const RationalPoly& denominator)
+    -> Result<RationalIntegralExtended>;
+```
+
+```cpp
+// int numerator/denominator dx
+//     == rational_num/rational_den
+//        + sum over log_terms of coefficient * log(argument)
+//        + sum over algebraic_log_terms of the field's conjugate-sum log block.
+struct RationalIntegralExtended {
+    RationalPoly rational_num;
+    RationalPoly rational_den;
+    std::vector<LogTerm> log_terms;                    // rational residues
+    std::vector<AlgebraicLogTerm> algebraic_log_terms;  // irrational/complex residues, exact
+};
+```
+
+`rational_num`/`rational_den` come from the **same** `hermite_reduce` call
+`integrate_rational` uses — the rational part is always fully computable, the
+same as before. `log_terms`/`algebraic_log_terms` are `log_part_extended`'s
+`rational_terms`/`algebraic_terms`, re-packed unchanged. `AlgebraicLogTerm` is
+re-used from [`rothstein`](rothstein.md): a `NumberField`, its `residue`
+(always the field's `generator()`), and a monic `AlgebraicPoly` `argument`.
+
+Error model:
+
+| Condition | Error |
+| :--- | :--- |
+| `denominator` is the zero polynomial | `MathError::division_by_zero` |
+| `log_part_extended`'s internal factorization (`factor_over_Q`) exhausts its search budget | `MathError::not_implemented` |
+| `log_part_extended`'s completeness identity fails | `MathError::domain_error` (never alongside a partial result) |
+| an `int64` coefficient computation wraps | `MathError::overflow` |
+
+### Example
+
+```cpp
+// int 1/(x^2+1) dx: the denominator is already square-free, so hermite_reduce
+// leaves rational_num == 0 and the FULL leftover integrand for log_part_extended.
+// The complex residues +-i/2 are expressed exactly as one conjugate-sum block
+// over Q(alpha) = Q[t]/(t^2 + 1/4) instead of not_implemented.
+auto rie = integrate_rational_extended(ipoly({1}), ipoly({1, 0, 1})).value();
+rie.rational_num.is_zero();          // true
+rie.log_terms.empty();               // true — no rational residues
+rie.algebraic_log_terms.size() == 1; // one conjugate-sum block, alpha^2 = -1/4
+
+// int 1/(x^2-2) dx: same shape, over Q(alpha) = Q[t]/(t^2 - 1/8).
+auto rie2 = integrate_rational_extended(ipoly({1}), ipoly({-2, 0, 1})).value();
+rie2.algebraic_log_terms.size() == 1;  // alpha^2 = 1/8
+```
+
 ## Examples
 
 Worked from the tests (`tests/integrate_tests.cpp`). Inputs are built
@@ -179,30 +242,39 @@ The tests verify the whole result end to end by **differentiating it back**: for
 ## Relationship to integration
 
 `integrate_rational` **completes** rational-function integration for the
-**rational-residue** class (ROADMAP §7.19). It is the assembly point above the two
-halves that each solve part of the problem:
+**rational-residue** class (ROADMAP §7.19), and `integrate_rational_extended`
+extends that completeness to **every** residue class — rational, irrational,
+or complex — that its factorization budget can reach, by expressing the
+algebraic residues exactly over the extension field they generate rather than
+deferring them. Both are the assembly point above the two halves that each
+solve part of the problem:
 
 - [`ratint`](ratint.md) — Hermite reduction, the **rational-part** half, which
-  computes `g` exactly and leaves the proper, square-free integrand;
-- [`rothstein`](rothstein.md) — Rothstein–Trager, the **logarithmic-part** half,
-  built on the resultant `R(t) = res_x(D, A − t·D')` from
-  [`resultant`](resultant.md) (§7.17), which turns that integrand into the
-  minimal set of residue-weighted logarithms.
+  computes `g` exactly and leaves the proper, square-free integrand (shared by
+  both capstones, unchanged);
+- [`rothstein`](rothstein.md) — Rothstein–Trager, the **logarithmic-part**
+  half, built on the resultant `R(t) = res_x(D, A − t·D')` from
+  [`resultant`](resultant.md) (§7.17): `log_part` (rational residues only,
+  behind `integrate_rational`) or `log_part_extended` (every residue, behind
+  `integrate_rational_extended`) turn that integrand into the minimal set of
+  residue-weighted logarithms.
 
-Full elementary integration of the **algebraic-residue** cases needs an extension
-field (deferred — the source of the `not_implemented` boundary above), and
-**transcendental** integrands (exp, log, trig arguments) are a separate future
-layer.
+**Transcendental** integrands (exp, log, trig arguments) remain a separate
+future layer outside either capstone.
 
 ## See also
 
 - [`nimblecas.ratint`](ratint.md) — Hermite reduction, the rational-part half
-  (`hermite_reduce` → `HermiteReduction`) this capstone runs first.
+  (`hermite_reduce` → `HermiteReduction`) both capstones run first.
 - [`nimblecas.rothstein`](rothstein.md) — Rothstein–Trager logarithmic
-  integration, the logarithmic-part half (`log_part` → `LogTerm`) this capstone
-  runs second, and the source of the `LogTerm` type.
+  integration, the logarithmic-part half (`log_part`/`log_part_extended` →
+  `LogTerm`/`AlgebraicLogTerm`) both capstones run second.
 - [`nimblecas.resultant`](resultant.md) — the resultant `res_x(D, A − t·D')`
   underneath the logarithmic part.
+- [`nimblecas.factor`](factor.md) / [`nimblecas.algnum`](algnum.md) /
+  [`nimblecas.algpoly`](algpoly.md) — the complete factorization and
+  extension-field machinery `integrate_rational_extended` inherits from
+  `log_part_extended`.
 - [`nimblecas.ratpoly`](ratpoly.md) — the exact `Q[x]` substrate (`Rational`,
   `RationalPoly`, division-with-remainder, monic Euclidean gcd, derivative) both
   halves are built on.

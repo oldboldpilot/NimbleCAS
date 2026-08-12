@@ -80,11 +80,25 @@ system is a `domain_error`.
 | Function | Signature | Behavior |
 | :--- | :--- | :--- |
 | `dense_matvec` | `auto dense_matvec(std::span<const double> mat, std::size_t n) -> MatVec` | Wrap an `n × n` row-major dense buffer as a `MatVec`. The buffer is **copied** into the returned closure, so it stays valid independently of the caller's storage. |
+| `csr_matvec` | `auto csr_matvec(std::span<const int> row_offsets, std::span<const int> col_indices, std::span<const double> values, std::size_t n) -> MatVec` | Wrap a compressed-sparse-row `n × n` matrix as a `MatVec`: `y[i] = sum_{k in row i} values[k]·x[col_indices[k]]`. The matrix-free numerical counterpart of `dense_matvec`. The three arrays are **copied** into the returned closure. |
 | `gmres` | `auto gmres(const MatVec& A, std::span<const double> b, double tol = 1e-10, std::size_t max_iter = 1000, std::size_t restart = 30) -> Result<IterativeResult>` | Restarted GMRES with Givens rotations, for general (possibly non-symmetric) systems. |
 | `minres` | `auto minres(const MatVec& A, std::span<const double> b, double tol = 1e-10, std::size_t max_iter = 1000) -> Result<IterativeResult>` | Paige-Saunders MINRES, for symmetric (possibly indefinite) systems. |
+| `cg` | `auto cg(const MatVec& A, std::span<const double> b, double tol = 1e-10, std::size_t max_iter = 1000) -> Result<IterativeResult>` | Numerical Conjugate Gradient for a symmetric positive-definite `A`, matrix-free via `MatVec`. The **true** residual `‖b − A x‖₂` is recomputed at return via `residual_norm` — **never** the recursive `r·r` used to drive the iteration, which can look deceptively tiny after round-off even though the true residual is not. `converged == false` is a legitimate outcome (budget exhausted, or a breakdown `pᵀA p == 0` on non-SPD input) — a non-SPD/indefinite `A` is **never** reported converged unless the true residual genuinely satisfies the tolerance. |
 | `bicgstab` | `auto bicgstab(const MatVec& A, std::span<const double> b, double tol = 1e-10, std::size_t max_iter = 1000) -> Result<IterativeResult>` | BiCGSTAB, for general non-symmetric systems. Breakdown (`rho` or `omega` collapsing to zero) stops the iteration and is reported as `converged == false`, not as an error. |
 | `lanczos_ritz` | `auto lanczos_ritz(const MatVec& A, std::span<const double> v0, std::size_t m) -> Result<std::vector<double>>` | Run `min(m, n)` steps of the classical **normalised** Lanczos on a symmetric operator and return the eigenvalues of the resulting tridiagonal — the Ritz values, sorted ascending. These are **approximations** of a subset of `A`'s spectrum (extreme eigenvalues emerge first), **not** exact eigenvalues. |
 | `arnoldi_hessenberg` | `auto arnoldi_hessenberg(const MatVec& A, std::span<const double> v0, std::size_t m) -> Result<DoubleHessenberg>` | Run `min(m, n)` steps of the classical **orthonormal** Arnoldi and return the `dim × dim` upper-Hessenberg `H = VᵀAV`. Its eigenvalues are the Arnoldi Ritz values — spectral **approximations** whose extraction needs a general (non-symmetric) eigensolver, out of this module's scope. |
+
+`csr_matvec` validates its CSR triple **once**, at construction (well-formed
+`row_offsets` of length `n+1`, monotone non-decreasing/non-negative; `nnz`
+matching `col_indices.size() == values.size()`; every column index in
+`[0, n)`) — not on every matvec call, so the returned closure stays a plain
+`Theta(nnz)` sparse apply, just as `dense_matvec` is a plain `Theta(n²)` dense
+apply. Because this factory returns a bare `MatVec` (matching
+`dense_matvec`'s shape) rather than `Result<MatVec>`, it has no channel to
+report malformed input at the point of misuse; a malformed triple is never
+clamped or partially applied (which would silently answer a different, wrong
+system) — instead `csr_matvec` returns a safe `MatVec` that always leaves
+`y == 0`.
 
 ## Error model
 
@@ -94,7 +108,7 @@ system is a `domain_error`.
 | `conjugate_gradient` / `conjugate_gradient_steps` on a non-symmetric `A` | `MathError::domain_error` |
 | CG breakdown — a direction with `pᵀA p <= 0`, or no exact solution within `n` steps (proves `A` is not SPD) | `MathError::domain_error` |
 | `lanczos_rational` on a non-symmetric `A` | `MathError::domain_error` |
-| `gmres` / `minres` / `bicgstab` / `lanczos_ritz` / `arnoldi_hessenberg` on an empty system (`b`/`v0` size `0`, or `m == 0` for the estimators) | `MathError::domain_error` |
+| `gmres` / `minres` / `cg` / `bicgstab` / `lanczos_ritz` / `arnoldi_hessenberg` on an empty system (`b`/`v0` size `0`, or `m == 0` for the estimators) | `MathError::domain_error` |
 | `lanczos_ritz` / `arnoldi_hessenberg` on a zero starting vector (`‖v0‖ == 0`) | `MathError::domain_error` |
 | `lanczos_ritz` when the tridiagonal QL iteration stalls (does not converge in 50 sweeps) | `MathError::not_implemented` |
 | An `int64` numerator or denominator computation wraps in an exact routine | `MathError::overflow` |
@@ -186,6 +200,29 @@ capped.iterations == 1;                                 // true
 // Only an empty system is genuinely invalid.
 std::array<double, 0> empty{};
 bicgstab(Op, empty, 1e-10, 10).error();                // MathError::domain_error
+
+// ---- NUMERICAL: csr_matvec + cg on a sparse SPD system ----
+// Tridiagonal SPD: diag 4, off-diag 1 (diagonally dominant => SPD), 4x4.
+// x_true = [1,2,3,4]; b = A * x_true, hand-computed: [6,12,18,19].
+const std::array<int, 5> row_offsets{0, 2, 5, 8, 10};
+const std::array<int, 10> col_indices{0, 1, 0, 1, 2, 1, 2, 3, 2, 3};
+const std::array<double, 10> values{4, 1, 1, 4, 1, 1, 4, 1, 1, 4};
+auto Asp = csr_matvec(row_offsets, col_indices, values, 4);
+
+const std::array<double, 4> b_spd{6.0, 12.0, 18.0, 19.0};
+auto cgr = cg(Asp, b_spd, 1e-12, 100).value();
+cgr.converged;                                          // true
+cgr.iterations <= 4;                                    // true (well-conditioned SPD 4x4: <= n)
+// cgr.x ~ [1, 2, 3, 4], the true residual ‖b - A x‖ well under tolerance.
+
+// A non-SPD (indefinite) matrix never reports a false positive: [[0,1],[1,0]], b=[0,1].
+auto Aindef = dense_matvec(std::array<double, 4>{0, 1, 1, 0}, 2);
+auto cg_bad = cg(Aindef, std::array<double, 2>{0.0, 1.0}, 1e-10, 100).value();
+cg_bad.converged;                                        // false — breakdown, not a wrong answer
+cg_bad.iterations == 1;                                  // stops after the p^T A p == 0 breakdown
+
+// Only an empty system is genuinely invalid for cg too.
+cg(Asp, std::array<double, 0>{}, 1e-10, 10).error();     // MathError::domain_error
 ```
 
 ## See also
