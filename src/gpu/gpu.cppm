@@ -758,4 +758,158 @@ namespace detail {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// FAMILY C — Path-dependent derivative pricing (gpu_asian_kernels.cu).
+// ---------------------------------------------------------------------------
+
+// Maximum averaging steps, mirroring pricing::monte_carlo_asian's kMaxSteps bound.
+inline constexpr int kGpuMcMaxSteps = 100'000;
+// Path*steps cap, mirroring pricing::monte_carlo_asian's kMaxPathSteps bound.
+inline constexpr std::uint64_t kGpuMcMaxPathSteps = 1'000'000'000;
+
+// Price a batch of arithmetic-average Asian options by GPU Monte Carlo path simulation,
+// returning one pricing::McResult { price, std_error, paths } per option, in order.
+// Every option is priced over the SAME counter stream [0, paths*steps) with key = splitmix64(seed)
+// — step t of path p draws counter index (p*steps + t), matching pricing::monte_carlo_asian —
+// so item i estimates the same quantity as monte_carlo_asian(spec_i, paths, steps, seed, false).
+//
+// HONESTY: STATISTICAL (double). The Threefry draw BITS are bit-identical to the CPU counter RNG;
+// the normal z is bit-identical in Acklam's central ~95% region, with <=1 ULP differences in the
+// ~5% tail (device libm log vs simd::log_one). Price agrees with CPU monte_carlo_asian(..., false)
+// to ~1e-6 relative (hardware exp vs simd::exp_into, plus the tail-z last bit). Geometric control
+// variate is CPU-only.
+// CPU fallback (no device): pricing::monte_carlo_asian(spec, paths, steps, seed, false) per option.
+//
+// Fails with MathError::domain_error when paths == 0, steps < 1, steps > kGpuMcMaxSteps,
+// paths * steps > kGpuMcMaxPathSteps, or an option is non-physical; MathError::overflow when
+// opts.size() or opts.size()*ceil(paths/kGpuMcSegPaths) exceeds the int kernel bound;
+// MathError::gpu_error when a device is present but a CUDA call fails.
+[[nodiscard]] auto monte_carlo_asian_batch(std::span<const BsOption> opts,
+                                           std::uint64_t paths, int steps, std::uint64_t seed)
+    -> Result<std::vector<pricing::McResult>> {
+    if (paths == 0 || steps < 1 || steps > kGpuMcMaxSteps ||
+        paths > kGpuMcMaxPathSteps / static_cast<std::uint64_t>(steps)) {
+        return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+    }
+    // Physical domain matched EXACTLY to pricing::monte_carlo_asian (spot>0, vol>=0, time>0) so the
+    // accept/reject decision — and therefore the result — never depends on whether a device is
+    // present. (to_bridge additionally rejects strike<=0, a module-wide batch-POD precondition that
+    // is applied identically on the device and CPU-fallback paths, so it is not device-dependent.)
+    for (const auto& o : opts) {
+        if (o.spot <= 0.0 || o.volatility < 0.0 || o.time <= 0.0) {
+            return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+        }
+    }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<pricing::McResult>>(pod.error()); }
+    if (opts.empty()) { return std::vector<pricing::McResult>{}; }
+    const std::uint64_t nseg = (paths + kGpuMcSegPaths - 1) / kGpuMcSegPaths;
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (opts.size() > int_max || nseg > int_max ||
+        opts.size() > static_cast<std::size_t>(int_max / nseg)) {
+        return make_error<std::vector<pricing::McResult>>(MathError::overflow);
+    }
+    if (!available()) {
+        std::vector<pricing::McResult> out;
+        out.reserve(opts.size());
+        for (const auto& o : opts) {
+            const auto spec = pricing::OptionSpec{}
+                                  .with_spot(o.spot).with_strike(o.strike).with_rate(o.rate)
+                                  .with_dividend(o.dividend).with_volatility(o.volatility)
+                                  .with_expiry(o.time)
+                                  .with_type(o.is_call ? pricing::OptionType::call
+                                                       : pricing::OptionType::put);
+            auto r = pricing::monte_carlo_asian(spec, paths, steps, seed, /*control_variate=*/false);
+            if (!r) { return make_error<std::vector<pricing::McResult>>(r.error()); }
+            out.push_back(*r);
+        }
+        return out;
+    }
+    std::vector<NimblecasMcEstimate> est(opts.size());
+    const int rc = nimblecas_gpu_mc_asian_batch(pod->data(), static_cast<int>(pod->size()),
+                                                steps, paths, seed, est.data());
+    if (rc != 0) { return make_error<std::vector<pricing::McResult>>(MathError::gpu_error); }
+    std::vector<pricing::McResult> out;
+    out.reserve(est.size());
+    for (const auto& e : est) { out.push_back(pricing::McResult{e.price, e.std_error, paths}); }
+    return out;
+}
+
+// Price a batch of single-barrier options by GPU Monte Carlo path simulation, returning one
+// pricing::McResult { price, std_error, paths } per option, in order. Every option is priced over
+// the SAME counter stream [0, paths*steps) with key = splitmix64(seed) — step t of path p draws
+// counter index (p*steps + t), matching pricing::barrier_option_mc — so item i estimates the same
+// barrier payoff as barrier_option_mc(spec_i, barrier, knock_in, paths, steps, seed). The single
+// barrier level and knock_in flag apply to every option; up/down is decided per option from its
+// own spot (down = barrier < spot).
+//
+// HONESTY: STATISTICAL (double) — the estimate carries its standard error. The Threefry draw BITS
+// are bit-identical to the CPU counter RNG; the normal z is bit-identical in Acklam's central ~95%
+// region, with <=1 ULP differences in the ~5% tail (device libm log vs simd::log_one). Price
+// matches pricing::barrier_option_mc to ~1e-5 relative on non-grazing cases (hardware exp vs
+// std::exp, plus the tail-z last bit).
+// BARRIER GRAZING CAVEAT: knock detection is an exact threshold check (s <= barrier / s >= barrier),
+// so paths that graze the barrier within a few ULPs can knock differently on GPU vs CPU, causing
+// occasional whole-path payoff divergence — price barriers away from a dense grazing band, or rely
+// on the grazing-immune identity knock_in + knock_out == vanilla (exact per path).
+// CPU fallback (no device): pricing::barrier_option_mc per option.
+//
+// Fails with MathError::domain_error when paths == 0, steps < 1, steps > kGpuMcMaxSteps,
+// barrier <= 0, paths * steps > kGpuMcMaxPathSteps, or an option is non-physical (spot <= 0,
+// vol < 0, time <= 0; strike <= 0 is rejected by the shared batch-POD builder on both the device
+// and CPU-fallback paths, as for every Family A/C pricer); MathError::overflow when opts.size() or
+// opts.size()*ceil(paths/kGpuMcSegPaths) exceeds the int kernel bound; MathError::gpu_error when a
+// device is present but a CUDA call fails.
+[[nodiscard]] auto barrier_option_mc_batch(std::span<const BsOption> opts, double barrier,
+                                           bool knock_in, std::uint64_t paths, int steps,
+                                           std::uint64_t seed)
+    -> Result<std::vector<pricing::McResult>> {
+    if (paths == 0 || steps < 1 || steps > kGpuMcMaxSteps || barrier <= 0.0 ||
+        paths > kGpuMcMaxPathSteps / static_cast<std::uint64_t>(steps)) {
+        return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+    }
+    // Physical domain matched EXACTLY to pricing::barrier_option_mc (spot>0, vol>=0, time>0) so the
+    // accept/reject decision — and therefore the result — never depends on device presence.
+    for (const auto& o : opts) {
+        if (o.spot <= 0.0 || o.volatility < 0.0 || o.time <= 0.0) {
+            return make_error<std::vector<pricing::McResult>>(MathError::domain_error);
+        }
+    }
+    auto pod = detail::to_bridge(opts);
+    if (!pod) { return make_error<std::vector<pricing::McResult>>(pod.error()); }
+    if (opts.empty()) { return std::vector<pricing::McResult>{}; }
+    const std::uint64_t nseg = (paths + kGpuMcSegPaths - 1) / kGpuMcSegPaths;
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (opts.size() > int_max || nseg > int_max ||
+        opts.size() > static_cast<std::size_t>(int_max / nseg)) {
+        return make_error<std::vector<pricing::McResult>>(MathError::overflow);
+    }
+    if (!available()) {
+        std::vector<pricing::McResult> out;
+        out.reserve(opts.size());
+        for (const auto& o : opts) {
+            const auto spec = pricing::OptionSpec{}
+                                  .with_spot(o.spot).with_strike(o.strike).with_rate(o.rate)
+                                  .with_dividend(o.dividend).with_volatility(o.volatility)
+                                  .with_expiry(o.time)
+                                  .with_type(o.is_call ? pricing::OptionType::call
+                                                       : pricing::OptionType::put);
+            auto r = pricing::barrier_option_mc(spec, barrier, knock_in, paths, steps, seed);
+            if (!r) { return make_error<std::vector<pricing::McResult>>(r.error()); }
+            out.push_back(*r);
+        }
+        return out;
+    }
+    std::vector<NimblecasMcEstimate> est(opts.size());
+    const int rc = nimblecas_gpu_mc_barrier_batch(pod->data(), static_cast<int>(pod->size()),
+                                                  barrier, knock_in ? 1 : 0, steps, paths, seed,
+                                                  est.data());
+    if (rc != 0) { return make_error<std::vector<pricing::McResult>>(MathError::gpu_error); }
+    std::vector<pricing::McResult> out;
+    out.reserve(est.size());
+    for (const auto& e : est) { out.push_back(pricing::McResult{e.price, e.std_error, paths}); }
+    return out;
+}
+
 }  // namespace nimblecas::gpu
+

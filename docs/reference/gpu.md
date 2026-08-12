@@ -77,14 +77,17 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `black_scholes_batch(opts)` | **Batched Black-Scholes-Merton pricing** — one thread per `BsOption`, grid-stride. Mirrors `pricing::black_scholes_price` to FP tolerance. |
 | `black_scholes_batch_graphed(opts, iterations)` | Same result, captured into a **CUDA graph** and replayed `iterations` times (a fixed-shape risk sweep); the replay is bit-identical to the direct launch. |
 | `monte_carlo_european_batch(opts, paths, seed)` | **Batched reproducible European Monte Carlo** — price ± standard error per option; bit-identical Threefry draws vs the CPU counter RNG, fixed-segment index-order reduction, result a pure function of (opts, paths, seed). Equals `pricing::monte_carlo_european` to 1e-6 (documented FP-reassociation/device-libm bound), never bit-for-bit. CPU fallback: `monte_carlo_european_parallel`. |
+| `monte_carlo_asian_batch(opts, paths, steps, seed)` | **Batched reproducible Asian Monte Carlo** — arithmetic-average price ± standard error per option over `steps` dates; Threefry draw *bits* bit-identical to the CPU counter RNG (inverse-normal bit-identical in the central ~95%, ≤1 ULP in the ~5% tail), matches CPU `monte_carlo_asian(..., false)` to ~1e-6. Control variate (CV) is CPU-only. CPU fallback: `monte_carlo_asian(..., false)`. |
+| `barrier_option_mc_batch(opts, barrier, knock_in, paths, steps, seed)` | **Batched reproducible barrier option Monte Carlo** — price ± standard error per option; Threefry draw *bits* bit-identical vs CPU `barrier_option_mc` (inverse-normal ≤1 ULP in the ~5% tail), fixed-segment index-order reduction. Equals CPU to ~1e-5 on non-grazing barriers; grazing-divergence caveat noted (the `knock_in + knock_out == vanilla` sum stays grazing-immune to ~1e-6). CPU fallback: `pricing::barrier_option_mc`. |
 | `black_scholes_greeks_batch(opts)` | Batched analytic BS Greeks (price/delta/gamma/vega/theta/rho), mirror of `pricing::black_scholes_greeks` incl. the degenerate `T==0`/`σ==0` branch; matches the CPU to 1e-9 relative. CPU fallback: the CPU closed form. |
 | `black_scholes_extended_greeks_batch(opts)` | Batched 13-field extended Greeks, mirror of `pricing::black_scholes_extended_greeks` **including** its central-finite-difference charm/color/veta/vera; matches the CPU to 1e-7. CPU fallback: the CPU implementation. |
 | `strategy_payoff_grid(legs, grid)` / `strategy_pnl_grid(legs, grid)` | **Exact piecewise-linear strategy sweep** — aggregate expiry payoff / P&L of an `optstrat` leg bag at every grid price; non-contracted device arithmetic reproduces the CPU double evaluation bit-for-bit (validated to 1e-12, expected equal). CPU fallback: `OptionStrategy::payoff_at`/`pnl_at`. |
 | `futures_pnl_grid(legs, grid)` | Exact linear futures-strategy sweep, mirror of `FuturesStrategy::pnl_at_uniform`, same bit-equality contract. CPU fallback: the CPU evaluation. |
 
-All eight numeric kernels plus the batched Black-Scholes pricer execute and pass on the
-**RTX PRO 6000 Blackwell** and **RTX 5090** (sm_120, CUDA 13.2, nvcc `-arch=native`); see
-[Testing](#testing).
+Every GPU entry point — the numeric kernels, the batched Black-Scholes pricer, and the Asian and
+barrier path-dependent Monte-Carlo pricers — builds and passes `gpu_tests` under
+`-DNIMBLECAS_CUDA=ON` on the **mgpu** host (**RTX PRO 6000 Blackwell** / **RTX 5090**, sm_120,
+nvcc `-arch=native`); see [Testing](#testing).
 
 ### Finance: batched Black-Scholes and the CUDA-graph path
 
@@ -126,6 +129,17 @@ form (4 standard errors). `black_scholes_greeks_batch` and
 `black_scholes_extended_greeks_batch` are elementwise closed-form mirrors of the CPU
 `pricing` functions (the extended set reproduces the CPU's central-finite-difference
 charm/color/veta/vera rather than re-deriving them), validated to 1e-9 and 1e-7.
+
+`monte_carlo_asian_batch` prices a batch of arithmetic-average Asian options by GPU path simulation
+over `steps` averaging dates. Path `p` step `t` draws counter index `p * steps + t` under
+`key = splitmix64(seed)`, so the Threefry draw *bits* are bit-identical to CPU
+`pricing::monte_carlo_asian`; the inverse-normal is bit-identical in Acklam's central ~95% region
+and differs by ≤1 ULP in the ~5% tail (device libm `log` vs CPU `simd::log_one`). Price and standard
+error agree with CPU `monte_carlo_asian(spec, paths, steps, seed, false)` to ~1e-6 relative (the
+divergence is transcendental hardware `exp` vs CPU `simd::exp_into`, plus the tail-`z` last bit). The
+geometric control variate (CV) is CPU-only (GPU v1 is arithmetic-only).
+
+`barrier_option_mc_batch` prices a batch of single-barrier options (knock-in or knock-out, up or down) by device path simulation. Its draw indexing for path `p` step `t` uses counter `p * steps + t` under `key = splitmix64(seed)`, so the Threefry draw *bits* are bit-identical to CPU `pricing::barrier_option_mc` — the inverse-normal `z[t]` is bit-identical in the central ~95% and differs by ≤1 ULP in the ~5% tail (device libm `log` vs CPU `simd::log_one`), so the sampled `z[t]` are **not** claimed bit-identical. The honesty boundary is STATISTICAL: prices match `pricing::barrier_option_mc` to ~1e-5 relative on non-grazing cases (CUDA hardware `exp` vs CPU `std::exp`, plus the tail-`z` last bit). **Barrier-grazing divergence caveat:** because knock detection is an exact threshold check (`s <= barrier` or `s >= barrier`), paths that graze extremely close to the barrier level can knock differently on GPU vs CPU due to tiny ULP-level path differences, causing occasional whole-path payoff divergence. Prefer barriers away from a dense grazing band; the grazing-immune identity `knock_in + knock_out == vanilla` holds per path (its GPU sum tracks the CPU sum to ~1e-6 regardless of flips). CPU fallback (when no device is present): `pricing::barrier_option_mc` per option.
 
 **Fallback contract (new with these entry points):** when NO CUDA device is present, these
 functions compute the result on the CPU via `nimblecas.pricing` and return real values —
@@ -289,16 +303,56 @@ amortization pays.
 
 `tests/gpu_tests.cpp` cross-checks **every** GPU kernel against a CPU reference:
 poly-eval (small/large/edge cases), batched edit-distance, CSR BFS, N-queens count,
-QMC polynomial integration, batched Haar DWT, batched matmul, and batched FFT (vs a
-CPU DFT) — **12 groups, 41 checks**. It uses relative tolerances because the GPU may
-contract to FMA where the CPU does not. The suite is built and run **only with
-`-DNIMBLECAS_CUDA=ON` on a machine with a CUDA device**.
+QMC polynomial integration, batched Haar DWT, batched matmul, batched FFT (vs a CPU
+DFT), batched Black-Scholes, CG, European/Asian/barrier Monte Carlo, first-order and
+extended Greeks, and the strategy/futures grid sweeps — **25 test groups**. It uses
+relative tolerances because the GPU may contract to FMA where the CPU does not (the
+sweep kernels are pinned non-contracted for bit-exactness). The suite is built and run
+**only with `-DNIMBLECAS_CUDA=ON` on a machine with a CUDA device**.
 
-Verified green on the **RTX 5090** (sm_120, CUDA 13.2): all 12 groups pass, and an
-`nsys` trace confirms all nine kernels launch and the pipeline is transfer-bound.
-`ncu` deep-counter profiling on that host requires elevated GPU-counter permissions
-(`ERR_NVGPUCTRPERM` — the `NVreg_RestrictProfilingToAdminUsers=0` driver setting or
-root), which was unavailable; `nsys` needs no such permission and profiled cleanly.
+Verified green on the **mgpu** host (**RTX PRO 6000 Blackwell** / **RTX 5090**, sm_120,
+CUDA 13.2): all 25 groups pass. An `nsys` trace confirms every kernel launches — the
+path-dependent `asian_segment_kernel` / `mc_barrier_segment_kernel` dominate wall-clock
+(compute-bound path simulation; the reductions are ~2 µs). `ncu` deep-counter profiling
+**is available on this host** and shows the segment kernels are latency/occupancy-bound
+at small batch sizes — achieved occupancy scales with `nseg = ceil(paths / 4096)`, so
+small path counts underutilize the SM while large counts saturate it (the deliberate
+determinism-vs-occupancy trade-off shared with the European kernel). No speedup is
+claimed; the GPU path is a correctness mirror, and `gpu_deriv_bench` reports raw
+wall-clock only.
+
+## Benchmarking
+
+`tools/gpu_deriv_bench.cpp` is a standalone profiling harness for the eight shipped GPU
+derivative pricing and grid sweep entry points (`monte_carlo_european_batch`,
+`monte_carlo_asian_batch`, `barrier_option_mc_batch`, `black_scholes_greeks_batch`,
+`black_scholes_extended_greeks_batch`, `strategy_payoff_grid`, `strategy_pnl_grid`, and
+`futures_pnl_grid`).
+
+### Building and Running
+
+When configured with `-DNIMBLECAS_CUDA=ON`, CMake registers the benchmark executable target:
+
+```bash
+# Build the benchmark executable
+ninja gpu_deriv_bench
+
+# Run the benchmark
+./build/gpu_deriv_bench
+```
+
+### Output Interpretation
+
+The tool measures raw host wall-clock execution time (`std::chrono::steady_clock`, median
+of 5 repetitions following 1 warmup iteration) and calculates throughput for each batch
+size alongside raw CPU execution time.
+
+- **Raw Wall-Clock Only**: Emits end-to-end host wall-clock duration including DMA
+  transfers and launch overhead. No speedup or acceleration ratios are claimed or asserted.
+- **Profiling for Kernel Attribution**: Detailed kernel execution duration, SM occupancy,
+  and memory bandwidth attribution require profiling with Nsight tools (`nsys` / `ncu`).
+- **Device Availability**: On systems without an available CUDA GPU (`device_count() == 0`),
+  a banner is displayed noting that GPU columns reflect CPU-fallback timings.
 
 ## Example
 

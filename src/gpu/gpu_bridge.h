@@ -214,8 +214,33 @@ typedef struct {
 int nimblecas_gpu_futures_grid(const NimblecasFuturesSweepLeg* legs, int n_legs,
                                const double* grid, int n_grid, double* out);
 
+/* --- FAMILY C: path-dependent MC (gpu_asian_kernels.cu) --- */
+
+/* Batched reproducible arithmetic-average Asian Monte Carlo. Prices each of the n options
+ * over the SAME counter stream [0, paths*steps) with key = splitmix64(seed) — identical
+ * Threefry-2x64-20 draw indexing as nimblecas.rng's counter_u64 — and writes { price, std_error }
+ * to out[i]. Path step t of path p draws counter index (p*steps + t). The path range is
+ * decomposed into FIXED segments of kMcSegPaths (4096) paths; partials are folded by a
+ * fixed-shape 256-thread block per option. Geometric control variate is CPU-only. Returns
+ * 0 on success or a non-zero CUDA error code. */
+int nimblecas_gpu_mc_asian_batch(const NimblecasBsOption* opts, int n, int steps,
+                                 unsigned long long paths, unsigned long long seed,
+                                 NimblecasMcEstimate* out);
+/* --- FAMILY D: barrier MC (gpu_barrier_kernels.cu) --- */
+
+/* Batched reproducible barrier option Monte Carlo. Prices each of the n options over the
+ * SAME counter stream [0, paths*steps) with key = splitmix64(seed) — using the exact
+ * per-path per-step counter indexing p*steps + t as pricing::barrier_option_mc — and
+ * writes { price, std_error } to out[i]. Inputs must be physically valid, steps >= 1,
+ * and barrier > 0 (the C++ wrapper validates). Returns 0 on success or a non-zero CUDA
+ * error code. */
+int nimblecas_gpu_mc_barrier_batch(const NimblecasBsOption* opts, int n, double barrier,
+                                   int knock_in, int steps, unsigned long long paths,
+                                   unsigned long long seed, NimblecasMcEstimate* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
 
 #endif  // NIMBLECAS_GPU_BRIDGE_H
+

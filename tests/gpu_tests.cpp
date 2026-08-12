@@ -797,5 +797,152 @@ auto main() -> int {
                   t.expect(zs.has_value() && (*zs)[0] == 0.0 && (*zs)[3] == 0.0,
                            "empty book sweeps to exactly zero");
               })
+        .test("monte_carlo_asian_batch mirrors the CPU Asian MC",
+              [](TestContext& t) {
+                  namespace pr = nimblecas::pricing;
+                  // Batch of >1 options sharing stream: ATM call, OTM call, ITM put.
+                  std::vector<gpu::BsOption> opts = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, true},
+                      gpu::BsOption{100.0, 110.0, 0.05, 0.0, 0.2, 1.0, true},
+                      gpu::BsOption{100.0, 110.0, 0.05, 0.0, 0.2, 1.0, false}};
+                  const std::uint64_t paths = 200000;
+                  const int steps = 64;
+                  const std::uint64_t seed = 42;
+                  auto got = gpu::monte_carlo_asian_batch(opts, paths, steps, seed);
+                  t.expect(got.has_value() && got->size() == opts.size(), "asian batch MC priced");
+                  bool mirror = got.has_value();
+                  for (std::size_t i = 0; i < opts.size() && mirror; ++i) {
+                      const auto spec = pr::OptionSpec{}
+                                            .with_spot(opts[i].spot).with_strike(opts[i].strike)
+                                            .with_rate(opts[i].rate).with_dividend(opts[i].dividend)
+                                            .with_volatility(opts[i].volatility)
+                                            .with_expiry(opts[i].time)
+                                            .with_type(opts[i].is_call ? pr::OptionType::call
+                                                                       : pr::OptionType::put);
+                      const auto cpu = pr::monte_carlo_asian(spec, paths, steps, seed, false).value();
+                      const double price_diff = std::abs((*got)[i].price - cpu.price);
+                      const double tol = 1e-6 * std::max(1.0, std::abs(cpu.price));
+                      const double se_diff = std::abs((*got)[i].std_error - cpu.std_error);
+                      const double se_tol = 1e-6 * std::max(1.0, std::abs(cpu.std_error));
+                      mirror = (price_diff <= tol) && (se_diff <= se_tol);
+                  }
+                  t.expect(mirror, "every GPU Asian MC estimate equals CPU monte_carlo_asian(..., false) to stated 1e-6 tolerance");
+
+                  // Determinism: same inputs twice -> identical bits (==).
+                  auto again = gpu::monte_carlo_asian_batch(opts, paths, steps, seed);
+                  bool identical = again.has_value() && again->size() == got->size();
+                  for (std::size_t i = 0; i < got->size() && identical; ++i) {
+                      identical = ((*again)[i].price == (*got)[i].price) &&
+                                  ((*again)[i].std_error == (*got)[i].std_error);
+                  }
+                  t.expect(identical, "repeated Asian MC is bit-identical (equal seeds, equal bits)");
+
+                  // Domain guards ride the railway.
+                  t.expect(!gpu::monte_carlo_asian_batch(opts, 0, steps, seed).has_value(),
+                           "zero paths -> domain_error");
+                  t.expect(!gpu::monte_carlo_asian_batch(opts, paths, 0, seed).has_value(),
+                           "steps < 1 -> domain_error");
+                  std::vector<gpu::BsOption> bad{gpu::BsOption{-1.0, 100.0, 0.05, 0.0, 0.2, 1.0, true}};
+                  auto br = gpu::monte_carlo_asian_batch(bad, paths, steps, seed);
+                  t.expect(!br.has_value() && br.error() == MathError::domain_error,
+                           "non-physical spot -> domain_error");
+              })
+        .test("barrier_option_mc_batch mirrors CPU barrier_option_mc",
+              [](TestContext& t) {
+                  namespace pr = nimblecas::pricing;
+                  // Non-grazing barriers: spot 100 with barrier 80 (down) and 120 (up), 0.8x/1.2x.
+                  const gpu::BsOption opt{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, true};
+                  const std::vector<gpu::BsOption> opts = {opt};
+                  const auto spec_call = pr::OptionSpec{}
+                                             .with_spot(opt.spot).with_strike(opt.strike)
+                                             .with_rate(opt.rate).with_dividend(opt.dividend)
+                                             .with_volatility(opt.volatility).with_expiry(opt.time)
+                                             .with_type(pr::OptionType::call);
+                  const std::uint64_t paths = 100000;
+                  const int steps = 50;
+                  const std::uint64_t seed = 12345;
+
+                  struct Case { double barrier; bool knock_in; std::string name; };
+                  const std::vector<Case> cases = {
+                      {80.0, false, "down-and-out"},  {80.0, true, "down-and-in"},
+                      {120.0, false, "up-and-out"},   {120.0, true, "up-and-in"}};
+
+                  for (const auto& c : cases) {
+                      auto got = gpu::barrier_option_mc_batch(opts, c.barrier, c.knock_in, paths, steps, seed);
+                      auto cpu = pr::barrier_option_mc(spec_call, c.barrier, c.knock_in, paths, steps, seed);
+                      t.expect(got.has_value() && cpu.has_value(), "barrier MC executed (" + c.name + ")");
+                      if (got && cpu) {
+                          const double tol = 1e-5 * (1.0 + std::abs(cpu->price));
+                          t.expect(std::abs((*got)[0].price - cpu->price) <= tol,
+                                   "GPU barrier price matches CPU within documented tolerance (" + c.name + ")");
+                          const double se_tol = 1e-5 * (1.0 + std::abs(cpu->std_error));
+                          t.expect(std::abs((*got)[0].std_error - cpu->std_error) <= se_tol,
+                                   "GPU barrier std_error matches CPU within tolerance (" + c.name + ")");
+                      }
+                  }
+
+                  // Grazing-immune identity: knock_in + knock_out == vanilla per path, so the SUM of
+                  // the two legs is insensitive to any ULP-level knock flip (a flip merely moves a
+                  // path's terminal payoff between the legs; the sum counts it exactly once). The GPU
+                  // sum therefore tracks the CPU sum to the tight ~1e-6 exp bound even at a barrier
+                  // where an individual leg could diverge more.
+                  for (double b : {80.0, 120.0}) {
+                      auto gin = gpu::barrier_option_mc_batch(opts, b, true, paths, steps, seed);
+                      auto gout = gpu::barrier_option_mc_batch(opts, b, false, paths, steps, seed);
+                      auto cin = pr::barrier_option_mc(spec_call, b, true, paths, steps, seed);
+                      auto cout = pr::barrier_option_mc(spec_call, b, false, paths, steps, seed);
+                      if (gin && gout && cin && cout) {
+                          const double gsum = (*gin)[0].price + (*gout)[0].price;
+                          const double csum = cin->price + cout->price;
+                          t.expect(std::abs(gsum - csum) <= 1e-6 * (1.0 + std::abs(csum)),
+                                   "knock_in+knock_out sum is grazing-immune and matches CPU to 1e-6");
+                      }
+                  }
+              })
+        .test("barrier_option_mc_batch determinism and batching",
+              [](TestContext& t) {
+                  // Batch of > 1 options sharing the stream.
+                  const std::vector<gpu::BsOption> opts = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, true},
+                      gpu::BsOption{100.0, 110.0, 0.05, 0.0, 0.2, 1.0, true}};
+                  const double barrier = 85.0;
+                  const bool knock_in = false;
+                  const std::uint64_t paths = 50000;
+                  const int steps = 20;
+                  const std::uint64_t seed = 999;
+
+                  auto run1 = gpu::barrier_option_mc_batch(opts, barrier, knock_in, paths, steps, seed);
+                  auto run2 = gpu::barrier_option_mc_batch(opts, barrier, knock_in, paths, steps, seed);
+
+                  t.expect(run1.has_value() && run1->size() == 2, "batch of 2 options evaluated");
+                  t.expect(run2.has_value() && run2->size() == 2, "second run evaluated");
+                  if (run1 && run2 && run1->size() == 2 && run2->size() == 2) {
+                      t.expect((*run1)[0].price == (*run2)[0].price && (*run1)[0].std_error == (*run2)[0].std_error,
+                               "option 0 deterministic across runs");
+                      t.expect((*run1)[1].price == (*run2)[1].price && (*run1)[1].std_error == (*run2)[1].std_error,
+                               "option 1 deterministic across runs");
+                  }
+              })
+        .test("barrier_option_mc_batch domain guards",
+              [](TestContext& t) {
+                  const std::vector<gpu::BsOption> opts = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 1.0, true}};
+
+                  auto r_paths = gpu::barrier_option_mc_batch(opts, 90.0, false, 0, 10, 42);
+                  t.expect(!r_paths.has_value() && r_paths.error() == MathError::domain_error, "paths == 0 yields domain_error");
+
+                  auto r_steps = gpu::barrier_option_mc_batch(opts, 90.0, false, 1000, 0, 42);
+                  t.expect(!r_steps.has_value() && r_steps.error() == MathError::domain_error, "steps < 1 yields domain_error");
+
+                  auto r_barrier = gpu::barrier_option_mc_batch(opts, 0.0, false, 1000, 10, 42);
+                  t.expect(!r_barrier.has_value() && r_barrier.error() == MathError::domain_error, "barrier <= 0 yields domain_error");
+
+                  // Physical domain matches the CPU oracle on both device and fallback paths.
+                  const std::vector<gpu::BsOption> bad_time = {
+                      gpu::BsOption{100.0, 100.0, 0.05, 0.0, 0.2, 0.0, true}};
+                  auto r_time = gpu::barrier_option_mc_batch(bad_time, 90.0, false, 1000, 10, 42);
+                  t.expect(!r_time.has_value() && r_time.error() == MathError::domain_error, "time <= 0 yields domain_error");
+              })
         .run();
 }
+

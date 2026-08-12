@@ -2062,14 +2062,16 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
 
   set(_gpu_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_kernels.cu")
   set(_gpu_pricing_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_pricing_kernels.cu")
+  set(_gpu_asian_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_asian_kernels.cu")
   set(_gpu_sweep_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_sweep_kernels.cu")
+  set(_gpu_barrier_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_barrier_kernels.cu")
   set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
   add_custom_command(
     OUTPUT "${_gpu_lib}"
     COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
             -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib
-            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_sweep_src}" -o "${_gpu_lib}"
-    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_sweep_src}"
+            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" -o "${_gpu_lib}"
+    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}"
             "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
     VERBATIM
     COMMENT "nvcc: building CUDA GPU kernels (-arch=native)")
@@ -2090,6 +2092,13 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
             nimblecas_core nimblecas_testing std_module)
   set_target_properties(gpu_tests PROPERTIES BUILD_RPATH "${_cuda_libdir}")
   add_test(NAME gpu_tests COMMAND gpu_tests)
+
+  add_executable(gpu_deriv_bench tools/gpu_deriv_bench.cpp)
+  add_dependencies(gpu_deriv_bench nimblecas_gpu_kernels)
+  target_link_libraries(gpu_deriv_bench
+    PRIVATE nimblecas_gpu nimblecas_pricing nimblecas_optstrat nimblecas_futures
+            nimblecas_core std_module)
+  set_target_properties(gpu_deriv_bench PROPERTIES BUILD_RPATH "${_cuda_libdir}")
 endif()
 
 # ---- Python bindings (nanobind, ROADMAP 10) — opt-in via -DNIMBLECAS_PYTHON=ON ----
