@@ -569,7 +569,8 @@ add_library(nimblecas_rothstein STATIC)
 target_sources(nimblecas_rothstein PUBLIC
   FILE_SET CXX_MODULES FILES src/rothstein/rothstein.cppm)
 target_link_libraries(nimblecas_rothstein
-  PUBLIC nimblecas_resultant nimblecas_ratpoly nimblecas_core std_module)
+  PUBLIC nimblecas_resultant nimblecas_factor nimblecas_algnum nimblecas_algpoly
+         nimblecas_ratpoly nimblecas_core std_module)
 
 # ---- nimblecas.integrate : rational-function integration capstone (Hermite + RT) ----
 add_library(nimblecas_integrate STATIC)
@@ -1773,8 +1774,8 @@ add_test(NAME ratint_tests COMMAND ratint_tests)
 
 add_executable(rothstein_tests tests/rothstein_tests.cpp)
 target_link_libraries(rothstein_tests
-  PRIVATE nimblecas_rothstein nimblecas_resultant nimblecas_ratpoly nimblecas_polynomial
-          nimblecas_core nimblecas_testing std_module)
+  PRIVATE nimblecas_rothstein nimblecas_resultant nimblecas_algnum nimblecas_algpoly
+          nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME rothstein_tests COMMAND rothstein_tests)
 
 add_executable(integrate_tests tests/integrate_tests.cpp)

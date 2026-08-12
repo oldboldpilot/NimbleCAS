@@ -40,6 +40,28 @@ struct RationalIntegral {
                                       const RationalPoly& denominator)
     -> Result<RationalIntegral>;
 
+// The complete integral with irrational/complex residues expressed exactly via algebraic
+// extension fields instead of being punted to not_implemented:
+//     int numerator/denominator dx
+//         == rational_num/rational_den
+//            + sum over log_terms of coefficient * log(argument)
+//            + sum over algebraic_log_terms of the field's conjugate-sum log block.
+struct RationalIntegralExtended {
+    RationalPoly rational_num;
+    RationalPoly rational_den;
+    std::vector<LogTerm> log_terms;
+    std::vector<AlgebraicLogTerm> algebraic_log_terms;
+};
+
+// Integrate numerator/denominator over Q(x), mirroring integrate_rational but calling
+// log_part_extended for the logarithmic part so every residue — rational or algebraic —
+// is expressed exactly. Fails with division_by_zero (a zero denominator), not_implemented
+// (the logarithmic step's internal factorization exhausting its search budget),
+// domain_error (an internal completeness check in log_part_extended failed), or overflow.
+[[nodiscard]] auto integrate_rational_extended(const RationalPoly& numerator,
+                                               const RationalPoly& denominator)
+    -> Result<RationalIntegralExtended>;
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -64,6 +86,28 @@ auto integrate_rational(const RationalPoly& numerator, const RationalPoly& denom
             return make_error<RationalIntegral>(lp.error());
         }
         out.log_terms = std::move(lp->terms);
+    }
+    return out;
+}
+
+auto integrate_rational_extended(const RationalPoly& numerator, const RationalPoly& denominator)
+    -> Result<RationalIntegralExtended> {
+    // Rational part + square-free logarithmic integrand.
+    auto hr = hermite_reduce(numerator, denominator);
+    if (!hr) {
+        return make_error<RationalIntegralExtended>(hr.error());
+    }
+    RationalIntegralExtended out;
+    out.rational_num = std::move(hr->rational_num);
+    out.rational_den = std::move(hr->rational_den);
+    // Integrate the leftover square-free integrand into logarithms, if any remains.
+    if (!hr->integrand_num.is_zero()) {
+        auto lp = log_part_extended(hr->integrand_num, hr->integrand_den);
+        if (!lp) {
+            return make_error<RationalIntegralExtended>(lp.error());
+        }
+        out.log_terms = std::move(lp->rational_terms);
+        out.algebraic_log_terms = std::move(lp->algebraic_terms);
     }
     return out;
 }

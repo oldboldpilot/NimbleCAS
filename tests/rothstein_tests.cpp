@@ -8,12 +8,20 @@ import std;
 import nimblecas.core;
 import nimblecas.polynomial;
 import nimblecas.ratpoly;
+import nimblecas.algnum;
+import nimblecas.algpoly;
 import nimblecas.rothstein;
 import nimblecas.testing;
 
+using nimblecas::AlgebraicLogTerm;
+using nimblecas::AlgebraicNumber;
+using nimblecas::AlgebraicPoly;
+using nimblecas::ExtendedLogarithmicPart;
 using nimblecas::LogarithmicPart;
 using nimblecas::log_part;
+using nimblecas::log_part_extended;
 using nimblecas::MathError;
+using nimblecas::NumberField;
 using nimblecas::Polynomial;
 using nimblecas::Rational;
 using nimblecas::RationalPoly;
@@ -55,6 +63,17 @@ namespace {
 [[nodiscard]] auto has_term(const LogarithmicPart& lp, const Rational& c,
                             const RationalPoly& arg) -> bool {
     for (const auto& term : lp.terms) {
+        if (term.coefficient == c && term.argument.is_equal(arg)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Does elp's rational_terms contain a term coefficient*log(argument)?
+[[nodiscard]] auto has_ext_term(const ExtendedLogarithmicPart& elp, const Rational& c,
+                                const RationalPoly& arg) -> bool {
+    for (const auto& term : elp.rational_terms) {
         if (term.coefficient == c && term.argument.is_equal(arg)) {
             return true;
         }
@@ -156,6 +175,78 @@ auto main() -> int {
                   // Zero numerator integrates to no logarithmic part.
                   t.expect(log_part(RationalPoly{}, ipoly({-1, 0, 1})).value().terms.empty(),
                            "zero numerator has no log part");
+              })
+        .test("extended_algebraic_pair_x2_plus_1",
+              [](TestContext& t) {
+                  // int 1/(x^2+1) dx: the residues +-i/2 are irrational, so log_part
+                  // punts to not_implemented, but log_part_extended expresses them exactly
+                  // as one conjugate-sum block over K = Q[t]/(t^2 + 1/4), alpha^2 = -1/4:
+                  // gcd_x(x^2+1, 1 - 2*alpha*x) == x + 2*alpha.
+                  auto a = ipoly({1});
+                  auto d = ipoly({1, 0, 1});  // x^2 + 1
+                  auto elp = log_part_extended(a, d).value();
+                  t.expect(elp.rational_terms.empty(), "no rational residues");
+                  t.expect(elp.algebraic_terms.size() == 1, "one algebraic conjugate block");
+                  if (elp.algebraic_terms.size() != 1) return;
+                  const AlgebraicLogTerm& term = elp.algebraic_terms.front();
+                  const RationalPoly expected_modulus = RationalPoly::from_coeffs(
+                      {rat(1, 4), Rational::from_int(0), Rational::from_int(1)});
+                  t.expect(term.field.modulus().is_equal(expected_modulus),
+                           "field is Q[t]/(t^2 + 1/4)");
+                  auto alpha = term.field.generator().value();
+                  t.expect(term.residue.is_equal(alpha), "residue is the field generator");
+                  t.expect(term.argument.degree() == 1, "argument has degree 1");
+                  auto two_alpha =
+                      alpha.multiply(term.field.from_rational(Rational::from_int(2))).value();
+                  t.expect(term.argument.coefficient(0).is_equal(two_alpha),
+                           "coefficient(0) == 2*alpha");
+                  t.expect(term.argument.coefficient(1).is_equal(term.field.one()),
+                           "coefficient(1) == 1");
+              })
+        .test("extended_algebraic_pair_x2_minus_2",
+              [](TestContext& t) {
+                  // int 1/(x^2-2) dx: the residues +-1/(2 sqrt2) are irrational; one
+                  // conjugate-sum block over K = Q[t]/(t^2 - 1/8), alpha^2 = 1/8:
+                  // gcd_x(x^2-2, 1 - 2*alpha*x) == x - 4*alpha.
+                  auto a = ipoly({1});
+                  auto d = ipoly({-2, 0, 1});  // x^2 - 2
+                  auto elp = log_part_extended(a, d).value();
+                  t.expect(elp.rational_terms.empty(), "no rational residues");
+                  t.expect(elp.algebraic_terms.size() == 1, "one algebraic conjugate block");
+                  if (elp.algebraic_terms.size() != 1) return;
+                  const AlgebraicLogTerm& term = elp.algebraic_terms.front();
+                  const RationalPoly expected_modulus = RationalPoly::from_coeffs(
+                      {rat(-1, 8), Rational::from_int(0), Rational::from_int(1)});
+                  t.expect(term.field.modulus().is_equal(expected_modulus),
+                           "field is Q[t]/(t^2 - 1/8)");
+                  auto alpha = term.field.generator().value();
+                  t.expect(term.residue.is_equal(alpha), "residue is the field generator");
+                  t.expect(term.argument.degree() == 1, "argument has degree 1");
+                  auto neg_four_alpha =
+                      alpha.multiply(term.field.from_rational(Rational::from_int(-4))).value();
+                  t.expect(term.argument.coefficient(0).is_equal(neg_four_alpha),
+                           "coefficient(0) == -4*alpha");
+                  t.expect(term.argument.coefficient(1).is_equal(term.field.one()),
+                           "coefficient(1) == 1");
+              })
+        .test("extended_regression_all_rational_residues_stay_rational",
+              [](TestContext& t) {
+                  // int 1/(x(x^2+1)) dx: every residue (1 at x=0, and the shared -1/2 at
+                  // the +-i poles) is RATIONAL, so R(t) splits completely over Q. This
+                  // guards against log_part_extended spuriously manufacturing extension
+                  // fields when none are needed.
+                  auto a = ipoly({1});
+                  auto d = ipoly({0, 1}).multiply(ipoly({1, 0, 1})).value();  // x(x^2+1)
+                  auto elp = log_part_extended(a, d).value();
+                  t.expect(elp.algebraic_terms.empty(), "no algebraic terms manufactured");
+                  t.expect(elp.rational_terms.size() == 2, "two rational terms");
+                  t.expect(has_ext_term(elp, Rational::from_int(1), ipoly({0, 1})), "1 * log(x)");
+                  t.expect(has_ext_term(elp, rat(-1, 2), ipoly({1, 0, 1})),
+                           "(-1/2) * log(x^2+1)");
+                  // Cross-check against the derivative identity via the plain rational
+                  // LogarithmicPart wrapper (every term here is rational).
+                  const LogarithmicPart lp{.terms = elp.rational_terms};
+                  t.expect(integrates_to(a, d, lp), "d/dx(sum c log V) == A/D");
               })
         .run();
 }
