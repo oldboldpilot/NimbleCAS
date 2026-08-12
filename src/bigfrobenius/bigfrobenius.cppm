@@ -32,6 +32,7 @@ export module nimblecas.bigfrobenius;
 
 import std;
 import nimblecas.core;
+import nimblecas.bigrational;
 import nimblecas.bigratpoly;
 import nimblecas.bigmatrix;
 
