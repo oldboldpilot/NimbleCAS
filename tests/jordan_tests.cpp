@@ -466,10 +466,16 @@ auto main() -> int {
                   const auto A = mat({{ri(0), ri(0), ri(2)},
                                       {ri(1), ri(0), ri(0)},
                                       {ri(0), ri(1), ri(0)}});
-                  t.expect(nimblecas::jordan_form(A).error() == MathError::not_implemented,
+                  auto jf_cubic = nimblecas::jordan_form(A);
+                  if (jf_cubic.has_value()) {
+                      std::println("  UNEXPECTED: jordan_form(x^3-2) succeeded (field degree {})",
+                                   jf_cubic->field.degree());
+                  }
+                  t.expect(!jf_cubic.has_value() && jf_cubic.error() == MathError::not_implemented,
                            "cubic splitting field beyond the exact envelope => not_implemented");
                   // And rational_jordan_form refuses it (no rational eigenvalue) as domain_error.
-                  t.expect(nimblecas::rational_jordan_form(A).error() == MathError::domain_error,
+                  auto rjf_cubic = nimblecas::rational_jordan_form(A);
+                  t.expect(!rjf_cubic.has_value() && rjf_cubic.error() == MathError::domain_error,
                            "x^3 - 2 does not split over Q => domain_error");
                   // jordan_structure needs no splitting field at all, so it still answers
                   // exactly over Q: the honest fallback when jordan_form must refuse.
@@ -497,7 +503,17 @@ auto main() -> int {
                                       {ri(1), ri(0), ri(0), ri(0)},
                                       {ri(0), ri(0), ri(0), ri(3)},
                                       {ri(0), ri(0), ri(1), ri(0)}});
-                  auto r = nimblecas::jordan_form(A).value();
+                  auto jf = nimblecas::jordan_form(A);
+                  if (!jf) {
+                      std::println("  jordan_form(2 quadratics) failed: not_impl={} overflow={} domain={}",
+                                   jf.error() == MathError::not_implemented,
+                                   jf.error() == MathError::overflow,
+                                   jf.error() == MathError::domain_error);
+                  }
+                  t.expect(jf.has_value(),
+                           "two distinct quadratics => splitting-field jordan_form succeeds");
+                  if (!jf) return;
+                  const auto& r = *jf;
                   t.expect(r.field.degree() == 4, "splitting field Q(sqrt2, sqrt3) has degree 4");
                   t.expect(r.jordan.size() == 4 && r.transform.size() == 4, "4x4 J and P");
 
