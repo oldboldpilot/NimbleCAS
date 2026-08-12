@@ -871,6 +871,14 @@ target_sources(nimblecas_taskdag PUBLIC
 target_link_libraries(nimblecas_taskdag
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.splitfield : Trager factorization / root adjunction / splitting fields ----
+add_library(nimblecas_splitfield STATIC)
+target_sources(nimblecas_splitfield PUBLIC
+  FILE_SET CXX_MODULES FILES src/splitfield/splitfield.cppm)
+target_link_libraries(nimblecas_splitfield
+  PUBLIC nimblecas_algnum nimblecas_algpoly nimblecas_factor nimblecas_resultant
+         nimblecas_frobenius nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.jordan : Jordan canonical form A = P J P^-1, over Q and over Q(alpha) (§7.2) ----
 add_library(nimblecas_jordan STATIC)
 target_sources(nimblecas_jordan PUBLIC
@@ -1233,6 +1241,12 @@ add_executable(taskdag_tests tests/taskdag_tests.cpp)
 target_link_libraries(taskdag_tests
   PRIVATE nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_tests COMMAND taskdag_tests)
+
+add_executable(splitfield_tests tests/splitfield_tests.cpp)
+target_link_libraries(splitfield_tests
+  PRIVATE nimblecas_splitfield nimblecas_algnum nimblecas_algpoly nimblecas_ratpoly
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME splitfield_tests COMMAND splitfield_tests)
 
 add_executable(jordan_tests tests/jordan_tests.cpp)
 target_link_libraries(jordan_tests
