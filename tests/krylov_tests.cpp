@@ -8,6 +8,10 @@
 //   * The EXACT rational Krylov power basis equals {b, Ab, A^2 b}.
 //   * NUMERICAL GMRES / BiCGSTAB solve a non-symmetric double system to a residual
 //     tolerance, and a capped-iteration run reports converged == false without erroring.
+//   * NUMERICAL CG solves an SPD system built via csr_matvec, exactly recovering a known
+//     solution; on a symmetric INDEFINITE matrix it reports converged == false (a
+//     breakdown, never a spuriously "converged" wrong answer). csr_matvec itself is
+//     cross-checked against dense_matvec on a small hand-verified matrix.
 
 import std;
 import nimblecas.core;
@@ -209,6 +213,138 @@ auto main() -> int {
                   std::array<double, 0> empty{};
                   t.expect(nimblecas::bicgstab(A, empty, 1e-10, 10).error() ==
                                MathError::domain_error,
+                           "empty system -> domain_error");
+              })
+        .test("csr_matvec_matches_dense_reference",
+              [](TestContext& t) {
+                  // A = [[1,2,0],[0,3,4],[5,0,6]] (deliberately non-symmetric).
+                  const std::array<double, 9> dense{1, 2, 0,
+                                                    0, 3, 4,
+                                                    5, 0, 6};
+                  const std::array<int, 4> row_offsets{0, 2, 4, 6};
+                  const std::array<int, 6> col_indices{0, 1, 1, 2, 0, 2};
+                  const std::array<double, 6> values{1, 2, 3, 4, 5, 6};
+
+                  auto dense_op = nimblecas::dense_matvec(dense, 3);
+                  auto csr_op = nimblecas::csr_matvec(row_offsets, col_indices, values, 3);
+
+                  const std::array<double, 3> x{1.0, 2.0, 3.0};
+                  std::array<double, 3> y_dense{};
+                  std::array<double, 3> y_csr{};
+                  dense_op(x, y_dense);
+                  csr_op(x, y_csr);
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      t.expect(y_dense[i] == y_csr[i], "csr_matvec matches the dense reference");
+                  }
+                  // Cross-check the hand-computed values too: A*[1,2,3] = [5,18,23].
+                  const std::array<double, 3> expected{5.0, 18.0, 23.0};
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      t.expect(y_csr[i] == expected[i], "csr_matvec gives the hand-verified result");
+                  }
+              })
+        .test("numerical_cg_solves_spd_system_via_csr_and_recovers_exact_solution",
+              [](TestContext& t) {
+                  // Tridiagonal SPD: diag 4, off-diag 1 (diagonally dominant => SPD).
+                  // x_true = [1,2,3,4]; b = A * x_true, hand-computed: [6,12,18,19].
+                  const std::array<int, 5> row_offsets{0, 2, 5, 8, 10};
+                  const std::array<int, 10> col_indices{0, 1, 0, 1, 2, 1, 2, 3, 2, 3};
+                  const std::array<double, 10> values{4, 1, 1, 4, 1, 1, 4, 1, 1, 4};
+                  auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, 4);
+
+                  const std::array<double, 4> b{6.0, 12.0, 18.0, 19.0};
+                  auto r = nimblecas::cg(A, b, 1e-12, 100);
+                  t.expect(r.has_value(), "cg returns a result");
+                  t.expect(r.has_value() && r->converged,
+                           "cg converges on the well-conditioned SPD tridiagonal system");
+                  t.expect(r.has_value() && r->iterations <= 4,
+                           "well-conditioned SPD 4x4 system: iterations <= n");
+                  if (r.has_value()) {
+                      const std::array<double, 4> expected{1.0, 2.0, 3.0, 4.0};
+                      bool all_close = true;
+                      for (std::size_t i = 0; i < 4; ++i) {
+                          const double rel = std::abs(r->x[i] - expected[i]) / expected[i];
+                          all_close = all_close && rel < 1e-9;
+                      }
+                      t.expect(all_close, "cg recovers x_true to within 1e-9 relative");
+                  }
+              })
+        .test("numerical_cg_solves_2d_laplacian_csr",
+              [](TestContext& t) {
+                  // Standard 5-point Poisson stencil on a 10x10 grid (n = 100), implicit
+                  // zero Dirichlet boundary: diagonal 4, off-diagonal -1 per existing
+                  // neighbor. Diagonally dominant (strictly on the boundary) symmetric =>
+                  // SPD.
+                  constexpr std::size_t nx = 10;
+                  constexpr std::size_t ny = 10;
+                  constexpr std::size_t n = nx * ny;
+                  std::vector<int> row_offsets;
+                  std::vector<int> col_indices;
+                  std::vector<double> values;
+                  row_offsets.reserve(n + 1);
+                  row_offsets.push_back(0);
+                  for (std::size_t i = 0; i < nx; ++i) {
+                      for (std::size_t j = 0; j < ny; ++j) {
+                          const std::size_t idx = i * ny + j;
+                          if (i > 0) {
+                              col_indices.push_back(static_cast<int>(idx - ny));
+                              values.push_back(-1.0);
+                          }
+                          if (j > 0) {
+                              col_indices.push_back(static_cast<int>(idx - 1));
+                              values.push_back(-1.0);
+                          }
+                          col_indices.push_back(static_cast<int>(idx));
+                          values.push_back(4.0);
+                          if (j + 1 < ny) {
+                              col_indices.push_back(static_cast<int>(idx + 1));
+                              values.push_back(-1.0);
+                          }
+                          if (i + 1 < nx) {
+                              col_indices.push_back(static_cast<int>(idx + ny));
+                              values.push_back(-1.0);
+                          }
+                          row_offsets.push_back(static_cast<int>(col_indices.size()));
+                      }
+                  }
+                  auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
+                  const std::vector<double> b(n, 1.0);
+                  auto r = nimblecas::cg(A, b, 1e-10, 500);
+                  t.expect(r.has_value(), "cg returns a result on the 2D Laplacian");
+                  t.expect(r.has_value() && r->converged, "cg converges on the 2D Laplacian");
+                  t.expect(r.has_value() && r->residual <= 1e-10 * std::sqrt(static_cast<double>(n)),
+                           "true residual within tol * ||b||");
+              })
+        .test("numerical_cg_reports_not_converged_on_indefinite_breakdown",
+              [](TestContext& t) {
+                  // A = [[0,1],[1,0]] is symmetric but INDEFINITE (eigenvalues +1, -1).
+                  // With b = [0,1] the very first search direction breaks down exactly:
+                  // p0 = r0 = b, and p0^T A p0 = 0*1 + 1*0 = 0 exactly (not merely small),
+                  // so CG cannot proceed past the first step. x must stay at the (wrong)
+                  // starting guess [0,0] rather than being reported as a spuriously
+                  // "converged" answer.
+                  const std::array<double, 4> dense{0, 1,
+                                                    1, 0};
+                  auto A = nimblecas::dense_matvec(dense, 2);
+                  const std::array<double, 2> b{0.0, 1.0};
+                  auto r = nimblecas::cg(A, b, 1e-10, 100);
+                  t.expect(r.has_value(), "cg does NOT error on an indefinite matrix");
+                  t.expect(r.has_value() && !r->converged,
+                           "indefinite breakdown -> converged == false, never a false positive");
+                  t.expect(r.has_value() && r->iterations == 1,
+                           "breakdown stops after exactly one iteration");
+                  if (r.has_value()) {
+                      t.expect(std::abs(r->x[0]) < 1e-15 && std::abs(r->x[1]) < 1e-15,
+                               "x remains the zero initial guess (no wrong 'solution')");
+                      t.expect(std::abs(r->residual - 1.0) < 1e-12,
+                               "true residual equals ||b|| since x never moved");
+                  }
+              })
+        .test("numerical_cg_empty_system_is_domain_error",
+              [](TestContext& t) {
+                  const std::array<double, 4> dense{4, 1, 1, 4};
+                  auto A = nimblecas::dense_matvec(dense, 2);
+                  const std::array<double, 0> empty{};
+                  t.expect(nimblecas::cg(A, empty, 1e-10, 10).error() == MathError::domain_error,
                            "empty system -> domain_error");
               })
         .run();

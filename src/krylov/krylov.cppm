@@ -30,11 +30,14 @@
 //       only available numerically (see lanczos_ritz / arnoldi_hessenberg below).
 //
 //   NUMERICAL over doubles (iterative, round-off present, convergence NOT guaranteed):
-//     * gmres (restarted, Givens rotations), minres, bicgstab — solvers for general,
-//       large, or non-symmetric / indefinite systems where an exact rational method is
-//       inapplicable or impractical. They return {x, iterations, residual, converged}.
-//       Running out of iterations is reported as converged == false; it is NOT an
-//       error — only genuinely invalid input (an empty system) is a domain_error.
+//     * cg, gmres (restarted, Givens rotations), minres, bicgstab — solvers for SPD,
+//       general, large, or non-symmetric / indefinite systems where an exact rational
+//       method is inapplicable or impractical. They return {x, iterations, residual,
+//       converged}. Running out of iterations is reported as converged == false; it
+//       is NOT an error — only genuinely invalid input (an empty system) is a
+//       domain_error.
+//     * csr_matvec — a matrix-free MatVec factory over a sparse CSR triple, the
+//       numerical counterpart of dense_matvec.
 //     * lanczos_ritz / arnoldi_hessenberg — the NORMALISED Lanczos/Arnoldi used to
 //       estimate eigenvalues. The returned Ritz values are APPROXIMATIONS of a subset
 //       of the spectrum, not exact eigenvalues.
@@ -615,6 +618,69 @@ export namespace nimblecas {
 }
 
 // ---------------------------------------------------------------------------
+//  NUMERICAL over doubles — CSR sparse operator factory.
+// ---------------------------------------------------------------------------
+// Wraps a compressed-sparse-row matrix as a MatVec: y[i] = sum_{k in row i}
+// values[k] * x[col_indices[k]]. PRECONDITION (documented, not silently patched): a
+// well-formed CSR triple — row_offsets has n+1 entries and is monotone
+// non-decreasing and non-negative, col_indices/values share row_offsets.back()
+// entries, and every col_indices[k] lies in [0, n). Validation runs ONCE, here at
+// construction, not on every matvec call, so the returned closure stays a plain
+// Theta(nnz) sparse apply like dense_matvec is a plain Theta(n^2) dense apply.
+// Malformed input is never clamped or partially applied (that would silently answer
+// a different, wrong system) — csr_matvec instead returns a safe MatVec that leaves
+// y == 0, since this factory (matching dense_matvec's shape) returns a bare MatVec
+// rather than Result<MatVec> and so has no channel to report the error at the point
+// of misuse. The three arrays are COPIED into the returned closure.
+[[nodiscard]] auto csr_matvec(std::span<const int> row_offsets, std::span<const int> col_indices,
+                              std::span<const double> values, std::size_t n) -> MatVec {
+    bool ok = row_offsets.size() == n + 1;
+    if (ok) {
+        for (std::size_t i = 0; i + 1 < row_offsets.size(); ++i) {
+            if (row_offsets[i] < 0 || row_offsets[i + 1] < row_offsets[i]) {
+                ok = false;
+                break;
+            }
+        }
+    }
+    if (ok) {
+        const int nnz = row_offsets.empty() ? 0 : row_offsets.back();
+        if (nnz < 0 || static_cast<std::size_t>(nnz) != col_indices.size() ||
+            col_indices.size() != values.size()) {
+            ok = false;
+        }
+    }
+    if (ok) {
+        for (const int c : col_indices) {
+            if (c < 0 || static_cast<std::size_t>(c) >= n) {
+                ok = false;
+                break;
+            }
+        }
+    }
+    if (!ok) {
+        return [](std::span<const double>, std::span<double> y) { std::ranges::fill(y, 0.0); };
+    }
+
+    std::vector<int> ro(row_offsets.begin(), row_offsets.end());
+    std::vector<int> ci(col_indices.begin(), col_indices.end());
+    std::vector<double> va(values.begin(), values.end());
+    return [ro = std::move(ro), ci = std::move(ci), va = std::move(va),
+            n](std::span<const double> x, std::span<double> y) {
+        for (std::size_t i = 0; i < n; ++i) {
+            double acc = 0.0;
+            const int lo = ro[i];
+            const int hi = ro[i + 1];
+            for (int k = lo; k < hi; ++k) {
+                const auto kk = static_cast<std::size_t>(k);
+                acc = std::fma(va[kk], x[static_cast<std::size_t>(ci[kk])], acc);
+            }
+            y[i] = acc;
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
 //  NUMERICAL over doubles — restarted GMRES with Givens rotations.
 // ---------------------------------------------------------------------------
 // General (possibly non-symmetric) systems. tol is RELATIVE to ||b||. Returns
@@ -823,6 +889,66 @@ export namespace nimblecas {
         }
         if (beta == 0.0) {
             break;  // exact invariant subspace
+        }
+    }
+
+    const double tr = residual_norm(A, b, x);
+    return IterativeResult{std::move(x), iter, tr, tr <= stop};
+}
+
+// ---------------------------------------------------------------------------
+//  NUMERICAL over doubles — Conjugate Gradient (symmetric positive-definite A).
+// ---------------------------------------------------------------------------
+// The classical numerical CG, matrix-free via MatVec. tol is RELATIVE to ||b||. The
+// TRUE residual ||b - A x||_2 is recomputed at return via residual_norm — never the
+// recursive r.r used to drive the iteration, which can look deceptively tiny after
+// round-off even though the true residual is not (the honesty rule this module's
+// header calls out explicitly). converged == false is a legitimate outcome — the
+// iteration budget ran out, or A is not SPD and the recursive residual stalled or a
+// direction collapsed (p^T A p == 0) — never an error; only an empty system is a
+// domain_error. A non-SPD/indefinite A is never reported as converged unless the
+// true residual genuinely satisfies the tolerance.
+[[nodiscard]] auto cg(const MatVec& A, std::span<const double> b, double tol = 1e-10,
+                      std::size_t max_iter = 1000) -> Result<IterativeResult> {
+    const std::size_t n = b.size();
+    if (n == 0) {
+        return make_error<IterativeResult>(MathError::domain_error);
+    }
+    const double bnorm = dnorm(b);
+    const double stop = tol * (bnorm > 0.0 ? bnorm : 1.0);
+
+    std::vector<double> x(n, 0.0);              // x_0 = 0
+    std::vector<double> r(b.begin(), b.end());  // r_0 = b - A x_0 = b
+    std::vector<double> p = r;                  // p_0 = r_0
+    double rtr = ddot(r, r);
+
+    std::size_t iter = 0;
+    if (std::sqrt(rtr) > stop) {
+        std::vector<double> ap(n, 0.0);
+        while (iter < max_iter) {
+            ++iter;
+            A(p, ap);
+            const double pap = ddot(p, ap);
+            if (std::fabs(pap) <= 1e-300) {
+                break;  // breakdown: p^T A p collapsed (A is not SPD along this direction)
+            }
+            const double alpha = rtr / pap;
+            for (std::size_t i = 0; i < n; ++i) {
+                x[i] += alpha * p[i];
+            }
+            for (std::size_t i = 0; i < n; ++i) {
+                r[i] -= alpha * ap[i];
+            }
+            const double rtr_new = ddot(r, r);
+            if (std::sqrt(rtr_new) <= stop) {
+                rtr = rtr_new;
+                break;
+            }
+            const double beta = rtr_new / rtr;
+            for (std::size_t i = 0; i < n; ++i) {
+                p[i] = r[i] + beta * p[i];
+            }
+            rtr = rtr_new;
         }
     }
 
