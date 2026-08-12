@@ -251,19 +251,34 @@ auto fill_sigma_and_u(const std::vector<double>& B, std::size_t m, std::size_t n
     std::vector<std::vector<double>> accepted;  // orthonormal U columns found so far
     accepted.reserve(n);
 
+    // Pass 1: accept every genuine (above-cutoff) column u_j = b_j / sigma_j FIRST. The
+    // basis completion below must see the full set of real singular directions, regardless
+    // of where the zero columns sit in index order -- otherwise a zero column preceding a
+    // nonzero one (e.g. rank-1 [[1,2],[2,4]], whose column 0 is annihilated) would complete
+    // against an incomplete set and land non-orthogonal to a later real column.
     for (std::size_t j = 0; j < n; ++j) {
-        if (sigma[j] > cutoff) {
-            std::vector<double> col(m);
-            for (std::size_t i = 0; i < m; ++i) {
-                col[i] = B[i * n + j] / sigma[j];
-            }
-            for (std::size_t i = 0; i < m; ++i) {
-                U[i * n + j] = col[i];
-            }
-            accepted.push_back(std::move(col));
+        if (sigma[j] <= cutoff) {
             continue;
         }
-        // Deterministic basis completion: try e0, e1, ..., e_{m-1}.
+        std::vector<double> col(m);
+        for (std::size_t i = 0; i < m; ++i) {
+            col[i] = B[i * n + j] / sigma[j];
+        }
+        for (std::size_t i = 0; i < m; ++i) {
+            U[i * n + j] = col[i];
+        }
+        accepted.push_back(std::move(col));
+    }
+
+    // Pass 2: complete each zero/degenerate column to a unit vector orthogonal to EVERY
+    // accepted column (all the real ones, plus any earlier completion column), by
+    // deterministic Gram-Schmidt of the standard basis e0, e1, ... in index order, taking
+    // the first candidate whose residual norm exceeds 1/2 (the largest residual is used as a
+    // deterministic fallback, guarded against 0/0 so it never yields NaN).
+    for (std::size_t j = 0; j < n; ++j) {
+        if (sigma[j] > cutoff) {
+            continue;
+        }
         double best_norm = -1.0;
         std::vector<double> best;
         for (std::size_t k = 0; k < m && best_norm <= 0.5; ++k) {
@@ -288,7 +303,7 @@ auto fill_sigma_and_u(const std::vector<double>& B, std::size_t m, std::size_t n
                 best = std::move(e);
             }
         }
-        // best_norm is provably > 0 (see the function comment); guard 0/0 anyway.
+        // best_norm is provably > 0 while accepted.size() < m; guard 0/0 anyway.
         std::vector<double> unit(m, 0.0);
         if (best_norm > 0.0) {
             for (std::size_t i = 0; i < m; ++i) {
