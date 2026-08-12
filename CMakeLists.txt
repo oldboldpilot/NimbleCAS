@@ -680,6 +680,13 @@ target_sources(nimblecas_latex PUBLIC
 target_link_libraries(nimblecas_latex
   PUBLIC nimblecas_symbolic nimblecas_core std_module)
 
+# ---- nimblecas.evalnum : numeric (double) evaluation of a symbolic Expr ----
+add_library(nimblecas_evalnum STATIC)
+target_sources(nimblecas_evalnum PUBLIC
+  FILE_SET CXX_MODULES FILES src/evalnum/evalnum.cppm)
+target_link_libraries(nimblecas_evalnum
+  PUBLIC nimblecas_symbolic nimblecas_core std_module)
+
 # ---- nimblecas.webexport : JSON export bridge for the WebGPU/WASM front-end ----
 add_library(nimblecas_webexport STATIC)
 target_sources(nimblecas_webexport PUBLIC
@@ -848,6 +855,20 @@ target_sources(nimblecas_algpoly PUBLIC
   FILE_SET CXX_MODULES FILES src/algpoly/algpoly.cppm)
 target_link_libraries(nimblecas_algpoly
   PUBLIC nimblecas_algnum nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.svd : numeric thin SVD (one-sided Jacobi) + polar; exact sigma^2 slice ----
+add_library(nimblecas_svd STATIC)
+target_sources(nimblecas_svd PUBLIC
+  FILE_SET CXX_MODULES FILES src/svd/svd.cppm)
+target_link_libraries(nimblecas_svd
+  PUBLIC nimblecas_eigen nimblecas_matrix nimblecas_ratpoly nimblecas_core std_module)
+
+# ---- nimblecas.taskdag : deterministic single-node task-DAG scheduler (NOT distributed) ----
+add_library(nimblecas_taskdag STATIC)
+target_sources(nimblecas_taskdag PUBLIC
+  FILE_SET CXX_MODULES FILES src/taskdag/taskdag.cppm)
+target_link_libraries(nimblecas_taskdag
+  PUBLIC nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.jordan : Jordan canonical form A = P J P^-1, over Q and over Q(alpha) (§7.2) ----
 add_library(nimblecas_jordan STATIC)
@@ -1200,6 +1221,17 @@ target_link_libraries(algpoly_tests
   PRIVATE nimblecas_algpoly nimblecas_algnum nimblecas_factor nimblecas_matrix
           nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME algpoly_tests COMMAND algpoly_tests)
+
+add_executable(svd_tests tests/svd_tests.cpp)
+target_link_libraries(svd_tests
+  PRIVATE nimblecas_svd nimblecas_qrschur nimblecas_eigen nimblecas_matrix
+          nimblecas_ratpoly nimblecas_core nimblecas_testing std_module)
+add_test(NAME svd_tests COMMAND svd_tests)
+
+add_executable(taskdag_tests tests/taskdag_tests.cpp)
+target_link_libraries(taskdag_tests
+  PRIVATE nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME taskdag_tests COMMAND taskdag_tests)
 
 add_executable(jordan_tests tests/jordan_tests.cpp)
 target_link_libraries(jordan_tests
@@ -1583,6 +1615,11 @@ add_executable(latex_tests tests/latex_tests.cpp)
 target_link_libraries(latex_tests
   PRIVATE nimblecas_latex nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
 add_test(NAME latex_tests COMMAND latex_tests)
+
+add_executable(evalnum_tests tests/evalnum_tests.cpp)
+target_link_libraries(evalnum_tests
+  PRIVATE nimblecas_evalnum nimblecas_symbolic nimblecas_core nimblecas_testing std_module)
+add_test(NAME evalnum_tests COMMAND evalnum_tests)
 
 add_executable(webexport_tests tests/webexport_tests.cpp)
 target_link_libraries(webexport_tests
