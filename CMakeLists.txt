@@ -458,12 +458,27 @@ target_sources(nimblecas_bigalgnum PUBLIC
 target_link_libraries(nimblecas_bigalgnum
   PUBLIC nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigalgpoly : dense polynomial over a BigNumberField (unbounded) ------------------
+add_library(nimblecas_bigalgpoly STATIC)
+target_sources(nimblecas_bigalgpoly PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigalgpoly/bigalgpoly.cppm)
+target_link_libraries(nimblecas_bigalgpoly
+  PUBLIC nimblecas_bigalgnum nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.bigmatrix : big-backed dense matrix over BigRational (exact Bareiss determinant) --
 add_library(nimblecas_bigmatrix STATIC)
 target_sources(nimblecas_bigmatrix PUBLIC
   FILE_SET CXX_MODULES FILES src/bigmatrix/bigmatrix.cppm)
 target_link_libraries(nimblecas_bigmatrix
   PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_matrix nimblecas_ratpoly
+         nimblecas_core std_module)
+
+# ---- nimblecas.bigfrobenius : minimal polynomial / invariant factors over BigRational (unbounded) --
+add_library(nimblecas_bigfrobenius STATIC)
+target_sources(nimblecas_bigfrobenius PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigfrobenius/bigfrobenius.cppm)
+target_link_libraries(nimblecas_bigfrobenius
+  PUBLIC nimblecas_bigmatrix nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint
          nimblecas_core std_module)
 
 # ---- nimblecas.bigeigen : exact characteristic polynomials & rational eigenvalues over BigRational --
@@ -1571,6 +1586,18 @@ target_link_libraries(bigalgnum_tests
   PRIVATE nimblecas_bigalgnum nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigalgnum_tests COMMAND bigalgnum_tests)
+
+add_executable(bigalgpoly_tests tests/bigalgpoly_tests.cpp)
+target_link_libraries(bigalgpoly_tests
+  PRIVATE nimblecas_bigalgpoly nimblecas_bigalgnum nimblecas_bigratpoly nimblecas_bigrational
+          nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigalgpoly_tests COMMAND bigalgpoly_tests)
+
+add_executable(bigfrobenius_tests tests/bigfrobenius_tests.cpp)
+target_link_libraries(bigfrobenius_tests
+  PRIVATE nimblecas_bigfrobenius nimblecas_bigmatrix nimblecas_bigratpoly nimblecas_bigrational
+          nimblecas_bigint nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigfrobenius_tests COMMAND bigfrobenius_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests

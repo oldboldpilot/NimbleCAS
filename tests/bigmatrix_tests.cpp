@@ -284,5 +284,91 @@ auto main() -> int {
                   auto wide = BigMatrix::from_matrix(imat({{1, 2, 3}})).value();
                   t.expect(wide.rows() == 1 && wide.cols() == 3, "1x3 promotion shape");
               })
+        .test("solve_small_exact",
+              [](TestContext& t) {
+                  // A = [[2,1],[1,3]], B = [[1],[2]] -> X = [[1/5],[3/5]].
+                  //   2*(1/5) + 1*(3/5) = 2/5 + 3/5 = 1  ✓
+                  //   1*(1/5) + 3*(3/5) = 1/5 + 9/5 = 2  ✓
+                  auto a = bmat({{2, 1}, {1, 3}});
+                  auto b = bmat({{1}, {2}});
+                  auto r = a.solve(b);
+                  const bool ok = r.has_value();
+                  t.expect(ok, "2x2 solve succeeds");
+                  if (!ok) {
+                      return;
+                  }
+                  const auto& x = *r;
+                  t.expect(x.rows() == 2 && x.cols() == 1, "solution is 2x1");
+                  t.expect(x.at(0, 0) == brat(1, 5), "x0 == 1/5 (exact)");
+                  t.expect(x.at(1, 0) == brat(3, 5), "x1 == 3/5 (exact)");
+
+                  // Cross-check: A * X reproduces B exactly.
+                  t.expect(a.multiply(x).value() == b, "A * X == B");
+              })
+        .test("solve_int64_overflowing_system",
+              [](TestContext& t) {
+                  // A = [[K,1],[1,K]] with K = 10^10, B = [[1],[0]].
+                  //   det(A) = K^2 - 1 = 10^20 - 1 = 99999999999999999999 (> int64 max).
+                  //   X = (1/det) [[K,-1],[-1,K]] [[1],[0]] = [K/det, -1/det].
+                  // gcd(K, det) = 1 (det is odd and not a multiple of 5), so the reduced
+                  // solution has a denominator of 10^20 - 1, well past the ~9.2e18 int64
+                  // ceiling — a system the int64 Matrix::solve could not represent.
+                  const std::int64_t k = 10000000000LL;  // 10^10 (fits int64)
+                  auto a = bmat({{k, 1}, {1, k}});
+                  auto b = bmat({{1}, {0}});
+                  auto r = a.solve(b);
+                  const bool ok = r.has_value();
+                  t.expect(ok, "overflowing solve succeeds (bignum)");
+                  if (!ok) {
+                      return;
+                  }
+                  const auto& x = *r;
+                  // Exact oracles via decimal-string BigRational construction.
+                  const auto x0 = BigRational::from_string("10000000000/99999999999999999999").value();
+                  const auto x1 = BigRational::from_string("-1/99999999999999999999").value();
+                  t.expect(x.at(0, 0) == x0, "x0 == 10^10/(10^20-1) exactly");
+                  t.expect(x.at(1, 0) == x1, "x1 == -1/(10^20-1) exactly");
+
+                  // The denominator genuinely exceeds int64, proving the bignum advantage.
+                  const auto int64_ceiling = BigRational::from_int(9223372036854775807LL);
+                  const auto denom = BigRational::from_bigint(x.at(1, 0).denominator());
+                  t.expect(denom > int64_ceiling,
+                           "solution denominator exceeds the int64 ceiling");
+
+                  // Cross-check: A * X reproduces B exactly.
+                  t.expect(a.multiply(x).value() == b, "A * X == B (exact residue)");
+              })
+        .test("solve_singular_and_domain_errors",
+              [](TestContext& t) {
+                  // Singular A (rank-1) -> division_by_zero (no nonzero pivot in a column).
+                  auto sing = bmat({{1, 2}, {2, 4}});
+                  auto sb = bmat({{1}, {1}});
+                  t.expect(sing.solve(sb).error() == MathError::division_by_zero,
+                           "singular A -> division_by_zero");
+
+                  // Non-square A -> domain_error.
+                  auto wide = bmat({{1, 2, 3}, {4, 5, 6}});
+                  auto wb = bmat({{1}, {2}});
+                  t.expect(wide.solve(wb).error() == MathError::domain_error,
+                           "non-square A -> domain_error");
+
+                  // Row-count mismatch between A and B -> domain_error.
+                  auto a = bmat({{2, 1}, {1, 3}});
+                  auto mismatched = bmat({{1}, {2}, {3}});
+                  t.expect(a.solve(mismatched).error() == MathError::domain_error,
+                           "B row-count mismatch -> domain_error");
+              })
+        .test("rank_over_bigrational",
+              [](TestContext& t) {
+                  // Rank-deficient: second row is twice the first -> rank 1.
+                  t.expect(bmat({{1, 2}, {2, 4}}).rank() == 1, "rank [[1,2],[2,4]] == 1");
+                  // Full-rank identity -> rank 3.
+                  t.expect(BigMatrix::identity(3).rank() == 3, "rank I_3 == 3");
+                  // The zero matrix has rank 0.
+                  t.expect(BigMatrix::zero(3, 3).rank() == 0, "rank of zero matrix == 0");
+                  // A full-rank 3x3 -> rank 3.
+                  t.expect(bmat({{6, 1, 1}, {4, -2, 5}, {2, 8, 7}}).rank() == 3,
+                           "rank of a nonsingular 3x3 == 3");
+              })
         .run();
 }

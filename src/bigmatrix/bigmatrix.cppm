@@ -109,6 +109,23 @@ public:
     // NEVER overflows, in contrast to the int64 Matrix::determinant.
     [[nodiscard]] auto determinant() const -> Result<BigRational>;
 
+    // --- solve / rank ---
+
+    // Solve A·X = B for X, where A is *this (square, invertible) and B has the same number
+    // of rows as A (B may carry several right-hand-side columns). Uses Gauss-Jordan
+    // elimination over the exact BigRational field, selecting the FIRST row with a nonzero
+    // pivot entry — exact arithmetic needs no numerical pivoting. Fails with domain_error
+    // when A is not square or the row counts disagree, and with division_by_zero when A is
+    // singular (a pivot column with no nonzero entry). Exact and unbounded: unlike the
+    // int64 Matrix::solve it NEVER overflows, and it never returns a plausible-wrong
+    // solution.
+    [[nodiscard]] auto solve(const BigMatrix& b) const -> Result<BigMatrix>;
+
+    // The exact rank (number of linearly independent rows) via Gaussian row reduction to
+    // echelon form over BigRational, counting the nonzero pivot rows. Infallible: bignum
+    // arithmetic cannot overflow, so the rank is always well-defined and returned directly.
+    [[nodiscard]] auto rank() const -> std::int64_t;
+
     [[nodiscard]] auto to_string() const -> std::string;
 
 private:
@@ -139,6 +156,60 @@ auto swap_rows(std::vector<BigRational>& m, std::size_t total, std::size_t a, st
     for (std::size_t j = 0; j < total; ++j) {
         std::swap(m[a * total + j], m[b * total + j]);
     }
+}
+
+// Reduce the leading n columns of a row-major augmented matrix (n rows, `total` columns,
+// total >= n) to the identity via Gauss-Jordan elimination, selecting the first nonzero
+// pivot at or below the diagonal (exact BigRational arithmetic needs no numerical
+// pivoting). Any trailing columns are carried along, so on success they hold A^{-1} times
+// the original trailing block. A pivot column with no nonzero entry means the leading block
+// is singular, reported as division_by_zero. Over Q every division is exact and the pivot
+// is always nonzero, so the divide never actually fails — the Result is threaded only for a
+// uniform, defensive surface.
+[[nodiscard]] auto gauss_jordan(std::vector<BigRational>& m, std::size_t n, std::size_t total)
+    -> Result<void> {
+    for (std::size_t col = 0; col < n; ++col) {
+        // Locate the first nonzero pivot at or below the diagonal in this column.
+        std::size_t pivot_row = col;
+        bool found = false;
+        for (std::size_t r = col; r < n; ++r) {
+            if (!m[r * total + col].is_zero()) {
+                pivot_row = r;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return make_error<void>(MathError::division_by_zero);  // singular leading block
+        }
+        if (pivot_row != col) {
+            swap_rows(m, total, col, pivot_row);
+        }
+        // Normalise the pivot row so the pivot becomes 1.
+        const BigRational pivot = m[col * total + col];
+        for (std::size_t j = col; j < total; ++j) {
+            auto q = m[col * total + j].divide(pivot);  // exact; pivot is nonzero
+            if (!q) {
+                return make_error<void>(q.error());
+            }
+            m[col * total + j] = std::move(*q);
+        }
+        // Clear the pivot column in every other row.
+        for (std::size_t r = 0; r < n; ++r) {
+            if (r == col) {
+                continue;
+            }
+            const BigRational factor = m[r * total + col];
+            if (factor.is_zero()) {
+                continue;
+            }
+            for (std::size_t j = col; j < total; ++j) {
+                const BigRational prod = m[col * total + j].multiply(factor);  // infallible
+                m[r * total + j] = m[r * total + j].subtract(prod);            // infallible
+            }
+        }
+    }
+    return {};
 }
 
 }  // namespace
@@ -318,6 +389,80 @@ auto BigMatrix::determinant() const -> Result<BigRational> {
     // After the sweep the determinant's magnitude is the final (bottom-right) pivot.
     const BigRational& det = m[(n - 1) * n + (n - 1)];
     return sign < 0 ? det.negate() : det;
+}
+
+// --- solve / rank -----------------------------------------------------------
+
+auto BigMatrix::solve(const BigMatrix& b) const -> Result<BigMatrix> {
+    if (!is_square() || b.rows_ != rows_) {
+        return make_error<BigMatrix>(MathError::domain_error);
+    }
+    const std::size_t n = rows_;
+    const std::size_t rhs = b.cols_;
+    const std::size_t total = n + rhs;
+    // Assemble the augmented matrix [A | B].
+    std::vector<BigRational> m(n * total);
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < n; ++j) {
+            m[i * total + j] = data_[i * cols_ + j];
+        }
+        for (std::size_t j = 0; j < rhs; ++j) {
+            m[i * total + n + j] = b.data_[i * b.cols_ + j];
+        }
+    }
+    auto reduced = gauss_jordan(m, n, total);  // singular => division_by_zero
+    if (!reduced) {
+        return make_error<BigMatrix>(reduced.error());
+    }
+    // The trailing rhs columns now hold the solution X.
+    std::vector<BigRational> data(n * rhs);
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = 0; j < rhs; ++j) {
+            data[i * rhs + j] = m[i * total + n + j];
+        }
+    }
+    return BigMatrix{n, rhs, std::move(data)};
+}
+
+auto BigMatrix::rank() const -> std::int64_t {
+    if (rows_ == 0 || cols_ == 0) {
+        return 0;
+    }
+    std::vector<BigRational> m = data_;  // working copy
+    std::size_t rank = 0;
+    for (std::size_t col = 0; col < cols_ && rank < rows_; ++col) {
+        // Find the first nonzero pivot at or below the current rank row in this column.
+        std::size_t pivot_row = rank;
+        bool found = false;
+        for (std::size_t r = rank; r < rows_; ++r) {
+            if (!m[r * cols_ + col].is_zero()) {
+                pivot_row = r;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            continue;  // free column, move on without consuming a rank
+        }
+        if (pivot_row != rank) {
+            swap_rows(m, cols_, rank, pivot_row);
+        }
+        const BigRational pivot = m[rank * cols_ + col];
+        for (std::size_t r = rank + 1; r < rows_; ++r) {
+            const BigRational below = m[r * cols_ + col];
+            if (below.is_zero()) {
+                continue;
+            }
+            // pivot is a found-nonzero entry, so this exact division never divides by zero.
+            const BigRational factor = below.divide(pivot).value();
+            for (std::size_t j = col; j < cols_; ++j) {
+                const BigRational prod = m[rank * cols_ + j].multiply(factor);  // infallible
+                m[r * cols_ + j] = m[r * cols_ + j].subtract(prod);             // infallible
+            }
+        }
+        ++rank;
+    }
+    return static_cast<std::int64_t>(rank);
 }
 
 auto BigMatrix::to_string() const -> std::string {
