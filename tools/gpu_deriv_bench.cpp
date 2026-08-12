@@ -1,10 +1,10 @@
 // NimbleCAS GPU derivatives benchmark tool.
 // @author Olumuyiwa Oluwasanmi
 //
-// Standalone benchmark harness for timing the 8 shipped GPU derivative pricing & grid sweep
-// entry points in nimblecas.gpu (European/Asian/barrier Monte Carlo, first-order & extended
-// Greeks, strategy payoff/P&L and futures P&L grid sweeps) against CPU references across
-// realistic batch sizes.
+// Standalone benchmark harness for timing the 9 shipped GPU derivative pricing & grid sweep
+// entry points in nimblecas.gpu (European/Asian/barrier/Longstaff-Schwartz-American Monte Carlo,
+// first-order & extended Greeks, strategy payoff/P&L and futures P&L grid sweeps) against CPU
+// references across realistic batch sizes.
 // Emits raw wall-clock timings (median of 5 reps after 1 warmup) and throughput figures.
 // Kernel-level attribution requires profiling with nsys / ncu.
 
@@ -493,6 +493,66 @@ template <typename F>
     return true;
 }
 
+[[nodiscard]] auto bench_longstaff_schwartz_american() -> bool {
+    std::cout << "--- Longstaff-Schwartz American Batch (longstaff_schwartz_american_batch, ATM puts) ---\n";
+    std::cout << std::format("{:>8} {:>10} {:>6} {:>14} {:>12} {:>12} {:>22}\n", "Options", "Paths",
+                             "Steps", "Path-Steps", "GPU (ms)", "CPU (ms)", "GPU Throughput");
+
+    // Modest sizes: LSM runs a full backward induction (N kernel launches + host solve3 per step)
+    // and stores an O(P*(N+1)) grid, so it is far heavier per path than the forward-only pricers.
+    const std::vector<std::size_t> opt_sizes = {1, 16, 64};
+    const std::vector<std::uint64_t> path_counts = {20'000, 50'000};
+    const int steps = 25;
+    const std::uint64_t seed = 42;
+
+    for (const std::size_t n_opts : opt_sizes) {
+        std::vector<gpu::BsOption> opts;
+        opts.reserve(n_opts);
+        for (std::size_t i = 0; i < n_opts; ++i) {
+            const double strike = 95.0 + static_cast<double>(i % 20) * 1.0;
+            opts.push_back(gpu::BsOption{100.0, strike, 0.05, 0.0, 0.2, 1.0, false});  // puts
+        }
+
+        for (const std::uint64_t paths : path_counts) {
+            auto gpu_res = gpu::longstaff_schwartz_american_batch(opts, paths, steps, seed);
+            if (!gpu_res || gpu_res->size() != n_opts) {
+                std::cerr << "ERROR: longstaff_schwartz_american_batch returned error or invalid size\n";
+                return false;
+            }
+            const auto cpu0 = pricing::longstaff_schwartz_american(to_spec(opts[0]), paths, steps, seed);
+            if (!cpu0) {
+                std::cerr << "ERROR: pricing::longstaff_schwartz_american failed\n";
+                return false;
+            }
+            const double p_gpu = (*gpu_res)[0].price;
+            // LSM matches CPU only to ~1e-3 relative (regression + exercise-threshold flips), so the
+            // spot check uses a correspondingly loose bound — it guards against garbage, not exactness.
+            if (!std::isfinite(p_gpu) || std::abs(p_gpu - cpu0->price) > 1e-2 * (1.0 + std::abs(cpu0->price))) {
+                std::cerr << std::format("ERROR: LSM spot check failed (GPU {:.6f} vs CPU {:.6f})\n",
+                                         p_gpu, cpu0->price);
+                return false;
+            }
+
+            const double gpu_ms = time_median_ms([&] {
+                std::ignore = gpu::longstaff_schwartz_american_batch(opts, paths, steps, seed);
+            });
+            const double cpu_ms = time_median_ms([&] {
+                for (const auto& o : opts) {
+                    std::ignore = pricing::longstaff_schwartz_american(to_spec(o), paths, steps, seed);
+                }
+            });
+
+            const std::uint64_t path_steps =
+                static_cast<std::uint64_t>(n_opts) * paths * static_cast<std::uint64_t>(steps);
+            const double gpu_tput = (static_cast<double>(path_steps) / 1e6) / (gpu_ms / 1000.0);
+            std::cout << std::format("{:>8} {:>10} {:>6} {:>14} {:>12.3f} {:>12.3f} {:>14.2f} M ps/s\n",
+                                     n_opts, paths, steps, path_steps, gpu_ms, cpu_ms, gpu_tput);
+        }
+    }
+    std::cout << "\n";
+    return true;
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -515,6 +575,7 @@ auto main() -> int {
     if (!bench_monte_carlo_european()) { return 1; }
     if (!bench_monte_carlo_asian()) { return 1; }
     if (!bench_barrier_option_mc()) { return 1; }
+    if (!bench_longstaff_schwartz_american()) { return 1; }
     if (!bench_black_scholes_greeks()) { return 1; }
     if (!bench_black_scholes_extended_greeks()) { return 1; }
     if (!bench_strategy_payoff_grid()) { return 1; }

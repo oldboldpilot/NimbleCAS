@@ -256,6 +256,41 @@ int nimblecas_gpu_lsm_american_batch(const NimblecasBsOption* opts, int n, int s
                                      unsigned long long paths, unsigned long long seed,
                                      NimblecasMcEstimate* out);
 
+/* --- FAMILY F: control frequency-response sweeps (gpu_control_kernels.cu) --- */
+
+int nimblecas_gpu_bode_sweep(const double* num, int n_num, const double* den, int n_den,
+                            const double* omegas, int n_omega, double* out_mag_db,
+                            double* out_phase_deg);
+
+int nimblecas_gpu_nyquist_sweep(const double* num, int n_num, const double* den, int n_den,
+                               const double* omegas, int n_omega, double* out_re,
+                               double* out_im);
+
+/* --- FAMILY G: batched wavelet transforms (gpu_wavelet_kernels.cu) --- */
+
+/* Batched 1D discrete wavelet transform for an arbitrary FilterBank. `data` holds `batch`
+ * contiguous signal blocks of `len` samples each (len must be even). `lo` and `hi` are analysis
+ * low-pass and high-pass filters of length `flen`. For each block, writes its len/2 approximation
+ * coefficients followed by its len/2 detail coefficients to `out`. Returns 0 on success or a
+ * non-zero CUDA error code. */
+int nimblecas_gpu_dwt_batch(const double* data, int batch, int len, const double* lo,
+                            const double* hi, int flen, double* out);
+
+/* Batched 1D stationary wavelet transform (level 1) for an arbitrary FilterBank. `data` holds
+ * `batch` contiguous signal blocks of `len` samples each. For each block, writes its `len`
+ * approximation coefficients followed by its `len` detail coefficients to `out` (total 2*len
+ * per block). Returns 0 on success or a non-zero CUDA error code. */
+int nimblecas_gpu_swt_batch(const double* data, int batch, int len, const double* lo,
+                            const double* hi, int flen, double* out);
+
+/* --- FAMILY H: quasi-Monte-Carlo (gpu_qmc_kernels.cu) --- */
+
+int nimblecas_gpu_l2_star_discrepancy(const double* points, int n, int dimension, double* out);
+int nimblecas_gpu_sobol_batch(const unsigned int* dir_numbers, int dir_stride,
+                              unsigned long long n0, int count, int dimension, double* out);
+int nimblecas_gpu_halton_batch(const int* primes, unsigned long long n0, int count,
+                               int dimension, double* out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

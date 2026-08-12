@@ -17,6 +17,9 @@ import nimblecas.core;
 import nimblecas.pricing;   // Family A CPU fallback + result types (McResult, Greeks, ExtendedGreeks)
 import nimblecas.optstrat;  // Family B CPU fallback + StrategyLeg (the exact piecewise-linear oracle)
 import nimblecas.futures;   // Family B CPU fallback + FuturesLeg
+import nimblecas.control;   // Family F CPU fallback + TransferFunction / BodePoint / NyquistPoint
+import nimblecas.wavelets;  // Wavelet FilterBank + CPU dwt/swt fallback
+import nimblecas.qmc;       // Family H CPU fallback & point generators
 
 export namespace nimblecas::gpu {
 
@@ -983,6 +986,448 @@ inline constexpr std::uint64_t kGpuMcMaxPathSteps = 1'000'000'000;
     std::vector<pricing::McResult> out;
     out.reserve(est.size());
     for (const auto& e : est) { out.push_back(pricing::McResult{e.price, e.std_error, paths}); }
+    return out;
+}
+
+// Frequency-response Bode sweep H(iω) over an angular frequency grid ω (rad/s).
+// Returns BodePoint { omega, magnitude_db (20·log10|H|), phase_deg (arg H in deg) }.
+//
+// HONESTY: NUMERICAL (double complex). Elementwise calculation (one thread per ω),
+// so execution order is independent of thread count or block geometry. Results
+// match CPU nimblecas::bode to ~1e-9 relative (device log10/atan2/hypot vs libm).
+// CPU fallback (no device): nimblecas::bode(tf, omegas). Fails with domain_error when
+// the transfer function denominator is zero, overflow when size exceeds int bounds,
+// and gpu_error on CUDA launch failure.
+[[nodiscard]] auto bode_sweep(const nimblecas::TransferFunction& tf, std::span<const double> omegas)
+    -> Result<std::vector<nimblecas::BodePoint>> {
+    if (tf.denominator().is_zero()) {
+        return make_error<std::vector<nimblecas::BodePoint>>(MathError::domain_error);
+    }
+    if (omegas.empty()) {
+        return std::vector<nimblecas::BodePoint>{};
+    }
+    const auto num_coeffs_span = tf.numerator().coefficients();
+    const auto den_coeffs_span = tf.denominator().coefficients();
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (num_coeffs_span.size() > int_max || den_coeffs_span.size() > int_max ||
+        omegas.size() > int_max) {
+        return make_error<std::vector<nimblecas::BodePoint>>(MathError::overflow);
+    }
+    // Domain/overflow validated above (before this branch) so accept/reject never depends on device presence.
+    if (!available()) {
+        return nimblecas::bode(tf, omegas);
+    }
+    std::vector<double> num_coeffs;
+    num_coeffs.reserve(num_coeffs_span.size());
+    for (const auto& r : num_coeffs_span) {
+        num_coeffs.push_back(static_cast<double>(r.numerator()) /
+                            static_cast<double>(r.denominator()));
+    }
+    std::vector<double> den_coeffs;
+    den_coeffs.reserve(den_coeffs_span.size());
+    for (const auto& r : den_coeffs_span) {
+        den_coeffs.push_back(static_cast<double>(r.numerator()) /
+                            static_cast<double>(r.denominator()));
+    }
+    std::vector<double> mag_db(omegas.size());
+    std::vector<double> phase_deg(omegas.size());
+    const int rc = nimblecas_gpu_bode_sweep(
+        num_coeffs.data(), static_cast<int>(num_coeffs.size()),
+        den_coeffs.data(), static_cast<int>(den_coeffs.size()),
+        omegas.data(), static_cast<int>(omegas.size()),
+        mag_db.data(), phase_deg.data());
+    if (rc != 0) {
+        return make_error<std::vector<nimblecas::BodePoint>>(MathError::gpu_error);
+    }
+    std::vector<nimblecas::BodePoint> out(omegas.size());
+    for (std::size_t i = 0; i < omegas.size(); ++i) {
+        out[i] = nimblecas::BodePoint{
+            .omega = omegas[i],
+            .magnitude_db = mag_db[i],
+            .phase_deg = phase_deg[i]
+        };
+    }
+    return out;
+}
+
+// Frequency-response Nyquist trace H(iω) = re + im·i sampled over an angular frequency grid ω.
+//
+// HONESTY: NUMERICAL (double complex). Elementwise calculation (one thread per ω),
+// so execution order is independent of thread count or block geometry. Results
+// match CPU nimblecas::nyquist to ~1e-9 relative (device log10/atan2/hypot vs libm).
+// CPU fallback (no device): nimblecas::nyquist(tf, omegas). Fails with domain_error when
+// the transfer function denominator is zero, overflow when size exceeds int bounds,
+// and gpu_error on CUDA launch failure.
+[[nodiscard]] auto nyquist_sweep(const nimblecas::TransferFunction& tf, std::span<const double> omegas)
+    -> Result<std::vector<nimblecas::NyquistPoint>> {
+    if (tf.denominator().is_zero()) {
+        return make_error<std::vector<nimblecas::NyquistPoint>>(MathError::domain_error);
+    }
+    if (omegas.empty()) {
+        return std::vector<nimblecas::NyquistPoint>{};
+    }
+    const auto num_coeffs_span = tf.numerator().coefficients();
+    const auto den_coeffs_span = tf.denominator().coefficients();
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (num_coeffs_span.size() > int_max || den_coeffs_span.size() > int_max ||
+        omegas.size() > int_max) {
+        return make_error<std::vector<nimblecas::NyquistPoint>>(MathError::overflow);
+    }
+    // Domain/overflow validated above (before this branch) so accept/reject never depends on device presence.
+    if (!available()) {
+        return nimblecas::nyquist(tf, omegas);
+    }
+    std::vector<double> num_coeffs;
+    num_coeffs.reserve(num_coeffs_span.size());
+    for (const auto& r : num_coeffs_span) {
+        num_coeffs.push_back(static_cast<double>(r.numerator()) /
+                            static_cast<double>(r.denominator()));
+    }
+    std::vector<double> den_coeffs;
+    den_coeffs.reserve(den_coeffs_span.size());
+    for (const auto& r : den_coeffs_span) {
+        den_coeffs.push_back(static_cast<double>(r.numerator()) /
+                            static_cast<double>(r.denominator()));
+    }
+    std::vector<double> re(omegas.size());
+    std::vector<double> im(omegas.size());
+    const int rc = nimblecas_gpu_nyquist_sweep(
+        num_coeffs.data(), static_cast<int>(num_coeffs.size()),
+        den_coeffs.data(), static_cast<int>(den_coeffs.size()),
+        omegas.data(), static_cast<int>(omegas.size()),
+        re.data(), im.data());
+    if (rc != 0) {
+        return make_error<std::vector<nimblecas::NyquistPoint>>(MathError::gpu_error);
+    }
+    std::vector<nimblecas::NyquistPoint> out(omegas.size());
+    for (std::size_t i = 0; i < omegas.size(); ++i) {
+        out[i] = nimblecas::NyquistPoint{
+            .omega = omegas[i],
+            .re = re[i],
+            .im = im[i]
+        };
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// FAMILY G — Batched discrete & stationary wavelet transforms (gpu_wavelet_kernels.cu).
+// ---------------------------------------------------------------------------
+
+// One-level batch 1D discrete wavelet transform for an arbitrary FilterBank over `batch`
+// contiguous signal blocks of `len` samples each (`data` is row-major, so data.size() == batch*len
+// and `len` must be even). For each block the result packs its len/2 approximation coefficients
+// followed by its len/2 detail coefficients, matching wavelets::dwt layout.
+//
+// HONESTY: NUMERICAL (double). Bitwise-deterministic run-to-run; matches CPU wavelets::dwt to
+// ~1e-12 (same filter FP arithmetic).
+// CPU fallback (no device): wavelets::dwt per signal, reassembling the batch layout.
+//
+// Fails with MathError::domain_error when batch <= 0, len <= 0, len is odd, data.size() != batch*len,
+// or filter bank is empty/mismatched; MathError::overflow when a flat size or filter length exceeds
+// the int kernel bound; MathError::gpu_error when a device is present but a CUDA call fails.
+[[nodiscard]] auto dwt_batch(std::span<const double> data, int batch, int len,
+                             const wavelets::FilterBank& fb) -> Result<std::vector<double>> {
+    if (batch <= 0 || len <= 0 || (len % 2) != 0) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    if (fb.analysis_lo.empty() || fb.analysis_hi.empty() ||
+        fb.analysis_lo.size() != fb.analysis_hi.size()) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    const auto expected = static_cast<std::size_t>(batch) * static_cast<std::size_t>(len);
+    if (data.size() != expected) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (expected > int_max || fb.analysis_lo.size() > int_max) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    const int flen = static_cast<int>(fb.analysis_lo.size());
+    if (!available()) {
+        std::vector<double> out(expected);
+        const std::size_t half = static_cast<std::size_t>(len / 2);
+        for (int b = 0; b < batch; ++b) {
+            const auto sig = data.subspan(static_cast<std::size_t>(b) * static_cast<std::size_t>(len),
+                                          static_cast<std::size_t>(len));
+            auto res = wavelets::dwt(sig, fb);
+            if (!res) {
+                return make_error<std::vector<double>>(res.error());
+            }
+            std::copy(res->approx.begin(), res->approx.end(),
+                      out.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(b) * len));
+            std::copy(res->detail.begin(), res->detail.end(),
+                      out.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(b) * len + half));
+        }
+        return out;
+    }
+    std::vector<double> out(expected);
+    const int rc = nimblecas_gpu_dwt_batch(data.data(), batch, len, fb.analysis_lo.data(),
+                                           fb.analysis_hi.data(), flen, out.data());
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    return out;
+}
+
+// Level-1 batch 1D stationary (undecimated / a-trous) wavelet transform for an arbitrary FilterBank
+// over `batch` contiguous signal blocks of `len` samples each (`data` is row-major, so data.size() == batch*len).
+// For each block the result packs its `len` approximation coefficients followed by its `len` detail
+// coefficients (total 2*len per block, so out.size() == batch*2*len), matching wavelets::swt level-1 convention.
+//
+// HONESTY: NUMERICAL (double). Bitwise-deterministic run-to-run; matches CPU wavelets::swt to
+// ~1e-12 (same filter FP arithmetic).
+// CPU fallback (no device): wavelets::swt level 1 per signal, reassembling the batch layout.
+//
+// Fails with MathError::domain_error when batch <= 0, len <= 0, data.size() != batch*len, or
+// filter bank is empty/mismatched; MathError::overflow when flat sizes or filter length exceed
+// the int kernel bound; MathError::gpu_error when a device is present but a CUDA call fails.
+[[nodiscard]] auto swt_batch(std::span<const double> data, int batch, int len,
+                             const wavelets::FilterBank& fb) -> Result<std::vector<double>> {
+    if (batch <= 0 || len <= 0) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    if (fb.analysis_lo.empty() || fb.analysis_hi.empty() ||
+        fb.analysis_lo.size() != fb.analysis_hi.size()) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    const auto expected_in = static_cast<std::size_t>(batch) * static_cast<std::size_t>(len);
+    if (data.size() != expected_in) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    const auto expected_out = static_cast<std::size_t>(batch) * static_cast<std::size_t>(2 * len);
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (expected_in > int_max || expected_out > int_max || fb.analysis_lo.size() > int_max) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    const int flen = static_cast<int>(fb.analysis_lo.size());
+    if (!available()) {
+        std::vector<double> out(expected_out);
+        const std::size_t slen = static_cast<std::size_t>(len);
+        for (int b = 0; b < batch; ++b) {
+            const auto sig = data.subspan(static_cast<std::size_t>(b) * slen, slen);
+            auto res = wavelets::swt(sig, fb, 1);
+            if (!res) {
+                return make_error<std::vector<double>>(res.error());
+            }
+            std::copy(res->approx.begin(), res->approx.end(),
+                      out.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(b) * 2 * slen));
+            std::copy(res->detail.begin(), res->detail.end(),
+                      out.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(b) * 2 * slen + slen));
+        }
+        return out;
+    }
+    std::vector<double> out(expected_out);
+    const int rc = nimblecas_gpu_swt_batch(data.data(), batch, len, fb.analysis_lo.data(),
+                                           fb.analysis_hi.data(), flen, out.data());
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// FAMILY H — Quasi-Monte Carlo primitives (gpu_qmc_kernels.cu).
+// ---------------------------------------------------------------------------
+
+namespace detail {
+struct GpuSobolSpec {
+    std::uint32_t s;
+    std::uint32_t a;
+    std::array<std::uint32_t, 6> m;
+};
+
+inline constexpr std::array<GpuSobolSpec, 7> gpu_sobol_table{{
+    {1, 0, {1, 0, 0, 0, 0, 0}},   // dim 2
+    {2, 1, {1, 3, 0, 0, 0, 0}},   // dim 3
+    {3, 1, {1, 3, 1, 0, 0, 0}},   // dim 4
+    {3, 2, {1, 1, 1, 0, 0, 0}},   // dim 5
+    {4, 1, {1, 1, 3, 3, 0, 0}},   // dim 6
+    {4, 4, {1, 3, 5, 13, 0, 0}},  // dim 7
+    {5, 2, {1, 1, 5, 5, 17, 0}},  // dim 8
+}};
+
+[[nodiscard]] inline auto build_sobol_directions_table(std::size_t max_dim)
+    -> std::vector<unsigned int> {
+    std::vector<unsigned int> table(max_dim * 32, 0U);
+    for (std::size_t dim = 1; dim <= max_dim; ++dim) {
+        std::array<std::uint32_t, 33> v{};
+        if (dim == 1) {
+            for (std::uint32_t k = 1; k <= 32; ++k) {
+                v[k] = 1U << (32 - k);
+            }
+        } else {
+            const GpuSobolSpec& spec = gpu_sobol_table[dim - 2];
+            const std::uint32_t s = spec.s;
+            for (std::uint32_t k = 1; k <= s; ++k) {
+                v[k] = spec.m[k - 1] << (32 - k);
+            }
+            for (std::uint32_t k = s + 1; k <= 32; ++k) {
+                std::uint32_t val = v[k - s] ^ (v[k - s] >> s);
+                for (std::uint32_t i = 1; i + 1 <= s; ++i) {
+                    const std::uint32_t bit = (spec.a >> (s - 1 - i)) & 1U;
+                    val ^= bit * v[k - i];
+                }
+                v[k] = val;
+            }
+        }
+        for (std::uint32_t k = 1; k <= 32; ++k) {
+            table[(dim - 1) * 32 + (k - 1)] = v[k];
+        }
+    }
+    return table;
+}
+
+[[nodiscard]] inline auto first_primes_gpu(std::size_t k) -> std::vector<int> {
+    std::vector<int> primes;
+    primes.reserve(k);
+    for (int cand = 2; primes.size() < k; ++cand) {
+        bool prime = true;
+        for (const int p : primes) {
+            if (static_cast<long long>(p) * p > cand) {
+                break;
+            }
+            if (cand % p == 0) {
+                prime = false;
+                break;
+            }
+        }
+        if (prime) {
+            primes.push_back(cand);
+        }
+    }
+    return primes;
+}
+}  // namespace detail
+
+// L2 star discrepancy of a point set via Warnock's closed form on the GPU.
+// Each point must have exactly `dimension` coordinates in [0,1].
+//
+// HONESTY: NUMERICAL (double) with tree-order last-bit differences vs the CPU serial sum
+// (each a valid value). Deterministic run-to-run.
+// CPU fallback (no device): nimblecas::l2_star_discrepancy.
+//
+// Fails with MathError::domain_error on an empty set, dimension == 0, or a point of the wrong size;
+// MathError::overflow when N * dimension exceeds the int kernel bound; and MathError::gpu_error
+// when a device is present but a CUDA call fails.
+[[nodiscard]] auto l2_star_discrepancy(std::span<const std::vector<double>> points,
+                                       std::size_t dimension) -> Result<double> {
+    const std::size_t N = points.size();
+    if (N == 0 || dimension == 0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    for (const auto& p : points) {
+        if (p.size() != dimension) {
+            return make_error<double>(MathError::domain_error);
+        }
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (N > int_max || dimension > int_max || N > int_max / dimension) {
+        return make_error<double>(MathError::overflow);
+    }
+    if (!available()) {
+        return nimblecas::l2_star_discrepancy(points, dimension);
+    }
+    std::vector<double> flat;
+    flat.reserve(N * dimension);
+    for (const auto& p : points) {
+        flat.insert(flat.end(), p.begin(), p.end());
+    }
+    double out_disc = 0.0;
+    const int rc = nimblecas_gpu_l2_star_discrepancy(flat.data(), static_cast<int>(N),
+                                                     static_cast<int>(dimension), &out_disc);
+    if (rc != 0) {
+        return make_error<double>(MathError::gpu_error);
+    }
+    return out_disc;
+}
+
+// Generate `count` Sobol' points in `dimension` dimensions starting at point index `n0` on the GPU.
+// Points are row-major packed (count * dimension doubles).
+//
+// HONESTY: DYADIC-EXACT bit-for-bit double view vs CPU sobol_point for the same index range.
+// CPU fallback (no device): nimblecas::sobol_point per index.
+//
+// Fails with MathError::domain_error when dimension == 0, dimension > 8, or n0 + count > 2^32;
+// MathError::overflow when count * dimension exceeds the int kernel bound; and MathError::gpu_error
+// when a device is present but a CUDA call fails.
+[[nodiscard]] auto sobol_batch(std::uint64_t n0, std::size_t count, std::size_t dimension)
+    -> Result<std::vector<double>> {
+    if (dimension == 0 || dimension > 8) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    if (count == 0) {
+        return std::vector<double>{};
+    }
+    if (n0 > 0xFFFFFFFFULL || count > 0xFFFFFFFFULL || n0 + count > 0x100000000ULL) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (count > int_max || dimension > int_max || count > int_max / dimension) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    if (!available()) {
+        std::vector<double> out;
+        out.reserve(count * dimension);
+        for (std::uint64_t i = 0; i < count; ++i) {
+            auto pt = nimblecas::sobol_point(n0 + i, dimension);
+            if (!pt) {
+                return make_error<std::vector<double>>(pt.error());
+            }
+            out.insert(out.end(), pt->begin(), pt->end());
+        }
+        return out;
+    }
+    const auto dir_numbers = detail::build_sobol_directions_table(dimension);
+    std::vector<double> out(count * dimension);
+    const int rc = nimblecas_gpu_sobol_batch(dir_numbers.data(), 32, n0,
+                                             static_cast<int>(count),
+                                             static_cast<int>(dimension), out.data());
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
+    return out;
+}
+
+// Generate `count` Halton points in `dimension` dimensions starting at point index `n0` on the GPU.
+// Points are row-major packed (count * dimension doubles).
+//
+// HONESTY: NUMERICAL double view matching CPU halton_point to floating-point rounding.
+// CPU fallback (no device): nimblecas::halton_point per index.
+//
+// Fails with MathError::domain_error when dimension == 0; MathError::overflow when count * dimension
+// exceeds the int kernel bound; and MathError::gpu_error when a device is present but a CUDA call fails.
+[[nodiscard]] auto halton_batch(std::uint64_t n0, std::size_t count, std::size_t dimension)
+    -> Result<std::vector<double>> {
+    if (dimension == 0) {
+        return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    if (count == 0) {
+        return std::vector<double>{};
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (count > int_max || dimension > int_max || count > int_max / dimension) {
+        return make_error<std::vector<double>>(MathError::overflow);
+    }
+    if (!available()) {
+        std::vector<double> out;
+        out.reserve(count * dimension);
+        for (std::uint64_t i = 0; i < count; ++i) {
+            auto pt = nimblecas::halton_point(n0 + i, dimension);
+            if (!pt) {
+                return make_error<std::vector<double>>(pt.error());
+            }
+            out.insert(out.end(), pt->begin(), pt->end());
+        }
+        return out;
+    }
+    const auto primes = detail::first_primes_gpu(dimension);
+    std::vector<double> out(count * dimension);
+    const int rc = nimblecas_gpu_halton_batch(primes.data(), n0, static_cast<int>(count),
+                                              static_cast<int>(dimension), out.data());
+    if (rc != 0) {
+        return make_error<std::vector<double>>(MathError::gpu_error);
+    }
     return out;
 }
 

@@ -10,6 +10,10 @@ import nimblecas.pricing;
 import nimblecas.optstrat;
 import nimblecas.futures;
 import nimblecas.testing;
+import nimblecas.control;
+import nimblecas.ratpoly;
+import nimblecas.wavelets;
+import nimblecas.qmc;
 
 namespace gpu = nimblecas::gpu;
 using nimblecas::MathError;
@@ -1102,6 +1106,322 @@ auto main() -> int {
                       t.expect(std::isfinite((*r_clamp)[0].std_error) && (*r_clamp)[0].std_error >= 0.0,
                                "std_error finite and >= 0 even when the intrinsic lower bound wins");
                   }
+              })
+        .test("bode_sweep / nyquist_sweep mirror control::bode/nyquist",
+              [](TestContext& t) {
+                  // Build a 2nd-order TransferFunction G(s) = 10 / (s^2 + 2s + 10)
+                  const auto num_p = nimblecas::RationalPoly::from_coeffs(
+                      {nimblecas::Rational::from_int(10)});
+                  const auto den_p = nimblecas::RationalPoly::from_coeffs(
+                      {nimblecas::Rational::from_int(10), nimblecas::Rational::from_int(2),
+                       nimblecas::Rational::from_int(1)});
+                  const auto tf_res = nimblecas::TransferFunction::make(num_p, den_p);
+                  t.expect(tf_res.has_value(), "TransferFunction constructed");
+                  if (!tf_res.has_value()) {
+                      return;
+                  }
+                  const auto tf = *tf_res;
+
+                  // Log-spaced grid of ~50 frequencies in [0.1, 100.0]
+                  const auto omegas = nimblecas::logspace(0.1, 100.0, 50);
+                  t.expect(omegas.size() == 50, "logspace produced 50 omegas");
+
+                  // 1. Bode sweep vs CPU control::bode
+                  const auto cpu_bode = nimblecas::bode(tf, omegas);
+                  const auto gpu_bode_res = gpu::bode_sweep(tf, omegas);
+                  t.expect(gpu_bode_res.has_value(), "bode_sweep returned value");
+                  if (gpu_bode_res) {
+                      const auto& gpu_bode = *gpu_bode_res;
+                      t.expect(gpu_bode.size() == cpu_bode.size(), "bode_sweep size matches cpu");
+                      bool bode_match = true;
+                      for (std::size_t i = 0; i < omegas.size() && i < gpu_bode.size(); ++i) {
+                          const double mag_diff = std::abs(gpu_bode[i].magnitude_db - cpu_bode[i].magnitude_db);
+                          const double phase_diff = std::abs(gpu_bode[i].phase_deg - cpu_bode[i].phase_deg);
+                          const double mag_tol = 1e-9 * (1.0 + std::abs(cpu_bode[i].magnitude_db));
+                          const double phase_tol = 1e-9 * (1.0 + std::abs(cpu_bode[i].phase_deg));
+                          if (mag_diff > mag_tol || phase_diff > phase_tol) {
+                              bode_match = false;
+                              break;
+                          }
+                      }
+                      t.expect(bode_match,
+                               "GPU bode_sweep magnitude_db and phase_deg match CPU control::bode within ~1e-9 relative/absolute tolerance");
+                  }
+
+                  // 2. Nyquist sweep vs CPU control::nyquist
+                  const auto cpu_nyquist = nimblecas::nyquist(tf, omegas);
+                  const auto gpu_nyquist_res = gpu::nyquist_sweep(tf, omegas);
+                  t.expect(gpu_nyquist_res.has_value(), "nyquist_sweep returned value");
+                  if (gpu_nyquist_res) {
+                      const auto& gpu_nyquist = *gpu_nyquist_res;
+                      t.expect(gpu_nyquist.size() == cpu_nyquist.size(), "nyquist_sweep size matches cpu");
+                      bool nyquist_match = true;
+                      for (std::size_t i = 0; i < omegas.size() && i < gpu_nyquist.size(); ++i) {
+                          const double re_diff = std::abs(gpu_nyquist[i].re - cpu_nyquist[i].re);
+                          const double im_diff = std::abs(gpu_nyquist[i].im - cpu_nyquist[i].im);
+                          const double re_tol = 1e-9 * (1.0 + std::abs(cpu_nyquist[i].re));
+                          const double im_tol = 1e-9 * (1.0 + std::abs(cpu_nyquist[i].im));
+                          if (re_diff > re_tol || im_diff > im_tol) {
+                              nyquist_match = false;
+                              break;
+                          }
+                      }
+                      t.expect(nyquist_match,
+                               "GPU nyquist_sweep re and im match CPU control::nyquist within ~1e-9 relative/absolute tolerance");
+                  }
+
+                  // 2b. Large-magnitude denominator: at very high omega, |den(iomega)| exceeds the
+                  //     ~1.3e154 point where a naive den_re^2+den_im^2 overflows to +inf (yielding a
+                  //     bogus (0,0)/-inf-dB result). Scaled (Smith) complex division must stay finite
+                  //     and track the CPU oracle. A naive kernel fails this; the happy-path grid cannot.
+                  const std::vector<double> big_omegas = {1e70, 1e78, 1e90};
+                  const auto cpu_big = nimblecas::bode(tf, big_omegas);
+                  const auto gpu_big = gpu::bode_sweep(tf, big_omegas);
+                  t.expect(gpu_big.has_value(), "bode_sweep evaluated at large omega");
+                  if (gpu_big) {
+                      bool big_ok = true;
+                      for (std::size_t i = 0; i < big_omegas.size() && i < gpu_big->size(); ++i) {
+                          const double g = (*gpu_big)[i].magnitude_db;
+                          const double c = cpu_big[i].magnitude_db;
+                          if (!std::isfinite(g) || std::abs(g - c) > 1e-9 * (1.0 + std::abs(c))) {
+                              big_ok = false;
+                              break;
+                          }
+                      }
+                      t.expect(big_ok,
+                               "GPU bode magnitude stays finite and matches CPU at |den| > 1e154 (scaled complex division)");
+                  }
+
+                  // 3. Determinism / bitwise repeat check
+                  const auto bode_run2 = gpu::bode_sweep(tf, omegas);
+                  const auto nyquist_run2 = gpu::nyquist_sweep(tf, omegas);
+                  if (gpu_bode_res && bode_run2) {
+                      bool bode_bitwise = true;
+                      for (std::size_t i = 0; i < gpu_bode_res->size(); ++i) {
+                          if ((*gpu_bode_res)[i].magnitude_db != (*bode_run2)[i].magnitude_db ||
+                              (*gpu_bode_res)[i].phase_deg != (*bode_run2)[i].phase_deg) {
+                              bode_bitwise = false;
+                              break;
+                          }
+                      }
+                      t.expect(bode_bitwise, "bode_sweep is bitwise deterministic across repeated runs");
+                  }
+                  if (gpu_nyquist_res && nyquist_run2) {
+                      bool nyquist_bitwise = true;
+                      for (std::size_t i = 0; i < gpu_nyquist_res->size(); ++i) {
+                          if ((*gpu_nyquist_res)[i].re != (*nyquist_run2)[i].re ||
+                              (*gpu_nyquist_res)[i].im != (*nyquist_run2)[i].im) {
+                              nyquist_bitwise = false;
+                              break;
+                          }
+                      }
+                      t.expect(nyquist_bitwise, "nyquist_sweep is bitwise deterministic across repeated runs");
+                  }
+
+                  // 4. Edge cases: empty omegas grid
+                  const std::vector<double> empty_omegas;
+                  const auto empty_bode = gpu::bode_sweep(tf, empty_omegas);
+                  const auto empty_nyquist = gpu::nyquist_sweep(tf, empty_omegas);
+                  t.expect(empty_bode.has_value() && empty_bode->empty(),
+                           "empty omegas -> empty Bode result");
+                  t.expect(empty_nyquist.has_value() && empty_nyquist->empty(),
+                           "empty omegas -> empty Nyquist result");
+
+                  // 5. Device-requiring asserts (when device is present)
+                  if (gpu::available()) {
+                      t.expect(gpu::device_count() > 0, "device count > 0 when available()");
+                  }
+              })
+        .test("dwt_batch and swt_batch mirror wavelets::dwt and wavelets::swt",
+              [](TestContext& t) {
+                  namespace wv = nimblecas::wavelets;
+                  // Daubechies-4 / db2 filter bank from built-in factory
+                  const auto fb = wv::daubechies(2).value();
+                  const int batch = 3;
+                  const int len = 8;
+                  const std::vector<double> data = {
+                      1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0,
+                      8.0, 6.0, 4.0, 2.0, 0.0, -2.0, -4.0, -6.0,
+                      0.5, -1.0, 1.5, -2.0, 2.5, -3.0, 3.5, -4.0};
+
+                  // 1. DWT batch cross-check against CPU wavelets::dwt
+                  auto got_dwt = gpu::dwt_batch(data, batch, len, fb);
+                  t.expect(got_dwt.has_value() && got_dwt->size() == data.size(),
+                           "dwt_batch produced expected output size");
+
+                  if (got_dwt && got_dwt->size() == data.size()) {
+                      bool dwt_ok = true;
+                      const std::size_t half = static_cast<std::size_t>(len / 2);
+                      for (int b = 0; b < batch && dwt_ok; ++b) {
+                          const std::span<const double> sig{
+                              data.data() + static_cast<std::size_t>(b * len),
+                              static_cast<std::size_t>(len)};
+                          const auto cpu = wv::dwt(sig, fb).value();
+                          for (std::size_t i = 0; i < half; ++i) {
+                              const double g_a = (*got_dwt)[static_cast<std::size_t>(b * len) + i];
+                              const double g_d = (*got_dwt)[static_cast<std::size_t>(b * len) + half + i];
+                              if (std::abs(g_a - cpu.approx[i]) > 1e-12 * (1.0 + std::abs(cpu.approx[i])) ||
+                                  std::abs(g_d - cpu.detail[i]) > 1e-12 * (1.0 + std::abs(cpu.detail[i]))) {
+                                  dwt_ok = false;
+                              }
+                          }
+                      }
+                      t.expect(dwt_ok, "dwt_batch matches wavelets::dwt per signal block to ~1e-12");
+                  }
+
+                  // 2. SWT batch cross-check against CPU wavelets::swt (level 1)
+                  auto got_swt = gpu::swt_batch(data, batch, len, fb);
+                  const std::size_t expected_swt_len = static_cast<std::size_t>(batch * 2 * len);
+                  t.expect(got_swt.has_value() && got_swt->size() == expected_swt_len,
+                           "swt_batch produced expected output size (2*len per block)");
+
+                  if (got_swt && got_swt->size() == expected_swt_len) {
+                      bool swt_ok = true;
+                      const std::size_t slen = static_cast<std::size_t>(len);
+                      for (int b = 0; b < batch && swt_ok; ++b) {
+                          const std::span<const double> sig{
+                              data.data() + static_cast<std::size_t>(b * len),
+                              slen};
+                          const auto cpu = wv::swt(sig, fb, 1).value();
+                          for (std::size_t i = 0; i < slen; ++i) {
+                              const double g_a = (*got_swt)[static_cast<std::size_t>(b * 2 * len) + i];
+                              const double g_d = (*got_swt)[static_cast<std::size_t>(b * 2 * len) + slen + i];
+                              if (std::abs(g_a - cpu.approx[i]) > 1e-12 * (1.0 + std::abs(cpu.approx[i])) ||
+                                  std::abs(g_d - cpu.detail[i]) > 1e-12 * (1.0 + std::abs(cpu.detail[i]))) {
+                                  swt_ok = false;
+                              }
+                          }
+                      }
+                      t.expect(swt_ok, "swt_batch matches wavelets::swt level 1 per signal block to ~1e-12");
+                  }
+
+                  // 3. Bitwise determinism run-to-run (identical outputs on repeated calls)
+                  auto dwt_again = gpu::dwt_batch(data, batch, len, fb);
+                  t.expect(dwt_again.has_value() && *dwt_again == *got_dwt,
+                           "dwt_batch is bitwise-deterministic run-to-run");
+
+                  auto swt_again = gpu::swt_batch(data, batch, len, fb);
+                  t.expect(swt_again.has_value() && *swt_again == *got_swt,
+                           "swt_batch is bitwise-deterministic run-to-run");
+
+                  // 4. Energy preservation check for orthogonal DWT (Parseval's identity)
+                  // ||signal||^2 == ||approx||^2 + ||detail||^2 to ~1e-12
+                  if (got_dwt) {
+                      bool energy_ok = true;
+                      for (int b = 0; b < batch; ++b) {
+                          double e_sig = 0.0;
+                          for (int i = 0; i < len; ++i) {
+                              const double v = data[static_cast<std::size_t>(b * len + i)];
+                              e_sig += v * v;
+                          }
+                          double e_coeff = 0.0;
+                          for (int i = 0; i < len; ++i) {
+                              const double c = (*got_dwt)[static_cast<std::size_t>(b * len + i)];
+                              e_coeff += c * c;
+                          }
+                          if (std::abs(e_sig - e_coeff) > 1e-12 * (1.0 + e_sig)) {
+                              energy_ok = false;
+                          }
+                      }
+                      t.expect(energy_ok, "orthonormal DWT preserves signal energy (Parseval identity)");
+                  }
+
+                  // 5. Domain guards
+                  const std::vector<double> odd_data(6, 1.0);
+                  auto bad_len = gpu::dwt_batch(odd_data, 2, 3, fb);
+                  t.expect(!bad_len.has_value() && bad_len.error() == MathError::domain_error,
+                           "odd block length yields domain_error for DWT");
+
+                  auto mism_size = gpu::dwt_batch(data, batch, 4, fb);
+                  t.expect(!mism_size.has_value() && mism_size.error() == MathError::domain_error,
+                           "size mismatch yields domain_error for DWT");
+
+                  const wv::FilterBank empty_fb;
+                  auto bad_fb = gpu::dwt_batch(data, batch, len, empty_fb);
+                  t.expect(!bad_fb.has_value() && bad_fb.error() == MathError::domain_error,
+                           "empty FilterBank yields domain_error");
+              })
+        .test("qmc GPU: discrepancy + sobol/halton batch",
+              [](TestContext& t) {
+                  namespace qmc = nimblecas;
+                  const std::size_t count = 100;
+                  const std::size_t dim = 5;
+                  const std::uint64_t n0 = 1;
+
+                  // 1. Sobol batch vs CPU sobol_point
+                  auto sob_gpu = gpu::sobol_batch(n0, count, dim);
+                  t.expect(sob_gpu.has_value() && sob_gpu->size() == count * dim,
+                           "sobol_batch evaluated");
+                  if (sob_gpu) {
+                      bool sob_ok = true;
+                      for (std::size_t i = 0; i < count && sob_ok; ++i) {
+                          auto pt_cpu = qmc::sobol_point(n0 + i, dim).value();
+                          for (std::size_t d = 0; d < dim; ++d) {
+                              if ((*sob_gpu)[i * dim + d] != pt_cpu[d]) {
+                                  sob_ok = false;
+                              }
+                          }
+                      }
+                      t.expect(sob_ok, "sobol_batch is bit-exact to CPU sobol_point (==)");
+                  }
+
+                  // 2. Halton batch vs CPU halton_point
+                  auto hal_gpu = gpu::halton_batch(n0, count, dim);
+                  t.expect(hal_gpu.has_value() && hal_gpu->size() == count * dim,
+                           "halton_batch evaluated");
+                  if (hal_gpu) {
+                      bool hal_ok = true;
+                      for (std::size_t i = 0; i < count && hal_ok; ++i) {
+                          auto pt_cpu = qmc::halton_point(n0 + i, dim).value();
+                          for (std::size_t d = 0; d < dim; ++d) {
+                              const double diff = std::abs((*hal_gpu)[i * dim + d] - pt_cpu[d]);
+                              if (diff > 1e-12) {
+                                  hal_ok = false;
+                              }
+                          }
+                      }
+                      t.expect(hal_ok, "halton_batch matches CPU halton_point to 1e-12");
+                  }
+
+                  // 3. L2 star discrepancy vs CPU l2_star_discrepancy
+                  std::vector<std::vector<double>> pts;
+                  pts.reserve(count);
+                  for (std::size_t i = 0; i < count; ++i) {
+                      pts.push_back(qmc::halton_point(n0 + i, dim).value());
+                  }
+                  auto disc_cpu = qmc::l2_star_discrepancy(pts, dim).value();
+                  auto disc_gpu = gpu::l2_star_discrepancy(pts, dim);
+                  t.expect(disc_gpu.has_value(), "l2_star_discrepancy computed");
+                  if (disc_gpu) {
+                      const double rel_diff = std::abs(*disc_gpu - disc_cpu) / disc_cpu;
+                      t.expect(rel_diff <= 1e-10,
+                               "GPU L2 star discrepancy matches CPU to 1e-10 relative");
+                  }
+
+                  // 4. Bitwise repeat / determinism
+                  auto sob_again = gpu::sobol_batch(n0, count, dim);
+                  auto hal_again = gpu::halton_batch(n0, count, dim);
+                  auto disc_again = gpu::l2_star_discrepancy(pts, dim);
+                  t.expect(sob_again.has_value() && *sob_again == *sob_gpu,
+                           "sobol_batch is bit-for-bit reproducible");
+                  t.expect(hal_again.has_value() && *hal_again == *hal_gpu,
+                           "halton_batch is bit-for-bit reproducible");
+                  t.expect(disc_again.has_value() && *disc_again == *disc_gpu,
+                           "l2_star_discrepancy is bit-for-bit reproducible");
+
+                  // 5. Domain guards
+                  auto bad_dim_s = gpu::sobol_batch(n0, count, 0);
+                  t.expect(!bad_dim_s.has_value() && bad_dim_s.error() == MathError::domain_error,
+                           "sobol_batch dim == 0 -> domain_error");
+                  auto bad_dim_s9 = gpu::sobol_batch(n0, count, 9);
+                  t.expect(!bad_dim_s9.has_value() && bad_dim_s9.error() == MathError::domain_error,
+                           "sobol_batch dim > 8 -> domain_error");
+                  auto bad_dim_h = gpu::halton_batch(n0, count, 0);
+                  t.expect(!bad_dim_h.has_value() && bad_dim_h.error() == MathError::domain_error,
+                           "halton_batch dim == 0 -> domain_error");
+                  auto empty_pts = gpu::l2_star_discrepancy(std::vector<std::vector<double>>{}, dim);
+                  t.expect(!empty_pts.has_value() && empty_pts.error() == MathError::domain_error,
+                           "empty point set -> domain_error");
               })
         .run();
 }

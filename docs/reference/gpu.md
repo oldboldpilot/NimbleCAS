@@ -84,9 +84,18 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `black_scholes_extended_greeks_batch(opts)` | Batched 13-field extended Greeks, mirror of `pricing::black_scholes_extended_greeks` **including** its central-finite-difference charm/color/veta/vera; matches the CPU to 1e-7. CPU fallback: the CPU implementation. |
 | `strategy_payoff_grid(legs, grid)` / `strategy_pnl_grid(legs, grid)` | **Exact piecewise-linear strategy sweep** — aggregate expiry payoff / P&L of an `optstrat` leg bag at every grid price; non-contracted device arithmetic reproduces the CPU double evaluation bit-for-bit (validated to 1e-12, expected equal). CPU fallback: `OptionStrategy::payoff_at`/`pnl_at`. |
 | `futures_pnl_grid(legs, grid)` | Exact linear futures-strategy sweep, mirror of `FuturesStrategy::pnl_at_uniform`, same bit-equality contract. CPU fallback: the CPU evaluation. |
+| `bode_sweep(tf, omegas)` | **Bode frequency-response sweep** — magnitude in dB (20·log10|H|) and phase in degrees (arg H) over an angular frequency grid; elementwise deterministic, matches CPU `control::bode` to ~1e-9 relative/absolute. CPU fallback: `control::bode`. |
+| `nyquist_sweep(tf, omegas)` | **Nyquist frequency-response trace** — H(iω) = re + im·i sampled over an angular frequency grid; elementwise deterministic, matches CPU `control::nyquist` to ~1e-9 relative/absolute (scaled complex division stays correct across the full magnitude range). CPU fallback: `control::nyquist`. |
+| `dwt_batch(data, batch, len, fb)` | Batched 1D discrete wavelet transform for arbitrary `FilterBank`. |
+| `swt_batch(data, batch, len, fb)` | Batched 1D stationary wavelet transform (level 1) for arbitrary `FilterBank`. |
+| `l2_star_discrepancy(points, dimension)` | Warnock L2 star discrepancy of point set (device tree reduction). Matches CPU to ~1e-10 relative (tree reduction last-bit difference). |
+| `sobol_batch(n0, count, dimension)` | **Batched Sobol' point generation** — dyadic-exact double view matching CPU `sobol_point` bit-for-bit (integer Gray-code XOR * 2^-32). |
+| `halton_batch(n0, count, dimension)` | **Batched Halton point generation** — radical inverse double view matching CPU `halton_point` to rounding (~1e-12). |
 
-Every GPU entry point — the numeric kernels, the batched Black-Scholes pricer, and the Asian and
-barrier path-dependent Monte-Carlo pricers — builds and passes `gpu_tests` under
+
+Every GPU entry point — the numeric kernels, the batched Black-Scholes pricer, the wavelet
+transforms, the control frequency-response and QMC sweeps, and the Asian and barrier
+path-dependent Monte-Carlo pricers — builds and passes `gpu_tests` under
 `-DNIMBLECAS_CUDA=ON` on the **mgpu** host (**RTX PRO 6000 Blackwell** / **RTX 5090**, sm_120,
 nvcc `-arch=native`); see [Testing](#testing).
 
@@ -166,7 +175,41 @@ validate to 1e-12, pin hand-computed breakeven/floor/cap points with exact `==`,
 a non-representable-product book asserted bit-exact against the CPU oracle). The same fallback
 contract applies: no device → the CPU optstrat/futures evaluation, real values returned.
 
+### Batched wavelet transforms (`dwt_batch` and `swt_batch`)
+
+`dwt_batch` computes a one-level 1D discrete wavelet transform across a batch of `batch` signals of length `len` (requires `len` even) using an arbitrary `wavelets::FilterBank`. For each signal block, it outputs `len/2` approximation coefficients followed by `len/2` detail coefficients (matching `wavelets::dwt` layout).
+
+`swt_batch` computes a level-1 stationary (undecimated / à-trous) 1D wavelet transform across a batch of `batch` signals of length `len`. For each signal block, it outputs `len` approximation coefficients followed by `len` detail coefficients (total `2*len` per block, matching `wavelets::swt` level-1 convention).
+
+**Honesty Boundary:** NUMERICAL (double). Both operations perform elementwise periodic convolutions with fused multiply-add matching CPU `wavelets::dwt` and `wavelets::swt` to ~1e-12.
+**CPU Fallback:** When no CUDA device is present, `dwt_batch` loops CPU `wavelets::dwt` per signal and `swt_batch` loops CPU `wavelets::swt` (level 1) per signal, reassembling the batch layout.
+
+### Control: Bode and Nyquist frequency-response sweeps
+
+`bode_sweep` and `nyquist_sweep` compute the frequency-response spectrum $H(i\omega) = \text{num}(i\omega) / \text{den}(i\omega)$ over an angular frequency grid $\omega$ (rad/s):
+
+- **`bode_sweep(tf, omegas)`** — evaluates $H(i\omega)$ and outputs `std::vector<BodePoint>` (`omega`, `magnitude_db` = $20\log_{10}|H|$, `phase_deg` = $\arg H \cdot 180/\pi$).
+- **`nyquist_sweep(tf, omegas)`** — evaluates $H(i\omega)$ and outputs `std::vector<NyquistPoint>` (`omega`, `re`, `im`).
+
+**Honesty boundary:** NUMERICAL (double-precision complex Horner evaluation). The calculation is purely elementwise (one thread per $\omega$), so execution order is independent of thread count or launch geometry, making the sweep 100% bitwise-deterministic across repeated runs. Magnitude, phase, real, and imaginary outputs match CPU `control::bode` and `control::nyquist` to ~1e-9 relative/absolute tolerance (accounting for CUDA device transcendentals `log10`, `atan2`, and `hypot` vs host C library `libm`). CPU fallback when no device is present: `control::bode`/`control::nyquist`.
+
+### Quasi-Monte Carlo GPU primitives
+
+`sobol_batch` generates `count` Sobol' points in `dimension` dimensions starting at index `n0`.
+Points are dyadic-exact integer operations (Gray-code XOR scaled by $2^{-32}$) and match the CPU `sobol_point`
+double view bit-for-bit.
+
+`halton_batch` generates `count` Halton points in `dimension` dimensions starting at index `n0`
+using radical inverse per prime base, matching the CPU `halton_point` double view to floating-point rounding (~1e-12).
+
+`l2_star_discrepancy` computes Warnock's closed-form $L_2$ star discrepancy over $N$ points in `dimension`
+dimensions using a deterministic block/tree reduction over the $O(N^2 d)$ pairwise term. Summation order
+differs from a strict CPU serial sum in the last bits, matching CPU `l2_star_discrepancy` to ~1e-10 relative.
+Deterministic run-to-run.
+
 ### Error model
+
+
 
 | Condition | Result |
 | :--- | :--- |
@@ -326,11 +369,11 @@ wall-clock only.
 
 ## Benchmarking
 
-`tools/gpu_deriv_bench.cpp` is a standalone profiling harness for the eight shipped GPU
+`tools/gpu_deriv_bench.cpp` is a standalone profiling harness for the nine shipped GPU
 derivative pricing and grid sweep entry points (`monte_carlo_european_batch`,
-`monte_carlo_asian_batch`, `barrier_option_mc_batch`, `black_scholes_greeks_batch`,
-`black_scholes_extended_greeks_batch`, `strategy_payoff_grid`, `strategy_pnl_grid`, and
-`futures_pnl_grid`).
+`monte_carlo_asian_batch`, `barrier_option_mc_batch`, `longstaff_schwartz_american_batch`,
+`black_scholes_greeks_batch`, `black_scholes_extended_greeks_batch`, `strategy_payoff_grid`,
+`strategy_pnl_grid`, and `futures_pnl_grid`).
 
 ### Building and Running
 

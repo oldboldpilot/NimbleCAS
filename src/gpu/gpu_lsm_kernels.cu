@@ -379,6 +379,11 @@ extern "C" int nimblecas_gpu_lsm_american_batch(const NimblecasBsOption* opts, i
     } else {
         const unsigned long long key = nc_splitmix64(seed);
         const int threads = 256;
+        // Block counts depend only on the loop-invariant paths/nseg; compute them ONCE here rather
+        // than re-querying the device (cudaGetDevice + cudaDeviceGetAttribute inside choose_blocks)
+        // on every option and every backward step. Bit-exact — grid geometry never affects the result.
+        const int path_blocks = choose_blocks(static_cast<long long>(paths), threads);
+        const int seg_blocks = choose_blocks(static_cast<long long>(nseg), threads);
 
         for (int opt_idx = 0; opt_idx < n && rc == 0; ++opt_idx) {
             const NimblecasBsOption o = opts[opt_idx];
@@ -387,8 +392,7 @@ extern "C" int nimblecas_gpu_lsm_american_batch(const NimblecasBsOption* opts, i
             const double vol_sqrtdt = o.volatility * sqrt(dt);
             const double disc = exp(-o.rate * dt);
 
-            const int f_blocks = choose_blocks(static_cast<long long>(paths), threads);
-            lsm_forward_kernel<<<f_blocks, threads>>>(o.spot, o.strike, o.is_call,
+            lsm_forward_kernel<<<path_blocks, threads>>>(o.spot, o.strike, o.is_call,
                                                       drift, vol_sqrtdt, steps, paths,
                                                       key, dev_S, dev_cash);
             if ((err = cudaGetLastError()) != cudaSuccess ||
@@ -396,8 +400,6 @@ extern "C" int nimblecas_gpu_lsm_american_batch(const NimblecasBsOption* opts, i
                 rc = static_cast<int>(err);
                 break;
             }
-
-            const int seg_blocks = choose_blocks(static_cast<long long>(nseg), threads);
 
             for (int t = steps - 1; t >= 1; --t) {
                 lsm_accumulate_segment_kernel<<<seg_blocks, threads>>>(o.strike, o.is_call, disc,
@@ -432,8 +434,7 @@ extern "C" int nimblecas_gpu_lsm_american_batch(const NimblecasBsOption* opts, i
                     double atb[3] = {host_out8[5], host_out8[6], host_out8[7]};
                     double beta[3];
                     if (solve3_host(ata, atb, beta)) {
-                        const int u_blocks = choose_blocks(static_cast<long long>(paths), threads);
-                        lsm_update_kernel<<<u_blocks, threads>>>(o.strike, o.is_call, t,
+                        lsm_update_kernel<<<path_blocks, threads>>>(o.strike, o.is_call, t,
                                                                  beta[0], beta[1], beta[2],
                                                                  paths, dev_S, dev_cash);
                         if ((err = cudaGetLastError()) != cudaSuccess ||
