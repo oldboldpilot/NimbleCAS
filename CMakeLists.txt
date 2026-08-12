@@ -437,6 +437,13 @@ target_sources(nimblecas_bigpowerseries PUBLIC
 target_link_libraries(nimblecas_bigpowerseries
   PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.bigratpoly : dense univariate polynomial over BigRational (unbounded) ----
+add_library(nimblecas_bigratpoly STATIC)
+target_sources(nimblecas_bigratpoly PUBLIC
+  FILE_SET CXX_MODULES FILES src/bigratpoly/bigratpoly.cppm)
+target_link_libraries(nimblecas_bigratpoly
+  PUBLIC nimblecas_bigrational nimblecas_bigint nimblecas_ratpoly nimblecas_core std_module)
+
 # ---- nimblecas.bigmatrix : big-backed dense matrix over BigRational (exact Bareiss determinant) --
 add_library(nimblecas_bigmatrix STATIC)
 target_sources(nimblecas_bigmatrix PUBLIC
@@ -1532,6 +1539,12 @@ target_link_libraries(bigpowerseries_tests
   PRIVATE nimblecas_bigpowerseries nimblecas_powerseries nimblecas_bigrational nimblecas_bigint
           nimblecas_ratpoly nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
 add_test(NAME bigpowerseries_tests COMMAND bigpowerseries_tests)
+
+add_executable(bigratpoly_tests tests/bigratpoly_tests.cpp)
+target_link_libraries(bigratpoly_tests
+  PRIVATE nimblecas_bigratpoly nimblecas_bigrational nimblecas_bigint nimblecas_ratpoly
+          nimblecas_polynomial nimblecas_core nimblecas_testing std_module)
+add_test(NAME bigratpoly_tests COMMAND bigratpoly_tests)
 
 add_executable(bigrational_tests tests/bigrational_tests.cpp)
 target_link_libraries(bigrational_tests
