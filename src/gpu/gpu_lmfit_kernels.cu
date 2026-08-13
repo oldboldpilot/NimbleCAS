@@ -240,7 +240,15 @@ __global__ void batched_lm_kernel(
             }
             __syncthreads();
 
-            if (sh_ctrl[2] == 0.0) {
+            // Consume-then-barrier: every thread latches the finiteness flag into a
+            // private register and synchronises BEFORE thread 0 reuses sh_ctrl[2] for
+            // the convergence flag below (:sh_ctrl[2] = 2.0/0.0). Without this barrier a
+            // warp stalled after the publish above could read sh_ctrl[2] after thread 0
+            // overwrote it, flip its branch decision, and desync at a __syncthreads().
+            const double finite_ok = sh_ctrl[2];
+            __syncthreads();
+
+            if (finite_ok == 0.0) {
                 if (tid == 0) {
                     out_iters[sys] = it;
                     out_converged[sys] = 0;
@@ -265,7 +273,16 @@ __global__ void batched_lm_kernel(
             }
             __syncthreads();
 
-            if (sh_ctrl[2] == 2.0) {
+            // Consume-then-barrier: latch the convergence flag before thread 0 reuses
+            // sh_ctrl[2] as the solve-ok flag inside the inner damping loop (:sh_ctrl[2]
+            // = solve_ok ? 1.0 : 0.0). Values written there (0.0/1.0) never equal the
+            // 2.0 decision value, so this is benign today, but the WAR read/overwrite of
+            // a shared slot is still a racecheck hazard; the barrier retires all reads
+            // first.
+            const double conv_flag = sh_ctrl[2];
+            __syncthreads();
+
+            if (conv_flag == 2.0) {
                 goto write_exit;
             }
 
@@ -401,6 +418,14 @@ __global__ void batched_lm_kernel(
 
                 double fn_try = sqrt(sh_ctrl[3]);
                 double fnorm = sqrt(sh_ctrl[1]);
+                // Consume-then-barrier: every thread must finish reading sh_ctrl[1]
+                // (current fnorm^2) into its private fnorm BEFORE thread 0 overwrites it
+                // with the accepted fn_try^2 (sh_ctrl[1] = sh_ctrl[3]) below. Without this
+                // barrier a stalled warp could read the just-written value, evaluate
+                // fn_try < fnorm as false, take the reject branch (parking at the wrong
+                // barrier) AND skip its strided share of the r[i] = rt[i] copy -> corrupt
+                // residual on the hot accept path.
+                __syncthreads();
                 if (fn_try < fnorm) {
                     for (int i = tid; i < n; i += 256) {
                         r[i] = rt[i];
@@ -488,11 +513,21 @@ extern "C" int nimblecas_gpu_batched_lm_curvefit(
         return cudaErrorInvalidValue;
     }
 
+    // Base offsets must be zero. Per-problem diffs and totals can all stay positive
+    // while pt_off[0]/th_off[0]/jac_off[0] are negative, which would let the kernel
+    // index below the allocation (the pointers are base_ptr + off[sys]).
+    if (pt_off[0] != 0 || th_off[0] != 0 || jac_off[0] != 0) {
+        return cudaErrorInvalidValue;
+    }
+
     for (int k = 0; k < num_problems; ++k) {
         int nk = pt_off[k + 1] - pt_off[k];
         int mk = th_off[k + 1] - th_off[k];
         int jk = jac_off[k + 1] - jac_off[k];
-        if (nk <= 0 || mk <= 0 || mk > kMaxParams || nk < mk || jk != nk * mk) {
+        // nk * mk in 64-bit: the int product can overflow (UB) for a hostile caller.
+        if (nk <= 0 || mk <= 0 || mk > kMaxParams || nk < mk ||
+            static_cast<long long>(nk) * static_cast<long long>(mk) !=
+                static_cast<long long>(jk)) {
             return cudaErrorInvalidValue;
         }
     }
@@ -540,15 +575,14 @@ extern "C" int nimblecas_gpu_batched_lm_curvefit(
     if (rc == cudaSuccess) rc = cudaMalloc(&d_out_resid, out_dbl_bytes != 0 ? out_dbl_bytes : sizeof(double));
 
     if (rc == cudaSuccess) {
-        if (n_bytes > 0) {
-            cudaMemset(d_scratch_r, 0, n_bytes);
-            cudaMemset(d_scratch_rt, 0, n_bytes);
-        }
-        if (jac_bytes > 0) {
-            cudaMemset(d_scratch_J, 0, jac_bytes);
-        }
+        // Fold the scratch zeroing into the rc ladder: the kernel reads scratch_r
+        // (f_base = r[i] + y[i]) before writing it in FD mode, so a failed memset must
+        // abort rather than run on garbage.
+        if (n_bytes > 0) rc = cudaMemset(d_scratch_r, 0, n_bytes);
+        if (rc == cudaSuccess && n_bytes > 0) rc = cudaMemset(d_scratch_rt, 0, n_bytes);
+        if (rc == cudaSuccess && jac_bytes > 0) rc = cudaMemset(d_scratch_J, 0, jac_bytes);
 
-        rc = cudaMemcpy(d_model, model, model_bytes, cudaMemcpyHostToDevice);
+        if (rc == cudaSuccess) rc = cudaMemcpy(d_model, model, model_bytes, cudaMemcpyHostToDevice);
         if (rc == cudaSuccess) rc = cudaMemcpy(d_t, t_cat, n_bytes, cudaMemcpyHostToDevice);
         if (rc == cudaSuccess) rc = cudaMemcpy(d_y, y_cat, n_bytes, cudaMemcpyHostToDevice);
         if (rc == cudaSuccess) rc = cudaMemcpy(d_pt_off, pt_off, off_bytes, cudaMemcpyHostToDevice);
@@ -557,8 +591,10 @@ extern "C" int nimblecas_gpu_batched_lm_curvefit(
         if (rc == cudaSuccess) rc = cudaMemcpy(d_jac_off, jac_off, off_bytes, cudaMemcpyHostToDevice);
 
         if (rc == cudaSuccess) {
+            int dev = 0;
+            cudaGetDevice(&dev);
             int sm_count = 0;
-            cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, 0);
+            cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, dev);
             int blocks = num_problems;
             if (sm_count > 0 && blocks > sm_count * 32) {
                 blocks = sm_count * 32;

@@ -2003,6 +2003,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
         std::span<double> j_span = opts.analytic_jacobian
                                        ? std::span<double>{j_buf.data(), m_k}
                                        : std::span<double>{};
+        std::array<double, kGpuLmMaxParams> th_pert{};
         for (std::size_t i = 0; i < n_k; ++i) {
             double f_val = 0.0;
             detail::lm_model_eval(p.model, p.t[i], p.theta0, f_val, j_span);
@@ -2012,6 +2013,30 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             if (opts.analytic_jacobian) {
                 for (std::size_t j = 0; j < m_k; ++j) {
                     if (!std::isfinite(j_buf[j])) {
+                        return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+                    }
+                }
+            } else {
+                // FD mode: host-validate the forward-difference Jacobian at theta0 with
+                // the SAME h_j = fd_step*(1+|theta_j|) recipe the kernel uses, so the GPU
+                // path and the CPU fallback agree on start-point admissibility (this is
+                // decided before the available() branch). A finite r(theta0) with a
+                // non-finite forward-FD Jacobian would otherwise diverge: the GPU returns
+                // {iters=0, converged=false} while the CPU fallback's fd_jacobian fails at
+                // it==0 and returns domain_error for the whole batch. m extra model evals
+                // per point.
+                for (std::size_t j = 0; j < m_k; ++j) {
+                    const double h_j = opts.fd_step * (1.0 + std::abs(p.theta0[j]));
+                    for (std::size_t q = 0; q < m_k; ++q) {
+                        th_pert[q] = p.theta0[q];
+                    }
+                    th_pert[j] += h_j;
+                    double f_pert = 0.0;
+                    detail::lm_model_eval(p.model, p.t[i],
+                                          std::span<const double>{th_pert.data(), m_k}, f_pert,
+                                          std::span<double>{});
+                    const double fd = (f_pert - f_val) / h_j;
+                    if (!std::isfinite(fd)) {
                         return make_error<std::vector<LmFitResult>>(MathError::domain_error);
                     }
                 }

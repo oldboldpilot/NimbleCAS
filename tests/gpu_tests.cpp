@@ -2173,6 +2173,57 @@ auto main() -> int {
                 }
             }
 
+            // 5b. High-occupancy determinism: a large batch of tiny problems forces
+            // many concurrent CUDA blocks (high warp contention) -- the regime that
+            // exposes divergent-__syncthreads races on reused shared control slots that
+            // small-K batches cannot surface. Kept modest and fast for CI; the
+            // compute-sanitizer racecheck verification temporarily raises K to 4096.
+            {
+                const std::size_t K = 512;
+                std::vector<double> t_pts = {0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5};
+                std::vector<double> y_pts = {2.0, 2.5, 3.2, 4.1, 5.3, 6.8, 8.7, 11.0};
+                std::vector<double> th0 = {1.5, 0.3, 0.5};
+                std::vector<gpu::CurveFitProblem> probs;
+                probs.reserve(K);
+                for (std::size_t k = 0; k < K; ++k) {
+                    probs.push_back(gpu::CurveFitProblem{
+                        .model = gpu::FitModel::exponential,
+                        .t = t_pts,
+                        .y = y_pts,
+                        .theta0 = th0
+                    });
+                }
+                auto r1 = gpu::batched_curve_fit_lm(probs, gpu::LmFitOptions{}.with_tol(1e-8));
+                auto r2 = gpu::batched_curve_fit_lm(probs, gpu::LmFitOptions{}.with_tol(1e-8));
+                t.expect(r1.has_value() && r2.has_value(), "high-occupancy batch returns value");
+                if (r1 && r2 && gpu::available()) {
+                    bool run_to_run = true;
+                    for (std::size_t k = 0; k < K; ++k) {
+                        if ((*r1)[k].theta != (*r2)[k].theta ||
+                            (*r1)[k].residual_norm != (*r2)[k].residual_norm ||
+                            (*r1)[k].iterations != (*r2)[k].iterations ||
+                            (*r1)[k].converged != (*r2)[k].converged) {
+                            run_to_run = false;
+                            break;
+                        }
+                    }
+                    t.expect(run_to_run, "high-occupancy K-batch is bitwise deterministic run-to-run");
+                    // Every problem is identical, so every result must be identical: a
+                    // shared-slot race would let one block's decision bleed into another.
+                    bool uniform = true;
+                    for (std::size_t k = 1; k < K; ++k) {
+                        if ((*r1)[k].theta != (*r1)[0].theta ||
+                            (*r1)[k].residual_norm != (*r1)[0].residual_norm ||
+                            (*r1)[k].iterations != (*r1)[0].iterations ||
+                            (*r1)[k].converged != (*r1)[0].converged) {
+                            uniform = false;
+                            break;
+                        }
+                    }
+                    t.expect(uniform, "identical problems in a high-occupancy batch agree bitwise");
+                }
+            }
+
             // 6. Non-convergence honesty (max_iter = 2)
             {
                 std::vector<double> t_pts = {0.0, 1.0, 2.0, 3.0, 4.0};
