@@ -39,19 +39,26 @@ enum class MathError : std::uint8_t {
     // fixed-point or Newton loop) exhausted its iteration budget without meeting its
     // tolerance. Never returned in place of a silently-arbitrary root (Rule 32).
     not_converged,
+    // A distributed/remote execution backend failed for a TRANSPORT-class reason
+    // (queue/WAL error, lost result, exhausted attempts, payload over the wire cap,
+    // liveness deadline). Distinct from every math error so the honesty signal —
+    // "the mathematics was never in question; the transport was" — is not blurred
+    // (Rule 32). Never returned in place of a task's own TaskFn error.
+    distributed_error,
 };
 
 [[nodiscard]] constexpr auto to_string_view(MathError err) noexcept -> std::string_view {
     switch (err) {
-        case MathError::division_by_zero: return "division by zero";
-        case MathError::undefined_value:  return "undefined value";
-        case MathError::overflow:         return "overflow";
-        case MathError::domain_error:     return "domain error";
-        case MathError::syntax_error:     return "syntax error";
-        case MathError::not_implemented:  return "not implemented";
-        case MathError::gpu_error:        return "gpu error";
-        case MathError::inexact:          return "inexact (rounding mode required)";
-        case MathError::not_converged:    return "iteration did not converge";
+        case MathError::division_by_zero:  return "division by zero";
+        case MathError::undefined_value:   return "undefined value";
+        case MathError::overflow:          return "overflow";
+        case MathError::domain_error:      return "domain error";
+        case MathError::syntax_error:      return "syntax error";
+        case MathError::not_implemented:   return "not implemented";
+        case MathError::gpu_error:         return "gpu error";
+        case MathError::inexact:           return "inexact (rounding mode required)";
+        case MathError::not_converged:     return "iteration did not converge";
+        case MathError::distributed_error: return "distributed backend/transport error";
     }
     return "unknown error";
 }

@@ -932,6 +932,29 @@ target_sources(nimblecas_taskdag PUBLIC
 target_link_libraries(nimblecas_taskdag
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.taskdag_sgee : SGEE distributed task-DAG backend — opt-in via -DNIMBLECAS_SGEE=ON ----
+option(NIMBLECAS_SGEE "Enable the SGEE distributed taskdag backend" OFF)
+
+add_library(nimblecas_taskdag_sgee STATIC)
+target_sources(nimblecas_taskdag_sgee PUBLIC
+  FILE_SET CXX_MODULES FILES src/taskdag_sgee/taskdag_sgee.cppm)
+target_link_libraries(nimblecas_taskdag_sgee
+  PUBLIC nimblecas_taskdag nimblecas_core std_module)
+
+if(NIMBLECAS_SGEE)
+  # TODO (Part 2): When NIMBLECAS_SGEE=ON, link sgee_backend_capi.cpp against libsgee_capi
+  set(NIMBLECAS_SGEE_ROOT "" CACHE PATH "Root of a built StochasticGraphExecutionEngine")
+  find_path(NIMBLECAS_SGEE_CAPI_INCLUDE sgee_capi.h
+    HINTS "${NIMBLECAS_SGEE_ROOT}/bindings/capi" REQUIRED)
+  find_library(NIMBLECAS_SGEE_CAPI_LIB sgee_capi
+    HINTS "${NIMBLECAS_SGEE_ROOT}/build" "${NIMBLECAS_SGEE_ROOT}/lib" REQUIRED)
+  target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_backend_capi.cpp)
+  target_include_directories(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_CAPI_INCLUDE}")
+  target_link_libraries(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_CAPI_LIB}")
+else()
+  target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_backend_stub.cpp)
+endif()
+
 # ---- nimblecas.splitfield : Trager factorization / root adjunction / splitting fields ----
 add_library(nimblecas_splitfield STATIC)
 target_sources(nimblecas_splitfield PUBLIC
@@ -1304,6 +1327,11 @@ add_executable(taskdag_tests tests/taskdag_tests.cpp)
 target_link_libraries(taskdag_tests
   PRIVATE nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_tests COMMAND taskdag_tests)
+
+add_executable(taskdag_sgee_tests tests/taskdag_sgee_tests.cpp)
+target_link_libraries(taskdag_sgee_tests
+  PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
+add_test(NAME taskdag_sgee_tests COMMAND taskdag_sgee_tests)
 
 add_executable(splitfield_tests tests/splitfield_tests.cpp)
 target_link_libraries(splitfield_tests

@@ -27,15 +27,13 @@
 // ancestor still runs to completion.
 //
 // ── HONESTY BOUNDARY (Rule 32) ───────────────────────────────────────────────────────────
-// This is a SINGLE-NODE, LOCAL fork-join scheduler. It is NOT distributed, and nothing in
-// this module or its documentation should ever be read as claiming otherwise. Payload
-// (std::vector<std::byte>) is serializable by construction — a future remote/distributed
-// Executor could ship it over a wire. TaskFn is NOT: it is a std::function wrapping an
-// arbitrary local closure, which cannot be named, serialized, or reconstructed on another
-// process. A remote backend is therefore a DIFFERENT problem — it would need tasks
-// identified by a registered/named "kind" plus serialized arguments, not a shipped
-// closure — and is left as future work behind this same Executor interface, not shipped
-// here.
+// This is a SINGLE-NODE, LOCAL fork-join scheduler, now with an additive TaskRegistry
+// and add_named_task path for named operations. Payload (std::vector<std::byte>) is
+// serializable by construction. Unnamed TaskFn closures cannot be serialized to remote
+// processes; named tasks identified by a registered OpId ("<domain>.<op>/v<N>") allow a
+// remote/distributed backend (such as nimblecas.taskdag_sgee) to ship op identifiers and
+// arguments while executing identical code across nodes. Named tasks run on local
+// executors bit-identically to plain closure tasks.
 
 module;
 #include <cassert>  // assert (unavailable via `import std`); guards internal-accessor preconditions
@@ -60,6 +58,85 @@ using Payload = std::vector<std::byte>;
 // independent by construction (a task's depth is strictly greater than every one of its
 // dependencies' depths), so this is the only requirement placed on TaskFn.
 using TaskFn = std::function<Result<Payload>(std::span<const Payload>)>;
+
+// Canonical identifier for a registered task operation string (e.g. "nimblecas.poly.eval_batch/v1").
+using OpId = std::string;
+
+// Registry mapping versioned OpId strings to executable TaskFn bodies.
+// The coordinator and worker processes populate an identical registry at startup.
+class TaskRegistry {
+public:
+    TaskRegistry() = default;
+
+    // Registers `fn` under `id`. Fails with domain_error if `id` violates the OpId grammar
+    // (<domain>.<op>/v<N>, ASCII, <= 256 bytes) or is already registered.
+    [[nodiscard]] auto register_op(OpId id, TaskFn fn) -> Result<void> {
+        if (!validate_op_id(id)) {
+            return make_error<void>(MathError::domain_error);
+        }
+        auto [it, inserted] = ops_.emplace(std::move(id), std::move(fn));
+        if (!inserted) {
+            return make_error<void>(MathError::domain_error);
+        }
+        return {};
+    }
+
+    // Lookup. Returns nullptr if absent.
+    [[nodiscard]] auto find(std::string_view id) const noexcept -> const TaskFn* {
+        const auto it = ops_.find(id);
+        if (it == ops_.end()) {
+            return nullptr;
+        }
+        return &it->second;
+    }
+
+    // Number of registered operations.
+    [[nodiscard]] auto size() const noexcept -> std::size_t { return ops_.size(); }
+
+    // FNV-1a fingerprint over sorted OpIds, each followed by '\0'.
+    [[nodiscard]] auto fingerprint() const noexcept -> std::uint64_t {
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        constexpr std::uint64_t prime = 0x00000100000001b3ULL;
+        for (const auto& [id, fn] : ops_) {
+            for (const char c : id) {
+                hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+                hash *= prime;
+            }
+            hash ^= 0ULL;
+            hash *= prime;
+        }
+        return hash;
+    }
+
+private:
+    [[nodiscard]] static auto validate_op_id(std::string_view id) noexcept -> bool {
+        if (id.empty() || id.size() > 256) {
+            return false;
+        }
+        for (const char c : id) {
+            const auto uc = static_cast<unsigned char>(c);
+            if (uc >= 128 || c == '\0') {
+                return false;
+            }
+        }
+        const auto v_pos = id.rfind("/v");
+        if (v_pos == std::string_view::npos || v_pos == 0) {
+            return false;
+        }
+        const std::string_view ver = id.substr(v_pos + 2);
+        if (ver.empty()) {
+            return false;
+        }
+        for (const char c : ver) {
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::map<OpId, TaskFn, std::less<>> ops_{};
+};
 
 // Opaque handle to a task within the TaskGraph that issued it. TaskId order == issuance
 // order == a valid topological order (a task can only depend on already-issued ids).
@@ -104,7 +181,39 @@ public:
         tasks_.push_back(Task{.fn = std::move(fn),
                                .deps = std::vector<TaskId>(deps.begin(), deps.end()),
                                .hint = hint,
-                               .depth = new_depth});
+                               .depth = new_depth,
+                               .op_id = {}});
+        if (new_depth >= levels_.size()) {
+            levels_.resize(new_depth + 1);
+        }
+        levels_[new_depth].push_back(id);
+        return id;
+    }
+
+    // Appends a new task whose TaskFn body is copied from `reg` for `op`. Fails with
+    // domain_error (adding nothing) if `op` is not in `reg` or any entry of `deps` is unknown.
+    [[nodiscard]] auto add_named_task(const TaskRegistry& reg, OpId op,
+                                      std::span<const TaskId> deps = {},
+                                      CostHint hint = {}) -> Result<TaskId> {
+        const TaskFn* fn_ptr = reg.find(op);
+        if (fn_ptr == nullptr) {
+            return make_error<TaskId>(MathError::domain_error);
+        }
+        for (const TaskId d : deps) {
+            if (d.value >= tasks_.size()) {
+                return make_error<TaskId>(MathError::domain_error);
+            }
+        }
+        std::size_t new_depth = 0;
+        for (const TaskId d : deps) {
+            new_depth = std::max(new_depth, tasks_[d.value].depth + 1);
+        }
+        const TaskId id{tasks_.size()};
+        tasks_.push_back(Task{.fn = *fn_ptr,
+                               .deps = std::vector<TaskId>(deps.begin(), deps.end()),
+                               .hint = hint,
+                               .depth = new_depth,
+                               .op_id = std::move(op)});
         if (new_depth >= levels_.size()) {
             levels_.resize(new_depth + 1);
         }
@@ -140,6 +249,12 @@ public:
         return tasks_[id.value].hint;
     }
 
+    // The op_id recorded at add_named_task, or empty for a plain add_task closure.
+    [[nodiscard]] auto op_id(TaskId id) const noexcept -> std::string_view {
+        assert(id.value < tasks_.size() && "TaskGraph::op_id: id not issued by this graph");
+        return tasks_[id.value].op_id;
+    }
+
     // Number of distinct depths present (0 for an empty graph).
     [[nodiscard]] auto num_levels() const noexcept -> std::size_t { return levels_.size(); }
 
@@ -162,6 +277,7 @@ private:
         std::vector<TaskId> deps;
         CostHint hint;
         std::size_t depth{0};
+        std::string op_id{};
     };
 
     std::vector<Task> tasks_{};

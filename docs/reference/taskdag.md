@@ -17,28 +17,26 @@ Depends on [`core`](core.md) (`Result` / `MathError`) and
 [`parallel`](parallel.md) (`transform_index`, the order-preserving fork-join
 primitive `local_parallel_executor` fans a wavefront level out over).
 
-## Honesty boundary — single-node, NOT distributed
+## Honesty boundary — single-node core with named-task extension
 
-**This is a single-node, local fork-join scheduler. It is NOT distributed**,
-and nothing in this module or its documentation should be read as claiming
-otherwise. `Payload` (`std::vector<std::byte>`) is serializable by
-construction — a future remote/distributed `Executor` *could* ship it over a
-wire. `TaskFn` is **not**: it is a `std::function` wrapping an arbitrary local
-closure, which cannot be named, serialized, or reconstructed on another
-process. A remote backend is therefore a genuinely different problem — it
-would need tasks identified by a registered/named "kind" plus serialized
-arguments, not a shipped closure — and is left as future work behind this
-same `Executor` interface, not shipped here.
+**This is a single-node, local fork-join scheduler, now featuring an additive
+`TaskRegistry` and `add_named_task` path for named operations.** `Payload`
+(`std::vector<std::byte>`) is serializable by construction. `TaskFn` closures
+cannot be serialized to remote processes. Named tasks identified by a
+registered `OpId` (`"<domain>.<op>/v<N>"`) allow a remote/distributed backend
+(such as [`nimblecas.taskdag_sgee`](taskdag_sgee.md)) to ship op identifiers and
+serialized arguments while executing identical code across nodes. Named tasks
+run on local executors bit-identically to plain closure tasks.
 
 ## Determinism contract
 
 `serial_executor()` and `local_parallel_executor()` produce **bit-identical**
 `TaskRunResult::outputs` for the same `TaskGraph`, for any thread count:
 
-- A `TaskGraph` is built **incrementally**: `add_task(fn, deps, hint)` appends
-  one task whose dependencies must already have been issued `TaskId`s, so the
-  graph is **acyclic by construction** — no cycle check is ever needed or
-  possible to fail.
+- A `TaskGraph` is built **incrementally**: `add_task(fn, deps, hint)` or
+  `add_named_task(reg, op, deps, hint)` appends one task whose dependencies must
+  already have been issued `TaskId`s, so the graph is **acyclic by construction** —
+  no cycle check is ever needed or possible to fail.
 - Each task's `depth = 1 + max(parent depth)` (`0` with no deps) places it in
   a wavefront **level**. An executor runs level `0`, then level `1`, and so
   on; within a level every task is independent of every other task in that
@@ -74,9 +72,13 @@ All entry points live in namespace `nimblecas`, `[[nodiscard]]`.
 | :--- | :--- | :--- |
 | `Payload` | `using Payload = std::vector<std::byte>;` | A task's output (or another task's input): an opaque byte blob, serializable by construction. |
 | `TaskFn` | `using TaskFn = std::function<Result<Payload>(std::span<const Payload>)>;` | A task's compute step: parents' outputs (in the exact order given to `add_task`) → this task's output or error. Must be **pure**. |
+| `OpId` | `using OpId = std::string;` | Versioned canonical string identifier for an op (`<domain>.<op>/v<N>`). |
+| `TaskRegistry` | `class TaskRegistry` | Registry mapping versioned `OpId`s to `TaskFn` bodies. `register_op`, `find`, `size`, `fingerprint` (FNV-1a). |
 | `TaskId` | `struct { std::size_t value{0}; }` | Opaque handle; `TaskId` order == issuance order == a valid topological order. |
-| `CostHint` | `struct { double mean_seconds{0.0}; double variance{0.0}; }` | A recorded (not yet exploited) cost estimate, readable via `TaskGraph::hint(id)`. Neither shipped executor uses it. |
-| `TaskGraph::add_task` | `auto add_task(TaskFn fn, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a task depending on `deps`. Fails with `domain_error`, **without adding the task**, if any `deps` entry names a `TaskId` not yet issued by this graph. |
+| `CostHint` | `struct { double mean_seconds{0.0}; double variance{0.0}; }` | A recorded cost estimate, readable via `TaskGraph::hint(id)`. |
+| `TaskGraph::add_task` | `auto add_task(TaskFn fn, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a closure task depending on `deps`. Fails with `domain_error`, **without adding the task**, if any `deps` entry names an unissued `TaskId`. |
+| `TaskGraph::add_named_task` | `auto add_named_task(const TaskRegistry& reg, OpId op, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a named task looking up `op` in `reg`. Fails with `domain_error` if `op` is unregistered or `deps` invalid. |
+| `TaskGraph::op_id` | `auto op_id(TaskId id) const noexcept -> std::string_view` | The registered op name for named tasks, or empty for plain closures. |
 | `TaskGraph::size` | `auto size() const noexcept -> std::size_t` | Number of tasks issued so far. |
 | `TaskGraph::deps` / `depth` / `hint` / `num_levels` / `level` / `invoke` | — | Accessors for `Executor` implementations; not part of the curated graph-building surface. |
 | `serial_executor` | `auto serial_executor() -> std::unique_ptr<Executor>` | Runs every task strictly one at a time, wavefront order. The deterministic reference implementation — validate any faster executor's output against it. |
