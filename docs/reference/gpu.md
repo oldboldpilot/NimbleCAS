@@ -94,6 +94,7 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `bicgstab_csr(row_offsets, col_indices, values, b, max_iters, tol)` | **BiCGStab sparse solver** for general (non-symmetric) CSR systems \(A x = b\); recomputes true residual on device, bitwise repeatable, CPU fallback `krylov::bicgstab`. |
 | `batched_cg_csr(systems, max_iters, tol)` | **Batched CG sparse solver** for $K$ independent SPD CSR systems (one CUDA block per system); recomputes true residual in-kernel, bitwise repeatable (geometry-independent 256-thread reduction tree per block), CPU fallback `krylov::cg`. |
 | `gmres_csr(row_offsets, col_indices, values, b, max_iters, tol, restart)` | **Restarted GMRES sparse solver** for general (non-symmetric) CSR systems \(A x = b\); recomputes true residual on device, bitwise repeatable, CPU fallback `krylov::gmres`. |
+| `batched_lm_curvefit(problems, opts)` | **Batched Levenberg-Marquardt curve fitting** for $K$ independent curve-fit problems over the closed `FitModel` family (polynomial, exponential, gaussian, logistic, sinusoid, power_law); whole LM trust-region loop in-kernel (one CUDA block per problem), in-block Cholesky solve, bitwise repeatable run-to-run. CPU fallback loops `nlsolve::levenberg_marquardt` per problem. |
 
 
 
@@ -398,6 +399,12 @@ small path counts underutilize the SM while large counts saturate it (the delibe
 determinism-vs-occupancy trade-off shared with the European kernel). No speedup is
 claimed; the GPU path is a correctness mirror, and `gpu_deriv_bench` reports raw
 wall-clock only.
+
+### Nonlinear Least-Squares: batched Levenberg-Marquardt curve fitting
+
+`batched_lm_curvefit` solves $K$ independent curve-fitting problems concurrently on the GPU, allocating **one CUDA block per problem** with the entire Levenberg-Marquardt trust-region iteration running in-kernel. The closed `FitModel` family (`polynomial`, `exponential`, `gaussian`, `logistic`, `sinusoid`, `power_law`) covers common parametric curve fitting up to $m \le 8$ parameters.
+
+**HONESTY (Rule 32):** A NUMERICAL local optimization solver. Levenberg-Marquardt finds a stationary point of $\|r(\theta)\|_2^2$, which depends on initial point $\theta_0$ and need not be a global minimum; `converged == false` is a valid outcome (iteration budget exhausted, rank-deficient system, or $\lambda > 10^{18}$ damping blow-up), never an error. Final cost $\|r(\theta)\|_2$ is honestly recomputed in-kernel from the returned parameters. Results are **bitwise repeatable run-to-run** for fixed inputs and independent of batch composition, but **NOT bit-for-bit equal vs CPU** `nlsolve::levenberg_marquardt` due to threshold-flip path divergence (floating-point reassociation on $J^T J$ and device libm differences). Structural, model-arity, parameter-count ($m \le 8$), domain, or non-finite start-point violations return `MathError::domain_error` before the `available()` check. CPU fallback loops `nlsolve::levenberg_marquardt` per problem over the identical model contract.
 
 ## Benchmarking
 

@@ -343,9 +343,40 @@ int nimblecas_gpu_sobol_batch(const unsigned int* dir_numbers, int dir_stride,
 int nimblecas_gpu_halton_batch(const int* primes, unsigned long long n0, int count,
                                int dimension, double* out);
 
+/* --- FAMILY I: batched Levenberg-Marquardt curve fitting (gpu_lmfit_kernels.cu) --- */
+
+/* Batched LM curve fit over num_problems independent problems, one CUDA block per
+ * problem, the whole LM iteration in-kernel. Layout (all offsets are int prefix
+ * arrays of length num_problems+1, validated by the C++ wrapper):
+ *   model[k]      : model selector (0 poly, 1 exp, 2 gauss, 3 logistic, 4 sinusoid,
+ *                   5 power law) for problem k
+ *   t_cat / y_cat : concatenated abscissae/observations; problem k spans
+ *                   [pt_off[k], pt_off[k+1]) with n_k = pt_off[k+1]-pt_off[k]
+ *   theta_cat     : concatenated parameters, prefix th_off, m_k = th_off[k+1]-th_off[k]
+ *                   (1 <= m_k <= 8, m_k <= n_k). IN: theta0. OUT: final theta.
+ *   jac_off       : prefix offsets for column-major per-problem Jacobian scratch (n_k * m_k)
+ *   use_fd        : 0 = analytic Jacobian, 1 = in-kernel forward FD with
+ *                   h_j = fd_step*(1+|theta_j|) per column
+ * Each problem iterates the exact CPU-oracle LM control flow (accept iff the trial
+ * 2-norm strictly decreases; lambda /3 floor 1e-12 on accept, *4 on reject, stop at
+ * lambda > 1e18 or 40 inner tries; convergence when ||r|| <= tol or ||J^T r||_inf
+ * <= tol) and writes per-problem out_iters[k], out_converged[k] (1/0), and the TRUE
+ * final ||r|| recomputed in-kernel to out_resid[k]. Per-block reductions have a
+ * FIXED 256-thread tree shape with index-ordered strided accumulation, so each
+ * problem's result is a pure function of its own inputs — independent of grid
+ * geometry, independent of the other problems in the batch, and bitwise repeatable
+ * run-to-run — but NOT bit-for-bit equal to the CPU nlsolve oracle, which remains
+ * authoritative. Returns 0 on success, or a non-zero CUDA error code. */
+int nimblecas_gpu_batched_lm_curvefit(
+    const int* model, const double* t_cat, const double* y_cat, const int* pt_off,
+    double* theta_cat, const int* th_off, const int* jac_off, int num_problems, int max_iter,
+    double tol, double lambda0, int use_fd, double fd_step,
+    int* out_iters, int* out_converged, double* out_resid);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
 
 #endif  // NIMBLECAS_GPU_BRIDGE_H
+
 

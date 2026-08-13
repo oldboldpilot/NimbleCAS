@@ -21,6 +21,7 @@ import nimblecas.control;   // Family F CPU fallback + TransferFunction / BodePo
 import nimblecas.wavelets;  // Wavelet FilterBank + CPU dwt/swt fallback
 import nimblecas.qmc;       // Family H CPU fallback & point generators
 import nimblecas.krylov;    // CPU fallbacks (csr_matvec + cg / bicgstab / gmres)
+import nimblecas.nlsolve;   // FAMILY I CPU fallback + the authoritative LM oracle
 
 export namespace nimblecas::gpu {
 
@@ -1737,6 +1738,412 @@ inline constexpr std::array<GpuSobolSpec, 7> gpu_sobol_table{{
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// FAMILY I — Batched nonlinear least-squares curve fitting by Levenberg-
+// Marquardt (gpu_lmfit_kernels.cu). One CUDA block per problem, the WHOLE LM
+// iteration in-kernel — the nonlinear counterpart of batched_cg_csr.
+// ---------------------------------------------------------------------------
+
+// The device-expressible parametric model family. The general host-callback LM
+// (nlsolve::levenberg_marquardt over an arbitrary ResidualFn) CANNOT run on the
+// device — std::function does not cross the bridge — so the GPU path is limited
+// to this closed family; anything else stays on the CPU oracle.
+enum class FitModel : std::uint8_t {
+    polynomial = 0,   // f = sum theta_j t^j        (m = theta0.size() <= 8)
+    exponential = 1,  // f = th0*exp(th1*t) + th2   (m = 3)
+    gaussian = 2,     // f = th0*exp(-(t-th1)^2/(2 th2^2))   (m = 3)
+    logistic = 3,     // f = th0/(1 + exp(-th1*(t - th2)))    (m = 3)
+    sinusoid = 4,     // f = th0*sin(th1*t + th2) + th3       (m = 4)
+    power_law = 5,    // f = th0 * t^th1 (requires t > 0)     (m = 2)
+};
+
+// Hard parameter-count cap (must match kMaxParams in gpu_lmfit_kernels.cu): the
+// in-block Cholesky state lives in fixed shared arrays sized by this bound.
+inline constexpr int kGpuLmMaxParams = 8;
+// Inner damping-loop bound, mirroring the CPU oracle's 40 (nlsolve detail_lm::run).
+inline constexpr int kGpuLmMaxInner = 40;
+
+// One curve-fit problem view; all spans must outlive the call. t/y have equal
+// length n_k (the points); theta0 has length m_k (the model's parameter count;
+// for polynomial, the degree+1). Requires n_k >= m_k (else under-determined).
+struct CurveFitProblem {
+    FitModel model{FitModel::polynomial};
+    std::span<const double> t;       // abscissae, length n_k
+    std::span<const double> y;       // observations, length n_k
+    std::span<const double> theta0;  // initial parameters, length m_k
+};
+
+// Fluent tuning knobs (defaults mirror nlsolve::Options / levenberg_marquardt).
+struct LmFitOptions {
+    double tol{1e-10};              // stopping tolerance on ||r||_2 AND on ||J^T r||_inf
+    int max_iter{100};              // outer LM iterations
+    double lambda0{1e-3};           // initial damping
+    bool analytic_jacobian{true};   // false -> in-kernel forward FD
+    double fd_step{1e-7};           // FD base step (relative-scaled), FD mode only
+
+    [[nodiscard]] auto with_tol(double v) const -> LmFitOptions {
+        auto copy = *this;
+        copy.tol = v;
+        return copy;
+    }
+    [[nodiscard]] auto with_max_iter(int v) const -> LmFitOptions {
+        auto copy = *this;
+        copy.max_iter = v;
+        return copy;
+    }
+    [[nodiscard]] auto with_lambda0(double v) const -> LmFitOptions {
+        auto copy = *this;
+        copy.lambda0 = v;
+        return copy;
+    }
+    [[nodiscard]] auto with_analytic_jacobian(bool v) const -> LmFitOptions {
+        auto copy = *this;
+        copy.analytic_jacobian = v;
+        return copy;
+    }
+    [[nodiscard]] auto with_fd_step(double v) const -> LmFitOptions {
+        auto copy = *this;
+        copy.fd_step = v;
+        return copy;
+    }
+};
+
+// Outcome of one fit — the batch mirror of nlsolve::SolveResult.
+struct LmFitResult {
+    std::vector<double> theta;   // best parameters found (always populated)
+    double residual_norm{0.0};   // honest final ||r(theta)||_2, recomputed at exit
+    int iterations{0};           // outer LM iterations, counted exactly as the oracle
+    bool converged{false};       // did the stopping test pass?
+};
+
+namespace detail {
+
+inline auto lm_model_eval(FitModel model, double t, std::span<const double> theta,
+                          double& out_f, std::span<double> out_jrow) -> void {
+    const std::size_t m = theta.size();
+    switch (model) {
+        case FitModel::polynomial: {
+            double f = 0.0;
+            double p = 1.0;
+            for (std::size_t j = 0; j < m; ++j) {
+                f += theta[j] * p;
+                if (!out_jrow.empty()) { out_jrow[j] = p; }
+                p *= t;
+            }
+            out_f = f;
+            break;
+        }
+        case FitModel::exponential: {
+            double e = std::exp(theta[1] * t);
+            out_f = theta[0] * e + theta[2];
+            if (!out_jrow.empty()) {
+                out_jrow[0] = e;
+                out_jrow[1] = theta[0] * t * e;
+                out_jrow[2] = 1.0;
+            }
+            break;
+        }
+        case FitModel::gaussian: {
+            double u = (t - theta[1]) / theta[2];
+            double e = std::exp(-0.5 * u * u);
+            out_f = theta[0] * e;
+            if (!out_jrow.empty()) {
+                out_jrow[0] = e;
+                out_jrow[1] = theta[0] * e * u / theta[2];
+                out_jrow[2] = theta[0] * e * u * u / theta[2];
+            }
+            break;
+        }
+        case FitModel::logistic: {
+            double s = 1.0 / (1.0 + std::exp(-theta[1] * (t - theta[2])));
+            out_f = theta[0] * s;
+            if (!out_jrow.empty()) {
+                out_jrow[0] = s;
+                out_jrow[1] = theta[0] * s * (1.0 - s) * (t - theta[2]);
+                out_jrow[2] = -theta[0] * s * (1.0 - s) * theta[1];
+            }
+            break;
+        }
+        case FitModel::sinusoid: {
+            double arg = theta[1] * t + theta[2];
+            double s = std::sin(arg);
+            double c = std::cos(arg);
+            out_f = theta[0] * s + theta[3];
+            if (!out_jrow.empty()) {
+                out_jrow[0] = s;
+                out_jrow[1] = theta[0] * t * c;
+                out_jrow[2] = theta[0] * c;
+                out_jrow[3] = 1.0;
+            }
+            break;
+        }
+        case FitModel::power_law: {
+            double p = std::pow(t, theta[1]);
+            out_f = theta[0] * p;
+            if (!out_jrow.empty()) {
+                out_jrow[0] = p;
+                out_jrow[1] = theta[0] * p * std::log(t);
+            }
+            break;
+        }
+    }
+}
+
+}  // namespace detail
+
+// Batched Levenberg-Marquardt curve fitting over the device-expressible FitModel
+// family — the batch mirror of nlsolve::levenberg_marquardt, which remains
+// authoritative. One CUDA block per problem runs the ENTIRE LM trust-region loop
+// in-kernel (residual + Jacobian evaluation, J^T J + lambda*diag normal equations
+// via in-block Cholesky, strict-decrease accept/reject with lambda*4 / lambda/3
+// damping), mirroring the CPU oracle's control flow decision-for-decision.
+//
+// HONESTY (Rule 32): a NUMERICAL (double) LOCAL method. LM finds a STATIONARY
+// point of ||r||^2, which need not be a global minimiser and need not fit the
+// data well; the result depends on theta0. converged == false is a legitimate
+// OUTCOME (budget exhausted, damping blow-up lambda > 1e18, rank-deficient
+// J^T J that damping cannot rescue), never an error; the best iterate found is
+// returned with its HONEST final residual_norm, recomputed in-kernel from the
+// returned theta. One problem's breakdown never affects the others. The general
+// host-callback LM (arbitrary ResidualFn) CANNOT run on the device and stays on
+// the CPU oracle — this entry point covers only the closed FitModel family.
+// DETERMINISM: fixed-shape in-block reductions make each problem's result a pure
+// function of its own inputs — bitwise repeatable run-to-run and independent of
+// batch composition — but NOT bit-for-bit vs the CPU oracle: threshold decisions
+// (accept/reject, convergence) can flip on last-bit differences, so GPU and CPU
+// may take different iterate paths to the same stationary point. Validated
+// agreement is on the DESTINATION (final cost/parameters, §tests), not the path.
+// Fails with domain_error on structural/model/finiteness/start-point violations
+// (decided before the available() branch, identically with or without a device);
+// overflow when a concatenated size exceeds the int kernel bound; gpu_error only
+// when a device is present and a CUDA call fails. CPU fallback (no device):
+// nlsolve::levenberg_marquardt per problem over the same model family.
+[[nodiscard]] auto batched_curve_fit_lm(std::span<const CurveFitProblem> problems,
+                                        const LmFitOptions& opts = {})
+    -> Result<std::vector<LmFitResult>> {
+    if (!(opts.tol >= 0.0) || !std::isfinite(opts.tol)) {
+        return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+    }
+    if (opts.max_iter < 0) {
+        return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+    }
+    if (!std::isfinite(opts.lambda0)) {
+        return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+    }
+    if (!opts.analytic_jacobian && !(opts.fd_step > 0.0)) {
+        return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+    }
+
+    if (problems.empty()) {
+        return std::vector<LmFitResult>{};
+    }
+
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (problems.size() > int_max) {
+        return make_error<std::vector<LmFitResult>>(MathError::overflow);
+    }
+
+    std::size_t total_n = 0;
+    std::size_t total_th = 0;
+    std::size_t total_jac = 0;
+
+    for (const auto& p : problems) {
+        const std::size_t n_k = p.t.size();
+        const std::size_t m_k = p.theta0.size();
+
+        if (p.t.size() != p.y.size() || n_k == 0 || m_k == 0 ||
+            m_k > static_cast<std::size_t>(kGpuLmMaxParams)) {
+            return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+        }
+
+        switch (p.model) {
+            case FitModel::exponential:
+            case FitModel::gaussian:
+            case FitModel::logistic:
+                if (m_k != 3) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+                break;
+            case FitModel::sinusoid:
+                if (m_k != 4) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+                break;
+            case FitModel::power_law:
+                if (m_k != 2) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+                break;
+            case FitModel::polynomial:
+                break;
+        }
+
+        if (n_k < m_k) {
+            return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+        }
+
+        for (double tv : p.t) {
+            if (!std::isfinite(tv)) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+        }
+        for (double yv : p.y) {
+            if (!std::isfinite(yv)) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+        }
+        for (double thv : p.theta0) {
+            if (!std::isfinite(thv)) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+        }
+
+        if (p.model == FitModel::power_law) {
+            for (double tv : p.t) {
+                if (tv <= 0.0) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+            }
+        }
+
+        std::array<double, kGpuLmMaxParams> j_buf{};
+        std::span<double> j_span = opts.analytic_jacobian
+                                       ? std::span<double>{j_buf.data(), m_k}
+                                       : std::span<double>{};
+        for (std::size_t i = 0; i < n_k; ++i) {
+            double f_val = 0.0;
+            detail::lm_model_eval(p.model, p.t[i], p.theta0, f_val, j_span);
+            if (!std::isfinite(f_val)) {
+                return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+            }
+            if (opts.analytic_jacobian) {
+                for (std::size_t j = 0; j < m_k; ++j) {
+                    if (!std::isfinite(j_buf[j])) {
+                        return make_error<std::vector<LmFitResult>>(MathError::domain_error);
+                    }
+                }
+            }
+        }
+
+        if (n_k > int_max) return make_error<std::vector<LmFitResult>>(MathError::overflow);
+        if (total_n > int_max - n_k) return make_error<std::vector<LmFitResult>>(MathError::overflow);
+        total_n += n_k;
+
+        if (total_th > int_max - m_k) return make_error<std::vector<LmFitResult>>(MathError::overflow);
+        total_th += m_k;
+
+        const std::size_t jac_k = n_k * m_k;
+        if (total_jac > int_max - jac_k) return make_error<std::vector<LmFitResult>>(MathError::overflow);
+        total_jac += jac_k;
+    }
+
+    if (!available()) {
+        std::vector<LmFitResult> out;
+        out.reserve(problems.size());
+        for (const auto& p : problems) {
+            nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
+                std::vector<double> r(p.t.size());
+                for (std::size_t i = 0; i < p.t.size(); ++i) {
+                    double f_val = 0.0;
+                    detail::lm_model_eval(p.model, p.t[i], th, f_val, std::span<double>{});
+                    r[i] = f_val - p.y[i];
+                }
+                return r;
+            };
+            nlsolve::Options o{};
+            o.tol = opts.tol;
+            o.max_iter = static_cast<std::size_t>(opts.max_iter);
+            o.fd_step = opts.fd_step;
+            Result<nlsolve::SolveResult> r;
+            if (opts.analytic_jacobian) {
+                nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
+                    const std::size_t n = p.t.size();
+                    const std::size_t m = p.theta0.size();
+                    std::vector<double> j_flat(n * m);
+                    std::array<double, kGpuLmMaxParams> j_row{};
+                    for (std::size_t i = 0; i < n; ++i) {
+                        double f_val = 0.0;
+                        detail::lm_model_eval(p.model, p.t[i], th, f_val,
+                                              std::span<double>{j_row.data(), m});
+                        for (std::size_t j = 0; j < m; ++j) {
+                            j_flat[i * m + j] = j_row[j];
+                        }
+                    }
+                    return j_flat;
+                };
+                r = nlsolve::levenberg_marquardt(F, J, p.theta0, o, opts.lambda0);
+            } else {
+                r = nlsolve::levenberg_marquardt(F, p.theta0, o, opts.lambda0);
+            }
+            if (!r) {
+                return make_error<std::vector<LmFitResult>>(r.error());
+            }
+            out.push_back(LmFitResult{
+                .theta = std::move(r->x),
+                .residual_norm = r->residual_norm,
+                .iterations = static_cast<int>(r->iterations),
+                .converged = r->converged
+            });
+        }
+        return out;
+    }
+
+    const int num_problems = static_cast<int>(problems.size());
+    std::vector<int> model_cat(num_problems);
+    std::vector<double> t_cat;
+    t_cat.reserve(total_n);
+    std::vector<double> y_cat;
+    y_cat.reserve(total_n);
+    std::vector<int> pt_off(num_problems + 1, 0);
+
+    std::vector<double> theta_cat;
+    theta_cat.reserve(total_th);
+    std::vector<int> th_off(num_problems + 1, 0);
+
+    std::vector<int> jac_off(num_problems + 1, 0);
+
+    for (int k = 0; k < num_problems; ++k) {
+        const auto& p = problems[k];
+        model_cat[k] = static_cast<int>(p.model);
+
+        pt_off[k] = static_cast<int>(t_cat.size());
+        t_cat.insert(t_cat.end(), p.t.begin(), p.t.end());
+        y_cat.insert(y_cat.end(), p.y.begin(), p.y.end());
+
+        th_off[k] = static_cast<int>(theta_cat.size());
+        theta_cat.insert(theta_cat.end(), p.theta0.begin(), p.theta0.end());
+
+        jac_off[k] = (k == 0) ? 0 : jac_off[k - 1] + (pt_off[k] - pt_off[k - 1]) * (th_off[k] - th_off[k - 1]);
+    }
+    pt_off[num_problems] = static_cast<int>(t_cat.size());
+    th_off[num_problems] = static_cast<int>(theta_cat.size());
+    jac_off[num_problems] = jac_off[num_problems - 1] +
+        (pt_off[num_problems] - pt_off[num_problems - 1]) * (th_off[num_problems] - th_off[num_problems - 1]);
+
+    std::vector<int> out_iters(num_problems);
+    std::vector<int> out_converged(num_problems);
+    std::vector<double> out_resid(num_problems);
+
+    const int use_fd = opts.analytic_jacobian ? 0 : 1;
+    const int rc = nimblecas_gpu_batched_lm_curvefit(
+        model_cat.data(), t_cat.data(), y_cat.data(), pt_off.data(), theta_cat.data(),
+        th_off.data(), jac_off.data(), num_problems, opts.max_iter, opts.tol, opts.lambda0,
+        use_fd, opts.fd_step, out_iters.data(), out_converged.data(), out_resid.data());
+
+    if (rc != 0) {
+        return make_error<std::vector<LmFitResult>>(MathError::gpu_error);
+    }
+
+    std::vector<LmFitResult> results;
+    results.reserve(num_problems);
+    for (int k = 0; k < num_problems; ++k) {
+        int start_th = th_off[k];
+        int end_th = th_off[k + 1];
+        std::vector<double> th_k(theta_cat.begin() + start_th, theta_cat.begin() + end_th);
+        results.push_back(LmFitResult{
+            .theta = std::move(th_k),
+            .residual_norm = out_resid[k],
+            .iterations = out_iters[k],
+            .converged = out_converged[k] != 0
+        });
+    }
+    return results;
+}
+
+// Alias for public module requirement: batched_lm_curvefit
+[[nodiscard]] inline auto batched_lm_curvefit(std::span<const CurveFitProblem> problems,
+                                             const LmFitOptions& opts = {})
+    -> Result<std::vector<LmFitResult>> {
+    return batched_curve_fit_lm(problems, opts);
+}
+
 }  // namespace nimblecas::gpu
+
 
 

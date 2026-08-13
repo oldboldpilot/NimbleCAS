@@ -15,8 +15,10 @@ import nimblecas.ratpoly;
 import nimblecas.wavelets;
 import nimblecas.qmc;
 import nimblecas.krylov;
+import nimblecas.nlsolve;
 
 namespace gpu = nimblecas::gpu;
+namespace nlsolve = nimblecas::nlsolve;
 using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
@@ -1914,5 +1916,454 @@ auto main() -> int {
                   t.expect(!oob.has_value() && oob.error() == MathError::domain_error,
                            "out-of-range col index yields domain_error");
               })
+        .test("batched_lm_curvefit (Family I)", [](TestContext& t) {
+            auto eval_model_data = [](gpu::FitModel model, double ti, std::span<const double> theta) -> double {
+                const std::size_t m = theta.size();
+                switch (model) {
+                    case gpu::FitModel::polynomial: {
+                        double f = 0.0, p = 1.0;
+                        for (std::size_t j = 0; j < m; ++j) { f += theta[j] * p; p *= ti; }
+                        return f;
+                    }
+                    case gpu::FitModel::exponential:
+                        return theta[0] * std::exp(theta[1] * ti) + theta[2];
+                    case gpu::FitModel::gaussian: {
+                        double u = (ti - theta[1]) / theta[2];
+                        return theta[0] * std::exp(-0.5 * u * u);
+                    }
+                    case gpu::FitModel::logistic:
+                        return theta[0] / (1.0 + std::exp(-theta[1] * (ti - theta[2])));
+                    case gpu::FitModel::sinusoid:
+                        return theta[0] * std::sin(theta[1] * ti + theta[2]) + theta[3];
+                    case gpu::FitModel::power_law:
+                        return theta[0] * std::pow(ti, theta[1]);
+                }
+                return 0.0;
+            };
+
+            // 1. Exact-data convergence for all 6 models
+            {
+                struct ModelTestCase {
+                    gpu::FitModel model;
+                    std::vector<double> theta_true;
+                    std::vector<double> theta0;
+                    double t_min;
+                    double t_max;
+                };
+
+                std::vector<ModelTestCase> cases = {
+                    {gpu::FitModel::polynomial, {1.5, -2.0, 0.5, 0.1}, {1.2, -1.6, 0.4, 0.08}, -1.0, 1.0},
+                    {gpu::FitModel::exponential, {2.0, -0.5, 1.0}, {1.8, -0.4, 0.8}, 0.0, 2.0},
+                    {gpu::FitModel::gaussian, {5.0, 1.0, 0.8}, {4.2, 0.85, 0.95}, -1.0, 3.0},
+                    {gpu::FitModel::logistic, {10.0, 1.5, 2.0}, {8.5, 1.2, 1.7}, 0.0, 4.0},
+                    {gpu::FitModel::sinusoid, {3.0, 2.0, 0.5, 1.0}, {2.6, 1.7, 0.4, 0.8}, 0.0, 3.0},
+                    {gpu::FitModel::power_law, {2.5, 1.8}, {2.1, 1.5}, 0.5, 3.5}
+                };
+
+                std::vector<gpu::CurveFitProblem> problems;
+                std::vector<std::vector<double>> t_buffers;
+                std::vector<std::vector<double>> y_buffers;
+                const std::size_t n_pts = 64;
+
+                for (const auto& c : cases) {
+                    std::vector<double> t_vec(n_pts);
+                    std::vector<double> y_vec(n_pts);
+                    double step = (c.t_max - c.t_min) / static_cast<double>(n_pts - 1);
+                    for (std::size_t i = 0; i < n_pts; ++i) {
+                        t_vec[i] = c.t_min + static_cast<double>(i) * step;
+                        y_vec[i] = eval_model_data(c.model, t_vec[i], c.theta_true);
+                    }
+                    t_buffers.push_back(std::move(t_vec));
+                    y_buffers.push_back(std::move(y_vec));
+                }
+
+                for (std::size_t k = 0; k < cases.size(); ++k) {
+                    problems.push_back(gpu::CurveFitProblem{
+                        .model = cases[k].model,
+                        .t = t_buffers[k],
+                        .y = y_buffers[k],
+                        .theta0 = cases[k].theta0
+                    });
+                }
+
+                auto res = gpu::batched_curve_fit_lm(problems);
+                t.expect(res.has_value(), "exact-data batched_curve_fit_lm returns value");
+                if (res) {
+                    t.expect(res->size() == cases.size(), "exact-data result size matches batch");
+                    for (std::size_t k = 0; k < cases.size(); ++k) {
+                        const auto& r = (*res)[k];
+                        const auto& c = cases[k];
+                        t.expect(r.converged, "exact-data problem converged");
+                        t.expect(r.residual_norm <= 1e-8, "exact-data residual_norm <= 1e-8");
+                        t.expect(r.theta.size() == c.theta_true.size(), "exact-data theta size matches");
+                        for (std::size_t j = 0; j < c.theta_true.size(); ++j) {
+                            double rel_err = std::abs(r.theta[j] - c.theta_true[j]) / std::max(1.0, std::abs(c.theta_true[j]));
+                            t.expect(rel_err <= 1e-6, "exact-data theta_j agrees with true to 1e-6 rel");
+                        }
+                    }
+                }
+            }
+
+            // 2. Noisy-data agreement with the CPU oracle
+            {
+                const std::size_t K = 16;
+                const std::size_t n_pts = 128;
+                std::vector<std::vector<double>> t_bufs(K);
+                std::vector<std::vector<double>> y_bufs(K);
+                std::vector<std::vector<double>> th0_bufs(K);
+                std::vector<gpu::CurveFitProblem> problems(K);
+
+                std::vector<double> theta_true = {4.0, 1.2, 0.7};
+                for (std::size_t k = 0; k < K; ++k) {
+                    t_bufs[k].resize(n_pts);
+                    y_bufs[k].resize(n_pts);
+                    double t_min = -1.0 + 0.1 * static_cast<double>(k);
+                    double t_max = 3.0 + 0.1 * static_cast<double>(k);
+                    double step = (t_max - t_min) / static_cast<double>(n_pts - 1);
+                    for (std::size_t i = 0; i < n_pts; ++i) {
+                        double tv = t_min + static_cast<double>(i) * step;
+                        t_bufs[k][i] = tv;
+                        double noise = 1e-2 * std::sin(static_cast<double>(k * 100 + i));
+                        y_bufs[k][i] = eval_model_data(gpu::FitModel::gaussian, tv, theta_true) + noise;
+                    }
+                    th0_bufs[k] = {3.5 + 0.05 * static_cast<double>(k), 1.0 + 0.02 * static_cast<double>(k), 0.8};
+                    problems[k] = gpu::CurveFitProblem{
+                        .model = gpu::FitModel::gaussian,
+                        .t = t_bufs[k],
+                        .y = y_bufs[k],
+                        .theta0 = th0_bufs[k]
+                    };
+                }
+
+                auto gpu_res = gpu::batched_curve_fit_lm(problems);
+                t.expect(gpu_res.has_value(), "noisy-data batch fit returns value");
+                if (gpu_res) {
+                    for (std::size_t k = 0; k < K; ++k) {
+                        const auto& r_gpu = (*gpu_res)[k];
+                        t.expect(r_gpu.converged, "noisy-data problem converged");
+
+                        const auto& p = problems[k];
+                        nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
+                            std::vector<double> r(p.t.size());
+                            for (std::size_t i = 0; i < p.t.size(); ++i) {
+                                double u = (p.t[i] - th[1]) / th[2];
+                                r[i] = th[0] * std::exp(-0.5 * u * u) - p.y[i];
+                            }
+                            return r;
+                        };
+                        nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
+                            std::size_t n = p.t.size();
+                            std::vector<double> j_flat(n * 3);
+                            for (std::size_t i = 0; i < n; ++i) {
+                                double u = (p.t[i] - th[1]) / th[2];
+                                double e = std::exp(-0.5 * u * u);
+                                j_flat[i * 3 + 0] = e;
+                                j_flat[i * 3 + 1] = th[0] * e * u / th[2];
+                                j_flat[i * 3 + 2] = th[0] * e * u * u / th[2];
+                            }
+                            return j_flat;
+                        };
+                        nlsolve::Options o{};
+                        o.tol = 1e-10;
+                        o.max_iter = 100;
+                        auto cpu_sol = nlsolve::levenberg_marquardt(F, J, p.theta0, o, 1e-3);
+                        t.expect(cpu_sol.has_value(), "noisy-data CPU oracle solve succeeded");
+                        if (cpu_sol) {
+                            t.expect(cpu_sol->converged, "noisy-data CPU oracle converged");
+                            double cost_diff = std::abs(r_gpu.residual_norm - cpu_sol->residual_norm);
+                            t.expect(cost_diff <= 1e-8 * std::max(1.0, cpu_sol->residual_norm),
+                                     "cost agrees with CPU oracle to 1e-8 rel");
+                            for (std::size_t j = 0; j < 3; ++j) {
+                                double th_diff = std::abs(r_gpu.theta[j] - cpu_sol->x[j]);
+                                t.expect(th_diff <= 1e-6 * std::max(1.0, std::abs(cpu_sol->x[j])),
+                                         "theta agrees with CPU oracle to 1e-6 rel");
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Linear-model exact oracle (polynomial m=4, n=32)
+            {
+                std::vector<double> th_true = {2.0, -1.5, 0.8, -0.2};
+                std::vector<double> th0 = {0.0, 0.0, 0.0, 0.0};
+                const std::size_t n_pts = 32;
+                std::vector<double> t_vec(n_pts);
+                std::vector<double> y_vec(n_pts);
+                for (std::size_t i = 0; i < n_pts; ++i) {
+                    t_vec[i] = -1.0 + 2.0 * static_cast<double>(i) / static_cast<double>(n_pts - 1);
+                    y_vec[i] = eval_model_data(gpu::FitModel::polynomial, t_vec[i], th_true);
+                }
+
+                gpu::CurveFitProblem poly_prob{
+                    .model = gpu::FitModel::polynomial,
+                    .t = t_vec,
+                    .y = y_vec,
+                    .theta0 = th0
+                };
+                auto poly_res = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&poly_prob, 1});
+                t.expect(poly_res.has_value(), "linear-model polynomial fit returns value");
+                if (poly_res) {
+                    t.expect((*poly_res)[0].converged, "polynomial fit converged");
+                    t.expect((*poly_res)[0].iterations <= 3, "linear model converges in <= 3 iterations");
+                    for (std::size_t j = 0; j < 4; ++j) {
+                        t.expect(std::abs((*poly_res)[0].theta[j] - th_true[j]) <= 1e-9,
+                                 "polynomial coefficient matches exact solution to 1e-9 abs");
+                    }
+                }
+            }
+
+            // 4. Determinism (bitwise, run-to-run) & 5. Batch-composition independence + isolation
+            {
+                std::vector<double> t_pts = {0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5};
+                std::vector<double> y_pts = {2.0, 2.5, 3.2, 4.1, 5.3, 6.8, 8.7, 11.0};
+                std::vector<double> th0 = {1.5, 0.3, 0.5};
+
+                std::vector<double> t_flat(8, 1.0);
+                std::vector<double> y_flat(8, 2.0);
+
+                std::vector<gpu::CurveFitProblem> batch_probs;
+                for (std::size_t k = 0; k < 8; ++k) {
+                    if (k == 3) {
+                        batch_probs.push_back(gpu::CurveFitProblem{
+                            .model = gpu::FitModel::exponential,
+                            .t = t_flat,
+                            .y = y_flat,
+                            .theta0 = th0
+                        });
+                    } else {
+                        batch_probs.push_back(gpu::CurveFitProblem{
+                            .model = gpu::FitModel::exponential,
+                            .t = t_pts,
+                            .y = y_pts,
+                            .theta0 = th0
+                        });
+                    }
+                }
+
+                auto run1 = gpu::batched_curve_fit_lm(batch_probs);
+                auto run2 = gpu::batched_curve_fit_lm(batch_probs);
+                t.expect(run1.has_value() && run2.has_value(), "batch runs return value");
+                if (run1 && run2) {
+                    if (gpu::available()) {
+                        t.expect((*run1)[0].theta == (*run2)[0].theta, "run-to-run bitwise theta equality");
+                        t.expect((*run1)[0].residual_norm == (*run2)[0].residual_norm, "run-to-run bitwise resid equality");
+                        t.expect((*run1)[0].iterations == (*run2)[0].iterations, "run-to-run bitwise iterations equality");
+                    }
+                    t.expect(!(*run1)[3].converged, "rank-deficient problem 3 honestly reports converged=false");
+                    t.expect(std::isfinite((*run1)[3].residual_norm), "rank-deficient problem 3 has finite residual_norm");
+                    for (std::size_t k = 0; k < 8; ++k) {
+                        if (k != 3) {
+                            t.expect((*run1)[k].converged, "healthy problem in batch converged");
+                        }
+                        auto single_run = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&batch_probs[k], 1});
+                        t.expect(single_run.has_value(), "batch-of-one run returns value");
+                        if (single_run && gpu::available()) {
+                            t.expect((*single_run)[0].theta == (*run1)[k].theta, "batch-of-one theta bitwise identical");
+                            t.expect((*single_run)[0].residual_norm == (*run1)[k].residual_norm, "batch-of-one resid bitwise identical");
+                            t.expect((*single_run)[0].iterations == (*run1)[k].iterations, "batch-of-one iterations bitwise identical");
+                            t.expect((*single_run)[0].converged == (*run1)[k].converged, "batch-of-one converged bitwise identical");
+                        }
+                    }
+                }
+            }
+
+            // 6. Non-convergence honesty (max_iter = 2)
+            {
+                std::vector<double> t_pts = {0.0, 1.0, 2.0, 3.0, 4.0};
+                std::vector<double> y_pts = {1.0, 3.0, 2.0, 5.0, 4.0};
+                std::vector<double> th0 = {10.0, -5.0, 10.0};
+                gpu::CurveFitProblem hard_prob{
+                    .model = gpu::FitModel::exponential,
+                    .t = t_pts,
+                    .y = y_pts,
+                    .theta0 = th0
+                };
+                auto opts = gpu::LmFitOptions{}.with_max_iter(2);
+                auto res = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&hard_prob, 1}, opts);
+                t.expect(res.has_value(), "max_iter=2 fit returns value");
+                if (res) {
+                    const auto& r = (*res)[0];
+                    t.expect(!r.converged, "max_iter=2 reports converged=false");
+                    t.expect(r.iterations == 2, "max_iter=2 reports iterations == 2");
+                    double sum_sq = 0.0;
+                    for (std::size_t i = 0; i < t_pts.size(); ++i) {
+                        double fi = r.theta[0] * std::exp(r.theta[1] * t_pts[i]) + r.theta[2];
+                        double ri = fi - y_pts[i];
+                        sum_sq += ri * ri;
+                    }
+                    double host_norm = std::sqrt(sum_sq);
+                    double rel_diff = std::abs(r.residual_norm - host_norm) / std::max(1.0, host_norm);
+                    t.expect(rel_diff <= 1e-12, "residual_norm matches host recompute within 1e-12 rel");
+                }
+            }
+
+            // 7. Domain guards
+            {
+                std::vector<double> t_good = {1.0, 2.0, 3.0, 4.0};
+                std::vector<double> y_good = {1.0, 2.0, 3.0, 4.0};
+                std::vector<double> th3 = {1.0, 1.0, 1.0};
+
+                std::vector<double> t_short = {1.0, 2.0};
+                gpu::CurveFitProblem p_mismatch{.model = gpu::FitModel::exponential, .t = t_short, .y = y_good, .theta0 = th3};
+                auto res_mismatch = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_mismatch, 1});
+                t.expect(!res_mismatch.has_value() && res_mismatch.error() == MathError::domain_error,
+                         "mismatched t/y lengths yield domain_error");
+
+                std::vector<double> empty_vec;
+                gpu::CurveFitProblem p_empty{.model = gpu::FitModel::exponential, .t = empty_vec, .y = empty_vec, .theta0 = th3};
+                auto res_empty = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_empty, 1});
+                t.expect(!res_empty.has_value() && res_empty.error() == MathError::domain_error,
+                         "empty t yields domain_error");
+
+                std::vector<double> t_2 = {1.0, 2.0};
+                std::vector<double> y_2 = {1.0, 2.0};
+                gpu::CurveFitProblem p_under{.model = gpu::FitModel::exponential, .t = t_2, .y = y_2, .theta0 = th3};
+                auto res_under = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_under, 1});
+                t.expect(!res_under.has_value() && res_under.error() == MathError::domain_error,
+                         "under-determined n < m yields domain_error");
+
+                std::vector<double> th4 = {1.0, 1.0, 1.0, 1.0};
+                gpu::CurveFitProblem p_arity{.model = gpu::FitModel::gaussian, .t = t_good, .y = y_good, .theta0 = th4};
+                auto res_arity = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_arity, 1});
+                t.expect(!res_arity.has_value() && res_arity.error() == MathError::domain_error,
+                         "wrong model arity yields domain_error");
+
+                std::vector<double> th9(9, 1.0);
+                std::vector<double> t9(10, 1.0);
+                std::vector<double> y9(10, 1.0);
+                gpu::CurveFitProblem p_m9{.model = gpu::FitModel::polynomial, .t = t9, .y = y9, .theta0 = th9};
+                auto res_m9 = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_m9, 1});
+                t.expect(!res_m9.has_value() && res_m9.error() == MathError::domain_error,
+                         "polynomial m=9 yields domain_error");
+
+                std::vector<double> y_nan = {1.0, std::numeric_limits<double>::quiet_NaN(), 3.0, 4.0};
+                gpu::CurveFitProblem p_nan{.model = gpu::FitModel::exponential, .t = t_good, .y = y_nan, .theta0 = th3};
+                auto res_nan = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_nan, 1});
+                t.expect(!res_nan.has_value() && res_nan.error() == MathError::domain_error,
+                         "NaN in y yields domain_error");
+
+                std::vector<double> t_zero = {0.0, 1.0, 2.0, 3.0};
+                std::vector<double> th2 = {1.0, 1.0};
+                gpu::CurveFitProblem p_pow0{.model = gpu::FitModel::power_law, .t = t_zero, .y = y_good, .theta0 = th2};
+                auto res_pow0 = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_pow0, 1});
+                t.expect(!res_pow0.has_value() && res_pow0.error() == MathError::domain_error,
+                         "power_law with t containing 0 yields domain_error");
+
+                gpu::CurveFitProblem p_ok{.model = gpu::FitModel::exponential, .t = t_good, .y = y_good, .theta0 = th3};
+                auto res_neg_iter = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_ok, 1}, gpu::LmFitOptions{}.with_max_iter(-1));
+                t.expect(!res_neg_iter.has_value() && res_neg_iter.error() == MathError::domain_error,
+                         "negative max_iter yields domain_error");
+
+                std::vector<double> t_huge = {1e3, 1e3 + 1, 1e3 + 2, 1e3 + 3};
+                std::vector<double> th_overflow = {1.0, 1e6, 0.0};
+                gpu::CurveFitProblem p_oflow{.model = gpu::FitModel::exponential, .t = t_huge, .y = y_good, .theta0 = th_overflow};
+                auto res_oflow = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_oflow, 1});
+                t.expect(!res_oflow.has_value() && res_oflow.error() == MathError::domain_error,
+                         "non-finite start residual yields domain_error");
+            }
+
+            // 8. Overflow guards
+            {
+                std::vector<double> t_buf(100, 1.0);
+                std::vector<double> y_buf(100, 1.0);
+                std::vector<double> th0 = {1.0, 1.0, 1.0};
+                constexpr std::size_t int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+                struct FakeSpan {
+                    const double* data_ptr;
+                    std::size_t sz;
+                };
+                FakeSpan fake_t{t_buf.data(), int_max + 5};
+                std::span<const double> huge_span(fake_t.data_ptr, fake_t.sz);
+                gpu::CurveFitProblem p_huge{.model = gpu::FitModel::exponential, .t = huge_span, .y = huge_span, .theta0 = th0};
+                auto res_huge = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_huge, 1});
+                t.expect(!res_huge.has_value() && res_huge.error() == MathError::overflow,
+                         "span size exceeding INT_MAX yields overflow error");
+            }
+
+            // 9. FD-vs-analytic cross-check
+            {
+                const std::size_t K = 8;
+                const std::size_t n_pts = 64;
+                std::vector<std::vector<double>> t_bufs(K);
+                std::vector<std::vector<double>> y_bufs(K);
+                std::vector<std::vector<double>> th0_bufs(K);
+                std::vector<gpu::CurveFitProblem> problems(K);
+
+                for (std::size_t k = 0; k < K; ++k) {
+                    t_bufs[k].resize(n_pts);
+                    y_bufs[k].resize(n_pts);
+                    std::vector<double> th_true = {2.5 + 0.1 * static_cast<double>(k), 1.5, 0.4, 0.8};
+                    for (std::size_t i = 0; i < n_pts; ++i) {
+                        double tv = 3.0 * static_cast<double>(i) / static_cast<double>(n_pts - 1);
+                        t_bufs[k][i] = tv;
+                        y_bufs[k][i] = eval_model_data(gpu::FitModel::sinusoid, tv, th_true);
+                    }
+                    th0_bufs[k] = {2.2 + 0.1 * static_cast<double>(k), 1.3, 0.3, 0.7};
+                    problems[k] = gpu::CurveFitProblem{
+                        .model = gpu::FitModel::sinusoid,
+                        .t = t_bufs[k],
+                        .y = y_bufs[k],
+                        .theta0 = th0_bufs[k]
+                    };
+                }
+
+                auto res_ana = gpu::batched_curve_fit_lm(problems, gpu::LmFitOptions{}.with_analytic_jacobian(true));
+                auto res_fd = gpu::batched_curve_fit_lm(problems, gpu::LmFitOptions{}.with_analytic_jacobian(false).with_fd_step(1e-7));
+                t.expect(res_ana.has_value() && res_fd.has_value(), "analytic and FD fits return value");
+                if (res_ana && res_fd) {
+                    for (std::size_t k = 0; k < K; ++k) {
+                        t.expect((*res_ana)[k].converged, "analytic fit converged");
+                        t.expect((*res_fd)[k].converged, "FD fit converged");
+                        double cost_diff = std::abs((*res_ana)[k].residual_norm - (*res_fd)[k].residual_norm);
+                        double ref_cost = std::max(1.0, (*res_ana)[k].residual_norm);
+                        t.expect(cost_diff <= 1e-6 * ref_cost, "FD and analytic final costs agree to 1e-6 relative");
+                    }
+                }
+            }
+
+            // 10. Fallback-oracle equality (CPU-only path test when !available())
+            if (!gpu::available()) {
+                std::vector<double> t_pts = {0.0, 0.5, 1.0, 1.5, 2.0};
+                std::vector<double> th_true = {3.0, 1.5, 0.5};
+                std::vector<double> y_pts(5);
+                for (std::size_t i = 0; i < 5; ++i) {
+                    y_pts[i] = th_true[0] / (1.0 + std::exp(-th_true[1] * (t_pts[i] - th_true[2])));
+                }
+                std::vector<double> th0 = {2.5, 1.2, 0.4};
+                gpu::CurveFitProblem p{.model = gpu::FitModel::logistic, .t = t_pts, .y = y_pts, .theta0 = th0};
+
+                auto fallback_res = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p, 1});
+                t.expect(fallback_res.has_value(), "CPU fallback returns value");
+                if (fallback_res) {
+                    nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
+                        std::vector<double> r(p.t.size());
+                        for (std::size_t i = 0; i < p.t.size(); ++i) {
+                            r[i] = th[0] / (1.0 + std::exp(-th[1] * (p.t[i] - th[2]))) - p.y[i];
+                        }
+                        return r;
+                    };
+                    nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
+                        std::size_t n = p.t.size();
+                        std::vector<double> j_flat(n * 3);
+                        for (std::size_t i = 0; i < n; ++i) {
+                            double s = 1.0 / (1.0 + std::exp(-th[1] * (p.t[i] - th[2])));
+                            j_flat[i * 3 + 0] = s;
+                            j_flat[i * 3 + 1] = th[0] * s * (1.0 - s) * (p.t[i] - th[2]);
+                            j_flat[i * 3 + 2] = -th[0] * s * (1.0 - s) * th[1];
+                        }
+                        return j_flat;
+                    };
+                    nlsolve::Options o{};
+                    auto oracle_res = nlsolve::levenberg_marquardt(F, J, p.theta0, o, 1e-3);
+                    t.expect(oracle_res.has_value(), "CPU oracle returns value");
+                    if (oracle_res) {
+                        t.expect((*fallback_res)[0].theta == oracle_res->x, "CPU fallback theta equals oracle bit-for-bit");
+                        t.expect((*fallback_res)[0].residual_norm == oracle_res->residual_norm, "CPU fallback residual equals oracle bit-for-bit");
+                    }
+                }
+            }
+        })
         .run();
 }
+
