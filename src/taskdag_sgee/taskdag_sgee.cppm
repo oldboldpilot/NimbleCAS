@@ -3,6 +3,13 @@
 
 module;
 #include <cassert>
+#ifdef NIMBLECAS_SGEE
+// Pull the SGEE C ABI into the GLOBAL module fragment (not the purview) so `sgee_task_broker_t`
+// is the header's global-module type. A forward declaration inside the module purview would
+// instead attach a DISTINCT module-owned `struct sgee_task_broker`, which the C functions in the
+// .cpp (that see the real global type) cannot accept — "cannot convert ... incomplete type".
+#include "sgee_capi.h"
+#endif
 
 export module nimblecas.taskdag_sgee;
 
@@ -310,6 +317,60 @@ private:
     std::unordered_map<std::uint64_t, TaskEntry> tasks_{};
     std::vector<std::uint64_t> fifo_order_{};
 };
+
+// ---------------------------------------------------------------------------
+// Real SGEE C-ABI BrokerPort (NIMBLECAS_SGEE=ON)
+// ---------------------------------------------------------------------------
+#ifdef NIMBLECAS_SGEE
+// sgee_task_broker_t comes from sgee_capi.h, included in the global module fragment above.
+class CapiBrokerPort final : public BrokerPort {
+public:
+    static auto create(const std::filesystem::path& wal_path,
+                       std::uint64_t vis_timeout_ms = 30'000,
+                       std::uint32_t max_attempts = 3)
+        -> Result<std::unique_ptr<CapiBrokerPort>>;
+
+    explicit CapiBrokerPort(sgee_task_broker_t* broker);
+    CapiBrokerPort(const std::filesystem::path& wal_path,
+                   std::uint64_t vis_timeout_ms = 30'000,
+                   std::uint32_t max_attempts = 3);
+    ~CapiBrokerPort() override;
+
+    CapiBrokerPort(const CapiBrokerPort&) = delete;
+    auto operator=(const CapiBrokerPort&) -> CapiBrokerPort& = delete;
+    CapiBrokerPort(CapiBrokerPort&& other) noexcept;
+    auto operator=(CapiBrokerPort&& other) noexcept -> CapiBrokerPort&;
+
+    [[nodiscard]] auto is_open() const noexcept -> bool;
+
+    [[nodiscard]] auto enqueue(std::span<const std::byte> payload,
+                               SgeePlacement placement, std::uint32_t max_attempts)
+        -> Result<std::uint64_t> override;
+
+    [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+        -> Result<std::optional<Lease>> override;
+
+    [[nodiscard]] auto complete(std::uint64_t qid, std::uint64_t token)
+        -> Result<void> override;
+
+    [[nodiscard]] auto fail(std::uint64_t qid, std::uint64_t token)
+        -> Result<void> override;
+
+    [[nodiscard]] auto heartbeat(std::uint64_t qid, std::uint64_t token,
+                                 std::uint64_t extend_by_ms) -> Result<void> override;
+
+    [[nodiscard]] auto sweep_expired(std::uint64_t now_ms)
+        -> Result<std::size_t> override;
+
+    [[nodiscard]] auto state(std::uint64_t qid) -> Result<QState> override;
+
+    [[nodiscard]] auto now_ms() const -> std::uint64_t override;
+
+private:
+    sgee_task_broker_t* broker_{nullptr};
+    mutable std::mutex mutex_{};
+};
+#endif
 
 // ---------------------------------------------------------------------------
 // Worker pump

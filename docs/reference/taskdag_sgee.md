@@ -32,11 +32,28 @@ Depends on [`core`](core.md) (`Result` / `MathError::distributed_error`) and
 
 ## Scope note (Part 1 vs Part 2)
 
-- **Part 1 (Current Scope):** The complete distributed executor seam (`SgeeDistributedExecutor`),
+- **Part 1 (SGEE-free Scaffolding):** The complete distributed executor seam (`SgeeDistributedExecutor`),
   envelope codec, worker pump (`run_worker_pump`), out-of-band result channel (`InMemoryResultChannel`),
   and deterministic in-memory `FakeBrokerPort` (with injectable hand clock for tests).
   Builds and tests with zero SGEE dependency.
-- **Part 2 (Future SGEE C-ABI Port):** `CapiBrokerPort` wrapping `libsgee_capi` behind `-DNIMBLECAS_SGEE=ON`.
+- **Part 2 (SGEE C-ABI Port):** `CapiBrokerPort` wrapping `libsgee_capi` behind `-DNIMBLECAS_SGEE=ON`.
+  When enabled via `-DNIMBLECAS_SGEE=ON -DNIMBLECAS_SGEE_ROOT=/path/to/SGEE`, `sgee_distributed_executor`
+  constructs a live `CapiBrokerPort` backed by a real SGEE durable WAL task broker.
+
+## Build recipe
+
+Default build (OFF, SGEE-free scaffolding stub):
+```bash
+cmake -B build -GNinja
+cmake --build build
+```
+
+Real SGEE-backed backend build (ON, `libsgee_capi` C-ABI):
+```bash
+cmake -B build -GNinja -DNIMBLECAS_SGEE=ON -DNIMBLECAS_SGEE_ROOT=/path/to/StochasticGraphExecutionEngine
+cmake --build build
+```
+Requires a built SGEE tree where `sgee_capi.h` is present under `${NIMBLECAS_SGEE_ROOT}/bindings/capi` and `libsgee_capi` shared library is present under `${NIMBLECAS_SGEE_ROOT}/build-capi/lib` or `${NIMBLECAS_SGEE_ROOT}/build/lib` or `${NIMBLECAS_SGEE_ROOT}/lib`.
 
 ## API
 
@@ -53,6 +70,7 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | `InMemoryResultChannel` | Mutex + hash map implementation of `ResultChannel`. |
 | `BrokerPort` | Abstract queue interface (`enqueue`, `lease`, `complete`, `fail`, `heartbeat`, `sweep_expired`, `state`). |
 | `FakeBrokerPort` | Deterministic in-memory `BrokerPort` with injectable hand clock. |
+| `CapiBrokerPort` | `class CapiBrokerPort : public BrokerPort` — C-ABI wrapper over `libsgee_capi`'s `sgee_task_broker_t*` (ON only). |
 | `WorkerPumpConfig` | `struct { u64 worker_id; u64 lease_timeout_ms; u64 idle_backoff_ms; u64 heartbeat_every_ms; }` |
 | `run_worker_pump` | Worker execution loop: lease → decode → registry lookup → invoke → put result → complete. |
 | `SgeeExecutorConfig` | Config struct with fluent setters (`with_registry`, `with_num_workers`, `with_poll_interval_ms`, etc.). |

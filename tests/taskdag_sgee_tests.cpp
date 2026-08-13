@@ -8,6 +8,9 @@ import nimblecas.taskdag_sgee;
 import nimblecas.testing;
 
 using nimblecas::BrokerPort;
+#ifdef NIMBLECAS_SGEE
+using nimblecas::CapiBrokerPort;
+#endif
 using nimblecas::CostHint;
 using nimblecas::Executor;
 using nimblecas::FakeBrokerPort;
@@ -370,5 +373,121 @@ auto main() -> int {
                   t.expect(!res3.has_value() && res3.error() == MathError::distributed_error,
                            "Dead queue state surfaces as distributed_error (never a partial output)");
               })
+#ifdef NIMBLECAS_SGEE
+        .test("acceptance_diamond_dag_real_capi_broker_port",
+              [](TestContext& t) {
+                  // Build TaskRegistry with named ops
+                  TaskRegistry reg;
+                  (void)reg.register_op("test.const7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  (void)reg.register_op("test.mul2/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 2); });
+                  (void)reg.register_op("test.add3/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + 3); });
+                  (void)reg.register_op("test.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+                  (void)reg.register_op("test.probe/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 1000 + decode_i64(ps[1])); });
+
+                  // Diamond DAG: A=7, B=A*2=14, C=A+3=10, D=B+C=24, probe=B*1000+C=14010
+                  TaskGraph g;
+                  const auto a = g.add_named_task(reg, "test.const7/v1").value();
+                  const auto b = g.add_named_task(reg, "test.mul2/v1", std::vector<TaskId>{a}).value();
+                  const auto c = g.add_named_task(reg, "test.add3/v1", std::vector<TaskId>{a}).value();
+                  const auto d = g.add_named_task(reg, "test.add/v1", std::vector<TaskId>{b, c}).value();
+                  const auto probe = g.add_named_task(reg, "test.probe/v1", std::vector<TaskId>{b, c}).value();
+
+                  // 1. Reference serial_executor
+                  const auto ser_exec = nimblecas::serial_executor();
+                  const auto ser_res = ser_exec->run(g).value();
+
+                  // 2. Real CapiBrokerPort over libsgee_capi C-ABI with unique WAL path
+                  static std::atomic<std::uint64_t> test_seq{0};
+                  const auto now_ms = static_cast<std::uint64_t>(
+                      std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count());
+                  const auto tmp_dir = std::filesystem::temp_directory_path();
+                  const auto wal_filename = "ncsgee_test_real_capi_" + std::to_string(now_ms) + "_" + std::to_string(test_seq.fetch_add(1)) + ".wal";
+                  const auto wal_path = tmp_dir / wal_filename;
+
+                  auto port_res = CapiBrokerPort::create(wal_path, 30'000, 3);
+                  t.expect(port_res.has_value(), "CapiBrokerPort opens real WAL broker successfully");
+                  if (!port_res.has_value()) {
+                      return;
+                  }
+                  auto& port = **port_res;
+                  InMemoryResultChannel results;
+
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+
+                  SgeeDistributedExecutor dist_exec(cfg, port, results);
+                  t.expect(dist_exec.name() == "sgee_distributed", "executor name is sgee_distributed");
+                  const auto dist_res_res = dist_exec.run(g);
+                  t.expect(dist_res_res.has_value(), "SgeeDistributedExecutor run succeeds over real CapiBrokerPort");
+                  if (!dist_res_res.has_value()) {
+                      std::error_code ec;
+                      std::filesystem::remove(wal_path, ec);
+                      return;
+                  }
+                  const auto& dist_res = *dist_res_res;
+
+                  // Assert elementwise bit-identity
+                  t.expect(dist_res.outputs.size() == ser_res.outputs.size(), "outputs size match");
+                  bool bit_identical = (dist_res.outputs.size() == ser_res.outputs.size());
+                  for (std::size_t i = 0; bit_identical && i < dist_res.outputs.size(); ++i) {
+                      bit_identical = results_equal(dist_res.outputs[i], ser_res.outputs[i]);
+                  }
+                  t.expect(bit_identical, "REAL CAPI ACCEPTANCE: SgeeDistributedExecutor outputs are BIT-IDENTICAL to serial_executor");
+
+                  t.expect(decode_i64(dist_res.outputs[a.value].value()) == 7, "A == 7");
+                  t.expect(decode_i64(dist_res.outputs[b.value].value()) == 14, "B == 14");
+                  t.expect(decode_i64(dist_res.outputs[c.value].value()) == 10, "C == 10");
+                  t.expect(decode_i64(dist_res.outputs[d.value].value()) == 24, "D == 24");
+                  t.expect(decode_i64(dist_res.outputs[probe.value].value()) == 14010, "probe == 14010");
+                  t.expect(dist_res.executed == ser_res.executed, "executed counts match (5)");
+                  t.expect(dist_res.executed == 5, "executed == 5");
+
+                  // Also test math error task poisoning identically over real broker
+                  TaskRegistry err_reg;
+                  (void)err_reg.register_op("op.c1/v1", [](auto) -> Result<Payload> { return encode_i64(1); });
+                  (void)err_reg.register_op("op.fail_dom/v1", [](auto) -> Result<Payload> { return nimblecas::make_error<Payload>(MathError::domain_error); });
+                  (void)err_reg.register_op("op.c2/v1", [](auto) -> Result<Payload> { return encode_i64(2); });
+                  (void)err_reg.register_op("op.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+
+                  TaskGraph g_err;
+                  const auto ea = g_err.add_named_task(err_reg, "op.c1/v1").value();
+                  const auto eb = g_err.add_named_task(err_reg, "op.fail_dom/v1", std::vector<TaskId>{ea}).value();
+                  const auto ec_id = g_err.add_named_task(err_reg, "op.c2/v1").value();
+                  const auto ed = g_err.add_named_task(err_reg, "op.add/v1", std::vector<TaskId>{eb, ec_id}).value();
+
+                  const auto ser_err_res = ser_exec->run(g_err).value();
+
+                  const auto wal_filename2 = "ncsgee_test_real_capi_err_" + std::to_string(now_ms) + "_" + std::to_string(test_seq.fetch_add(1)) + ".wal";
+                  const auto wal_path2 = tmp_dir / wal_filename2;
+                  auto port_err_res = CapiBrokerPort::create(wal_path2, 30'000, 3);
+                  t.expect(port_err_res.has_value(), "CapiBrokerPort for err test opens successfully");
+                  if (port_err_res.has_value()) {
+                      InMemoryResultChannel results_err;
+                      SgeeExecutorConfig cfg_err;
+                      cfg_err.with_registry(err_reg).with_num_workers(2).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor dist_err_exec(cfg_err, **port_err_res, results_err);
+                      const auto dist_err_res = dist_err_exec.run(g_err).value();
+
+                      t.expect(dist_err_res.outputs.size() == ser_err_res.outputs.size(), "err outputs size match");
+                      bool err_parity = (dist_err_res.outputs.size() == ser_err_res.outputs.size());
+                      for (std::size_t i = 0; err_parity && i < dist_err_res.outputs.size(); ++i) {
+                          err_parity = results_equal(dist_err_res.outputs[i], ser_err_res.outputs[i]);
+                      }
+                      t.expect(err_parity, "error poisoning outputs are BIT-IDENTICAL over real CapiBrokerPort");
+                      t.expect(!dist_err_res.outputs[eb.value].has_value() && dist_err_res.outputs[eb.value].error() == MathError::domain_error,
+                               "B executed and returned domain_error on real broker");
+                      t.expect(!dist_err_res.outputs[ed.value].has_value() && dist_err_res.outputs[ed.value].error() == MathError::domain_error,
+                               "D poisoned on real broker");
+
+                      std::error_code ec;
+                      std::filesystem::remove(wal_path2, ec);
+                  }
+
+                  // Cleanup main test WAL file
+                  std::error_code ec;
+                  std::filesystem::remove(wal_path, ec);
+              })
+#endif
         .run();
 }
