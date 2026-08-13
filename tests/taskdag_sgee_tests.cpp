@@ -869,6 +869,32 @@ auto main() -> int {
                       const auto res = exec.run(g);
                       t.expect(!res.has_value() && res.error() == MathError::distributed_error, "(iii) state fault aborts");
                   }
+                  // (iv) per-run transport factory failure & null-transport (the OFF-build path that
+                  // keeps the per-run lifecycle honest without SGEE).
+                  {
+                      TaskRegistry reg; TaskGraph g; make_single(reg, g);
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor exec(cfg, nimblecas::RunTransportFactory{
+                          []() -> Result<nimblecas::RunTransport> {
+                              return nimblecas::make_error<nimblecas::RunTransport>(MathError::distributed_error);
+                          }});
+                      const auto res = exec.run(g);
+                      t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                               "(iv) a failing transport factory aborts run() before any enqueue");
+                  }
+                  {
+                      TaskRegistry reg; TaskGraph g; make_single(reg, g);
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor exec(cfg, nimblecas::RunTransportFactory{
+                          []() -> Result<nimblecas::RunTransport> {
+                              return nimblecas::RunTransport{};  // null port/channel views
+                          }});
+                      const auto res = exec.run(g);
+                      t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                               "(iv) a transport with a null port aborts run() honestly");
+                  }
               })
         .test("oversize_fan_in_payload_aborts_run",  // T12 — run-level oversize (kept large; near the end)
               [](TestContext& t) {
@@ -1101,7 +1127,78 @@ auto main() -> int {
                           t.expect(dist_res->executed == ser_res.executed, "factory executor executed count matches");
                       }
                   }
-                  // The executor's destructor reaps its own WAL; nothing to clean up here.
+                  // Each successful run() reaps its own per-run WAL; nothing to clean up here.
+              })
+        .test("wal_reaped_on_success_retained_on_failure",  // T14 — per-run WAL lifecycle (ON only)
+              [](TestContext& t) {
+                  static std::atomic<std::uint64_t> t14_seq{0};
+                  const auto now_ms = static_cast<std::uint64_t>(
+                      std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count());
+                  const auto wal_dir = std::filesystem::temp_directory_path() /
+                      ("ncsgee_m2_" + std::to_string(now_ms) + "_" + std::to_string(t14_seq.fetch_add(1)));
+                  std::error_code ec;
+                  std::filesystem::create_directories(wal_dir, ec);
+
+                  const auto count_wals = [&]() -> std::size_t {
+                      std::size_t count = 0;
+                      std::error_code lec;
+                      for (const auto& e : std::filesystem::directory_iterator(wal_dir, lec)) {
+                          const auto fname = e.path().filename().string();
+                          if (fname.rfind("ncsgee-", 0) == 0 && e.path().extension() == ".wal") { ++count; }
+                      }
+                      return count;
+                  };
+
+                  // Success half: the diamond succeeds; its per-run WAL is reaped.
+                  TaskRegistry reg; TaskGraph g;
+                  const auto ids = build_diamond(reg, g);
+                  (void)ids;
+                  const auto ser_res = nimblecas::serial_executor()->run(g).value();
+
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_wal_dir(wal_dir).with_num_workers(2)
+                     .with_poll_interval_ms(1).with_max_attempts(3).with_visibility_timeout_ms(30'000);
+                  auto exec_res = nimblecas::sgee_distributed_executor(cfg);
+                  t.expect(exec_res.has_value(), "factory builds a per-run executor");
+                  if (exec_res.has_value()) {
+                      const auto r = (*exec_res)->run(g);
+                      t.expect(r.has_value(), "the diamond run succeeds");
+                      if (r.has_value()) {
+                          bool ok = (r->outputs.size() == ser_res.outputs.size());
+                          for (std::size_t i = 0; ok && i < r->outputs.size(); ++i) {
+                              ok = results_equal(r->outputs[i], ser_res.outputs[i]);
+                          }
+                          t.expect(ok, "outputs bit-identical to serial");
+                      }
+                      t.expect(count_wals() == 0, "the WAL is reaped on success (zero *.wal remain)");
+
+                      // Failure half: a run that aborts on its deadline retains exactly one WAL.
+                      TaskRegistry sreg;
+                      (void)sreg.register_op("test.sleep/v1", [](auto) -> Result<Payload> {
+                          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                          return encode_i64(1); });
+                      TaskGraph sg;
+                      (void)sg.add_named_task(sreg, "test.sleep/v1");
+                      SgeeExecutorConfig scfg;
+                      scfg.with_registry(sreg).with_wal_dir(wal_dir).with_num_workers(1)
+                          .with_poll_interval_ms(1).with_max_attempts(3)
+                          .with_visibility_timeout_ms(30'000).with_run_deadline_ms(1);
+                      auto sexec_res = nimblecas::sgee_distributed_executor(scfg);
+                      t.expect(sexec_res.has_value(), "factory builds the sleeper executor");
+                      if (sexec_res.has_value()) {
+                          const auto sr = (*sexec_res)->run(sg);
+                          t.expect(!sr.has_value() && sr.error() == MathError::distributed_error,
+                                   "the sleeper run aborts on its deadline");
+                          t.expect(count_wals() == 1, "exactly one WAL retained for post-mortem");
+                      }
+
+                      // Reuse the first executor after a failed run -> succeeds (fresh per-run broker,
+                      // no stale-task contamination; the very defect per-run brokers remove).
+                      const auto r2 = (*exec_res)->run(g);
+                      t.expect(r2.has_value(), "the per-run executor is reusable after a failed run");
+                  }
+                  std::filesystem::remove_all(wal_dir, ec);
               })
 #endif
         .run();

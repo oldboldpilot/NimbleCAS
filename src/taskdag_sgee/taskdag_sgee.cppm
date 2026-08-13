@@ -528,10 +528,45 @@ struct SgeeExecutorConfig {
     }
 };
 
+// One run()'s transport: the broker and result channel the coordinator and its pump
+// threads use for exactly one execution, plus the WAL file to reap on success.
+//
+// `port`/`channel` are the non-owning views run() actually uses; `owned_*` keep
+// per-run instances alive (a borrowed transport -- e.g. a test's FakeBrokerPort that
+// must outlive the run for inspection -- leaves them null). `wal_path` empty means
+// "nothing on disk to reap" (every Fake-backed transport). Raw view pointers stay
+// valid across a move because moving a unique_ptr never relocates the pointee.
+struct RunTransport {
+    BrokerPort* port{nullptr};
+    ResultChannel* channel{nullptr};
+    std::unique_ptr<BrokerPort> owned_port{};
+    std::unique_ptr<ResultChannel> owned_channel{};
+    std::filesystem::path wal_path{};
+};
+
+// Invoked once per run(). Returning an error aborts the run with that error before any
+// task is enqueued. A factory that opens durable state (a WAL) MUST return a FRESH
+// instance per call -- reusing a WAL would durably replay a previous run's tasks into
+// this one (broker recovery aimed at the wrong target).
+using RunTransportFactory = std::function<Result<RunTransport>()>;
+
 class SgeeDistributedExecutor final : public Executor {
 public:
+    // Borrowed-transport ctor (unchanged signature & caller contract: `port` and
+    // `results` must outlive this executor). Every run() reuses the same borrowed pair
+    // -- the caller owns queue hygiene across runs. This is the ctor the deterministic
+    // test suite uses so it can inspect/fault the port directly.
     SgeeDistributedExecutor(SgeeExecutorConfig cfg, BrokerPort& port, ResultChannel& results)
-        : cfg_(std::move(cfg)), port_(port), results_(results) {}
+        : cfg_(std::move(cfg)),
+          make_transport_([&port, &results]() -> Result<RunTransport> {
+              return RunTransport{.port = &port, .channel = &results};
+          }) {}
+
+    // Per-run-transport ctor: `make_transport` is called at the top of every run(); the
+    // transport lives exactly as long as that run. On run success a non-empty wal_path
+    // is deleted; on failure it is retained for post-mortem.
+    SgeeDistributedExecutor(SgeeExecutorConfig cfg, RunTransportFactory make_transport)
+        : cfg_(std::move(cfg)), make_transport_(std::move(make_transport)) {}
 
     [[nodiscard]] auto name() const noexcept -> std::string_view override {
         return "sgee_distributed";
@@ -541,8 +576,7 @@ public:
 
 private:
     SgeeExecutorConfig cfg_;
-    BrokerPort& port_;
-    ResultChannel& results_;
+    RunTransportFactory make_transport_;
 };
 
 // Factory function
@@ -961,11 +995,51 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
         }
     }
 
-    // Worker threads management
-    std::stop_source stop_source;
-    std::vector<std::thread> workers;
+    // Acquire this run's transport: a fresh broker + channel + WAL for a per-run
+    // factory, or the borrowed pair for the reference ctor. Done AFTER the pre-flight
+    // so an invalid graph never opens a broker or creates a WAL.
+    auto transport_res = make_transport_();
+    if (!transport_res.has_value()) {
+        return make_error<TaskRunResult>(transport_res.error());
+    }
+    RunTransport transport = std::move(*transport_res);
+    if (transport.port == nullptr || transport.channel == nullptr) {
+        return make_error<TaskRunResult>(MathError::distributed_error);
+    }
+    BrokerPort& port = *transport.port;
+    ResultChannel& results = *transport.channel;
+
+    // RAII teardown; declaration order is load-bearing. `reaper` is declared FIRST so
+    // it is destroyed LAST: the pump threads (joined by PumpGuard) hold BrokerPort&/
+    // ResultChannel& into the transport and MUST stop before the reaper releases the
+    // owned broker/channel. This replaces the per-return-site cleanup() calls -- a
+    // future early return can no longer forget to join a pump or leak a WAL decision.
+    struct TransportReaper {
+        RunTransport& tr;
+        bool succeeded{false};
+        ~TransportReaper() {
+            tr.owned_port.reset();      // closes the broker => releases the WAL file
+            tr.owned_channel.reset();
+            if (succeeded && !tr.wal_path.empty()) {
+                std::error_code ec;
+                std::filesystem::remove(tr.wal_path, ec);  // best-effort on success
+            }                            // failure: file retained for post-mortem
+        }
+    };
+    struct PumpGuard {
+        std::stop_source stop{};
+        std::vector<std::thread> threads{};
+        ~PumpGuard() {
+            stop.request_stop();
+            for (auto& t : threads) {
+                if (t.joinable()) { t.join(); }
+            }
+        }
+    };
+    TransportReaper reaper{transport};
+    PumpGuard pumps;
     if (cfg_.num_workers > 0) {
-        workers.reserve(cfg_.num_workers);
+        pumps.threads.reserve(cfg_.num_workers);
         for (std::size_t w = 0; w < cfg_.num_workers; ++w) {
             WorkerPumpConfig pump_cfg{
                 .worker_id = w + 1,
@@ -973,20 +1047,13 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 .idle_backoff_ms = cfg_.poll_interval_ms,
                 .heartbeat_every_ms = 0
             };
-            workers.emplace_back([this, pump_cfg, token = stop_source.get_token()]() {
-                run_worker_pump(port_, *cfg_.registry, results_, pump_cfg, token);
-            });
+            pumps.threads.emplace_back(
+                [&port, &results, reg = cfg_.registry, pump_cfg,
+                 token = pumps.stop.get_token()]() {
+                    run_worker_pump(port, *reg, results, pump_cfg, token);
+                });
         }
     }
-
-    auto cleanup = [&]() {
-        stop_source.request_stop();
-        for (auto& w : workers) {
-            if (w.joinable()) {
-                w.join();
-            }
-        }
-    };
 
     std::vector<Result<Payload>> outputs(n);
     std::vector<std::optional<std::size_t>> origins(n);
@@ -1043,14 +1110,12 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
 
             auto enc_res = sgee_bridge::encode_task(env);
             if (!enc_res.has_value()) {
-                cleanup();
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
             const SgeePlacement placement = cfg_.placement ? cfg_.placement(g, id) : SgeePlacement::cpu;
-            auto enqueue_res = port_.enqueue(*enc_res, placement, cfg_.max_attempts);
+            auto enqueue_res = port.enqueue(*enc_res, placement, cfg_.max_attempts);
             if (!enqueue_res.has_value()) {
-                cleanup();
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
@@ -1063,37 +1128,32 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - start_time).count());
             if (elapsed_ms > run_deadline_ms) {
-                cleanup();
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
             // Sweep in the broker's OWN clock domain (never a wall clock): lease deadlines were set
-            // against port_.now_ms(), so sourcing "now" from anywhere else would spuriously expire
+            // against port.now_ms(), so sourcing "now" from anywhere else would spuriously expire
             // every in-flight lease. A sweep failure is a transport fault -> honest whole-run abort.
-            const auto sweep_res = port_.sweep_expired(port_.now_ms());
+            const auto sweep_res = port.sweep_expired(port.now_ms());
             if (!sweep_res.has_value()) {
-                cleanup();
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
             std::vector<std::uint64_t> resolved_qids;
 
             for (const auto& [qid, id] : pending_qids) {
-                auto st_res = port_.state(qid);
+                auto st_res = port.state(qid);
                 if (!st_res.has_value()) {
-                    cleanup();
                     return make_error<TaskRunResult>(MathError::distributed_error);
                 }
                 const BrokerPort::QState st = *st_res;
                 if (st == BrokerPort::QState::completed) {
-                    auto res_bytes_res = results_.get(qid);
+                    auto res_bytes_res = results.get(qid);
                     if (!res_bytes_res.has_value()) {
-                        cleanup();
                         return make_error<TaskRunResult>(MathError::distributed_error);
                     }
                     auto dec_res = sgee_bridge::decode_result(*res_bytes_res);
                     if (!dec_res.has_value()) {
-                        cleanup();
                         return make_error<TaskRunResult>(MathError::distributed_error);
                     }
                     const auto& res_env = *dec_res;
@@ -1110,11 +1170,9 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                         ++executed;
                         resolved_qids.push_back(qid);
                     } else {
-                        cleanup();
                         return make_error<TaskRunResult>(MathError::distributed_error);
                     }
                 } else if (st == BrokerPort::QState::dead) {
-                    cleanup();
                     return make_error<TaskRunResult>(MathError::distributed_error);
                 }
             }
@@ -1129,7 +1187,7 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
         }
     }
 
-    cleanup();
+    reaper.succeeded = true;             // ONLY the full-result path sets this
     return TaskRunResult{
         .outputs = std::move(outputs),
         .measured_seconds = std::move(seconds),
