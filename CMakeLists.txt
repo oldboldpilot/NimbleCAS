@@ -934,6 +934,11 @@ target_link_libraries(nimblecas_taskdag
 
 # ---- nimblecas.taskdag_sgee : SGEE distributed task-DAG backend — opt-in via -DNIMBLECAS_SGEE=ON ----
 option(NIMBLECAS_SGEE "Enable the SGEE distributed taskdag backend" OFF)
+# The cross-process gRPC backend is INDEPENDENT of NIMBLECAS_SGEE: it links libsgee_capi_grpc
+# (which carries gRPC transitively) rather than the broker-only libsgee_capi, so a build may
+# enable either, both, or neither. The default build (both OFF) links only the honest stubs.
+option(NIMBLECAS_SGEE_GRPC "Enable the cross-process gRPC SGEE distributed backend" OFF)
+set(NIMBLECAS_SGEE_ROOT "" CACHE PATH "Root of a built StochasticGraphExecutionEngine")
 
 add_library(nimblecas_taskdag_sgee STATIC)
 target_sources(nimblecas_taskdag_sgee PUBLIC
@@ -942,7 +947,6 @@ target_link_libraries(nimblecas_taskdag_sgee
   PUBLIC nimblecas_taskdag nimblecas_core std_module)
 
 if(NIMBLECAS_SGEE)
-  set(NIMBLECAS_SGEE_ROOT "" CACHE PATH "Root of a built StochasticGraphExecutionEngine")
   find_path(NIMBLECAS_SGEE_CAPI_INCLUDE sgee_capi.h
     HINTS "${NIMBLECAS_SGEE_ROOT}/bindings/capi" REQUIRED)
   find_library(NIMBLECAS_SGEE_CAPI_LIB sgee_capi
@@ -953,6 +957,25 @@ if(NIMBLECAS_SGEE)
   target_compile_definitions(nimblecas_taskdag_sgee PUBLIC NIMBLECAS_SGEE)
 else()
   target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_backend_stub.cpp)
+endif()
+
+if(NIMBLECAS_SGEE_GRPC)
+  # sgee_capi_grpc.h lives beside sgee_capi.h (which it includes); libsgee_capi_grpc.so is built
+  # under build-grpc/lib and carries gRPC/protobuf statically embedded, so linking it needs no
+  # gRPC toolchain on the NimbleCAS side.
+  find_path(NIMBLECAS_SGEE_GRPC_INCLUDE sgee_capi_grpc.h
+    HINTS "${NIMBLECAS_SGEE_ROOT}/bindings/capi" REQUIRED)
+  find_library(NIMBLECAS_SGEE_GRPC_LIB sgee_capi_grpc
+    HINTS "${NIMBLECAS_SGEE_ROOT}/build-grpc/lib" "${NIMBLECAS_SGEE_ROOT}/build-grpc" REQUIRED)
+  target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_backend_grpc.cpp)
+  target_include_directories(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_GRPC_INCLUDE}")
+  target_link_libraries(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_GRPC_LIB}")
+  target_compile_definitions(nimblecas_taskdag_sgee PUBLIC NIMBLECAS_SGEE_GRPC)
+  # Directory of libsgee_capi_grpc.so, for the integration test/worker BUILD_RPATH (the .so lives
+  # in SGEE's build tree, not installed).
+  get_filename_component(NIMBLECAS_SGEE_GRPC_LIB_DIR "${NIMBLECAS_SGEE_GRPC_LIB}" DIRECTORY)
+else()
+  target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_grpc_backend_stub.cpp)
 endif()
 
 # ---- nimblecas.splitfield : Trager factorization / root adjunction / splitting fields ----
@@ -1332,6 +1355,27 @@ add_executable(taskdag_sgee_tests tests/taskdag_sgee_tests.cpp)
 target_link_libraries(taskdag_sgee_tests
   PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_sgee_tests COMMAND taskdag_sgee_tests)
+
+# Cross-process gRPC integration test + its worker binary (NIMBLECAS_SGEE_GRPC=ON only). The test
+# spawns a real sgee_queue_node (path from the NIMBLECAS_SGEE_QUEUE_NODE env var) and two worker
+# processes; it honestly skips (CTest 77) when that env var is unset.
+if(NIMBLECAS_SGEE_GRPC)
+  add_executable(taskdag_sgee_grpc_worker tests/taskdag_sgee_grpc_worker.cpp)
+  target_link_libraries(taskdag_sgee_grpc_worker
+    PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core std_module)
+  set_target_properties(taskdag_sgee_grpc_worker PROPERTIES
+    BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
+
+  add_executable(taskdag_sgee_grpc_tests tests/taskdag_sgee_grpc_tests.cpp)
+  target_link_libraries(taskdag_sgee_grpc_tests
+    PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
+  set_target_properties(taskdag_sgee_grpc_tests PROPERTIES
+    BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
+  add_test(NAME taskdag_sgee_grpc_tests COMMAND taskdag_sgee_grpc_tests)
+  set_tests_properties(taskdag_sgee_grpc_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    ENVIRONMENT "NIMBLECAS_SGEE_GRPC_WORKER=$<TARGET_FILE:taskdag_sgee_grpc_worker>")
+endif()
 
 add_executable(splitfield_tests tests/splitfield_tests.cpp)
 target_link_libraries(splitfield_tests

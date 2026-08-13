@@ -46,6 +46,29 @@ Depends on [`core`](core.md) (`Result` / `MathError::distributed_error`) and
   reuse after a `run()` has failed** — the next run starts on a clean broker with no stale tasks.
   Broker-open failure surfaces at `run()` time as `MathError::distributed_error`; the factory
   validates configuration only (invalid config → `domain_error`) and does not itself open a broker.
+- **Part 3 (Cross-process gRPC — `-DNIMBLECAS_SGEE_GRPC=ON`):** `GrpcBrokerPort` /
+  `GrpcResultChannel` drive a **remote** `sgee_queue_node` over gRPC, so a coordinator process and
+  its worker **processes** need not share a machine. This option is **independent** of
+  `NIMBLECAS_SGEE` (enable either, both, or neither; the default build links honest stubs for both).
+  It links **`libsgee_capi_grpc`**, a shared library that statically embeds gRPC/protobuf — so
+  NimbleCAS needs the header and the `.so` only, never the gRPC toolchain.
+  `sgee_grpc_distributed_executor(cfg, {endpoint})` opens a fresh `GrpcBrokerPort` + `GrpcResultChannel`
+  pair per `run()` to `endpoint` (`"host:port"` of the node's queue port); `cfg.wal_dir` is **ignored**
+  (the queue lives in the node's `SGEE_DATA_DIR`) and `num_workers == 0` is **valid** — it means "no
+  in-process pumps; work is done by separate worker processes attached to the same endpoint".
+  - **`sweep_expired` is a no-op** (returns 0): the queue node's driver sweeps expired leases
+    autonomously, so the coordinator's per-tick sweep call is a free success and `now_ms` is inert.
+  - **Result transport is the node's out-of-band, in-memory store** (never the broker WAL). It is
+    **not durable**: a queue-node restart mid-run loses stored results, which the coordinator observes
+    as `Completed`-but-absent and — per the honesty boundary below — turns into an honest whole-run
+    `distributed_error` abort, never a fabricated value.
+  - **Fencing tokens** cross the wire as the full `(local, term, index)` triple; the single-`u64`
+    `BrokerPort` token is the `local` half, with `(term, index)` stashed per-qid and re-attached on
+    `complete`/`fail`/`heartbeat` (only ever called by the process that leased).
+  - **Serialization:** `GrpcBrokerPort`'s mutex is held across each RPC. The intended topology (one
+    coordinator thread; each worker a separate process with its own port) never contends. The
+    in-process-pump config (`num_workers > 0`) fully serializes its transport on that mutex and is a
+    convenience, not a throughput path — use separate worker processes for parallelism.
 
 ## Build recipe
 
@@ -61,6 +84,13 @@ cmake -B build -GNinja -DNIMBLECAS_SGEE=ON -DNIMBLECAS_SGEE_ROOT=/path/to/Stocha
 cmake --build build
 ```
 Requires a built SGEE tree where `sgee_capi.h` is present under `${NIMBLECAS_SGEE_ROOT}/bindings/capi` and `libsgee_capi` shared library is present under `${NIMBLECAS_SGEE_ROOT}/build-capi/lib` or `${NIMBLECAS_SGEE_ROOT}/build/lib` or `${NIMBLECAS_SGEE_ROOT}/lib`.
+
+Cross-process gRPC backend build (ON, `libsgee_capi_grpc` — independent of `NIMBLECAS_SGEE`):
+```bash
+cmake -B build -GNinja -DNIMBLECAS_SGEE_GRPC=ON -DNIMBLECAS_SGEE_ROOT=/path/to/StochasticGraphExecutionEngine
+cmake --build build
+```
+Requires a built SGEE **gRPC** tree with `sgee_capi_grpc.h` under `${NIMBLECAS_SGEE_ROOT}/bindings/capi` and `libsgee_capi_grpc` under `${NIMBLECAS_SGEE_ROOT}/build-grpc/lib` (built with `-DSGEE_USE_GRPC=ON`, which also produces the `sgee_queue_node` server). The cross-process integration test `taskdag_sgee_grpc_tests` runs only when `NIMBLECAS_SGEE_QUEUE_NODE` points at a built `sgee_queue_node` (else it CTest-skips, exit 77); it spawns the node + two worker processes and asserts bit-identity to `serial_executor`.
 
 ## API
 
@@ -78,6 +108,10 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | `BrokerPort` | Abstract queue interface (`enqueue`, `lease`, `complete`, `fail`, `heartbeat`, `sweep_expired`, `state`). |
 | `FakeBrokerPort` | Deterministic in-memory `BrokerPort` with injectable hand clock. |
 | `CapiBrokerPort` | `class CapiBrokerPort : public BrokerPort` — C-ABI wrapper over `libsgee_capi`'s `sgee_task_broker_t*` (ON only). |
+| `GrpcBrokerPort` | `class GrpcBrokerPort : public BrokerPort` — remote `sgee_queue_node` over gRPC via `libsgee_capi_grpc` (`NIMBLECAS_SGEE_GRPC` only). `connect(endpoint, auth, deadline_ms)` factory. |
+| `GrpcResultChannel` | `class GrpcResultChannel : public ResultChannel` — the node's out-of-band result store over gRPC (`NIMBLECAS_SGEE_GRPC` only). |
+| `SgeeGrpcExecutorOptions` | `struct { string endpoint; string auth_token; u64 rpc_deadline_ms; }` |
+| `sgee_grpc_distributed_executor` | `auto sgee_grpc_distributed_executor(SgeeExecutorConfig, SgeeGrpcExecutorOptions) -> Result<unique_ptr<Executor>>` factory (cross-process; `wal_dir` ignored, `num_workers==0` valid). |
 | `WorkerPumpConfig` | `struct { u64 worker_id; u64 lease_timeout_ms; u64 idle_backoff_ms; u64 heartbeat_every_ms; }` |
 | `run_worker_pump` | Worker execution loop: lease → decode → registry lookup → invoke → put result → complete. |
 | `SgeeExecutorConfig` | Config struct with fluent setters (`with_registry`, `with_num_workers`, `with_poll_interval_ms`, etc.). |
@@ -89,6 +123,8 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | Condition | Error |
 | :--- | :--- |
 | Factory called when `NIMBLECAS_SGEE=OFF` | `MathError::not_implemented` |
+| `sgee_grpc_distributed_executor` called when `NIMBLECAS_SGEE_GRPC=OFF` | `MathError::not_implemented` (valid config) / `domain_error` (invalid) |
+| gRPC: `GetResult` returns `found=false` after `state()==completed` (node lost its store) | `MathError::distributed_error` (honest whole-run abort, never a fabricated value) |
 | Factory config invalid (null registry / zero workers / zero attempts) | `MathError::domain_error` |
 | Graph contains an unnamed closure task | `MathError::not_implemented` (before enqueue) |
 | Graph names an OpId absent from the registry | `MathError::domain_error` (before enqueue) |

@@ -10,6 +10,12 @@ module;
 // .cpp (that see the real global type) cannot accept — "cannot convert ... incomplete type".
 #include "sgee_capi.h"
 #endif
+#ifdef NIMBLECAS_SGEE_GRPC
+// The cross-process gRPC C ABI, same GLOBAL-module-fragment rationale as above for
+// `sgee_grpc_client_t`. Independent of NIMBLECAS_SGEE: this header brings the gRPC-client
+// surface only, and includes sgee_capi.h itself (guarded) for the shared enums/helpers.
+#include "sgee_capi_grpc.h"
+#endif
 
 export module nimblecas.taskdag_sgee;
 
@@ -467,6 +473,113 @@ private:
 #endif
 
 // ---------------------------------------------------------------------------
+// Cross-process gRPC BrokerPort / ResultChannel (NIMBLECAS_SGEE_GRPC=ON)
+// ---------------------------------------------------------------------------
+#ifdef NIMBLECAS_SGEE_GRPC
+// sgee_grpc_client_t comes from sgee_capi_grpc.h, included in the global module fragment above.
+// A BrokerPort backed by a remote sgee_queue_node over gRPC — the TRUE cross-process transport.
+// Unlike CapiBrokerPort there is no local WAL: the queue lives in the server. sweep_expired is a
+// no-op (the node's driver sweeps expired leases autonomously), and now_ms is inert (its only
+// coordinator use is the sweep argument). The single-u64 BrokerPort token is the wire token's
+// local half; the (term, index) halves are stashed per-qid and re-attached on
+// complete/fail/heartbeat — safe because those are only ever called by the process that leased.
+//
+// SERIALIZATION: mutex_ is held across the whole RPC (a network call, up to rpc_deadline_ms). In
+// the intended topology this is free — the coordinator port is driven by one thread and each
+// worker PROCESS has its own port. The in-process-pump config (num_workers > 0) instead shares one
+// port across N pump threads + their heartbeat threads, which then fully serialize their transport
+// on this mutex; it is a convenience configuration, not a throughput path (use separate worker
+// processes for parallelism). Correctness is unaffected either way (ops are deterministic, so a
+// lease swept for slow-heartbeat starvation simply re-executes bit-identically).
+class GrpcBrokerPort final : public BrokerPort {
+public:
+    // Connect to a TaskQueue endpoint ("host:port"). NEVER blocks on the network (the gRPC
+    // channel connects lazily); a wrong endpoint surfaces as distributed_error on the first RPC.
+    [[nodiscard]] static auto connect(std::string endpoint, std::string auth_token = {},
+                                      std::uint64_t rpc_deadline_ms = 0)
+        -> Result<std::unique_ptr<GrpcBrokerPort>>;
+
+    explicit GrpcBrokerPort(sgee_grpc_client_t* client);
+    ~GrpcBrokerPort() override;
+
+    // Non-copyable AND non-movable — same rationale as CapiBrokerPort.
+    GrpcBrokerPort(const GrpcBrokerPort&) = delete;
+    auto operator=(const GrpcBrokerPort&) -> GrpcBrokerPort& = delete;
+    GrpcBrokerPort(GrpcBrokerPort&&) = delete;
+    auto operator=(GrpcBrokerPort&&) -> GrpcBrokerPort& = delete;
+
+    [[nodiscard]] auto is_open() const noexcept -> bool;
+
+    [[nodiscard]] auto enqueue(std::span<const std::byte> payload,
+                               SgeePlacement placement, std::uint32_t max_attempts)
+        -> Result<std::uint64_t> override;
+
+    [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+        -> Result<std::optional<Lease>> override;
+
+    [[nodiscard]] auto complete(std::uint64_t qid, std::uint64_t token)
+        -> Result<void> override;
+
+    [[nodiscard]] auto fail(std::uint64_t qid, std::uint64_t token)
+        -> Result<void> override;
+
+    [[nodiscard]] auto heartbeat(std::uint64_t qid, std::uint64_t token,
+                                 std::uint64_t extend_by_ms) -> Result<void> override;
+
+    [[nodiscard]] auto sweep_expired(std::uint64_t now_ms)
+        -> Result<std::size_t> override;
+
+    [[nodiscard]] auto state(std::uint64_t qid) -> Result<QState> override;
+
+    [[nodiscard]] auto now_ms() const -> std::uint64_t override;
+
+private:
+    struct TokenTriple {
+        std::uint64_t local{0};
+        std::uint64_t term{0};
+        std::uint64_t index{0};
+    };
+    sgee_grpc_client_t* client_{nullptr};
+    mutable std::mutex mutex_{};
+    // qid -> the wire token triple for the lease THIS port took (see the class comment).
+    std::unordered_map<std::uint64_t, TokenTriple> leases_{};
+};
+
+// A ResultChannel over the same remote node's out-of-band result store. Holds its OWN client
+// handle (an independent connection to the same endpoint) rather than sharing the port's — the
+// store is server-side, so two cheap connections are simpler than shared ownership and match the
+// per-run RunTransport's owned_port/owned_channel split. Coordinator side reads with
+// consume_on_get=true (each qid once); worker side only ever puts.
+class GrpcResultChannel final : public ResultChannel {
+public:
+    [[nodiscard]] static auto connect(std::string endpoint, bool consume_on_get,
+                                      std::string auth_token = {},
+                                      std::uint64_t rpc_deadline_ms = 0)
+        -> Result<std::unique_ptr<GrpcResultChannel>>;
+
+    GrpcResultChannel(sgee_grpc_client_t* client, bool consume_on_get);
+    ~GrpcResultChannel() override;
+
+    GrpcResultChannel(const GrpcResultChannel&) = delete;
+    auto operator=(const GrpcResultChannel&) -> GrpcResultChannel& = delete;
+    GrpcResultChannel(GrpcResultChannel&&) = delete;
+    auto operator=(GrpcResultChannel&&) -> GrpcResultChannel& = delete;
+
+    [[nodiscard]] auto is_open() const noexcept -> bool;
+
+    [[nodiscard]] auto put(std::uint64_t qid, Payload result_envelope)
+        -> Result<void> override;
+
+    [[nodiscard]] auto get(std::uint64_t qid) const -> Result<Payload> override;
+
+private:
+    sgee_grpc_client_t* client_{nullptr};
+    bool consume_on_get_{true};
+    mutable std::mutex mutex_{};
+};
+#endif
+
+// ---------------------------------------------------------------------------
 // Worker pump
 // ---------------------------------------------------------------------------
 struct WorkerPumpConfig {
@@ -591,6 +704,27 @@ private:
 // at run() time as distributed_error, and an executor is safe to reuse after a failed run. With
 // NIMBLECAS_SGEE=OFF the stub honestly returns not_implemented for a valid config.
 [[nodiscard]] auto sgee_distributed_executor(SgeeExecutorConfig cfg)
+    -> Result<std::unique_ptr<Executor>>;
+
+// ---------------------------------------------------------------------------
+// Cross-process gRPC executor factory (NIMBLECAS_SGEE_GRPC=ON)
+// ---------------------------------------------------------------------------
+struct SgeeGrpcExecutorOptions {
+    std::string endpoint{};            // "host:port" of a running sgee_queue_node's queue port
+    std::string auth_token{};          // reserved; the queue port is unauthenticated without mTLS
+    std::uint64_t rpc_deadline_ms{0};  // 0 = 30s; MUST exceed the node's lease await budget
+};
+
+// Factory for the TRUE cross-process backend: every run() opens a FRESH GrpcBrokerPort +
+// GrpcResultChannel pair (independent connections) to `opts.endpoint`. Validates cfg the same
+// way as sgee_distributed_executor EXCEPT: `wal_dir` is IGNORED (the queue lives in the server's
+// SGEE_DATA_DIR) and `num_workers == 0` is VALID — it means "no in-process pumps; work is done by
+// separate worker processes attached to the same endpoint". num_workers > 0 also runs in-process
+// pumps against the remote broker (a useful halfway configuration). The RunTransport carries no
+// local WAL, so nothing is reaped on success. With NIMBLECAS_SGEE_GRPC=OFF the stub honestly
+// returns not_implemented for a valid config.
+[[nodiscard]] auto sgee_grpc_distributed_executor(SgeeExecutorConfig cfg,
+                                                  SgeeGrpcExecutorOptions opts)
     -> Result<std::unique_ptr<Executor>>;
 
 }  // namespace nimblecas
