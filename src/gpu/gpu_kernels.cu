@@ -1327,6 +1327,150 @@ cudaError_t cg_device_dot(const double* a, const double* b, int n, int blocks, i
     return cudaMemcpy(result, dev_scalar, sizeof(double), cudaMemcpyDeviceToHost);
 }
 
+// In-block tree reduction helper for a single block of 256 threads.
+// Computes sum_{i=0..n-1} a[i] * b[i].
+// EVERY thread in the 256-thread block must execute block_dot and pass through all
+// internal __syncthreads() barriers, including threads where tid >= n.
+__device__ double block_dot(const double* __restrict__ a, const double* __restrict__ b, int n,
+                            double* __restrict__ sdata) {
+    const int tid = static_cast<int>(threadIdx.x);
+    double local_sum = 0.0;
+    for (int i = tid; i < n; i += 256) {
+        local_sum += a[i] * b[i];
+    }
+    sdata[tid] = local_sum;
+    __syncthreads();
+
+    if (tid < 128) { sdata[tid] += sdata[tid + 128]; }
+    __syncthreads();
+    if (tid < 64) { sdata[tid] += sdata[tid + 64]; }
+    __syncthreads();
+    if (tid < 32) { sdata[tid] += sdata[tid + 32]; }
+    __syncthreads();
+    if (tid < 16) { sdata[tid] += sdata[tid + 16]; }
+    __syncthreads();
+    if (tid < 8) { sdata[tid] += sdata[tid + 8]; }
+    __syncthreads();
+    if (tid < 4) { sdata[tid] += sdata[tid + 4]; }
+    __syncthreads();
+    if (tid < 2) { sdata[tid] += sdata[tid + 2]; }
+    __syncthreads();
+    if (tid < 1) { sdata[tid] += sdata[tid + 1]; }
+    __syncthreads();
+
+    const double result = sdata[0];
+    __syncthreads();
+    return result;
+}
+
+// Batched CG solver megakernel: one CUDA block per system, entire CG iteration in-kernel.
+__global__ void batched_cg_kernel(
+    const int* __restrict__ row_offsets_cat, const int* __restrict__ col_indices_cat,
+    const double* __restrict__ values_cat, const int* __restrict__ x_off,
+    const int* __restrict__ nz_off, int num_systems, const double* __restrict__ b_cat,
+    double* __restrict__ x_cat, double* __restrict__ scratch_r, double* __restrict__ scratch_p,
+    double* __restrict__ scratch_ap, int max_iters, double tol, int* __restrict__ out_iters,
+    int* __restrict__ out_converged, double* __restrict__ out_resid) {
+    extern __shared__ double sdata[];
+    const int tid = static_cast<int>(threadIdx.x);
+
+    for (int sys = static_cast<int>(blockIdx.x); sys < num_systems;
+         sys += static_cast<int>(gridDim.x)) {
+        const int n = x_off[sys + 1] - x_off[sys];
+        const int* ro = row_offsets_cat + x_off[sys] + sys;
+        const int* ci = col_indices_cat + nz_off[sys];
+        const double* va = values_cat + nz_off[sys];
+        const double* b = b_cat + x_off[sys];
+        double* x = x_cat + x_off[sys];
+        double* r = scratch_r + x_off[sys];
+        double* p = scratch_p + x_off[sys];
+        double* ap = scratch_ap + x_off[sys];
+
+        for (int i = tid; i < n; i += 256) {
+            x[i] = 0.0;
+            r[i] = b[i];
+            p[i] = b[i];
+        }
+        __syncthreads();
+
+        const double bnorm2 = block_dot(b, b, n, sdata);
+        const double threshold = tol * sqrt(bnorm2);
+        double rsold = block_dot(r, r, n, sdata);
+
+        int iters = 0;
+        int converged = (sqrt(rsold) <= threshold) ? 1 : 0;
+
+        for (int it = 0; it < max_iters && converged == 0; ++it) {
+            for (int i = tid; i < n; i += 256) {
+                const int row_start = ro[i];
+                const int row_end = ro[i + 1];
+                double sum = 0.0;
+                for (int k = row_start; k < row_end; ++k) {
+                    sum += va[k] * p[ci[k]];
+                }
+                ap[i] = sum;
+            }
+            __syncthreads();
+
+            const double pap = block_dot(p, ap, n, sdata);
+            if (!(pap > 0.0)) {
+                break;  // non-SPD breakdown, honest stop
+            }
+            const double alpha = rsold / pap;
+
+            for (int i = tid; i < n; i += 256) {
+                x[i] += alpha * p[i];
+                r[i] -= alpha * ap[i];
+            }
+            __syncthreads();
+
+            const double rsnew = block_dot(r, r, n, sdata);
+            iters = it + 1;
+            if (sqrt(rsnew) <= threshold) {
+                converged = 1;
+                rsold = rsnew;
+                break;
+            }
+
+            const double beta = rsnew / rsold;
+            for (int i = tid; i < n; i += 256) {
+                p[i] = r[i] + beta * p[i];
+            }
+            __syncthreads();
+
+            rsold = rsnew;
+        }
+
+        // TRUE RESIDUAL RECOMPUTE IN-KERNEL (mandatory honesty step)
+        for (int i = tid; i < n; i += 256) {
+            const int row_start = ro[i];
+            const int row_end = ro[i + 1];
+            double sum = 0.0;
+            for (int k = row_start; k < row_end; ++k) {
+                sum += va[k] * x[ci[k]];
+            }
+            ap[i] = sum;
+        }
+        __syncthreads();
+
+        for (int i = tid; i < n; i += 256) {
+            ap[i] = b[i] - ap[i];
+        }
+        __syncthreads();
+
+        const double true_rs = block_dot(ap, ap, n, sdata);
+        const double true_resid = sqrt(true_rs);
+        converged = (true_resid <= threshold) ? 1 : 0;
+
+        if (tid == 0) {
+            out_iters[sys] = iters;
+            out_converged[sys] = converged;
+            out_resid[sys] = true_resid;
+        }
+        __syncthreads();
+    }
+}
+
 }  // namespace
 
 extern "C" int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indices,
@@ -1838,3 +1982,154 @@ extern "C" int nimblecas_gpu_bicgstab_csr(const int* row_offsets, const int* col
 
     return rc;
 }
+
+extern "C" int nimblecas_gpu_batched_cg_csr(const int* row_offsets_cat, const int* col_indices_cat,
+                                           const double* values_cat, const int* x_off,
+                                           const int* nz_off, int num_systems, const double* b_cat,
+                                           double* x_cat, int max_iters, double tol, int* out_iters,
+                                           int* out_converged, double* out_resid) {
+    if (num_systems <= 0) {
+        return num_systems < 0 ? static_cast<int>(cudaErrorInvalidValue) : 0;
+    }
+    if (row_offsets_cat == nullptr || x_off == nullptr || nz_off == nullptr ||
+        b_cat == nullptr || x_cat == nullptr || out_iters == nullptr ||
+        out_converged == nullptr || out_resid == nullptr) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+    const size_t sys_count = static_cast<size_t>(num_systems);
+    const size_t total_n = static_cast<size_t>(x_off[num_systems]);
+    const size_t total_nnz = static_cast<size_t>(nz_off[num_systems]);
+    if (total_nnz > 0 && (col_indices_cat == nullptr || values_cat == nullptr)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
+
+    for (int i = 0; i < num_systems; ++i) {
+        out_iters[i] = 0;
+        out_converged[i] = 0;
+        out_resid[i] = 0.0;
+    }
+
+    const size_t total_rows = total_n + sys_count;
+    const size_t row_bytes = total_rows * sizeof(int);
+    const size_t col_bytes = total_nnz * sizeof(int);
+    const size_t val_bytes = total_nnz * sizeof(double);
+    const size_t off_bytes = (sys_count + 1) * sizeof(int);
+    const size_t vec_bytes = total_n * sizeof(double);
+    const size_t out_int_bytes = sys_count * sizeof(int);
+    const size_t out_dbl_bytes = sys_count * sizeof(double);
+
+    const size_t col_alloc = col_bytes != 0 ? col_bytes : sizeof(int);
+    const size_t val_alloc = val_bytes != 0 ? val_bytes : sizeof(double);
+    const size_t vec_alloc = vec_bytes != 0 ? vec_bytes : sizeof(double);
+
+    int* dev_row = nullptr;
+    int* dev_col = nullptr;
+    double* dev_val = nullptr;
+    int* dev_x_off = nullptr;
+    int* dev_nz_off = nullptr;
+    double* dev_b = nullptr;
+    double* dev_x = nullptr;
+    double* dev_scratch_r = nullptr;
+    double* dev_scratch_p = nullptr;
+    double* dev_scratch_ap = nullptr;
+    int* dev_out_iters = nullptr;
+    int* dev_out_converged = nullptr;
+    double* dev_out_resid = nullptr;
+
+    cudaError_t err = cudaSuccess;
+    int rc = 0;
+
+    if ((err = cudaMalloc(&dev_row, row_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_col, col_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_val, val_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_x_off, off_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_nz_off, off_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_b, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_x, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_scratch_r, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_scratch_p, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_scratch_ap, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_out_iters, out_int_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_out_converged, out_int_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMalloc(&dev_out_resid, out_dbl_bytes)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemset(dev_scratch_p, 0, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemset(dev_scratch_ap, 0, vec_alloc)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_row, row_offsets_cat, row_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if (total_nnz > 0 &&
+               (err = cudaMemcpy(dev_col, col_indices_cat, col_bytes, cudaMemcpyHostToDevice)) !=
+                   cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if (total_nnz > 0 &&
+               (err = cudaMemcpy(dev_val, values_cat, val_bytes, cudaMemcpyHostToDevice)) !=
+                   cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_x_off, x_off, off_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_nz_off, nz_off, off_bytes, cudaMemcpyHostToDevice)) !=
+               cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_b, b_cat, vec_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else if ((err = cudaMemcpy(dev_x, x_cat, vec_bytes, cudaMemcpyHostToDevice)) != cudaSuccess) {
+        rc = static_cast<int>(err);
+    } else {
+        const int threads = 256;
+        const int blocks = choose_blocks(num_systems, threads);
+        const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
+        batched_cg_kernel<<<blocks, threads, shmem>>>(
+            dev_row, dev_col, dev_val, dev_x_off, dev_nz_off, num_systems, dev_b, dev_x,
+            dev_scratch_r, dev_scratch_p, dev_scratch_ap, max_iters, tol, dev_out_iters,
+            dev_out_converged, dev_out_resid);
+        if ((err = cudaGetLastError()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaDeviceSynchronize()) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(x_cat, dev_x, vec_bytes, cudaMemcpyDeviceToHost)) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(out_iters, dev_out_iters, out_int_bytes, cudaMemcpyDeviceToHost)) !=
+                   cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(out_converged, dev_out_converged, out_int_bytes,
+                                     cudaMemcpyDeviceToHost)) != cudaSuccess) {
+            rc = static_cast<int>(err);
+        } else if ((err = cudaMemcpy(out_resid, dev_out_resid, out_dbl_bytes, cudaMemcpyDeviceToHost)) !=
+                   cudaSuccess) {
+            rc = static_cast<int>(err);
+        }
+    }
+
+    if (dev_row != nullptr) cudaFree(dev_row);
+    if (dev_col != nullptr) cudaFree(dev_col);
+    if (dev_val != nullptr) cudaFree(dev_val);
+    if (dev_x_off != nullptr) cudaFree(dev_x_off);
+    if (dev_nz_off != nullptr) cudaFree(dev_nz_off);
+    if (dev_b != nullptr) cudaFree(dev_b);
+    if (dev_x != nullptr) cudaFree(dev_x);
+    if (dev_scratch_r != nullptr) cudaFree(dev_scratch_r);
+    if (dev_scratch_p != nullptr) cudaFree(dev_scratch_p);
+    if (dev_scratch_ap != nullptr) cudaFree(dev_scratch_ap);
+    if (dev_out_iters != nullptr) cudaFree(dev_out_iters);
+    if (dev_out_converged != nullptr) cudaFree(dev_out_converged);
+    if (dev_out_resid != nullptr) cudaFree(dev_out_resid);
+
+    return rc;
+}
+

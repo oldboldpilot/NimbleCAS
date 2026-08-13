@@ -1571,7 +1571,118 @@ auto main() -> int {
                                "out-of-range column index yields domain_error");
                   }
               })
+        .test("batched_cg_csr solves K independent SPD systems",
+              [](nimblecas::testing::TestContext& t) {
+                  using namespace nimblecas;
+
+                  // 1. Define K = 3 independent SPD CSR systems of different sizes:
+                  // System 0: 2x2 SPD matrix [[4, 1], [1, 3]], b = [1, 2]
+                  std::vector<int> row0 = {0, 2, 4};
+                  std::vector<int> col0 = {0, 1, 0, 1};
+                  std::vector<double> val0 = {4.0, 1.0, 1.0, 3.0};
+                  std::vector<double> b0 = {1.0, 2.0};
+
+                  // System 1: 3x3 Poisson-1D tridiagonal [[2, -1, 0], [-1, 2, -1], [0, -1, 2]], b = [1, 0, 1]
+                  std::vector<int> row1 = {0, 2, 5, 7};
+                  std::vector<int> col1 = {0, 1, 0, 1, 2, 1, 2};
+                  std::vector<double> val1 = {2.0, -1.0, -1.0, 2.0, -1.0, -1.0, 2.0};
+                  std::vector<double> b1 = {1.0, 0.0, 1.0};
+
+                  // System 2: 1x1 diagonal [[5.0]], b = [10.0]
+                  std::vector<int> row2 = {0, 1};
+                  std::vector<int> col2 = {0};
+                  std::vector<double> val2 = {5.0};
+                  std::vector<double> b2 = {10.0};
+
+                  std::vector<gpu::CsrSystem> sys_list = {
+                      {row0, col0, val0, b0},
+                      {row1, col1, val1, b1},
+                      {row2, col2, val2, b2}
+                  };
+
+                  auto res = gpu::batched_cg_csr(sys_list, 100, 1e-10);
+                  t.expect(res.has_value(), "batched_cg_csr succeeds on valid batch");
+                  if (res) {
+                      t.expect(res->size() == 3, "returns 3 results for 3 systems");
+
+                      // Check convergence and residuals
+                      for (std::size_t i = 0; i < res->size(); ++i) {
+                          t.expect((*res)[i].converged, "system " + std::to_string(i) + " converged");
+                          t.expect((*res)[i].residual <= 1e-8, "system " + std::to_string(i) + " residual small");
+                      }
+
+                      // Verify System 2 exact solution: 5 * x = 10 => x = 2
+                      t.expect((*res)[2].x.size() == 1 && std::abs((*res)[2].x[0] - 2.0) < 1e-8,
+                               "1x1 system solves to x = 2");
+
+                      // Compare each system against solo cg_csr / CPU krylov::cg
+                      auto solo0 = gpu::cg_csr(row0, col0, val0, b0, 100, 1e-10);
+                      if (solo0) {
+                          t.expect(solo0->converged, "solo cg_csr converged for system 0");
+                          for (std::size_t k = 0; k < b0.size(); ++k) {
+                              t.expect(std::abs((*res)[0].x[k] - solo0->x[k]) < 1e-6,
+                                       "batch system 0 agrees with solo cg_csr to tolerance");
+                          }
+                      }
+                  }
+
+                  // 2. Bitwise repeatability run-to-run:
+                  auto res_repeat = gpu::batched_cg_csr(sys_list, 100, 1e-10);
+                  if (res && res_repeat) {
+                      bool bitwise_match = true;
+                      for (std::size_t i = 0; i < sys_list.size(); ++i) {
+                          if ((*res)[i].x != (*res_repeat)[i].x ||
+                              (*res)[i].residual != (*res_repeat)[i].residual ||
+                              (*res)[i].iterations != (*res_repeat)[i].iterations ||
+                              (*res)[i].converged != (*res_repeat)[i].converged) {
+                              bitwise_match = false;
+                              break;
+                          }
+                      }
+                      t.expect(bitwise_match, "batched_cg_csr is bitwise repeatable run-to-run");
+                  }
+
+                  // 3. Non-SPD isolation: batch containing one non-SPD system mid-batch
+                  std::vector<int> row_neg = {0, 1};
+                  std::vector<int> col_neg = {0};
+                  std::vector<double> val_neg = {-2.0};
+                  std::vector<double> b_neg = {1.0};
+
+                  std::vector<gpu::CsrSystem> mixed_list = {
+                      {row0, col0, val0, b0},
+                      {row_neg, col_neg, val_neg, b_neg},  // non-SPD breakdown
+                      {row2, col2, val2, b2}
+                  };
+
+                  auto mixed_res = gpu::batched_cg_csr(mixed_list, 100, 1e-10);
+                  t.expect(mixed_res.has_value(), "mixed non-SPD batch completes without error");
+                  if (mixed_res) {
+                      t.expect((*mixed_res)[0].converged, "sys 0 in mixed batch converged");
+                      t.expect(!(*mixed_res)[1].converged, "sys 1 (non-SPD) in mixed batch honestly reports not converged");
+                      t.expect((*mixed_res)[2].converged, "sys 2 in mixed batch converged");
+                  }
+
+                  // 4. max_iters honesty: max_iters = 1 on multi-iter system
+                  auto max_it_res = gpu::batched_cg_csr(sys_list, 1, 1e-10);
+                  if (max_it_res) {
+                      t.expect((*max_it_res)[0].iterations == 1, "max_iters=1 performs 1 iteration");
+                  }
+
+                  // 5. Domain error guards:
+                  auto empty_res = gpu::batched_cg_csr({}, 100, 1e-10);
+                  t.expect(empty_res.has_value() && empty_res->empty(), "empty systems span returns empty success");
+
+                  auto neg_iters_res = gpu::batched_cg_csr(sys_list, -1, 1e-10);
+                  t.expect(!neg_iters_res.has_value() && neg_iters_res.error() == MathError::domain_error,
+                           "negative max_iters yields domain_error");
+
+                  std::vector<double> empty_b;
+                  std::vector<gpu::CsrSystem> bad_b_list = {
+                      {row0, col0, val0, empty_b}
+                  };
+                  auto bad_b_res = gpu::batched_cg_csr(bad_b_list, 100, 1e-10);
+                  t.expect(!bad_b_res.has_value() && bad_b_res.error() == MathError::domain_error,
+                           "system with empty b yields domain_error");
+              })
         .run();
 }
-
-

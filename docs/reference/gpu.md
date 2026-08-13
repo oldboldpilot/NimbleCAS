@@ -92,6 +92,8 @@ C ABI, and every one is cross-checked against a CPU reference in `tests/gpu_test
 | `sobol_batch(n0, count, dimension)` | **Batched Sobol' point generation** — dyadic-exact double view matching CPU `sobol_point` bit-for-bit (integer Gray-code XOR * 2^-32). |
 | `halton_batch(n0, count, dimension)` | **Batched Halton point generation** — radical inverse double view matching CPU `halton_point` to rounding (~1e-12). |
 | `bicgstab_csr(row_offsets, col_indices, values, b, max_iters, tol)` | **BiCGStab sparse solver** for general (non-symmetric) CSR systems \(A x = b\); recomputes true residual on device, bitwise repeatable, CPU fallback `krylov::bicgstab`. |
+| `batched_cg_csr(systems, max_iters, tol)` | **Batched CG sparse solver** for $K$ independent SPD CSR systems (one CUDA block per system); recomputes true residual in-kernel, bitwise repeatable (geometry-independent 256-thread reduction tree per block), CPU fallback `krylov::cg`. |
+
 
 
 Every GPU entry point — the numeric kernels, the batched Black-Scholes pricer, the wavelet
@@ -353,6 +355,15 @@ amortization pays.
 - **Honesty boundary**: NUMERICAL (`double`). `converged == false` is an outcome (iteration limit reached or breakdown), never an error. At exit, the TRUE residual \(\|b - A x\|\) is recomputed on the device, and `converged` is derived from it. The solver never claims unachieved convergence.
 - **Determinism**: Block/tree order dot reductions sum in device tree order, so the last bits of \(x\) may differ from a sequential CPU solver (each is a valid numerical solution). Bitwise repeatable run-to-run on the same device at fixed launch shape.
 - **CPU Fallback**: When no GPU is present (`!available()`), falls back to CPU `krylov::bicgstab` via `csr_matvec`. Domain validation (monotone offsets, valid column bounds) is applied prior to device/fallback selection.
+
+### Sparse Krylov Solvers: `batched_cg_csr`
+
+`batched_cg_csr` solves $K$ independent symmetric positive-definite (SPD) sparse linear systems $A_i x_i = b_i$ in CSR format in a single CUDA launch (one block per system, the whole iteration in-kernel without per-iteration host launches).
+
+- **Honesty boundary**: NUMERICAL (`double`). Non-SPD systems stop honestly on $p^T A p \le 0$ breakdown with `converged == false` without poisoning remaining systems in the batch. At exit, true residual $\|b_i - A_i x_i\|$ is recomputed in-kernel and `converged` is derived from it.
+- **Determinism**: Each block uses a fixed 256-thread reduction tree with strided accumulation in index order, making per-system arithmetic independent of grid geometry and bitwise repeatable run-to-run. Differs in last bits from sequential CPU `krylov::cg` and solo `cg_csr` (different tree reduction association).
+- **CPU Fallback**: When no device is present (`!available()`), loops CPU `krylov::cg` per system. Per-system shape, consistency, and nonzeros validation is applied prior to device/fallback selection.
+
 
 ## Testing
 

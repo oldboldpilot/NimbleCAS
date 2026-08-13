@@ -537,6 +537,144 @@ using BicgstabCsrResult = CgCsrResult;
     return CgCsrResult{std::move(x), iterations, converged != 0, residual};
 }
 
+// One CSR system view for the batched solver; all spans must outlive the call.
+struct CsrSystem {
+    std::span<const int> row_offsets;    // length n_i + 1
+    std::span<const int> col_indices;    // length nnz_i, entries in [0, n_i)
+    std::span<const double> values;      // length nnz_i
+    std::span<const double> b;           // length n_i
+};
+
+// Batched CG solve over K independent SYMMETRIC POSITIVE-DEFINITE sparse CSR systems — one CUDA
+// block per system, the whole iteration in-kernel (no per-iteration host sync).
+// Layout & validation: per-system shape/consistency/nnz is validated BEFORE the available() branch.
+// SPD-ness is assumed (caller's responsibility); a non-SPD system is stopped honestly by the pap > 0
+// guard with converged == false for that system only.
+//
+// HONESTY: NUMERICAL (double) iterative solver. CPU krylov::cg remains authoritative.
+// `converged == false` is a legitimate outcome (budget exhausted or non-SPD breakdown), never an error.
+// The reported residual is the TRUE ||b_i - A_i x_i|| recomputed in-kernel at exit.
+// DETERMINISM: per-block tree reduction has a fixed 256-thread shape and index-ordered strided
+// accumulation, so each system's result is a pure function of its inputs, independent of grid
+// geometry and bitwise repeatable run-to-run; NOT bit-for-bit vs CPU krylov::cg, and a batch-of-one
+// is NOT guaranteed bitwise equal to cg_csr (single-block 256-slice dot vs multi-block two-stage dot).
+//
+// Fails with MathError::domain_error when max_iters < 0, a system has empty b, row_offsets.size() != n_i+1,
+// col_indices.size() != values.size(), non-monotone row_offsets, or out-of-range col index;
+// MathError::overflow when total_n, total_nnz, or total_n + K exceeds INT_MAX;
+// and MathError::gpu_error when a CUDA call fails on an available device.
+// When no GPU is present (!available()), loops CPU krylov::cg per system.
+[[nodiscard]] auto batched_cg_csr(std::span<const CsrSystem> systems, int max_iters = 1000,
+                                  double tol = 1e-10) -> Result<std::vector<CgCsrResult>> {
+    if (systems.empty()) {
+        return std::vector<CgCsrResult>{};
+    }
+    if (max_iters < 0) {
+        return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
+    }
+
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (systems.size() > int_max) {
+        return make_error<std::vector<CgCsrResult>>(MathError::overflow);
+    }
+
+    std::size_t total_n = 0;
+    std::size_t total_nnz = 0;
+
+    for (const auto& s : systems) {
+        if (s.b.empty() || s.row_offsets.size() != s.b.size() + 1 ||
+            s.col_indices.size() != s.values.size()) {
+            return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
+        }
+        if (s.row_offsets.front() != 0 ||
+            static_cast<std::size_t>(s.row_offsets.back()) != s.values.size()) {
+            return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
+        }
+        for (std::size_t i = 0; i + 1 < s.row_offsets.size(); ++i) {
+            if (s.row_offsets[i] < 0 || s.row_offsets[i + 1] < s.row_offsets[i]) {
+                return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
+            }
+        }
+        const auto n_i = static_cast<int>(s.b.size());
+        for (const int c : s.col_indices) {
+            if (c < 0 || c >= n_i) {
+                return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
+            }
+        }
+        total_n += s.b.size();
+        total_nnz += s.values.size();
+    }
+
+    if (total_n > int_max || total_nnz > int_max ||
+        (total_n + systems.size()) > int_max) {
+        return make_error<std::vector<CgCsrResult>>(MathError::overflow);
+    }
+
+    if (!available()) {
+        std::vector<CgCsrResult> out;
+        out.reserve(systems.size());
+        for (const auto& s : systems) {
+            auto A = nimblecas::csr_matvec(s.row_offsets, s.col_indices, s.values, s.b.size());
+            auto res = nimblecas::cg(A, s.b, tol, static_cast<std::size_t>(max_iters));
+            if (!res) {
+                return make_error<std::vector<CgCsrResult>>(res.error());
+            }
+            out.push_back(CgCsrResult{std::move(res->x), static_cast<int>(res->iterations),
+                                      res->converged, res->residual});
+        }
+        return out;
+    }
+
+    const auto K = systems.size();
+    std::vector<int> x_off(K + 1, 0);
+    std::vector<int> nz_off(K + 1, 0);
+    std::vector<int> row_offsets_cat;
+    row_offsets_cat.reserve(total_n + K);
+    std::vector<int> col_indices_cat;
+    col_indices_cat.reserve(total_nnz);
+    std::vector<double> values_cat;
+    values_cat.reserve(total_nnz);
+    std::vector<double> b_cat;
+    b_cat.reserve(total_n);
+    std::vector<double> x_cat(total_n, 0.0);
+
+    for (std::size_t i = 0; i < K; ++i) {
+        const auto& s = systems[i];
+        x_off[i + 1] = x_off[i] + static_cast<int>(s.b.size());
+        nz_off[i + 1] = nz_off[i] + static_cast<int>(s.values.size());
+        row_offsets_cat.insert(row_offsets_cat.end(), s.row_offsets.begin(), s.row_offsets.end());
+        col_indices_cat.insert(col_indices_cat.end(), s.col_indices.begin(), s.col_indices.end());
+        values_cat.insert(values_cat.end(), s.values.begin(), s.values.end());
+        b_cat.insert(b_cat.end(), s.b.begin(), s.b.end());
+    }
+
+    std::vector<int> out_iters(K, 0);
+    std::vector<int> out_converged(K, 0);
+    std::vector<double> out_resid(K, 0.0);
+
+    const int rc = nimblecas_gpu_batched_cg_csr(
+        row_offsets_cat.data(), col_indices_cat.data(), values_cat.data(), x_off.data(),
+        nz_off.data(), static_cast<int>(K), b_cat.data(), x_cat.data(), max_iters, tol,
+        out_iters.data(), out_converged.data(), out_resid.data());
+
+    if (rc != 0) {
+        return make_error<std::vector<CgCsrResult>>(MathError::gpu_error);
+    }
+
+    std::vector<CgCsrResult> results;
+    results.reserve(K);
+    for (std::size_t i = 0; i < K; ++i) {
+        const std::size_t start = static_cast<std::size_t>(x_off[i]);
+        const std::size_t end = static_cast<std::size_t>(x_off[i + 1]);
+        std::vector<double> xi(x_cat.begin() + static_cast<std::ptrdiff_t>(start),
+                               x_cat.begin() + static_cast<std::ptrdiff_t>(end));
+        results.push_back(CgCsrResult{std::move(xi), out_iters[i], out_converged[i] != 0,
+                                      out_resid[i]});
+    }
+    return results;
+}
+
+
 // ---------------------------------------------------------------------------
 // FAMILY A — Batched derivative pricing (gpu_pricing_kernels.cu).
 //

@@ -129,6 +129,27 @@ int nimblecas_gpu_bicgstab_csr(const int* row_offsets, const int* col_indices,
                                double* x, int max_iters, double tol, int* out_iters,
                                int* out_converged, double* out_resid);
 
+/* Batched CG solve of K independent SYMMETRIC POSITIVE-DEFINITE sparse CSR systems, one CUDA
+ * block per system, the whole iteration in-kernel (no per-iteration host sync). Layout:
+ * x_off/nz_off are int prefix arrays (length K+1) of the per-system n_i / nnz_i;
+ * row_offsets_cat concatenates each system's LOCAL row_offsets (system i starts at index
+ * x_off[i] + i and has n_i + 1 entries); col_indices_cat/values_cat/b_cat/x_cat are
+ * concatenated with LOCAL column indices. Each system iterates until its residual 2-norm
+ * <= tol*||b_i|| or max_iters, writing per-system out_iters[i], out_converged[i] (1/0), and
+ * the TRUE ||b_i - A_i x_i|| recomputed in-kernel to out_resid[i]. A non-SPD system breaks
+ * down honestly (p.Ap <= 0 stops that system with converged 0) without affecting the others.
+ * The per-block reduction tree has a FIXED 256-thread shape and each thread accumulates its
+ * strided slice in index order, so the result is a pure function of the inputs — independent
+ * of grid geometry and bitwise repeatable run-to-run — but NOT bit-for-bit equal to the
+ * sequential CPU krylov::cg, which remains authoritative. Returns 0 on success, or a
+ * non-zero CUDA error code. */
+int nimblecas_gpu_batched_cg_csr(const int* row_offsets_cat, const int* col_indices_cat,
+                                 const double* values_cat, const int* x_off,
+                                 const int* nz_off, int num_systems, const double* b_cat,
+                                 double* x_cat, int max_iters, double tol, int* out_iters,
+                                 int* out_converged, double* out_resid);
+
+
 /* --- FAMILY A: batched derivative pricing (gpu_pricing_kernels.cu) --- */
 
 /* A Monte Carlo estimate in POD form: the price and its standard error. */
