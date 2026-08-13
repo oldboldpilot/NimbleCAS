@@ -1951,6 +1951,13 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
         const std::size_t n_k = p.t.size();
         const std::size_t m_k = p.theta0.size();
 
+        // Size/overflow guard FIRST: a span whose element count exceeds the int
+        // kernel bound must be reported as overflow before ANY element is read
+        // (the finiteness/model loops below iterate over p.t / p.y / p.theta0).
+        if (n_k > int_max || m_k > int_max || p.y.size() > int_max) {
+            return make_error<std::vector<LmFitResult>>(MathError::overflow);
+        }
+
         if (p.t.size() != p.y.size() || n_k == 0 || m_k == 0 ||
             m_k > static_cast<std::size_t>(kGpuLmMaxParams)) {
             return make_error<std::vector<LmFitResult>>(MathError::domain_error);
@@ -2011,7 +2018,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             }
         }
 
-        if (n_k > int_max) return make_error<std::vector<LmFitResult>>(MathError::overflow);
+        // n_k <= int_max already proven above; guard only the running total.
         if (total_n > int_max - n_k) return make_error<std::vector<LmFitResult>>(MathError::overflow);
         total_n += n_k;
 
