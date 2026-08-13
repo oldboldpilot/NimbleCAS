@@ -942,6 +942,11 @@ target_link_libraries(nimblecas_taskdag_sgee
   PUBLIC nimblecas_taskdag nimblecas_core std_module)
 
 if(NIMBLECAS_SGEE)
+  # Part 2 (the SGEE C-ABI BrokerPort, src/taskdag_sgee/sgee_backend_capi.cpp) is not yet
+  # implemented; fail honestly here rather than later with a confusing missing-source error.
+  message(FATAL_ERROR
+    "NIMBLECAS_SGEE=ON: the real SGEE-backed BrokerPort (Part 2) is not yet implemented. "
+    "Build with -DNIMBLECAS_SGEE=OFF (default) to use the SGEE-free scaffolding.")
   # TODO (Part 2): When NIMBLECAS_SGEE=ON, link sgee_backend_capi.cpp against libsgee_capi
   set(NIMBLECAS_SGEE_ROOT "" CACHE PATH "Root of a built StochasticGraphExecutionEngine")
   find_path(NIMBLECAS_SGEE_CAPI_INCLUDE sgee_capi.h

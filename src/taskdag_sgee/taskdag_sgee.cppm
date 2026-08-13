@@ -140,6 +140,12 @@ public:
         -> Result<std::size_t> = 0;
 
     [[nodiscard]] virtual auto state(std::uint64_t qid) -> Result<QState> = 0;
+
+    // "Now" in the port's OWN clock domain. The coordinator MUST source sweep time from here,
+    // never from a wall clock: lease deadlines are set against this clock, so mixing a wall clock
+    // into sweep_expired() would spuriously expire every in-flight lease (the fake clock starts at
+    // 0; a real Capi port would return the same wall clock it sets deadlines from).
+    [[nodiscard]] virtual auto now_ms() const -> std::uint64_t = 0;
 };
 
 // Deterministic in-memory FakeBrokerPort for testing without SGEE.
@@ -148,23 +154,16 @@ public:
     using ClockFn = std::function<std::uint64_t()>;
 
     explicit FakeBrokerPort(ClockFn clock = nullptr)
-        : clock_(clock ? std::move(clock) : [this]() { return current_time_ms_; }) {}
+        : clock_(clock ? std::move(clock) : [this]() { return current_time_ms_.load(); }) {}
 
-    void set_time_ms(std::uint64_t now_ms) {
-        std::lock_guard lock(mutex_);
-        current_time_ms_ = now_ms;
-    }
+    // current_time_ms_ is atomic so the default clock lambda can read it lock-free from any thread
+    // (including now_ms() called inside a mutex-held lease()/heartbeat()) without racing the writers
+    // below, and without the self-deadlock a mutex-taking clock would create.
+    void set_time_ms(std::uint64_t now_ms) { current_time_ms_.store(now_ms); }
 
-    void advance_time_ms(std::uint64_t delta_ms) {
-        std::lock_guard lock(mutex_);
-        current_time_ms_ += delta_ms;
-    }
+    void advance_time_ms(std::uint64_t delta_ms) { current_time_ms_.fetch_add(delta_ms); }
 
-    [[nodiscard]] auto now_ms() const -> std::uint64_t {
-        if (clock_) return clock_();
-        std::lock_guard lock(mutex_);
-        return current_time_ms_;
-    }
+    [[nodiscard]] auto now_ms() const -> std::uint64_t override { return clock_(); }
 
     [[nodiscard]] auto enqueue(std::span<const std::byte> payload,
                                SgeePlacement placement, std::uint32_t max_attempts)
@@ -304,7 +303,7 @@ private:
     };
 
     ClockFn clock_{nullptr};
-    std::uint64_t current_time_ms_{0};
+    std::atomic<std::uint64_t> current_time_ms_{0};
     mutable std::mutex mutex_{};
     std::uint64_t next_qid_{0};
     std::uint64_t next_token_{0};
@@ -469,12 +468,19 @@ auto encode_task(const TaskEnvelope& env, std::size_t max_bytes) -> Result<Paylo
     if (env.op_id.empty() || env.op_id.size() > 256) {
         return make_error<Payload>(MathError::syntax_error);
     }
-    std::size_t total_size = 4 + 2 + 2 + 8 + 4 + env.op_id.size() + 4 + env.args.size() * 8;
-    for (const auto& arg : env.args) {
-        total_size += arg.size();
-    }
-    if (total_size > max_bytes) {
+    // Accumulate the framed size with no size_t wrap: compare each addend against the headroom
+    // left under max_bytes rather than summing everything first and checking after (a wrapped total
+    // could otherwise slip under the cap and mis-size the reserve).
+    std::size_t total_size = 4 + 2 + 2 + 8 + 4 + env.op_id.size() + 4;  // header + op + n_args
+    if (total_size > max_bytes || env.args.size() > (max_bytes - total_size) / 8) {
         return make_error<Payload>(MathError::overflow);
+    }
+    total_size += env.args.size() * 8;  // the per-arg length table
+    for (const auto& arg : env.args) {
+        if (arg.size() > max_bytes - total_size) {
+            return make_error<Payload>(MathError::overflow);
+        }
+        total_size += arg.size();
     }
 
     Payload out;
@@ -502,7 +508,7 @@ auto encode_task(const TaskEnvelope& env, std::size_t max_bytes) -> Result<Paylo
 }
 
 auto decode_task(std::span<const std::byte> bytes) -> Result<TaskEnvelope> {
-    if (bytes.size() < 20) {
+    if (bytes.size() < 20 || bytes.size() > k_max_task_payload_bytes) {
         return make_error<TaskEnvelope>(MathError::syntax_error);
     }
     const std::uint32_t magic = read_u32_le(bytes, 0);
@@ -537,14 +543,24 @@ auto decode_task(std::span<const std::byte> bytes) -> Result<TaskEnvelope> {
     }
 
     std::vector<std::uint64_t> arg_lens(n_args);
-    std::uint64_t total_arg_bytes = 0;
     for (std::uint32_t i = 0; i < n_args; ++i) {
-        arg_lens[i] = read_u64_le(bytes, offset + i * 8);
-        total_arg_bytes += arg_lens[i];
+        arg_lens[i] = read_u64_le(bytes, offset + static_cast<std::size_t>(i) * 8);
     }
-    offset += n_args * 8;
+    offset += static_cast<std::size_t>(n_args) * 8;  // 64-bit; the table was bounds-checked above
 
-    if (bytes.size() != offset + total_arg_bytes) {
+    // Bounds-check the declared arg lengths against the bytes still unconsumed, with NO summation
+    // that could wrap size_t: a crafted length (or a pair summing to 2^64) must be rejected, never
+    // allowed to reach subspan() as an out-of-contract count -> OOB read. `remaining - consumed`
+    // never underflows because we only advance `consumed` when the length fits.
+    const std::size_t remaining = bytes.size() - offset;
+    std::size_t consumed = 0;
+    for (std::uint32_t i = 0; i < n_args; ++i) {
+        if (arg_lens[i] > remaining - consumed) {
+            return make_error<TaskEnvelope>(MathError::syntax_error);
+        }
+        consumed += static_cast<std::size_t>(arg_lens[i]);
+    }
+    if (consumed != remaining) {
         return make_error<TaskEnvelope>(MathError::syntax_error);
     }
 
@@ -598,10 +614,18 @@ auto decode_result(std::span<const std::byte> bytes) -> Result<ResultEnvelope> {
         return make_error<ResultEnvelope>(MathError::syntax_error);
     }
     const auto math_err_raw = static_cast<std::uint8_t>(bytes[7]);
+    // A corrupt result must be rejected as transport corruption, never smuggled in as a math error
+    // that does not exist: reject a math_err byte outside the enum, and (for a non-ok status) a
+    // spurious payload length. distributed_error is the last enumerator.
+    if (status_raw == 1 &&
+        math_err_raw > static_cast<std::uint8_t>(MathError::distributed_error)) {
+        return make_error<ResultEnvelope>(MathError::syntax_error);
+    }
     const double seconds = read_f64_le(bytes, 8);
     const std::uint64_t len = read_u64_le(bytes, 16);
 
-    if (bytes.size() != 24 + len) {
+    // No-wrap length check: bytes.size() >= 24 is established above, so bytes.size() - 24 is safe.
+    if (len != bytes.size() - 24) {
         return make_error<ResultEnvelope>(MathError::syntax_error);
     }
 
@@ -646,23 +670,38 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
             std::uint64_t qid;
             std::uint64_t token;
             std::uint64_t interval_ms;
-            std::atomic<bool> active{true};
+            std::mutex mtx;
+            std::condition_variable cv;
+            bool active{true};
             std::thread thread;
 
             HeartbeatGuard(BrokerPort& p, std::uint64_t q, std::uint64_t tok, std::uint64_t interval)
                 : port(p), qid(q), token(tok), interval_ms(interval) {
                 thread = std::thread([this]() {
-                    while (active.load()) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-                        if (active.load()) {
-                            (void)port.heartbeat(qid, token, 0);
+                    std::unique_lock lock(mtx);
+                    // INTERRUPTIBLE wait: wake the instant the destructor clears `active` instead of
+                    // sleeping out the whole interval. An uninterruptible sleep_for here would stall
+                    // the pump for a full heartbeat interval (~10s at default timeouts) after every
+                    // task, throttling throughput to ~1 task/interval and blowing the run deadline on
+                    // deeper graphs. Heartbeat only on a genuine interval timeout.
+                    while (active) {
+                        if (cv.wait_for(lock, std::chrono::milliseconds(interval_ms),
+                                        [this] { return !active; })) {
+                            break;  // active cleared -> stop promptly
                         }
+                        lock.unlock();
+                        (void)port.heartbeat(qid, token, 0);
+                        lock.lock();
                     }
                 });
             }
 
             ~HeartbeatGuard() {
-                active.store(false);
+                {
+                    std::lock_guard lock(mtx);
+                    active = false;
+                }
+                cv.notify_all();
                 if (thread.joinable()) {
                     thread.join();
                 }
@@ -879,10 +918,14 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
-            const auto now_ms = static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count());
-            (void)port_.sweep_expired(now_ms);
+            // Sweep in the broker's OWN clock domain (never a wall clock): lease deadlines were set
+            // against port_.now_ms(), so sourcing "now" from anywhere else would spuriously expire
+            // every in-flight lease. A sweep failure is a transport fault -> honest whole-run abort.
+            const auto sweep_res = port_.sweep_expired(port_.now_ms());
+            if (!sweep_res.has_value()) {
+                cleanup();
+                return make_error<TaskRunResult>(MathError::distributed_error);
+            }
 
             std::vector<std::uint64_t> resolved_qids;
 

@@ -141,6 +141,29 @@ auto main() -> int {
                   const auto enc_cap = encode_task(env_huge, 100);
                   t.expect(!enc_cap.has_value() && enc_cap.error() == MathError::overflow,
                            "encode_task rejects payload exceeding max_bytes with overflow");
+
+                  // Arg-length overflow (the OOB exploit): two declared lengths summing to 2^64 must
+                  // be rejected, never reach subspan() as an out-of-contract count. Encode two empty
+                  // args (op "a.b/v1": header 20 + op 6 + n_args 4 => length table at bytes[30..45]),
+                  // then patch length[0]=100, length[1]=2^64-100 so the naive sum wraps to 0.
+                  Payload oob = encode_task(TaskEnvelope{.op_id = "a.b/v1",
+                                                         .args = {Payload{}, Payload{}}}).value();
+                  oob[30] = std::byte{100};  // length[0] = 100 (LE, remaining bytes zero)
+                  for (int k = 0; k < 8; ++k) oob[38 + k] = std::byte{0xFF};
+                  oob[38] = std::byte{0x9C};  // length[1] = 0xFFFFFFFFFFFFFF9C = 2^64 - 100
+                  t.expect(!decode_task(oob).has_value() &&
+                           decode_task(oob).error() == MathError::syntax_error,
+                           "decode_task rejects arg lengths that overflow (no OOB read)");
+
+                  // decode_result must reject a math_err byte outside the enum (transport corruption),
+                  // never smuggle a non-existent MathError in as task data.
+                  Payload bad_err = encode_result(ResultEnvelope{
+                      .status = ResultEnvelope::Status::math_error,
+                      .math_err = MathError::domain_error, .seconds = 0.0, .bytes = {}}).value();
+                  bad_err[7] = std::byte{200};  // not a valid MathError enumerator
+                  t.expect(!decode_result(bad_err).has_value() &&
+                           decode_result(bad_err).error() == MathError::syntax_error,
+                           "decode_result rejects out-of-range MathError byte");
               })
         .test("task_registry_validation_and_fingerprint",
               [](TestContext& t) {
@@ -150,6 +173,9 @@ auto main() -> int {
 
                   t.expect(!reg.register_op("invalid_grammar", [](auto) -> Result<Payload> { return encode_i64(1); }).has_value(),
                            "grammar violation without /v<N> fails");
+
+                  t.expect(!reg.register_op("nodot/v1", [](auto) -> Result<Payload> { return encode_i64(1); }).has_value(),
+                           "grammar violation without a <domain>. separator fails");
 
                   t.expect(!reg.register_op("nimblecas.eval/v1", [](auto) -> Result<Payload> { return encode_i64(1); }).has_value(),
                            "duplicate registration fails loudly with domain_error");
