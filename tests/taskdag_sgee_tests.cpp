@@ -308,6 +308,16 @@ auto main() -> int {
                   t.expect(res_named.outputs.size() == res_plain.outputs.size(), "same output count");
                   t.expect(decode_i64(res_named.outputs[b_n.value].value()) == decode_i64(res_plain.outputs[b_p.value].value()),
                            "add_named_task graph output is identical to add_task closure graph on serial_executor");
+
+                  // add_named_task honesty (§6.4 row 12): an unregistered op and an out-of-range
+                  // dependency both fail with domain_error BEFORE the task is issued (no mutation).
+                  const auto unknown_op = g_named.add_named_task(reg, "no.such/v1");
+                  t.expect(!unknown_op.has_value() && unknown_op.error() == MathError::domain_error,
+                           "add_named_task rejects an unregistered op with domain_error");
+                  const auto bad_dep =
+                      g_named.add_named_task(reg, "op.c7/v1", std::vector<TaskId>{TaskId{999}});
+                  t.expect(!bad_dep.has_value() && bad_dep.error() == MathError::domain_error,
+                           "add_named_task rejects an out-of-range dependency with domain_error");
               })
         .test("acceptance_diamond_dag_sgee_distributed_vs_serial_bit_identity",
               [](TestContext& t) {

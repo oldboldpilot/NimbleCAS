@@ -243,11 +243,10 @@ auto sgee_distributed_executor(SgeeExecutorConfig cfg) -> Result<std::unique_ptr
                 return make_error<RunTransport>(MathError::distributed_error);
             }
             RunTransport tr;
-            tr.port = port.get();
             tr.owned_port = std::move(port);
-            auto channel = std::make_unique<InMemoryResultChannel>();
-            tr.channel = channel.get();
-            tr.owned_channel = std::move(channel);
+            tr.port = tr.owned_port.get();
+            tr.owned_channel = std::make_unique<InMemoryResultChannel>();
+            tr.channel = tr.owned_channel.get();
             tr.wal_path = wal_path;
             return tr;
         };

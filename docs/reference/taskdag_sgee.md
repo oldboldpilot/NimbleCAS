@@ -39,12 +39,13 @@ Depends on [`core`](core.md) (`Result` / `MathError::distributed_error`) and
 - **Part 2 (SGEE C-ABI Port):** `CapiBrokerPort` wrapping `libsgee_capi` behind `-DNIMBLECAS_SGEE=ON`.
   When enabled via `-DNIMBLECAS_SGEE=ON -DNIMBLECAS_SGEE_ROOT=/path/to/SGEE`, `sgee_distributed_executor`
   constructs a live `CapiBrokerPort` backed by a real SGEE durable WAL task broker.
-  **WAL lifecycle:** the factory opens one broker on a process-unique WAL file
-  (`ncsgee-<epoch_ms>-<process_nonce>-<seq>.wal` under `wal_dir`) that is shared by every `run()`
-  on the returned executor and best-effort reaped when the executor is destroyed. Because the broker
-  is per-executor (not per-run), an executor should not be reused after a `run()` has failed — an
-  aborted run leaves stale tasks in its queue. Per-run brokers with success-path WAL deletion are a
-  planned refinement.
+  **WAL lifecycle (per-run brokers):** every `run()` on the returned executor opens a **fresh**
+  `CapiBrokerPort` on a process-unique WAL file (`ncsgee-<epoch_ms>-<process_nonce>-<seq>.wal`
+  under `wal_dir`). On a **successful** run the WAL is deleted; on a **failed** run it is retained
+  for post-mortem inspection. Consecutive runs never share a queue, so an executor is **safe to
+  reuse after a `run()` has failed** — the next run starts on a clean broker with no stale tasks.
+  Broker-open failure surfaces at `run()` time as `MathError::distributed_error`; the factory
+  validates configuration only (invalid config → `domain_error`) and does not itself open a broker.
 
 ## Build recipe
 

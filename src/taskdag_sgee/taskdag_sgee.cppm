@@ -76,6 +76,12 @@ export namespace nimblecas {
 // ---------------------------------------------------------------------------
 // Result Channel interface & InMemory implementation
 // ---------------------------------------------------------------------------
+// Out-of-band result channel. NOTE: put() is NOT fencing-token-guarded — a stale worker whose
+// lease expired can still overwrite a committed envelope for the same qid. This is safe only
+// because ops are deterministic (the retry republishes identical bytes; the broker's fencing
+// blocks the stale *commit*, so the coordinator only reads a qid it saw reach `completed`). The
+// one field that can differ between attempts is `seconds` (wall-time). Token-fenced puts are an
+// M3 concern.
 class ResultChannel {
 public:
     virtual ~ResultChannel() = default;
@@ -579,7 +585,11 @@ private:
     RunTransportFactory make_transport_;
 };
 
-// Factory function
+// Factory (NIMBLECAS_SGEE=ON). Validates config (invalid -> domain_error) and returns an executor
+// whose every run() opens a FRESH per-run CapiBrokerPort on a process-unique WAL, deleted on success
+// and retained on failure. The factory does NOT open a broker itself: broker-open failure surfaces
+// at run() time as distributed_error, and an executor is safe to reuse after a failed run. With
+// NIMBLECAS_SGEE=OFF the stub honestly returns not_implemented for a valid config.
 [[nodiscard]] auto sgee_distributed_executor(SgeeExecutorConfig cfg)
     -> Result<std::unique_ptr<Executor>>;
 
@@ -997,7 +1007,12 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
 
     // Acquire this run's transport: a fresh broker + channel + WAL for a per-run
     // factory, or the borrowed pair for the reference ctor. Done AFTER the pre-flight
-    // so an invalid graph never opens a broker or creates a WAL.
+    // so an invalid graph never opens a broker or creates a WAL. An empty factory (a
+    // misuse of the public per-run ctor) aborts honestly rather than throwing
+    // std::bad_function_call out of this Result-returning API (Rule 32).
+    if (!make_transport_) {
+        return make_error<TaskRunResult>(MathError::distributed_error);
+    }
     auto transport_res = make_transport_();
     if (!transport_res.has_value()) {
         return make_error<TaskRunResult>(transport_res.error());
@@ -1018,9 +1033,13 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
         RunTransport& tr;
         bool succeeded{false};
         ~TransportReaper() {
+            // Only an OWNED transport (a per-run factory) has a WAL to reap; a borrowed
+            // transport (owned_port == null) must never have its caller's file removed,
+            // even if a contract-violating factory left wal_path non-empty. Latch before reset.
+            const bool owned = tr.owned_port != nullptr;
             tr.owned_port.reset();      // closes the broker => releases the WAL file
             tr.owned_channel.reset();
-            if (succeeded && !tr.wal_path.empty()) {
+            if (succeeded && owned && !tr.wal_path.empty()) {
                 std::error_code ec;
                 std::filesystem::remove(tr.wal_path, ec);  // best-effort on success
             }                            // failure: file retained for post-mortem
