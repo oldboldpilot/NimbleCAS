@@ -1683,6 +1683,44 @@ auto main() -> int {
                   auto bad_b_res = gpu::batched_cg_csr(bad_b_list, 100, 1e-10);
                   t.expect(!bad_b_res.has_value() && bad_b_res.error() == MathError::domain_error,
                            "system with empty b yields domain_error");
+
+                  auto neg_tol_res = gpu::batched_cg_csr(sys_list, 100, -1.0);
+                  t.expect(!neg_tol_res.has_value() && neg_tol_res.error() == MathError::domain_error,
+                           "negative tol yields domain_error");
+
+                  // 6. Larger batch: exercises the one-block-per-system launch across many blocks
+                  // (the K=3 batch above would fit a single block; this forces a multi-block grid).
+                  std::vector<std::vector<int>> big_row(32), big_col(32);
+                  std::vector<std::vector<double>> big_val(32), big_b(32);
+                  std::vector<gpu::CsrSystem> big_list;
+                  big_list.reserve(32);
+                  for (int s = 0; s < 32; ++s) {
+                      // 2x2 SPD [[4+s, 1], [1, 3]], b = [1, 2]; distinct per system.
+                      big_row[s] = {0, 2, 4};
+                      big_col[s] = {0, 1, 0, 1};
+                      big_val[s] = {4.0 + s, 1.0, 1.0, 3.0};
+                      big_b[s] = {1.0, 2.0};
+                      big_list.push_back({big_row[s], big_col[s], big_val[s], big_b[s]});
+                  }
+                  auto big_res = gpu::batched_cg_csr(big_list, 100, 1e-10);
+                  t.expect(big_res.has_value() && big_res->size() == 32,
+                           "32-system batch returns 32 results");
+                  if (big_res) {
+                      bool all_conv = true;
+                      for (std::size_t i = 0; i < big_res->size(); ++i) {
+                          if (!(*big_res)[i].converged || (*big_res)[i].residual > 1e-8) {
+                              all_conv = false;
+                          }
+                          auto solo = gpu::cg_csr(big_row[i], big_col[i], big_val[i], big_b[i], 100, 1e-10);
+                          if (solo) {
+                              for (std::size_t k = 0; k < big_b[i].size(); ++k) {
+                                  t.expect(std::abs((*big_res)[i].x[k] - solo->x[k]) < 1e-6,
+                                           "large-batch system agrees with solo cg_csr");
+                              }
+                          }
+                      }
+                      t.expect(all_conv, "all 32 systems converged with small residual");
+                  }
               })
         .test("gmres_csr solves a non-symmetric CSR system",
               [](nimblecas::testing::TestContext& t) {
@@ -1865,6 +1903,10 @@ auto main() -> int {
                   auto neg_it = gpu::gmres_csr(row_offsets, col_indices, values, b, -1, tol, restart);
                   t.expect(!neg_it.has_value() && neg_it.error() == MathError::domain_error,
                            "negative max_iters yields domain_error");
+
+                  auto neg_tol = gpu::gmres_csr(row_offsets, col_indices, values, b, max_iters, -1.0, restart);
+                  t.expect(!neg_tol.has_value() && neg_tol.error() == MathError::domain_error,
+                           "negative tol yields domain_error");
 
                   std::vector<int> oob_cols = col_indices;
                   if (!oob_cols.empty()) oob_cols[0] = n;

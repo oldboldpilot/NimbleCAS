@@ -7,6 +7,7 @@
 // carries no libstdc++ dependency and links cleanly with the clang/libc++ engine.
 
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 
 #include <cuda_runtime.h>
@@ -1414,6 +1415,8 @@ __global__ void batched_cg_kernel(
         int converged = (sqrt(rsold) <= threshold) ? 1 : 0;
 
         for (int it = 0; it < max_iters && converged == 0; ++it) {
+            iters = it + 1;  // count at loop top, mirroring the CPU oracle's ++iter, so a
+                             // breakdown iteration is counted exactly as krylov::cg counts it
             for (int i = tid; i < n; i += 256) {
                 const int row_start = ro[i];
                 const int row_end = ro[i + 1];
@@ -1426,8 +1429,12 @@ __global__ void batched_cg_kernel(
             __syncthreads();
 
             const double pap = block_dot(p, ap, n, sdata);
-            if (!(pap > 0.0)) {
-                break;  // non-SPD breakdown, honest stop
+            // For SPD A, p.Ap > 0; a non-positive OR denormal-tiny value is a numerical
+            // breakdown. The 1e-300 floor mirrors the CPU oracle (krylov::cg) and prevents
+            // a tiny-positive pap from producing an Inf alpha that would spin the whole
+            // budget in NaN arithmetic. Also catches pap == NaN.
+            if (!(pap > 1e-300)) {
+                break;  // non-SPD / breakdown, honest stop
             }
             const double alpha = rsold / pap;
 
@@ -1438,7 +1445,6 @@ __global__ void batched_cg_kernel(
             __syncthreads();
 
             const double rsnew = block_dot(r, r, n, sdata);
-            iters = it + 1;
             if (sqrt(rsnew) <= threshold) {
                 converged = 1;
                 rsold = rsnew;
@@ -1602,9 +1608,11 @@ extern "C" int nimblecas_gpu_cg_csr(const int* row_offsets, const int* col_indic
                     rc = static_cast<int>(err);
                     break;
                 }
-                // For an SPD A, p.Ap > 0; a non-positive value is a numerical breakdown. Stop
-                // honestly (leaving converged == 0) rather than divide and emit a wrong x.
-                if (!(pap > 0.0)) {
+                // For an SPD A, p.Ap > 0; a non-positive OR denormal-tiny value is a numerical
+                // breakdown. The 1e-300 floor mirrors the CPU oracle (krylov::cg) and avoids a
+                // tiny-positive pap yielding an Inf alpha that would spin the budget in NaN
+                // arithmetic. Stop honestly (leaving converged == 0) rather than emit a wrong x.
+                if (!(pap > 1e-300)) {
                     break;
                 }
                 const double alpha = rsold / pap;
@@ -2010,6 +2018,12 @@ extern "C" int nimblecas_gpu_gmres_csr(const int* row_offsets, const int* col_in
     *out_resid = 0.0;
 
     const int m = (restart < n) ? restart : n;  // effective m = min(restart, n)
+    // The (m+1)*n basis buffer is the only size product here that can wrap size_t under in-range
+    // int inputs (all others are <= n or <= nnz). Defend the ABI precondition independently of the
+    // C++ wrapper's own guard: a wrapped tiny cudaMalloc would let csr_spmv write far past it.
+    if (static_cast<size_t>(m) + 1 > (SIZE_MAX / sizeof(double)) / static_cast<size_t>(n)) {
+        return static_cast<int>(cudaErrorInvalidValue);
+    }
     const int threads = 256;  // power of two: required by the shared-memory dot reductions
     const int blocks = choose_blocks(n, threads);
     const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
@@ -2423,7 +2437,18 @@ extern "C" int nimblecas_gpu_batched_cg_csr(const int* row_offsets_cat, const in
         rc = static_cast<int>(err);
     } else {
         const int threads = 256;
-        const int blocks = choose_blocks(num_systems, threads);
+        // ONE BLOCK PER SYSTEM: this is a one-block-per-system megakernel, so the grid must be
+        // sized by the system count, NOT choose_blocks(num_systems, threads) (which divides by
+        // threads and would collapse a K<=256 batch onto a single block, serializing it on one
+        // SM). Cap at sm_count*32 resident blocks; the kernel's `sys += gridDim.x` grid-stride
+        // absorbs any overflow beyond the cap while keeping every system on exactly one block.
+        int sm_count = 0;
+        const int grid_cap =
+            (cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, 0) == cudaSuccess &&
+             sm_count > 0)
+                ? sm_count * 32
+                : num_systems;
+        const int blocks = num_systems < grid_cap ? num_systems : grid_cap;
         const size_t shmem = static_cast<size_t>(threads) * sizeof(double);
         batched_cg_kernel<<<blocks, threads, shmem>>>(
             dev_row, dev_col, dev_val, dev_x_off, dev_nz_off, num_systems, dev_b, dev_x,

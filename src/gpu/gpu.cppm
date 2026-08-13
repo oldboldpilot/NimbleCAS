@@ -20,7 +20,7 @@ import nimblecas.futures;   // Family B CPU fallback + FuturesLeg
 import nimblecas.control;   // Family F CPU fallback + TransferFunction / BodePoint / NyquistPoint
 import nimblecas.wavelets;  // Wavelet FilterBank + CPU dwt/swt fallback
 import nimblecas.qmc;       // Family H CPU fallback & point generators
-import nimblecas.krylov;    // BiCGStab CPU fallback (csr_matvec + bicgstab)
+import nimblecas.krylov;    // CPU fallbacks (csr_matvec + cg / bicgstab / gmres)
 
 export namespace nimblecas::gpu {
 
@@ -437,7 +437,8 @@ struct CgCsrResult {
     if (!available()) {
         return make_error<CgCsrResult>(MathError::gpu_error);
     }
-    if (b.empty() || row_offsets.size() != b.size() + 1 || col_indices.size() != values.size()) {
+    if (!(tol >= 0.0) || b.empty() || row_offsets.size() != b.size() + 1 ||
+        col_indices.size() != values.size()) {
         return make_error<CgCsrResult>(MathError::domain_error);
     }
     constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
@@ -485,7 +486,7 @@ using BicgstabCsrResult = CgCsrResult;
 [[nodiscard]] auto bicgstab_csr(std::span<const int> row_offsets, std::span<const int> col_indices,
                                 std::span<const double> values, std::span<const double> b,
                                 int max_iters = 1000, double tol = 1e-10) -> Result<CgCsrResult> {
-    if (max_iters < 0 || b.empty() || row_offsets.size() != b.size() + 1 ||
+    if (max_iters < 0 || !(tol >= 0.0) || b.empty() || row_offsets.size() != b.size() + 1 ||
         col_indices.size() != values.size()) {
         return make_error<CgCsrResult>(MathError::domain_error);
     }
@@ -565,8 +566,8 @@ using GmresCsrResult = CgCsrResult;
                              std::span<const double> values, std::span<const double> b,
                              int max_iters = 1000, double tol = 1e-10, int restart = 30)
     -> Result<CgCsrResult> {
-    if (max_iters < 0 || restart < 1 || b.empty() || row_offsets.size() != b.size() + 1 ||
-        col_indices.size() != values.size()) {
+    if (max_iters < 0 || restart < 1 || !(tol >= 0.0) || b.empty() ||
+        row_offsets.size() != b.size() + 1 || col_indices.size() != values.size()) {
         return make_error<CgCsrResult>(MathError::domain_error);
     }
     constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
@@ -647,11 +648,14 @@ struct CsrSystem {
 // When no GPU is present (!available()), loops CPU krylov::cg per system.
 [[nodiscard]] auto batched_cg_csr(std::span<const CsrSystem> systems, int max_iters = 1000,
                                   double tol = 1e-10) -> Result<std::vector<CgCsrResult>> {
+    // Reject invalid parameters unconditionally (matching the scalar solvers), before the
+    // empty-span shortcut. `!(tol >= 0.0)` also rejects NaN — a negative/NaN tol would make the
+    // per-system stop threshold negative, defeating every convergence test.
+    if (max_iters < 0 || !(tol >= 0.0)) {
+        return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
+    }
     if (systems.empty()) {
         return std::vector<CgCsrResult>{};
-    }
-    if (max_iters < 0) {
-        return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
     }
 
     constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
@@ -675,6 +679,9 @@ struct CsrSystem {
             if (s.row_offsets[i] < 0 || s.row_offsets[i + 1] < s.row_offsets[i]) {
                 return make_error<std::vector<CgCsrResult>>(MathError::domain_error);
             }
+        }
+        if (s.b.size() > int_max || s.values.size() > int_max) {
+            return make_error<std::vector<CgCsrResult>>(MathError::overflow);
         }
         const auto n_i = static_cast<int>(s.b.size());
         for (const int c : s.col_indices) {

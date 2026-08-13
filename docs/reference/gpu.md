@@ -361,7 +361,8 @@ amortization pays.
 
 `batched_cg_csr` solves $K$ independent symmetric positive-definite (SPD) sparse linear systems $A_i x_i = b_i$ in CSR format in a single CUDA launch (one block per system, the whole iteration in-kernel without per-iteration host launches).
 
-- **Honesty boundary**: NUMERICAL (`double`). Non-SPD systems stop honestly on $p^T A p \le 0$ breakdown with `converged == false` without poisoning remaining systems in the batch. At exit, true residual $\|b_i - A_i x_i\|$ is recomputed in-kernel and `converged` is derived from it.
+- **Honesty boundary**: NUMERICAL (`double`). Non-SPD systems stop honestly on a $p^T A p \le 10^{-300}$ breakdown with `converged == false` without poisoning remaining systems in the batch. At exit, true residual $\|b_i - A_i x_i\|$ is recomputed in-kernel and `converged` is derived from it. SPD-ness is the caller's contract: for a non-SPD (indefinite) system the device path stops on the first non-positive curvature and reports `converged == false`, whereas the CPU fallback `krylov::cg` may make indefinite progress and converge — both are outside the documented SPD domain, so neither is authoritative there.
+- **Launch geometry**: one CUDA block per system (grid sized by the system count, capped at `sm_count * 32` resident blocks with a grid-stride absorbing any overflow), so systems run concurrently rather than serializing on one SM.
 - **Determinism**: Each block uses a fixed 256-thread reduction tree with strided accumulation in index order, making per-system arithmetic independent of grid geometry and bitwise repeatable run-to-run. Differs in last bits from sequential CPU `krylov::cg` and solo `cg_csr` (different tree reduction association).
 - **CPU Fallback**: When no device is present (`!available()`), loops CPU `krylov::cg` per system. Per-system shape, consistency, and nonzeros validation is applied prior to device/fallback selection.
 
