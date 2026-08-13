@@ -45,24 +45,6 @@ CapiBrokerPort::~CapiBrokerPort() {
     }
 }
 
-CapiBrokerPort::CapiBrokerPort(CapiBrokerPort&& other) noexcept {
-    std::lock_guard lock(other.mutex_);
-    broker_ = other.broker_;
-    other.broker_ = nullptr;
-}
-
-auto CapiBrokerPort::operator=(CapiBrokerPort&& other) noexcept -> CapiBrokerPort& {
-    if (this != &other) {
-        std::scoped_lock lock(mutex_, other.mutex_);
-        if (broker_) {
-            sgee_broker_destroy(broker_);
-        }
-        broker_ = other.broker_;
-        other.broker_ = nullptr;
-    }
-    return *this;
-}
-
 auto CapiBrokerPort::is_open() const noexcept -> bool {
     std::lock_guard lock(mutex_);
     return broker_ != nullptr;
@@ -100,6 +82,11 @@ auto CapiBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
     const int rc = sgee_broker_lease(broker_, worker_id, timeout_ms, &qid, &token,
                                      &placement, &attempt, &out_payload, &out_payload_len);
     if (rc == SGEE_ERR_QUEUE_EMPTY) {
+        // Defensive: the header only populates out-params on success, but free unconditionally so
+        // correctness never rests on a shim internal (this is the hottest path — polled every tick).
+        if (out_payload) {
+            sgee_free_buffer(out_payload);
+        }
         return std::optional<Lease>{std::nullopt};
     }
     if (rc != SGEE_OK) {
@@ -208,33 +195,57 @@ auto CapiBrokerPort::now_ms() const -> std::uint64_t {
 
 namespace {
 
+// Owns one CapiBrokerPort (= one durable WAL) for its lifetime; every run() on this executor
+// shares that broker/WAL. On destruction it tears down in dependency order and reaps the WAL.
+// (Per-run brokers with success-path WAL deletion are a future refinement; for now an executor
+// is a single-broker handle — do not reuse one after a run() has failed, as an aborted run leaves
+// stale tasks in the shared queue.)
 class CapiSgeeDistributedExecutor final : public Executor {
 public:
     CapiSgeeDistributedExecutor(SgeeExecutorConfig cfg,
                                 std::unique_ptr<CapiBrokerPort> port,
-                                std::unique_ptr<ResultChannel> channel)
-        : port_(std::move(port)),
+                                std::unique_ptr<ResultChannel> channel,
+                                std::filesystem::path wal_path)
+        : wal_path_(std::move(wal_path)),
+          port_(std::move(port)),
           channel_(std::move(channel)),
-          inner_(std::move(cfg), *port_, *channel_) {}
+          inner_(std::make_unique<SgeeDistributedExecutor>(std::move(cfg), *port_, *channel_)) {}
+
+    CapiSgeeDistributedExecutor(const CapiSgeeDistributedExecutor&) = delete;
+    auto operator=(const CapiSgeeDistributedExecutor&) -> CapiSgeeDistributedExecutor& = delete;
+    CapiSgeeDistributedExecutor(CapiSgeeDistributedExecutor&&) = delete;
+    auto operator=(CapiSgeeDistributedExecutor&&) -> CapiSgeeDistributedExecutor& = delete;
+
+    ~CapiSgeeDistributedExecutor() override {
+        // Explicit teardown order: inner_ first (releases the BrokerPort& and joins any pump
+        // threads), then port_ (closes the broker, releasing the WAL file), then reap the file.
+        inner_.reset();
+        port_.reset();
+        channel_.reset();
+        std::error_code ec;
+        std::filesystem::remove(wal_path_, ec);  // best-effort; ignore failure
+    }
 
     [[nodiscard]] auto name() const noexcept -> std::string_view override {
-        return inner_.name();
+        return inner_->name();
     }
 
     [[nodiscard]] auto run(const TaskGraph& g) -> Result<TaskRunResult> override {
-        return inner_.run(g);
+        return inner_->run(g);
     }
 
 private:
+    std::filesystem::path wal_path_;
     std::unique_ptr<CapiBrokerPort> port_;
     std::unique_ptr<ResultChannel> channel_;
-    SgeeDistributedExecutor inner_;
+    std::unique_ptr<SgeeDistributedExecutor> inner_;
 };
 
 }  // namespace
 
 auto sgee_distributed_executor(SgeeExecutorConfig cfg) -> Result<std::unique_ptr<Executor>> {
-    if (cfg.registry == nullptr || cfg.wal_dir.empty() || cfg.num_workers == 0 || cfg.max_attempts == 0) {
+    if (cfg.registry == nullptr || cfg.wal_dir.empty() || cfg.num_workers == 0 ||
+        cfg.max_attempts == 0 || cfg.visibility_timeout_ms == 0) {
         return make_error<std::unique_ptr<Executor>>(MathError::domain_error);
     }
 
@@ -244,12 +255,22 @@ auto sgee_distributed_executor(SgeeExecutorConfig cfg) -> Result<std::unique_ptr
         return make_error<std::unique_ptr<Executor>>(MathError::distributed_error);
     }
 
+    // The WAL filename must be unique across PROCESSES, not just within one: a reused WAL is
+    // durably recovered, so two processes sharing wal_dir that collide on a name would replay each
+    // other's tasks (or two single-writer brokers would corrupt one file). Timestamp + a
+    // per-process random nonce + a within-process atomic sequence makes a collision astronomical.
     static std::atomic<std::uint64_t> seq{0};
+    static const std::uint64_t proc_nonce = [] {
+        std::random_device rd;
+        return (static_cast<std::uint64_t>(rd()) << 32) ^ static_cast<std::uint64_t>(rd());
+    }();
     const auto now_ms = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-    const std::string filename = "ncsgee-" + std::to_string(now_ms) + "-" + std::to_string(seq.fetch_add(1)) + ".wal";
+    const std::string filename = "ncsgee-" + std::to_string(now_ms) + "-" +
+                                 std::to_string(proc_nonce) + "-" +
+                                 std::to_string(seq.fetch_add(1)) + ".wal";
     const std::filesystem::path wal_path = cfg.wal_dir / filename;
 
     auto port = std::make_unique<CapiBrokerPort>(wal_path, cfg.visibility_timeout_ms, cfg.max_attempts);
@@ -258,7 +279,8 @@ auto sgee_distributed_executor(SgeeExecutorConfig cfg) -> Result<std::unique_ptr
     }
 
     auto channel = std::make_unique<InMemoryResultChannel>();
-    return std::make_unique<CapiSgeeDistributedExecutor>(std::move(cfg), std::move(port), std::move(channel));
+    return std::make_unique<CapiSgeeDistributedExecutor>(std::move(cfg), std::move(port),
+                                                         std::move(channel), wal_path);
 }
 
 }  // namespace nimblecas

@@ -325,7 +325,7 @@ private:
 // sgee_task_broker_t comes from sgee_capi.h, included in the global module fragment above.
 class CapiBrokerPort final : public BrokerPort {
 public:
-    static auto create(const std::filesystem::path& wal_path,
+    [[nodiscard]] static auto create(const std::filesystem::path& wal_path,
                        std::uint64_t vis_timeout_ms = 30'000,
                        std::uint32_t max_attempts = 3)
         -> Result<std::unique_ptr<CapiBrokerPort>>;
@@ -336,10 +336,14 @@ public:
                    std::uint32_t max_attempts = 3);
     ~CapiBrokerPort() override;
 
+    // Non-copyable AND non-movable: the port is only ever held by unique_ptr (create()/factory),
+    // and worker/coordinator threads hold a live BrokerPort& into it. A move would either dangle
+    // those references or leave a moved-from port silently answering every call with a transport
+    // error, so it is forbidden outright rather than made safe.
     CapiBrokerPort(const CapiBrokerPort&) = delete;
     auto operator=(const CapiBrokerPort&) -> CapiBrokerPort& = delete;
-    CapiBrokerPort(CapiBrokerPort&& other) noexcept;
-    auto operator=(CapiBrokerPort&& other) noexcept -> CapiBrokerPort&;
+    CapiBrokerPort(CapiBrokerPort&&) = delete;
+    auto operator=(CapiBrokerPort&&) -> CapiBrokerPort& = delete;
 
     [[nodiscard]] auto is_open() const noexcept -> bool;
 

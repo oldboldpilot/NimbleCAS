@@ -467,7 +467,15 @@ auto main() -> int {
                       SgeeExecutorConfig cfg_err;
                       cfg_err.with_registry(err_reg).with_num_workers(2).with_poll_interval_ms(1);
                       SgeeDistributedExecutor dist_err_exec(cfg_err, **port_err_res, results_err);
-                      const auto dist_err_res = dist_err_exec.run(g_err).value();
+                      const auto dist_err_res_res = dist_err_exec.run(g_err);
+                      t.expect(dist_err_res_res.has_value(), "err-graph run succeeds over real CapiBrokerPort");
+                      if (!dist_err_res_res.has_value()) {
+                          std::error_code ec2;
+                          std::filesystem::remove(wal_path2, ec2);
+                          std::filesystem::remove(wal_path, ec2);
+                          return;
+                      }
+                      const auto& dist_err_res = *dist_err_res_res;
 
                       t.expect(dist_err_res.outputs.size() == ser_err_res.outputs.size(), "err outputs size match");
                       bool err_parity = (dist_err_res.outputs.size() == ser_err_res.outputs.size());
@@ -487,6 +495,54 @@ auto main() -> int {
                   // Cleanup main test WAL file
                   std::error_code ec;
                   std::filesystem::remove(wal_path, ec);
+              })
+        .test("real_factory_sgee_distributed_executor_and_config_validation",
+              [](TestContext& t) {
+                  // Invalid config is rejected with domain_error before any broker is opened.
+                  SgeeExecutorConfig bad_cfg;  // null registry + empty wal_dir + zero workers
+                  auto bad_res = nimblecas::sgee_distributed_executor(bad_cfg);
+                  t.expect(!bad_res.has_value() && bad_res.error() == MathError::domain_error,
+                           "factory rejects invalid config with domain_error");
+
+                  // Valid config: the factory opens its OWN broker on a unique WAL and reaps it on
+                  // destruction. Drive the diamond DAG through it and assert bit-identity to serial.
+                  TaskRegistry reg;
+                  (void)reg.register_op("test.const7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  (void)reg.register_op("test.mul2/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 2); });
+                  (void)reg.register_op("test.add3/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + 3); });
+                  (void)reg.register_op("test.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+
+                  TaskGraph g;
+                  const auto a = g.add_named_task(reg, "test.const7/v1").value();
+                  const auto b = g.add_named_task(reg, "test.mul2/v1", std::vector<TaskId>{a}).value();
+                  const auto c = g.add_named_task(reg, "test.add3/v1", std::vector<TaskId>{a}).value();
+                  const auto d = g.add_named_task(reg, "test.add/v1", std::vector<TaskId>{b, c}).value();
+
+                  const auto ser_exec = nimblecas::serial_executor();
+                  const auto ser_res = ser_exec->run(g).value();
+
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg)
+                      .with_wal_dir(std::filesystem::temp_directory_path())
+                      .with_num_workers(2)
+                      .with_poll_interval_ms(1)
+                      .with_max_attempts(3)
+                      .with_visibility_timeout_ms(30'000);
+                  auto exec_res = nimblecas::sgee_distributed_executor(cfg);
+                  t.expect(exec_res.has_value(), "factory builds a live executor for valid config");
+                  if (exec_res.has_value()) {
+                      const auto dist_res = (*exec_res)->run(g);
+                      t.expect(dist_res.has_value(), "factory-built executor runs the graph");
+                      if (dist_res.has_value()) {
+                          bool ok = (dist_res->outputs.size() == ser_res.outputs.size());
+                          for (std::size_t i = 0; ok && i < dist_res->outputs.size(); ++i) {
+                              ok = results_equal(dist_res->outputs[i], ser_res.outputs[i]);
+                          }
+                          t.expect(ok, "factory executor outputs are BIT-IDENTICAL to serial_executor");
+                          t.expect(dist_res->executed == ser_res.executed, "factory executor executed count matches");
+                      }
+                  }
+                  // The executor's destructor reaps its own WAL; nothing to clean up here.
               })
 #endif
         .run();
