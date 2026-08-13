@@ -537,6 +537,87 @@ using BicgstabCsrResult = CgCsrResult;
     return CgCsrResult{std::move(x), iterations, converged != 0, residual};
 }
 
+// ---------------------------------------------------------------------------
+// Restarted GMRES(m) solve of a general (possibly non-symmetric) CSR sparse system A x = b — the
+// batch-solve MIRROR of the authoritative CPU nimblecas::gmres.
+// ---------------------------------------------------------------------------
+using GmresCsrResult = CgCsrResult;
+
+// Solve A x = b for a GENERAL (possibly non-symmetric) sparse A in CSR form on the device or CPU fallback:
+// `row_offsets` has length n+1 and `col_indices`/`values` hold the flattened nonzeros (equal length nnz),
+// with n = b.size(). The solver starts from a zero initial guess and restarts until the true residual
+// 2-norm falls to tol*||b|| or `max_iters` total inner iterations is reached.
+//
+// HONESTY: a NUMERICAL (double) iterative solver — the CPU nimblecas::gmres remains authoritative.
+// `converged == false` is a legitimate outcome (budget exhausted or breakdown), never an error. The reported
+// residual is the TRUE ||b - A x|| recomputed at exit.
+// DETERMINISM: device dot-product reductions sum in block/tree order rather than the CPU's strict left-to-right
+// order, so the last bits of x can differ from a sequential CPU GMRES — each is a valid numerical solution.
+// Bitwise REPEATABLE run-to-run on the same device at fixed launch shape.
+// DOMAIN: no SPD requirement; `restart` clamped to min(restart, n); memory O(n*(restart+1)) on device.
+//
+// Fails with MathError::domain_error when max_iters < 0, restart < 1, b is empty (n must be > 0),
+// row_offsets.size() != n+1, col_indices.size() != values.size(), or CSR interior invariants (monotone
+// row_offsets, col index in [0, n)) are violated; MathError::overflow when a size exceeds the int kernel
+// bound or basis allocation sizing wraps; and MathError::gpu_error when a CUDA call fails on an available device.
+// When no GPU is present, falls back to CPU krylov::gmres.
+[[nodiscard]] auto gmres_csr(std::span<const int> row_offsets, std::span<const int> col_indices,
+                             std::span<const double> values, std::span<const double> b,
+                             int max_iters = 1000, double tol = 1e-10, int restart = 30)
+    -> Result<CgCsrResult> {
+    if (max_iters < 0 || restart < 1 || b.empty() || row_offsets.size() != b.size() + 1 ||
+        col_indices.size() != values.size()) {
+        return make_error<CgCsrResult>(MathError::domain_error);
+    }
+    constexpr auto int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (b.size() > int_max || row_offsets.size() > int_max || values.size() > int_max) {
+        return make_error<CgCsrResult>(MathError::overflow);
+    }
+    const std::size_t m_size = std::min<std::size_t>(static_cast<std::size_t>(restart), b.size());
+    if (b.size() != 0 && (m_size + 1) > std::numeric_limits<std::size_t>::max() / b.size() / sizeof(double)) {
+        return make_error<CgCsrResult>(MathError::overflow);
+    }
+    if (row_offsets.front() != 0 ||
+        static_cast<std::size_t>(row_offsets.back()) != values.size()) {
+        return make_error<CgCsrResult>(MathError::domain_error);
+    }
+    for (std::size_t i = 0; i + 1 < row_offsets.size(); ++i) {
+        if (row_offsets[i] < 0 || row_offsets[i + 1] < row_offsets[i]) {
+            return make_error<CgCsrResult>(MathError::domain_error);
+        }
+    }
+    const auto n = static_cast<int>(b.size());
+    for (const int c : col_indices) {
+        if (c < 0 || c >= n) {
+            return make_error<CgCsrResult>(MathError::domain_error);
+        }
+    }
+
+    if (!available()) {
+        auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, b.size());
+        auto res = nimblecas::gmres(A, b, tol, static_cast<std::size_t>(max_iters),
+                                    static_cast<std::size_t>(restart));
+        if (!res) {
+            return make_error<CgCsrResult>(res.error());
+        }
+        return CgCsrResult{std::move(res->x), static_cast<int>(res->iterations), res->converged,
+                           res->residual};
+    }
+
+    const auto nnz = static_cast<int>(values.size());
+    std::vector<double> x(b.size(), 0.0);
+    int iterations = 0;
+    int converged = 0;
+    double residual = 0.0;
+    const int rc = nimblecas_gpu_gmres_csr(row_offsets.data(), col_indices.data(), values.data(), n,
+                                           nnz, b.data(), x.data(), max_iters, tol, restart,
+                                           &iterations, &converged, &residual);
+    if (rc != 0) {
+        return make_error<CgCsrResult>(MathError::gpu_error);
+    }
+    return CgCsrResult{std::move(x), iterations, converged != 0, residual};
+}
+
 // One CSR system view for the batched solver; all spans must outlive the call.
 struct CsrSystem {
     std::span<const int> row_offsets;    // length n_i + 1

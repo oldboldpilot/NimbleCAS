@@ -1684,5 +1684,193 @@ auto main() -> int {
                   t.expect(!bad_b_res.has_value() && bad_b_res.error() == MathError::domain_error,
                            "system with empty b yields domain_error");
               })
+        .test("gmres_csr solves a non-symmetric CSR system",
+              [](nimblecas::testing::TestContext& t) {
+                  using namespace nimblecas;
+
+                  // 1. Non-symmetric 8x8 convection-diffusion CSR system
+                  const int n = 8;
+                  std::vector<int> row_offsets;
+                  std::vector<int> col_indices;
+                  std::vector<double> values;
+                  row_offsets.push_back(0);
+                  for (int i = 0; i < n; ++i) {
+                      if (i > 0) {
+                          col_indices.push_back(i - 1);
+                          values.push_back(-0.8);
+                      }
+                      col_indices.push_back(i);
+                      values.push_back(2.0 + i * 0.1);
+                      if (i + 1 < n) {
+                          col_indices.push_back(i + 1);
+                          values.push_back(-1.2);
+                      }
+                      row_offsets.push_back(static_cast<int>(values.size()));
+                  }
+                  std::vector<double> b(n, 1.0);
+                  const double tol = 1e-10;
+                  const int max_iters = 200;
+                  const int restart = 30;
+
+                  auto host_spmv = [&](const std::vector<double>& vx) {
+                      std::vector<double> ax(n, 0.0);
+                      for (int r = 0; r < n; ++r) {
+                          double sum = 0.0;
+                          for (int e = row_offsets[r]; e < row_offsets[r + 1]; ++e) {
+                              sum += values[e] * vx[col_indices[e]];
+                          }
+                          ax[r] = sum;
+                      }
+                      return ax;
+                  };
+                  auto host_norm = [](const std::vector<double>& v) {
+                      double s = 0.0;
+                      for (double d : v) s += d * d;
+                      return std::sqrt(s);
+                  };
+                  auto host_true_resid = [&](const std::vector<double>& vx) {
+                      auto ax = host_spmv(vx);
+                      std::vector<double> r(n, 0.0);
+                      for (int i = 0; i < n; ++i) r[i] = b[i] - ax[i];
+                      return host_norm(r);
+                  };
+
+                  const double bnorm = host_norm(b);
+
+                  // Primary solve
+                  auto got = gpu::gmres_csr(row_offsets, col_indices, values, b, max_iters, tol, restart);
+                  t.expect(got.has_value(), "gmres_csr computed without error");
+                  if (got) {
+                      t.expect(got->converged, "system converged");
+                      t.expect(got->residual <= tol * bnorm, "reported residual <= tol * ||b||");
+
+                      const double tr = host_true_resid(got->x);
+                      t.expect(tr <= tol * bnorm, "true residual <= tol * ||b||");
+
+                      // Compare against CPU oracle
+                      auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
+                      auto cpu_res = nimblecas::gmres(A, b, tol, static_cast<std::size_t>(max_iters),
+                                                      static_cast<std::size_t>(restart));
+                      t.expect(cpu_res.has_value(), "CPU oracle computed");
+                      if (cpu_res) {
+                          t.expect(cpu_res->converged, "CPU oracle converged");
+                          bool near = true;
+                          for (int i = 0; i < n; ++i) {
+                              if (std::abs(got->x[i] - cpu_res->x[i]) > 1e-8) {
+                                  near = false;
+                                  break;
+                              }
+                          }
+                          t.expect(near, "GPU solution agrees with CPU krylov::gmres within 1e-8");
+                      }
+                  }
+
+                  // 2. Honesty at exhaustion: max_iters = 1, restart = 1
+                  auto got_1 = gpu::gmres_csr(row_offsets, col_indices, values, b, 1, tol, 1);
+                  t.expect(got_1.has_value(), "max_iters=1 computed without error");
+                  if (got_1) {
+                      t.expect(!got_1->converged, "max_iters=1 does not falsely claim convergence");
+                      t.expect(got_1->iterations == 1, "iteration count is 1");
+                      const double tr_1 = host_true_resid(got_1->x);
+                      t.expect(std::abs(got_1->residual - tr_1) <= 1e-12 * std::max(1.0, tr_1),
+                               "reported residual matches host true residual");
+                  }
+
+                  // 3. Determinism: bitwise repeatability on identical inputs
+                  auto got_repeat = gpu::gmres_csr(row_offsets, col_indices, values, b, max_iters, tol, restart);
+                  t.expect(got_repeat.has_value(), "repeat solve computed");
+                  if (got && got_repeat) {
+                      t.expect(got->x == got_repeat->x, "bitwise repeatable solution vector");
+                      t.expect(got->residual == got_repeat->residual, "bitwise repeatable residual");
+                      t.expect(got->iterations == got_repeat->iterations, "bitwise repeatable iteration count");
+                  }
+
+                  // 4. Restart edge: restart = 2 forcing >1 outer restart cycle
+                  auto got_r2 = gpu::gmres_csr(row_offsets, col_indices, values, b, max_iters, tol, 2);
+                  t.expect(got_r2.has_value(), "restart=2 solve computed");
+                  if (got_r2) {
+                      t.expect(got_r2->converged, "restart=2 system converged");
+                      const double tr_r2 = host_true_resid(got_r2->x);
+                      t.expect(tr_r2 <= tol * bnorm, "restart=2 true residual <= tol * ||b||");
+                  }
+
+                  // 5. Edge systems: Identity matrix
+                  {
+                      std::vector<int> id_row = {0, 1, 2, 3, 4};
+                      std::vector<int> id_col = {0, 1, 2, 3};
+                      std::vector<double> id_val = {1.0, 1.0, 1.0, 1.0};
+                      std::vector<double> id_b = {2.0, -3.0, 0.5, 1.5};
+                      auto id_res = gpu::gmres_csr(id_row, id_col, id_val, id_b, 100, tol, 10);
+                      t.expect(id_res.has_value(), "Identity system solved");
+                      if (id_res) {
+                          t.expect(id_res->converged && id_res->iterations == 1, "Identity converges in 1 iteration");
+                          bool match = true;
+                          for (std::size_t i = 0; i < id_b.size(); ++i) {
+                              if (std::abs(id_res->x[i] - id_b[i]) > 1e-12) match = false;
+                          }
+                          t.expect(match, "Identity x == b to 1e-12");
+                      }
+                  }
+
+                  // b == all zeros
+                  {
+                      std::vector<double> b_zero(n, 0.0);
+                      auto z_res = gpu::gmres_csr(row_offsets, col_indices, values, b_zero, max_iters, tol, restart);
+                      t.expect(z_res.has_value(), "b == 0 solve returns value");
+                      if (z_res) {
+                          t.expect(z_res->converged && z_res->iterations == 0, "b == 0 converges at iteration 0");
+                          bool all_zero = true;
+                          for (double xv : z_res->x) {
+                              if (xv != 0.0) all_zero = false;
+                          }
+                          t.expect(all_zero, "b == 0 gives x == 0");
+                          t.expect(z_res->residual == 0.0, "b == 0 residual is 0");
+                      }
+                  }
+
+                  // nnz == 0 (all-zero matrix A, b != 0)
+                  {
+                      std::vector<int> zero_rows(n + 1, 0);
+                      std::vector<int> no_cols;
+                      std::vector<double> no_vals;
+                      auto sing = gpu::gmres_csr(zero_rows, no_cols, no_vals, b, max_iters, tol, restart);
+                      t.expect(sing.has_value(), "nnz == 0 matrix solve returns value");
+                      if (sing) {
+                          t.expect(!sing->converged, "nnz == 0 matrix honestly reports not converged");
+                          t.expect(std::abs(sing->residual - bnorm) <= 1e-12 * bnorm, "nnz == 0 residual equals ||b||");
+                      }
+                  }
+
+                  // 6. Domain guards
+                  std::vector<double> empty_b;
+                  auto bad_b = gpu::gmres_csr(row_offsets, col_indices, values, empty_b, max_iters, tol, restart);
+                  t.expect(!bad_b.has_value() && bad_b.error() == MathError::domain_error,
+                           "empty b yields domain_error");
+
+                  std::vector<int> bad_row_offsets = {0, 2};
+                  auto bad_row = gpu::gmres_csr(bad_row_offsets, col_indices, values, b, max_iters, tol, restart);
+                  t.expect(!bad_row.has_value() && bad_row.error() == MathError::domain_error,
+                           "bad row_offsets length yields domain_error");
+
+                  std::vector<int> bad_cols = col_indices;
+                  if (!bad_cols.empty()) bad_cols.pop_back();
+                  auto bad_col = gpu::gmres_csr(row_offsets, bad_cols, values, b, max_iters, tol, restart);
+                  t.expect(!bad_col.has_value() && bad_col.error() == MathError::domain_error,
+                           "mismatched col_indices/values length yields domain_error");
+
+                  auto bad_restart = gpu::gmres_csr(row_offsets, col_indices, values, b, max_iters, tol, 0);
+                  t.expect(!bad_restart.has_value() && bad_restart.error() == MathError::domain_error,
+                           "restart < 1 yields domain_error");
+
+                  auto neg_it = gpu::gmres_csr(row_offsets, col_indices, values, b, -1, tol, restart);
+                  t.expect(!neg_it.has_value() && neg_it.error() == MathError::domain_error,
+                           "negative max_iters yields domain_error");
+
+                  std::vector<int> oob_cols = col_indices;
+                  if (!oob_cols.empty()) oob_cols[0] = n;
+                  auto oob = gpu::gmres_csr(row_offsets, oob_cols, values, b, max_iters, tol, restart);
+                  t.expect(!oob.has_value() && oob.error() == MathError::domain_error,
+                           "out-of-range col index yields domain_error");
+              })
         .run();
 }

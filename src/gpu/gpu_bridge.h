@@ -129,6 +129,22 @@ int nimblecas_gpu_bicgstab_csr(const int* row_offsets, const int* col_indices,
                                double* x, int max_iters, double tol, int* out_iters,
                                int* out_converged, double* out_resid);
 
+/* Restarted GMRES(m) solve of a GENERAL (possibly non-symmetric) sparse system A x = b, with
+ * A in CSR form: row_offsets length n+1, col_indices/values length nnz. x is the solution
+ * (caller supplies the initial guess, typically zeros, in x on entry). Inner Arnoldi with
+ * modified Gram-Schmidt builds a (restart+1)-vector Krylov basis (device memory
+ * O(n*(restart+1))); Givens rotations track the residual on the host; the solver restarts
+ * until the residual 2-norm <= tol*||b|| or max_iters total inner iterations. *out_resid is
+ * the TRUE ||b - A x|| recomputed on the device at exit (never the Givens estimate) and
+ * *out_converged is derived from it; running out of iterations is an outcome (0), not an
+ * error. restart is clamped to n. Device dot reductions sum in block/tree order, so the last
+ * bits may differ from the sequential CPU nimblecas::gmres, which remains authoritative.
+ * Returns 0 on success, or a non-zero CUDA error code. */
+int nimblecas_gpu_gmres_csr(const int* row_offsets, const int* col_indices,
+                            const double* values, int n, int nnz, const double* b,
+                            double* x, int max_iters, double tol, int restart,
+                            int* out_iters, int* out_converged, double* out_resid);
+
 /* Batched CG solve of K independent SYMMETRIC POSITIVE-DEFINITE sparse CSR systems, one CUDA
  * block per system, the whole iteration in-kernel (no per-iteration host sync). Layout:
  * x_off/nz_off are int prefix arrays (length K+1) of the per-system n_i / nnz_i;
