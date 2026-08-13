@@ -172,10 +172,63 @@ public:
 
     [[nodiscard]] auto now_ms() const -> std::uint64_t override { return clock_(); }
 
+    // -----------------------------------------------------------------------
+    // M2 hardening hooks (additive; happy path bit-identical when no fault is
+    // armed and no accessor is called). All take the existing mutex_.
+    // -----------------------------------------------------------------------
+
+    // Which BrokerPort entry point to fault. Values index fault_counters_.
+    enum class FaultOp : std::uint8_t {
+        enqueue = 0, lease = 1, complete = 2, fail = 3, heartbeat = 4, sweep = 5, state = 6
+    };
+
+    // Arms the port so the next `count` calls of `op` return
+    // make_error(MathError::distributed_error) WITHOUT touching queue state (an
+    // enqueue fault consumes no qid; a sweep fault expires nothing). Counts are
+    // consumed under mutex_, so concurrent callers observe exactly `count`
+    // failures in total. Additive: all counters default 0 => today's behavior.
+    void inject_fault(FaultOp op, std::size_t count = 1) {
+        std::lock_guard lock(mutex_);
+        fault_counters_[static_cast<std::size_t>(op)] += count;
+    }
+
+    // Total tasks ever enqueued on this port. next_qid_ pre-increments below, so
+    // qids are 1-based/sequential and next_qid_ IS the enqueue count.
+    [[nodiscard]] auto enqueue_count() const -> std::uint64_t {
+        std::lock_guard lock(mutex_);
+        return next_qid_;
+    }
+
+    // Lease attempts consumed by qid so far (0 for an unknown qid).
+    [[nodiscard]] auto attempts(std::uint64_t qid) const -> std::uint32_t {
+        std::lock_guard lock(mutex_);
+        const auto it = tasks_.find(qid);
+        return it == tasks_.end() ? 0u : it->second.attempt;
+    }
+
+    // Number of successful heartbeat() calls for qid (0 if unknown/none).
+    [[nodiscard]] auto heartbeat_count(std::uint64_t qid) const -> std::uint64_t {
+        std::lock_guard lock(mutex_);
+        const auto it = tasks_.find(qid);
+        return it == tasks_.end() ? 0u : it->second.heartbeat_count;
+    }
+
+    // Current visibility deadline for qid in the port clock domain (0 if unknown
+    // / never leased). Lets the heartbeat test assert extension without racing
+    // the sweep.
+    [[nodiscard]] auto visibility_deadline_ms(std::uint64_t qid) const -> std::uint64_t {
+        std::lock_guard lock(mutex_);
+        const auto it = tasks_.find(qid);
+        return it == tasks_.end() ? 0u : it->second.visibility_deadline_ms;
+    }
+
     [[nodiscard]] auto enqueue(std::span<const std::byte> payload,
                                SgeePlacement placement, std::uint32_t max_attempts)
         -> Result<std::uint64_t> override {
         std::lock_guard lock(mutex_);
+        if (take_fault(FaultOp::enqueue)) {
+            return make_error<std::uint64_t>(MathError::distributed_error);
+        }
         const std::uint64_t qid = ++next_qid_;
         TaskEntry entry{
             .qid = qid,
@@ -193,6 +246,10 @@ public:
     [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
         -> Result<std::optional<Lease>> override {
         std::lock_guard lock(mutex_);
+        // A lease fault is the ERROR branch, not nullopt: queue-empty is not a fault.
+        if (take_fault(FaultOp::lease)) {
+            return make_error<std::optional<Lease>>(MathError::distributed_error);
+        }
         for (const std::uint64_t qid : fifo_order_) {
             auto it = tasks_.find(qid);
             if (it != tasks_.end() && it->second.state == QState::pending) {
@@ -217,6 +274,9 @@ public:
     [[nodiscard]] auto complete(std::uint64_t qid, std::uint64_t token)
         -> Result<void> override {
         std::lock_guard lock(mutex_);
+        if (take_fault(FaultOp::complete)) {
+            return make_error<void>(MathError::distributed_error);
+        }
         auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<void>(MathError::distributed_error);
@@ -231,6 +291,9 @@ public:
     [[nodiscard]] auto fail(std::uint64_t qid, std::uint64_t token)
         -> Result<void> override {
         std::lock_guard lock(mutex_);
+        if (take_fault(FaultOp::fail)) {
+            return make_error<void>(MathError::distributed_error);
+        }
         auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<void>(MathError::distributed_error);
@@ -249,6 +312,9 @@ public:
     [[nodiscard]] auto heartbeat(std::uint64_t qid, std::uint64_t token,
                                  std::uint64_t extend_by_ms) -> Result<void> override {
         std::lock_guard lock(mutex_);
+        if (take_fault(FaultOp::heartbeat)) {
+            return make_error<void>(MathError::distributed_error);
+        }
         auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<void>(MathError::distributed_error);
@@ -258,12 +324,16 @@ public:
         }
         const std::uint64_t extend = extend_by_ms ? extend_by_ms : 10'000;
         it->second.visibility_deadline_ms = now_ms() + extend;
+        ++it->second.heartbeat_count;
         return {};
     }
 
     [[nodiscard]] auto sweep_expired(std::uint64_t now_ms)
         -> Result<std::size_t> override {
         std::lock_guard lock(mutex_);
+        if (take_fault(FaultOp::sweep)) {
+            return make_error<std::size_t>(MathError::distributed_error);
+        }
         std::size_t swept = 0;
         for (auto& [qid, entry] : tasks_) {
             if (entry.state == QState::leased && now_ms >= entry.visibility_deadline_ms) {
@@ -280,6 +350,9 @@ public:
 
     [[nodiscard]] auto state(std::uint64_t qid) -> Result<QState> override {
         std::lock_guard lock(mutex_);
+        if (take_fault(FaultOp::state)) {
+            return make_error<QState>(MathError::distributed_error);
+        }
         auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<QState>(MathError::distributed_error);
@@ -307,7 +380,17 @@ private:
         std::uint64_t worker_id{0};
         std::uint64_t fencing_token{0};
         std::uint64_t visibility_deadline_ms{0};
+        std::uint64_t heartbeat_count{0};
     };
+
+    // Decrement-and-return-true when `op`'s counter is nonzero. MUST be called
+    // with mutex_ held (every caller is inside a lock_guard).
+    [[nodiscard]] auto take_fault(FaultOp op) -> bool {
+        std::size_t& c = fault_counters_[static_cast<std::size_t>(op)];
+        if (c == 0) { return false; }
+        --c;
+        return true;
+    }
 
     ClockFn clock_{nullptr};
     std::atomic<std::uint64_t> current_time_ms_{0};
@@ -316,6 +399,7 @@ private:
     std::uint64_t next_token_{0};
     std::unordered_map<std::uint64_t, TaskEntry> tasks_{};
     std::vector<std::uint64_t> fifo_order_{};
+    std::array<std::size_t, 7> fault_counters_{};
 };
 
 // ---------------------------------------------------------------------------

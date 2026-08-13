@@ -18,9 +18,13 @@ using nimblecas::InMemoryResultChannel;
 using nimblecas::MathError;
 using nimblecas::Payload;
 using nimblecas::Result;
+using nimblecas::ResultChannel;
+using nimblecas::run_worker_pump;
 using nimblecas::SgeeDistributedExecutor;
 using nimblecas::SgeeExecutorConfig;
+using nimblecas::SgeePlacement;
 using nimblecas::TaskFn;
+using nimblecas::WorkerPumpConfig;
 using nimblecas::TaskGraph;
 using nimblecas::TaskId;
 using nimblecas::TaskRegistry;
@@ -51,6 +55,82 @@ namespace {
         return false;
     }
     return a.has_value() ? (*a == *b) : (a.error() == b.error());
+}
+
+// Polls pred() every 1 ms until true or `budget` elapses; returns pred()'s final value.
+// Assertions are made on OUTCOMES after the wait, never on timing itself.
+[[nodiscard]] auto wait_until(const std::function<bool()>& pred,
+                              std::chrono::milliseconds budget = std::chrono::seconds(10)) -> bool {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (pred()) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return pred();
+}
+
+// Accepts put() (returns success) but silently discards the first `n` payloads: the
+// "worker committed via complete(), but the channel lost the bytes" fault.
+class SwallowingResultChannel final : public ResultChannel {
+public:
+    explicit SwallowingResultChannel(std::size_t swallow_first_n) : remaining_(swallow_first_n) {}
+    [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
+        std::lock_guard lock(mutex_);
+        if (remaining_ > 0) { --remaining_; return {}; }  // pretend success, drop bytes
+        return inner_.put(qid, std::move(p));
+    }
+    [[nodiscard]] auto get(std::uint64_t qid) const -> Result<Payload> override {
+        return inner_.get(qid);
+    }
+private:
+    mutable std::mutex mutex_;
+    std::size_t remaining_;
+    nimblecas::InMemoryResultChannel inner_;
+};
+
+// put() stores a COPY with byte 0 flipped (corrupt result envelope on the wire).
+class CorruptingResultChannel final : public ResultChannel {
+public:
+    [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
+        std::lock_guard lock(mutex_);
+        if (!p.empty()) { p[0] = p[0] ^ std::byte{0xFF}; }
+        return inner_.put(qid, std::move(p));
+    }
+    [[nodiscard]] auto get(std::uint64_t qid) const -> Result<Payload> override {
+        return inner_.get(qid);
+    }
+private:
+    mutable std::mutex mutex_;
+    nimblecas::InMemoryResultChannel inner_;
+};
+
+// put() always fails with distributed_error (drives the pump's fail() -> retry -> DLQ path).
+class RefusingResultChannel final : public ResultChannel {
+public:
+    [[nodiscard]] auto put(std::uint64_t, Payload) -> Result<void> override {
+        return nimblecas::make_error<void>(MathError::distributed_error);
+    }
+    [[nodiscard]] auto get(std::uint64_t) const -> Result<Payload> override {
+        return nimblecas::make_error<Payload>(MathError::distributed_error);
+    }
+};
+
+// Registers the diamond ops into reg and builds the diamond DAG into g. Returns the
+// five task ids. A=7, B=A*2=14, C=A+3=10, D=B+C=24, probe=B*1000+C=14010.
+struct DiamondIds { TaskId a, b, c, d, probe; };
+[[nodiscard]] auto build_diamond(TaskRegistry& reg, TaskGraph& g) -> DiamondIds {
+    (void)reg.register_op("test.const7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+    (void)reg.register_op("test.mul2/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 2); });
+    (void)reg.register_op("test.add3/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + 3); });
+    (void)reg.register_op("test.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+    (void)reg.register_op("test.probe/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 1000 + decode_i64(ps[1])); });
+    DiamondIds ids;
+    ids.a = g.add_named_task(reg, "test.const7/v1").value();
+    ids.b = g.add_named_task(reg, "test.mul2/v1", std::vector<TaskId>{ids.a}).value();
+    ids.c = g.add_named_task(reg, "test.add3/v1", std::vector<TaskId>{ids.a}).value();
+    ids.d = g.add_named_task(reg, "test.add/v1", std::vector<TaskId>{ids.b, ids.c}).value();
+    ids.probe = g.add_named_task(reg, "test.probe/v1", std::vector<TaskId>{ids.b, ids.c}).value();
+    return ids;
 }
 
 }  // namespace
@@ -373,6 +453,485 @@ auto main() -> int {
                   t.expect(!res3.has_value() && res3.error() == MathError::distributed_error,
                            "Dead queue state surfaces as distributed_error (never a partial output)");
               })
+        // ===================================================================
+        // M2 hardening: honesty-path robustness suite (DEFAULT OFF build).
+        // ===================================================================
+        .test("lost_result_completed_but_channel_empty_aborts",  // T1 — gap (a)
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  TaskGraph g;
+                  (void)g.add_named_task(reg, "op.c7/v1");
+
+                  FakeBrokerPort port;
+                  SwallowingResultChannel results{1};  // worker's put() "succeeds" but drops the bytes
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+
+                  const auto res = exec.run(g);
+                  t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                           "completed task with a lost result aborts the whole run (never fabricated)");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed,
+                           "the abort came from the missing result, not the queue (state == completed)");
+                  t.expect(!results.get(1).has_value(), "the channel really has nothing for qid 1");
+                  t.expect(port.attempts(1) == 1, "a lost result after commit is NOT retried");
+              })
+        .test("corrupt_result_envelope_aborts",  // T1b — result undecodable
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  TaskGraph g;
+                  (void)g.add_named_task(reg, "op.c7/v1");
+
+                  FakeBrokerPort port;
+                  CorruptingResultChannel results;  // flips byte 0 -> decode_result syntax_error
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+
+                  const auto res = exec.run(g);
+                  t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                           "an undecodable result envelope aborts with distributed_error (codec syntax_error not leaked)");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed,
+                           "the worker completed; the coordinator refused the corrupt bytes");
+              })
+        .test("worker_publishes_bridge_error_for_poison_payloads",  // T2 — gap (b), pump level
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+
+                  // 1) garbage bytes -> worker decode failure
+                  (void)port.enqueue(std::vector<std::byte>{std::byte{0xDE}, std::byte{0xAD}},
+                                     SgeePlacement::cpu, 3);
+                  // 2) valid frame, wrong fingerprint -> fp mismatch
+                  const auto p2 = encode_task(TaskEnvelope{
+                      .registry_fp = reg.fingerprint() ^ 1ULL, .op_id = "op.c7/v1", .args = {}}).value();
+                  (void)port.enqueue(p2, SgeePlacement::cpu, 3);
+                  // 3) valid frame, honest fingerprint, unknown op -> find() == nullptr
+                  const auto p3 = encode_task(TaskEnvelope{
+                      .registry_fp = reg.fingerprint(), .op_id = "no.such/v1", .args = {}}).value();
+                  (void)port.enqueue(p3, SgeePlacement::cpu, 3);
+
+                  std::jthread pump([&](std::stop_token st) {
+                      run_worker_pump(port, reg, results,
+                                      WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100,
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
+                  });
+                  const bool all_done = wait_until([&] {
+                      return port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed &&
+                             port.state(2).has_value() && *port.state(2) == BrokerPort::QState::completed &&
+                             port.state(3).has_value() && *port.state(3) == BrokerPort::QState::completed;
+                  });
+                  pump.request_stop();
+                  pump.join();
+
+                  t.expect(all_done, "all three poison payloads reach completed");
+                  for (std::uint64_t qid = 1; qid <= 3; ++qid) {
+                      const auto bytes = results.get(qid);
+                      t.expect(bytes.has_value(), "a result envelope was published for the poison payload");
+                      if (bytes.has_value()) {
+                          const auto dec = decode_result(*bytes);
+                          t.expect(dec.has_value() && dec->status == ResultEnvelope::Status::bridge_error,
+                                   "worker publishes a bridge_error envelope (not a fabricated result)");
+                      }
+                      t.expect(port.attempts(qid) == 1, "a deterministic worker failure is never retried");
+                  }
+              })
+        .test("coordinator_aborts_whole_run_on_bridge_error",  // T3 — gap (b), executor level
+              [](TestContext& t) {
+                  TaskRegistry reg_coord;
+                  (void)reg_coord.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  TaskRegistry reg_worker;
+                  (void)reg_worker.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  (void)reg_worker.register_op("extra.op/v1", [](auto) -> Result<Payload> { return encode_i64(0); });
+                  t.expect(reg_coord.fingerprint() != reg_worker.fingerprint(),
+                           "registry skew makes the fingerprints differ");
+
+                  TaskGraph g;
+                  (void)g.add_named_task(reg_coord, "op.c7/v1");
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg_coord).with_num_workers(0).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+
+                  std::jthread pump([&](std::stop_token st) {
+                      run_worker_pump(port, reg_worker, results,
+                                      WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100'000,
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
+                  });
+                  const auto res = exec.run(g);
+                  pump.request_stop();
+                  pump.join();
+
+                  t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                           "registry-skew bridge error aborts the whole run");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed,
+                           "the worker completed honestly with a bridge error; the coordinator refused");
+              })
+        .test("organic_lease_expiry_retry_is_bit_identical",  // T4 — gap (c)
+              [](TestContext& t) {
+                  // Serial reference on a clean diamond.
+                  TaskRegistry reg_s;
+                  TaskGraph g_s;
+                  const auto ids_s = build_diamond(reg_s, g_s);
+                  const auto ser_res = nimblecas::serial_executor()->run(g_s).value();
+
+                  // Distributed diamond whose const7 is instrumented to count physical executions.
+                  std::atomic<int> exec_count{0};
+                  TaskRegistry reg;
+                  (void)reg.register_op("test.const7/v1", [&exec_count](auto) -> Result<Payload> {
+                      exec_count.fetch_add(1); return encode_i64(7); });
+                  (void)reg.register_op("test.mul2/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 2); });
+                  (void)reg.register_op("test.add3/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + 3); });
+                  (void)reg.register_op("test.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+                  (void)reg.register_op("test.probe/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 1000 + decode_i64(ps[1])); });
+                  TaskGraph g;
+                  const auto a = g.add_named_task(reg, "test.const7/v1").value();
+                  const auto b = g.add_named_task(reg, "test.mul2/v1", std::vector<TaskId>{a}).value();
+                  const auto c = g.add_named_task(reg, "test.add3/v1", std::vector<TaskId>{a}).value();
+                  const auto d = g.add_named_task(reg, "test.add/v1", std::vector<TaskId>{b, c}).value();
+                  const auto probe = g.add_named_task(reg, "test.probe/v1", std::vector<TaskId>{b, c}).value();
+
+                  FakeBrokerPort port;                 // hand clock starts at 0
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(0).with_poll_interval_ms(1)
+                     .with_visibility_timeout_ms(100);
+
+                  SgeeDistributedExecutor exec(cfg, port, results);
+                  Result<nimblecas::TaskRunResult> run_res = nimblecas::make_error<nimblecas::TaskRunResult>(MathError::distributed_error);
+                  std::jthread runner([&] { run_res = exec.run(g); });
+
+                  // A (qid 1) is enqueued; the test plays the doomed worker.
+                  t.expect(wait_until([&] { return port.state(1).has_value(); }), "A enqueued as qid 1");
+                  auto l1_res = port.lease(99, 100);
+                  t.expect(l1_res.has_value() && l1_res->has_value(), "doomed worker leases A");
+                  const auto l1 = l1_res->value();
+                  t.expect(l1.qid == 1 && l1.attempt == 1, "first lease: qid 1, attempt 1");
+
+                  // Execute attempt 1, publish the result, then CRASH before complete().
+                  const auto env1 = decode_task(l1.payload).value();
+                  const TaskFn* fn1 = reg.find(env1.op_id);
+                  t.expect(fn1 != nullptr, "doomed worker resolves the op");
+                  const auto r1 = (*fn1)(std::span<const Payload>(env1.args));
+                  const auto renv1 = encode_result(ResultEnvelope{
+                      .status = ResultEnvelope::Status::ok, .math_err = MathError::division_by_zero,
+                      .seconds = 0.0, .bytes = r1.value()}).value();
+                  (void)results.put(1, renv1);           // published, but never complete()d
+
+                  // Push past the visibility deadline; the coordinator's own sweep re-pends A.
+                  port.advance_time_ms(101);
+                  t.expect(wait_until([&] {
+                      return port.state(1).has_value() && *port.state(1) == BrokerPort::QState::pending &&
+                             port.attempts(1) == 1;
+                  }), "A organically re-pended by the coordinator sweep (attempt still 1)");
+
+                  // Now a real pump re-leases and re-executes with a huge lease timeout (no further expiry).
+                  std::jthread pump([&](std::stop_token st) {
+                      run_worker_pump(port, reg, results,
+                                      WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100'000,
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
+                  });
+                  runner.join();
+                  pump.request_stop();
+                  pump.join();
+
+                  t.expect(run_res.has_value(), "the run completes after the organic retry");
+                  if (run_res.has_value()) {
+                      bool bit_identical = (run_res->outputs.size() == ser_res.outputs.size());
+                      for (std::size_t i = 0; bit_identical && i < run_res->outputs.size(); ++i) {
+                          bit_identical = results_equal(run_res->outputs[i], ser_res.outputs[i]);
+                      }
+                      t.expect(bit_identical, "outputs are BIT-IDENTICAL to serial despite the retry");
+                      t.expect(run_res->executed == 5, "executed == 5 (once per task, regardless of physical attempts)");
+                      t.expect(decode_i64(run_res->outputs[a.value].value()) == 7, "A == 7");
+                      t.expect(decode_i64(run_res->outputs[b.value].value()) == 14, "B == 14");
+                      t.expect(decode_i64(run_res->outputs[c.value].value()) == 10, "C == 10");
+                      t.expect(decode_i64(run_res->outputs[d.value].value()) == 24, "D == 24");
+                      t.expect(decode_i64(run_res->outputs[probe.value].value()) == 14010, "probe == 14010");
+                  }
+                  t.expect(port.attempts(1) == 2, "the retry really happened (attempt 2)");
+                  t.expect(exec_count.load() == 2, "A's fn physically ran twice; purity made it invisible");
+              })
+        .test("stale_fencing_token_is_dropped",  // T5 — gap (d), pure broker level
+              [](TestContext& t) {
+                  FakeBrokerPort port;
+                  const auto p = encode_task(TaskEnvelope{.registry_fp = 0, .op_id = "op.c7/v1", .args = {}}).value();
+                  (void)port.enqueue(p, SgeePlacement::cpu, 3);
+
+                  const auto l1 = port.lease(1, 100).value().value();  // token t1, attempt 1
+                  port.advance_time_ms(101);
+                  const auto swept = port.sweep_expired(port.now_ms());
+                  t.expect(swept.has_value() && *swept == 1, "the first lease expires and re-pends");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::pending, "state is pending");
+                  const auto l2 = port.lease(2, 100).value().value();  // token t2 != t1, attempt 2
+                  t.expect(l2.token != l1.token, "the retry gets a fresh fencing token");
+
+                  t.expect(!port.complete(1, l1.token).has_value(), "stale complete() is dropped");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::leased,
+                           "the retry's lease is intact after the stale commit");
+                  t.expect(!port.fail(1, l1.token).has_value(), "stale fail() is dropped");
+                  t.expect(!port.heartbeat(1, l1.token, 0).has_value(), "a zombie worker cannot extend the retry's lease");
+                  t.expect(port.complete(1, l2.token).has_value(), "the retry's own token commits");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed, "the retry's result wins");
+                  t.expect(port.attempts(1) == 2, "exactly two attempts");
+              })
+        .test("poisoned_task_payload_never_enqueued",  // T6 — gap (e)
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c1/v1", [](auto) -> Result<Payload> { return encode_i64(1); });
+                  (void)reg.register_op("op.fail_dom/v1", [](auto) -> Result<Payload> { return nimblecas::make_error<Payload>(MathError::domain_error); });
+                  (void)reg.register_op("op.c2/v1", [](auto) -> Result<Payload> { return encode_i64(2); });
+                  (void)reg.register_op("op.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+                  (void)reg.register_op("op.c5/v1", [](auto) -> Result<Payload> { return encode_i64(5); });
+                  (void)reg.register_op("op.mul10/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 10); });
+
+                  TaskGraph g;
+                  const auto a = g.add_named_task(reg, "op.c1/v1").value();
+                  const auto b = g.add_named_task(reg, "op.fail_dom/v1", std::vector<TaskId>{a}).value();
+                  const auto c = g.add_named_task(reg, "op.c2/v1").value();
+                  const auto d = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{b, c}).value();
+                  const auto e = g.add_named_task(reg, "op.c5/v1").value();
+                  const auto f = g.add_named_task(reg, "op.mul10/v1", std::vector<TaskId>{e}).value();
+                  (void)d; (void)f;
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+                  const auto res = exec.run(g).value();
+
+                  t.expect(!res.outputs[d.value].has_value() && res.outputs[d.value].error() == MathError::domain_error,
+                           "D is poisoned by B's domain_error");
+                  t.expect(port.enqueue_count() == 5, "exactly the five non-poisoned tasks bought qids");
+                  for (std::uint64_t q = 1; q <= 5; ++q) {
+                      t.expect(port.state(q).has_value() && *port.state(q) == BrokerPort::QState::completed,
+                               "each of the five enqueued tasks reached completed");
+                  }
+                  t.expect(!port.state(6).has_value(), "no sixth task ever existed (D's bytes never travelled)");
+              })
+        .test("multi_worker_pumps_serial_identical",  // T7 — gap (f)
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  for (int i = 0; i < 8; ++i) {
+                      reg.register_op("op.leaf" + std::to_string(i) + "/v1",
+                                      [i](auto) -> Result<Payload> { return encode_i64(i); }).value();
+                  }
+                  (void)reg.register_op("op.add/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+
+                  TaskGraph g;
+                  std::vector<TaskId> leaves;
+                  for (int i = 0; i < 8; ++i) {
+                      leaves.push_back(g.add_named_task(reg, "op.leaf" + std::to_string(i) + "/v1").value());
+                  }
+                  const auto n0 = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{leaves[0], leaves[1]}).value();
+                  const auto n1 = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{leaves[2], leaves[3]}).value();
+                  const auto n2 = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{leaves[4], leaves[5]}).value();
+                  const auto n3 = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{leaves[6], leaves[7]}).value();
+                  const auto m0 = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{n0, n1}).value();
+                  const auto m1 = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{n2, n3}).value();
+                  const auto root = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{m0, m1}).value();
+
+                  const auto ser_res = nimblecas::serial_executor()->run(g).value();
+                  t.expect(decode_i64(ser_res.outputs[root.value].value()) == 28, "serial reduction root == 28");
+
+                  for (const std::size_t wc : {std::size_t{1}, std::size_t{2}, std::size_t{4}}) {
+                      FakeBrokerPort port;
+                      InMemoryResultChannel results;
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(wc).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor exec(cfg, port, results);
+                      const auto res = exec.run(g).value();
+
+                      bool identical = (res.outputs.size() == ser_res.outputs.size());
+                      for (std::size_t i = 0; identical && i < res.outputs.size(); ++i) {
+                          identical = results_equal(res.outputs[i], ser_res.outputs[i]);
+                      }
+                      t.expect(identical, "outputs are BIT-IDENTICAL to serial at every worker count");
+                      t.expect(res.executed == 15, "all 15 tasks executed exactly once");
+                      t.expect(port.enqueue_count() == 15, "every task enqueued exactly once (no double-submit under contention)");
+                  }
+              })
+        .test("dead_letter_after_max_attempts_aborts_run",  // T8 — gap (g), organic DLQ
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  TaskGraph g;
+                  (void)g.add_named_task(reg, "op.c7/v1");
+
+                  FakeBrokerPort port;
+                  RefusingResultChannel results;  // every put() fails -> fail() -> retry -> DLQ
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1).with_max_attempts(2);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+
+                  const auto res = exec.run(g);
+                  t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                           "a task that exhausts its attempts aborts the run");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::dead, "qid 1 is dead");
+                  t.expect(port.attempts(1) == 2, "exactly max_attempts attempts, no over-retry");
+              })
+        .test("heartbeat_extends_visibility_under_sweep",  // T9 — Part D
+              [](TestContext& t) {
+                  std::binary_semaphore sem{0};
+                  TaskRegistry reg;
+                  (void)reg.register_op("test.block/v1", [sem = &sem](auto) -> Result<Payload> {
+                      sem->acquire(); return encode_i64(9); });
+
+                  FakeBrokerPort port;  // clock at 0
+                  InMemoryResultChannel results;
+                  const auto p = encode_task(TaskEnvelope{
+                      .registry_fp = reg.fingerprint(), .op_id = "test.block/v1", .args = {}}).value();
+                  (void)port.enqueue(p, SgeePlacement::cpu, 3);
+
+                  std::jthread pump([&](std::stop_token st) {
+                      run_worker_pump(port, reg, results,
+                                      WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100,
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 1}, st);
+                  });
+
+                  t.expect(wait_until([&] {
+                      return port.state(1).has_value() && *port.state(1) == BrokerPort::QState::leased;
+                  }), "the task is leased (initial deadline 0 + 100)");
+                  t.expect(wait_until([&] { return port.heartbeat_count(1) >= 1; }),
+                           "a heartbeat landed (deadline now 0 + 10000)");
+
+                  port.advance_time_ms(5'000);  // now = 5000, inside 10000
+                  const auto s1 = port.sweep_expired(port.now_ms());
+                  t.expect(s1.has_value() && *s1 == 0, "sweep at t=5000 does not expire the heartbeated lease");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::leased, "still leased");
+
+                  const auto hb = port.heartbeat_count(1);
+                  t.expect(wait_until([&] { return port.heartbeat_count(1) > hb; }), "another heartbeat lands at t=5000");
+                  t.expect(port.visibility_deadline_ms(1) >= 15'000,
+                           "the extension is real: deadline pushed strictly beyond the earlier 10000");
+
+                  port.advance_time_ms(5'000);  // now = 10000, past the step-2 deadline
+                  const auto s2 = port.sweep_expired(port.now_ms());
+                  t.expect(s2.has_value() && *s2 == 0, "the guard kept the lease alive past the un-extended deadline");
+
+                  sem.release();
+                  t.expect(wait_until([&] {
+                      return port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed;
+                  }), "the task completes once released");
+                  pump.request_stop();
+                  pump.join();
+                  const auto bytes = results.get(1);
+                  t.expect(bytes.has_value() && decode_result(*bytes).value().status == ResultEnvelope::Status::ok &&
+                           decode_i64(decode_result(*bytes).value().bytes) == 9, "result is 9");
+                  t.expect(port.attempts(1) == 1, "no spurious retry, ever");
+              })
+        .test("coordinator_transport_faults_abort_honestly",  // T10 (i)-(iii)
+              [](TestContext& t) {
+                  const auto make_single = [](TaskRegistry& reg, TaskGraph& g) {
+                      (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                      (void)g.add_named_task(reg, "op.c7/v1");
+                  };
+
+                  // (i) enqueue fault -> no qid consumed
+                  {
+                      TaskRegistry reg; TaskGraph g; make_single(reg, g);
+                      FakeBrokerPort port; InMemoryResultChannel results;
+                      port.inject_fault(FakeBrokerPort::FaultOp::enqueue);
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor exec(cfg, port, results);
+                      const auto res = exec.run(g);
+                      t.expect(!res.has_value() && res.error() == MathError::distributed_error, "(i) enqueue fault aborts");
+                      t.expect(port.enqueue_count() == 0, "(i) the fault consumed no qid");
+                  }
+                  // (ii) sweep fault on the first await tick
+                  {
+                      TaskRegistry reg; TaskGraph g; make_single(reg, g);
+                      FakeBrokerPort port; InMemoryResultChannel results;
+                      port.inject_fault(FakeBrokerPort::FaultOp::sweep);
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor exec(cfg, port, results);
+                      const auto res = exec.run(g);
+                      t.expect(!res.has_value() && res.error() == MathError::distributed_error, "(ii) sweep fault aborts");
+                  }
+                  // (iii) state fault on the per-qid poll
+                  {
+                      TaskRegistry reg; TaskGraph g; make_single(reg, g);
+                      FakeBrokerPort port; InMemoryResultChannel results;
+                      port.inject_fault(FakeBrokerPort::FaultOp::state);
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                      SgeeDistributedExecutor exec(cfg, port, results);
+                      const auto res = exec.run(g);
+                      t.expect(!res.has_value() && res.error() == MathError::distributed_error, "(iii) state fault aborts");
+                  }
+              })
+        .test("oversize_fan_in_payload_aborts_run",  // T12 — run-level oversize (kept large; near the end)
+              [](TestContext& t) {
+                  constexpr std::size_t k_max = nimblecas::sgee_bridge::k_max_task_payload_bytes;
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.big/v1", [](auto) -> Result<Payload> {
+                      return Payload(k_max - 8, std::byte{0}); });
+                  (void)reg.register_op("op.len/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(static_cast<std::int64_t>(ps[0].size())); });
+
+                  TaskGraph g;
+                  const auto big = g.add_named_task(reg, "op.big/v1").value();
+                  (void)g.add_named_task(reg, "op.len/v1", std::vector<TaskId>{big}).value();
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+
+                  const auto res = exec.run(g);
+                  t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                           "an oversize child task envelope aborts (codec overflow not leaked)");
+                  t.expect(port.enqueue_count() == 1, "the producer ran; the oversize child was never enqueued");
+              })
+        .test("run_deadline_exceeded_aborts",  // T13 — whole-run liveness deadline
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  TaskGraph g;
+                  (void)g.add_named_task(reg, "op.c7/v1");
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(0).with_poll_interval_ms(1).with_run_deadline_ms(50);
+                  SgeeDistributedExecutor exec(cfg, port, results);
+
+                  const auto res = exec.run(g);
+                  t.expect(!res.has_value() && res.error() == MathError::distributed_error,
+                           "an unserved task past the run deadline aborts honestly");
+                  t.expect(port.state(1).has_value() && *port.state(1) == BrokerPort::QState::pending,
+                           "the task was enqueued and honestly abandoned, not fabricated");
+              })
+#ifndef NIMBLECAS_SGEE
+        .test("stub_factory_is_honest",  // T11 — OFF build only
+              [](TestContext& t) {
+                  SgeeExecutorConfig bad_cfg;  // default: null registry etc.
+                  const auto bad = nimblecas::sgee_distributed_executor(bad_cfg);
+                  t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
+                           "stub factory rejects invalid config with domain_error");
+
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  SgeeExecutorConfig good;
+                  good.with_registry(reg)
+                      .with_wal_dir(std::filesystem::temp_directory_path())
+                      .with_num_workers(1).with_max_attempts(3).with_visibility_timeout_ms(30'000);
+                  const auto res = nimblecas::sgee_distributed_executor(good);
+                  t.expect(!res.has_value() && res.error() == MathError::not_implemented,
+                           "stub factory NEVER pretends a backend exists (not_implemented for valid config)");
+              })
+#endif
 #ifdef NIMBLECAS_SGEE
         .test("acceptance_diamond_dag_real_capi_broker_port",
               [](TestContext& t) {
