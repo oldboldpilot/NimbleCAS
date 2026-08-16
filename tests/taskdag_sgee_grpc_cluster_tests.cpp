@@ -955,8 +955,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   if (!dist.has_value()) {
                       std::println("FAILOVER DIST ERROR: {}", static_cast<int>(dist.error()));
                       for (std::size_t i = 0; i < 3; ++i) {
-                          std::println("--- node{} log ---
-{}", i, read_file(cluster.node_log(i)));
+                          std::println("--- node{} log ---\n{}", i, read_file(cluster.node_log(i)));
                           dump_wal_file(cluster.nodes[i].data_dir / "raft.wal");
                           dump_wal_file(cluster.nodes[i].data_dir / "broker.wal");
                       }
