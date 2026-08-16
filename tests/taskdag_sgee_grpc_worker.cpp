@@ -128,7 +128,7 @@ auto main(int argc, char** argv) -> int {
         std::cerr << "worker " << worker_id << ": failed to connect port\n";
         return 3;
     }
-    auto channel = GrpcResultChannel::connect(endpoints, /*consume_on_get=*/false, /*auth_token=*/"", /*rpc_deadline_ms=*/0, tls);
+    auto channel = std::make_unique<GrpcResultChannel>((*port)->ring(), /*consume_on_get=*/false);
     if (!channel) {
         std::cerr << "worker " << worker_id << ": failed to connect result channel\n";
         return 4;

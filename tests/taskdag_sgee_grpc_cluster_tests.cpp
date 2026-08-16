@@ -850,15 +850,14 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   };
 
                   auto port_res = GrpcBrokerPort::connect(eps, "", 0, tls);
-                  auto chan_res = GrpcResultChannel::connect(eps, /*consume_on_get=*/false, "", 0, tls);
-                  t.expect(port_res.has_value() && chan_res.has_value(), "port and channel connected");
-                  if (!port_res || !chan_res) {
+                  t.expect(port_res.has_value(), "port connected");
+                  if (!port_res) {
                       return;
                   }
                   auto& port = **port_res;
-                  auto& chan = **chan_res;
+                  auto chan = std::make_unique<GrpcResultChannel>(port.ring(), /*consume_on_get=*/false);
 
-                  SgeeDistributedExecutor exec(cfg, port, chan);
+                  SgeeDistributedExecutor exec(cfg, port, *chan);
 
                   // Sequence: start run() on a thread -> wait until gate task is leased ->
                   // identify leader via /statusz -> SIGKILL it -> wait for survivor to report is_leader
