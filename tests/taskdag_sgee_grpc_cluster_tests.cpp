@@ -281,7 +281,7 @@ struct Certs {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
 
-    std::string cmd = std::format("\"{}\" \"{}\"", script_path, dir.string());
+    std::string cmd = std::format("bash \"{}\" \"{}\"", script_path, dir.string());
     const int rc = std::system(cmd.c_str());
     if (rc != 0) {
         return std::nullopt;
