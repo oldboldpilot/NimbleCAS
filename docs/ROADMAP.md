@@ -32,7 +32,8 @@ Every module above is honest about its exact-over-`Q` vs numerical boundary, bui
 - **GPU / parallel / distributed acceleration** of the numerical, data-parallel modules (batched `qmc`/`optimize`/`nlsolve`/`control`/`wavelets`/`krylov`) — TBB batch APIs + CUDA kernels (opt-in) + stateless shard entrypoints. The exact-rational/symbolic cores do not GPU-accelerate.
 - A **WebGPU/WASM interactive** plotting + document front-end (§7.11/§7.13); the full-CAS WASM compile (Emscripten toolchain is set up — see [WASM build](architecture/wasm-build.md)).
 - Breadth items: SDE schemes beyond the current set, nonlinear/variable-coefficient higher-index DAEs, boundary/nonlinear PDEs beyond the current builders.
-- The full JIT/multi-GPU (§5) and `StochasticGraphExecutionEngine` distributed DAG (§6) scaling paths.
+- The full JIT/multi-GPU (§5) scaling path.
+- **§6 is transport-complete but not yet applied.** `taskdag` + `taskdag_sgee` now carry a task DAG in-process, across processes over gRPC, and across a **3-node Raft quorum with mTLS and leader failover** — outputs bit-identical to `serial_executor()`, every transport failure an honest `distributed_error`. What is *not* built is the part that makes it pay: §6.1's stochastic scheduling (tasks carry no execution-time estimate or variance model, and affinity is a placement hint the coordinator does not optimize over) and all of §6.2 — distributed modular GCD, distributed hash-consing, and data-locality scheduling. No NimbleCAS math is distributed yet; the DAG's registered ops so far exist to prove the transport. The result store also remains in-memory and per-node: Raft replicates the queue, not results.
 
 ---
 
