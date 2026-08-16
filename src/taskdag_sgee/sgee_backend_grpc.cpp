@@ -106,7 +106,7 @@ struct GrpcBufferGuard {
         sgee_grpc_client_t* client = nullptr;
         int rc = SGEE_OK;
         if (use_tls) {
-            if (sgee_grpc_client_open_tls != nullptr) {
+            if (&sgee_grpc_client_open_tls != nullptr) {
                 rc = sgee_grpc_client_open_tls(
                     ep.c_str(),
                     auth_token.empty() ? nullptr : auth_token.c_str(),
@@ -141,7 +141,7 @@ auto rotate_ring_on_error(nimblecas::GrpcEndpointRing& ring, std::size_t current
         return;
     }
     std::size_t next_idx = (current_idx + 1) % n;
-    if (sgee_grpc_last_leader_hint != nullptr) {
+    if (&sgee_grpc_last_leader_hint != nullptr) {
         const std::uint64_t hint = sgee_grpc_last_leader_hint();
         if (hint >= 1 && hint <= n) {
             next_idx = static_cast<std::size_t>(hint - 1);
