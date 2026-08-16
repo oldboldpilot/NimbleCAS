@@ -865,15 +865,10 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   // Sequence: start run() on a thread -> wait until worker enters gate op ->
                   // identify leader via /statusz -> SIGKILL it -> wait for survivor to report is_leader
                   // with HIGHER term -> create gate file -> join.
-                  struct RunContext {
-                      std::unique_ptr<Executor> exec;
-                      const TaskGraph* g{nullptr};
-                      std::promise<Result<TaskRunResult>> promise{};
-                  };
-                  auto ctx = std::make_shared<RunContext>(std::move(*exec_res), &g, std::promise<Result<TaskRunResult>>{});
-                  auto run_future = ctx->promise.get_future();
-                  std::thread runner([ctx]() {
-                      ctx->promise.set_value(ctx->exec->run(*ctx->g));
+                  std::unique_ptr<Executor> exec = std::move(*exec_res);
+                  Result<TaskRunResult> dist_result;
+                  std::thread runner([&]() {
+                      dist_result = exec->run(g);
                   });
 
                   // Wait until worker is actively executing the gate task
@@ -927,7 +922,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   }
 
                   runner.join();
-                  const auto dist = run_future.get();
+                  const auto& dist = dist_result;
                   t.expect(dist.has_value(), "distributed run completed successfully after failover");
                   if (!dist.has_value()) {
                       std::println("FAILOVER DIST ERROR: {}", static_cast<int>(dist.error()));
