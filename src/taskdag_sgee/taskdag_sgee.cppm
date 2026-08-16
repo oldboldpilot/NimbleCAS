@@ -490,8 +490,23 @@ private:
 #endif
 
 // ---------------------------------------------------------------------------
-// Cross-process gRPC BrokerPort / ResultChannel (NIMBLECAS_SGEE_GRPC=ON)
+// Cross-process gRPC options and classes
 // ---------------------------------------------------------------------------
+struct SgeeGrpcTlsOptions {           // all-or-nothing
+    std::string ca_cert_path{};
+    std::string cert_path{};
+    std::string key_path{};
+    std::string target_name_override{};  // optional
+};
+
+struct SgeeGrpcExecutorOptions {
+    std::string endpoint{};                 // UNCHANGED, still works alone
+    std::string auth_token{};
+    std::uint64_t rpc_deadline_ms{0};
+    std::vector<std::string> endpoints{};   // NEW: when non-empty, supersedes `endpoint`
+    SgeeGrpcTlsOptions tls{};               // NEW: empty == plaintext
+};
+
 #ifdef NIMBLECAS_SGEE_GRPC
 // Shared endpoint ring holding one open sgee_grpc_client_t* per endpoint plus an atomic active index.
 struct GrpcEndpointRing {
@@ -776,21 +791,6 @@ private:
 // ---------------------------------------------------------------------------
 // Cross-process gRPC executor factory (NIMBLECAS_SGEE_GRPC=ON)
 // ---------------------------------------------------------------------------
-struct SgeeGrpcTlsOptions {           // all-or-nothing
-    std::string ca_cert_path{};
-    std::string cert_path{};
-    std::string key_path{};
-    std::string target_name_override{};  // optional
-};
-
-struct SgeeGrpcExecutorOptions {
-    std::string endpoint{};                 // UNCHANGED, still works alone
-    std::string auth_token{};
-    std::uint64_t rpc_deadline_ms{0};
-    std::vector<std::string> endpoints{};   // NEW: when non-empty, supersedes `endpoint`
-    SgeeGrpcTlsOptions tls{};               // NEW: empty == plaintext
-};
-
 // Factory for the TRUE cross-process backend: every run() opens a FRESH GrpcBrokerPort +
 // GrpcResultChannel pair (independent connections) to `opts.endpoint`. Validates cfg the same
 // way as sgee_distributed_executor EXCEPT: `wal_dir` is IGNORED (the queue lives in the server's
