@@ -1371,10 +1371,23 @@ if(NIMBLECAS_SGEE_GRPC)
     PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
   set_target_properties(taskdag_sgee_grpc_tests PROPERTIES
     BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
+  add_dependencies(taskdag_sgee_grpc_tests taskdag_sgee_grpc_worker)
   add_test(NAME taskdag_sgee_grpc_tests COMMAND taskdag_sgee_grpc_tests)
   set_tests_properties(taskdag_sgee_grpc_tests PROPERTIES
     SKIP_RETURN_CODE 77
-    ENVIRONMENT "NIMBLECAS_SGEE_GRPC_WORKER=$<TARGET_FILE:taskdag_sgee_grpc_worker>")
+    ENVIRONMENT "NIMBLECAS_SGEE_GRPC_WORKER=$<TARGET_FILE:taskdag_sgee_grpc_worker>;NIMBLECAS_SGEE_QUEUE_NODE=${NIMBLECAS_SGEE_ROOT}/build-grpc/sgee_queue_node")
+
+  add_executable(taskdag_sgee_grpc_cluster_tests tests/taskdag_sgee_grpc_cluster_tests.cpp)
+  target_link_libraries(taskdag_sgee_grpc_cluster_tests
+    PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
+  set_target_properties(taskdag_sgee_grpc_cluster_tests PROPERTIES
+    BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
+  add_dependencies(taskdag_sgee_grpc_cluster_tests taskdag_sgee_grpc_worker)
+  add_test(NAME taskdag_sgee_grpc_cluster_tests COMMAND taskdag_sgee_grpc_cluster_tests)
+  set_tests_properties(taskdag_sgee_grpc_cluster_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    RUN_SERIAL TRUE
+    ENVIRONMENT "NIMBLECAS_SGEE_GRPC_WORKER=$<TARGET_FILE:taskdag_sgee_grpc_worker>;NIMBLECAS_SGEE_QUEUE_NODE=${NIMBLECAS_SGEE_ROOT}/build-grpc/sgee_queue_node;NIMBLECAS_GEN_TEST_CERTS_SH=${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_test_certs.sh")
 endif()
 
 add_executable(splitfield_tests tests/splitfield_tests.cpp)
