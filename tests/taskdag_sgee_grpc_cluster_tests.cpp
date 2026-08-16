@@ -865,7 +865,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   // Sequence: start run() on a thread -> wait until worker enters gate op ->
                   // identify leader via /statusz -> SIGKILL it -> wait for survivor to report is_leader
                   // with HIGHER term -> create gate file -> join.
-                  std::unique_ptr<Executor> exec = std::move(*exec_res);
+                  auto exec = std::move(*exec_res);
                   Result<TaskRunResult> dist_result;
                   std::thread runner([&]() {
                       dist_result = exec->run(g);
