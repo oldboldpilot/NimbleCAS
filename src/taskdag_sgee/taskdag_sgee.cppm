@@ -96,6 +96,14 @@ public:
         -> Result<void> = 0;
 
     [[nodiscard]] virtual auto get(std::uint64_t qid) const -> Result<Payload> = 0;
+
+    [[nodiscard]] virtual auto try_get(std::uint64_t qid) const -> Result<std::optional<Payload>> {
+        auto res = get(qid);
+        if (res.has_value()) {
+            return std::optional<Payload>{std::move(*res)};
+        }
+        return std::optional<Payload>{std::nullopt};
+    }
 };
 
 class InMemoryResultChannel final : public ResultChannel {
@@ -116,6 +124,15 @@ public:
             return make_error<Payload>(MathError::distributed_error);
         }
         return it->second;
+    }
+
+    [[nodiscard]] auto try_get(std::uint64_t qid) const -> Result<std::optional<Payload>> override {
+        std::lock_guard lock(mutex_);
+        const auto it = storage_.find(qid);
+        if (it == storage_.end()) {
+            return std::optional<Payload>{std::nullopt};
+        }
+        return std::optional<Payload>{it->second};
     }
 
 private:
@@ -476,6 +493,25 @@ private:
 // Cross-process gRPC BrokerPort / ResultChannel (NIMBLECAS_SGEE_GRPC=ON)
 // ---------------------------------------------------------------------------
 #ifdef NIMBLECAS_SGEE_GRPC
+// Shared endpoint ring holding one open sgee_grpc_client_t* per endpoint plus an atomic active index.
+struct GrpcEndpointRing {
+    struct Node {
+        std::string endpoint;
+        sgee_grpc_client_t* client{nullptr};
+    };
+    std::vector<Node> nodes{};
+    std::atomic<std::size_t> active_index{0};
+    std::atomic<std::uint64_t> failover_rotations{0};
+
+    GrpcEndpointRing() = default;
+    ~GrpcEndpointRing();
+
+    GrpcEndpointRing(const GrpcEndpointRing&) = delete;
+    auto operator=(const GrpcEndpointRing&) -> GrpcEndpointRing& = delete;
+    GrpcEndpointRing(GrpcEndpointRing&&) = delete;
+    auto operator=(GrpcEndpointRing&&) -> GrpcEndpointRing& = delete;
+};
+
 // sgee_grpc_client_t comes from sgee_capi_grpc.h, included in the global module fragment above.
 // A BrokerPort backed by a remote sgee_queue_node over gRPC — the TRUE cross-process transport.
 // Unlike CapiBrokerPort there is no local WAL: the queue lives in the server. sweep_expired is a
@@ -493,13 +529,21 @@ private:
 // lease swept for slow-heartbeat starvation simply re-executes bit-identically).
 class GrpcBrokerPort final : public BrokerPort {
 public:
-    // Connect to a TaskQueue endpoint ("host:port"). NEVER blocks on the network (the gRPC
+    // Connect to a single TaskQueue endpoint ("host:port"). NEVER blocks on the network (the gRPC
     // channel connects lazily); a wrong endpoint surfaces as distributed_error on the first RPC.
     [[nodiscard]] static auto connect(std::string endpoint, std::string auth_token = {},
                                       std::uint64_t rpc_deadline_ms = 0)
         -> Result<std::unique_ptr<GrpcBrokerPort>>;
 
+    // Connect to multiple TaskQueue endpoints forming a Raft cluster ring with optional TLS.
+    [[nodiscard]] static auto connect(std::vector<std::string> endpoints,
+                                      std::string auth_token = {},
+                                      std::uint64_t rpc_deadline_ms = 0,
+                                      const SgeeGrpcTlsOptions& tls = {})
+        -> Result<std::unique_ptr<GrpcBrokerPort>>;
+
     explicit GrpcBrokerPort(sgee_grpc_client_t* client);
+    explicit GrpcBrokerPort(std::shared_ptr<GrpcEndpointRing> ring);
     ~GrpcBrokerPort() override;
 
     // Non-copyable AND non-movable — same rationale as CapiBrokerPort.
@@ -509,6 +553,7 @@ public:
     auto operator=(GrpcBrokerPort&&) -> GrpcBrokerPort& = delete;
 
     [[nodiscard]] auto is_open() const noexcept -> bool;
+    [[nodiscard]] auto failover_rotations() const noexcept -> std::uint64_t;
 
     [[nodiscard]] auto enqueue(std::span<const std::byte> payload,
                                SgeePlacement placement, std::uint32_t max_attempts)
@@ -533,23 +578,25 @@ public:
 
     [[nodiscard]] auto now_ms() const -> std::uint64_t override;
 
+    [[nodiscard]] auto ring() const noexcept -> std::shared_ptr<GrpcEndpointRing> {
+        return ring_;
+    }
+
 private:
     struct TokenTriple {
         std::uint64_t local{0};
         std::uint64_t term{0};
         std::uint64_t index{0};
     };
-    sgee_grpc_client_t* client_{nullptr};
+    std::shared_ptr<GrpcEndpointRing> ring_{nullptr};
     mutable std::mutex mutex_{};
     // qid -> the wire token triple for the lease THIS port took (see the class comment).
     std::unordered_map<std::uint64_t, TokenTriple> leases_{};
 };
 
 // A ResultChannel over the same remote node's out-of-band result store. Holds its OWN client
-// handle (an independent connection to the same endpoint) rather than sharing the port's — the
-// store is server-side, so two cheap connections are simpler than shared ownership and match the
-// per-run RunTransport's owned_port/owned_channel split. Coordinator side reads with
-// consume_on_get=true (each qid once); worker side only ever puts.
+// handle or shared ring. Coordinator side reads with consume_on_get (each qid once when
+// single endpoint; consume=false when multi-node); worker side only ever puts.
 class GrpcResultChannel final : public ResultChannel {
 public:
     [[nodiscard]] static auto connect(std::string endpoint, bool consume_on_get,
@@ -557,7 +604,14 @@ public:
                                       std::uint64_t rpc_deadline_ms = 0)
         -> Result<std::unique_ptr<GrpcResultChannel>>;
 
+    [[nodiscard]] static auto connect(std::vector<std::string> endpoints, bool consume_on_get,
+                                      std::string auth_token = {},
+                                      std::uint64_t rpc_deadline_ms = 0,
+                                      const SgeeGrpcTlsOptions& tls = {})
+        -> Result<std::unique_ptr<GrpcResultChannel>>;
+
     GrpcResultChannel(sgee_grpc_client_t* client, bool consume_on_get);
+    GrpcResultChannel(std::shared_ptr<GrpcEndpointRing> ring, bool consume_on_get);
     ~GrpcResultChannel() override;
 
     GrpcResultChannel(const GrpcResultChannel&) = delete;
@@ -572,8 +626,15 @@ public:
 
     [[nodiscard]] auto get(std::uint64_t qid) const -> Result<Payload> override;
 
+    [[nodiscard]] auto try_get(std::uint64_t qid) const
+        -> Result<std::optional<Payload>> override;
+
+    [[nodiscard]] auto ring() const noexcept -> std::shared_ptr<GrpcEndpointRing> {
+        return ring_;
+    }
+
 private:
-    sgee_grpc_client_t* client_{nullptr};
+    std::shared_ptr<GrpcEndpointRing> ring_{nullptr};
     bool consume_on_get_{true};
     mutable std::mutex mutex_{};
 };
@@ -603,6 +664,7 @@ struct SgeeExecutorConfig {
     std::size_t num_workers{1};
     std::uint64_t poll_interval_ms{2};
     std::uint64_t run_deadline_ms{0};
+    std::size_t max_result_recoveries{0};
     std::function<SgeePlacement(const TaskGraph&, TaskId)> placement{};
 
     auto with_wal_dir(std::filesystem::path p) -> SgeeExecutorConfig& {
@@ -637,6 +699,11 @@ struct SgeeExecutorConfig {
 
     auto with_run_deadline_ms(std::uint64_t ms) -> SgeeExecutorConfig& {
         run_deadline_ms = ms;
+        return *this;
+    }
+
+    auto with_max_result_recoveries(std::size_t n) -> SgeeExecutorConfig& {
+        max_result_recoveries = n;
         return *this;
     }
 
@@ -709,10 +776,19 @@ private:
 // ---------------------------------------------------------------------------
 // Cross-process gRPC executor factory (NIMBLECAS_SGEE_GRPC=ON)
 // ---------------------------------------------------------------------------
+struct SgeeGrpcTlsOptions {           // all-or-nothing
+    std::string ca_cert_path{};
+    std::string cert_path{};
+    std::string key_path{};
+    std::string target_name_override{};  // optional
+};
+
 struct SgeeGrpcExecutorOptions {
-    std::string endpoint{};            // "host:port" of a running sgee_queue_node's queue port
-    std::string auth_token{};          // reserved; the queue port is unauthenticated without mTLS
-    std::uint64_t rpc_deadline_ms{0};  // 0 = 30s; MUST exceed the node's lease await budget
+    std::string endpoint{};                 // UNCHANGED, still works alone
+    std::string auth_token{};
+    std::uint64_t rpc_deadline_ms{0};
+    std::vector<std::string> endpoints{};   // NEW: when non-empty, supersedes `endpoint`
+    SgeeGrpcTlsOptions tls{};               // NEW: empty == plaintext
 };
 
 // Factory for the TRUE cross-process backend: every run() opens a FRESH GrpcBrokerPort +
@@ -1226,7 +1302,12 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
 
     for (std::size_t lvl = 0; lvl < g.num_levels(); ++lvl) {
         const std::span<const TaskId> level_tasks = g.level(lvl);
-        std::unordered_map<std::uint64_t, TaskId> pending_qids;
+        struct PendingTaskInfo {
+            TaskId id;
+            Payload encoded_payload;
+            std::size_t recoveries{0};
+        };
+        std::unordered_map<std::uint64_t, PendingTaskInfo> pending_tasks;
 
         for (const TaskId id : level_tasks) {
             // Check poisoning
@@ -1272,11 +1353,15 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
-            pending_qids[*enqueue_res] = id;
+            pending_tasks[*enqueue_res] = PendingTaskInfo{
+                .id = id,
+                .encoded_payload = std::move(*enc_res),
+                .recoveries = 0
+            };
         }
 
         // Await resolution of this level
-        while (!pending_qids.empty()) {
+        while (!pending_tasks.empty()) {
             const auto elapsed_ms = static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - start_time).count());
@@ -1293,33 +1378,60 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             }
 
             std::vector<std::uint64_t> resolved_qids;
+            std::vector<std::pair<std::uint64_t, PendingTaskInfo>> re_enqueued_tasks;
 
-            for (const auto& [qid, id] : pending_qids) {
+            for (const auto& [qid, info] : pending_tasks) {
                 auto st_res = port.state(qid);
                 if (!st_res.has_value()) {
                     return make_error<TaskRunResult>(MathError::distributed_error);
                 }
                 const BrokerPort::QState st = *st_res;
                 if (st == BrokerPort::QState::completed) {
-                    auto res_bytes_res = results.get(qid);
+                    auto res_bytes_res = results.try_get(qid);
                     if (!res_bytes_res.has_value()) {
                         return make_error<TaskRunResult>(MathError::distributed_error);
                     }
-                    auto dec_res = sgee_bridge::decode_result(*res_bytes_res);
+                    if (!res_bytes_res->has_value()) {
+                        // Genuinely absent result (found == false)!
+                        if (info.recoveries < cfg_.max_result_recoveries) {
+                            const SgeePlacement placement =
+                                cfg_.placement ? cfg_.placement(g, info.id) : SgeePlacement::cpu;
+                            auto re_enqueue_res =
+                                port.enqueue(info.encoded_payload, placement, cfg_.max_attempts);
+                            if (!re_enqueue_res.has_value()) {
+                                return make_error<TaskRunResult>(MathError::distributed_error);
+                            }
+                            resolved_qids.push_back(qid);
+                            re_enqueued_tasks.emplace_back(
+                                *re_enqueue_res,
+                                PendingTaskInfo{
+                                    .id = info.id,
+                                    .encoded_payload = info.encoded_payload,
+                                    .recoveries = info.recoveries + 1
+                                });
+                            continue;
+                        } else {
+                            // Recoveries exhausted or bound == 0: honest abort!
+                            return make_error<TaskRunResult>(MathError::distributed_error);
+                        }
+                    }
+
+                    const Payload& res_bytes = **res_bytes_res;
+                    auto dec_res = sgee_bridge::decode_result(res_bytes);
                     if (!dec_res.has_value()) {
                         return make_error<TaskRunResult>(MathError::distributed_error);
                     }
                     const auto& res_env = *dec_res;
                     if (res_env.status == sgee_bridge::ResultEnvelope::Status::ok) {
-                        outputs[id.value] = res_env.bytes;
-                        origins[id.value] = std::nullopt;
-                        seconds[id.value] = res_env.seconds;
+                        outputs[info.id.value] = res_env.bytes;
+                        origins[info.id.value] = std::nullopt;
+                        seconds[info.id.value] = res_env.seconds;
                         ++executed;
                         resolved_qids.push_back(qid);
                     } else if (res_env.status == sgee_bridge::ResultEnvelope::Status::math_error) {
-                        outputs[id.value] = make_error<Payload>(res_env.math_err);
-                        origins[id.value] = id.value;
-                        seconds[id.value] = res_env.seconds;
+                        outputs[info.id.value] = make_error<Payload>(res_env.math_err);
+                        origins[info.id.value] = info.id.value;
+                        seconds[info.id.value] = res_env.seconds;
                         ++executed;
                         resolved_qids.push_back(qid);
                     } else {
@@ -1331,10 +1443,13 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             }
 
             for (const std::uint64_t qid : resolved_qids) {
-                pending_qids.erase(qid);
+                pending_tasks.erase(qid);
+            }
+            for (auto& [new_qid, new_info] : re_enqueued_tasks) {
+                pending_tasks[new_qid] = std::move(new_info);
             }
 
-            if (!pending_qids.empty()) {
+            if (!pending_tasks.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
             }
         }
