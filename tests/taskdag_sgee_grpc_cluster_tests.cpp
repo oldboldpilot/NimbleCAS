@@ -803,6 +803,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   }
 
                   const auto eps = cluster.endpoints();
+                  std::filesystem::path gate_entered_path = cluster.base_dir / "gate_entered.lock";
                   // Spawn 2 workers with short lease timeout (3000ms) and gate file registration
                   std::vector<std::string> worker1_args = {
                       "--endpoint", eps[0], "--endpoint", eps[1], "--endpoint", eps[2],
@@ -812,6 +813,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       "--cert", certs.client_crt,
                       "--key", certs.client_key,
                       "--gate-file", gate_path.string(),
+                      "--gate-entered-file", gate_entered_path.string(),
                   };
                   std::vector<std::string> worker2_args = {
                       "--endpoint", eps[0], "--endpoint", eps[1], "--endpoint", eps[2],
@@ -821,6 +823,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       "--cert", certs.client_crt,
                       "--key", certs.client_key,
                       "--gate-file", gate_path.string(),
+                      "--gate-entered-file", gate_entered_path.string(),
                   };
                   auto w_env1 = make_env({});
                   auto w_env2 = make_env({});
@@ -848,36 +851,35 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       .cert_path = certs.client_crt,
                       .key_path = certs.client_key,
                   };
+                  SgeeGrpcExecutorOptions opts{
+                      .endpoints = eps,
+                      .tls = tls,
+                  };
 
-                  auto port_res = GrpcBrokerPort::connect(eps, "", 0, tls);
-                  t.expect(port_res.has_value(), "port connected");
-                  if (!port_res) {
+                  auto exec_res = nimblecas::sgee_grpc_distributed_executor(cfg, opts);
+                  t.expect(exec_res.has_value(), "gRPC distributed executor factory succeeds");
+                  if (!exec_res.has_value()) {
                       return;
                   }
-                  auto& port = **port_res;
-                  auto chan = std::make_unique<GrpcResultChannel>(port.ring(), /*consume_on_get=*/false);
 
-                  SgeeDistributedExecutor exec(cfg, port, *chan);
-
-                  // Sequence: start run() on a thread -> wait until gate task is leased ->
+                  // Sequence: start run() on a thread -> wait until worker enters gate op ->
                   // identify leader via /statusz -> SIGKILL it -> wait for survivor to report is_leader
                   // with HIGHER term -> create gate file -> join.
                   std::promise<Result<TaskRunResult>> run_promise;
                   auto run_future = run_promise.get_future();
                   std::thread runner([&]() {
-                      run_promise.set_value(exec.run(g));
+                      run_promise.set_value((*exec_res)->run(g));
                   });
 
-                  // Wait until gate task (qid 2) is actually leased
+                  // Wait until worker is actively executing the gate task
                   bool gate_leased = false;
-                  const auto lease_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+                  const auto lease_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
                   while (std::chrono::steady_clock::now() < lease_deadline) {
-                      auto st = port.state(2);
-                      if (st.has_value() && *st == BrokerPort::QState::leased) {
+                      if (std::filesystem::exists(gate_entered_path)) {
                           gate_leased = true;
                           break;
                       }
-                      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                      std::this_thread::sleep_for(std::chrono::milliseconds(10));
                   }
                   t.expect(gate_leased, "gate task was leased by a worker mid-run");
 
@@ -923,6 +925,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   const auto dist = run_future.get();
                   t.expect(dist.has_value(), "distributed run completed successfully after failover");
                   if (!dist.has_value()) {
+                      std::println("FAILOVER DIST ERROR: {}", static_cast<int>(dist.error()));
                       for (std::size_t i = 0; i < 3; ++i) {
                           std::println("--- node{} log ---\n{}", i, read_file(cluster.node_log(i)));
                       }

@@ -110,9 +110,14 @@ auto main(int argc, char** argv) -> int {
     TaskRegistry reg;
     nimblecas::diamond_ops::register_diamond_ops(reg);
 
+    const auto gate_entered_file = arg_value(argc, argv, "--gate-entered-file");
     if (const auto gate_file = arg_value(argc, argv, "--gate-file")) {
-        (void)reg.register_op("test.gate/v1", [gate_path = *gate_file](std::span<const Payload> ps) -> Result<Payload> {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        (void)reg.register_op("test.gate/v1", [gate_path = *gate_file, entered_path = gate_entered_file ? *gate_entered_file : ""](std::span<const Payload> ps) -> Result<Payload> {
+            if (!entered_path.empty()) {
+                std::ofstream f(entered_path);
+                f << "entered\n";
+            }
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             while (!std::filesystem::exists(gate_path)) {
                 if (std::chrono::steady_clock::now() >= deadline) {
                     return nimblecas::make_error<Payload>(MathError::distributed_error);
