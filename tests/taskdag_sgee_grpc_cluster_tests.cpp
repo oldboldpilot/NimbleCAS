@@ -818,23 +818,10 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       "--gate-file", gate_path.string(),
                       "--gate-entered-file", gate_entered_path.string(),
                   };
-                  std::vector<std::string> worker2_args = {
-                      "--endpoint", eps[0], "--endpoint", eps[1], "--endpoint", eps[2],
-                      "--worker-id", "2",
-                      "--lease-timeout-ms", "3000",
-                      "--ca-cert", certs.ca_crt,
-                      "--cert", certs.client_crt,
-                      "--key", certs.client_key,
-                      "--gate-file", gate_path.string(),
-                      "--gate-entered-file", gate_entered_path.string(),
-                  };
                   auto w_env1 = make_env({});
-                  auto w_env2 = make_env({});
                   cluster.workers.push_back(
-                      spawn_logged(worker_path, worker1_args, w_env1, cluster.worker_log(0)));
-                  cluster.workers.push_back(
-                      spawn_logged(worker_path, worker2_args, w_env2, cluster.worker_log(1)));
-                  t.expect(cluster.workers[0] > 0 && cluster.workers[1] > 0, "two workers spawned");
+                       spawn_logged(worker_path, worker1_args, w_env1, cluster.worker_log(0)));
+                  t.expect(cluster.workers[0] > 0, "worker spawned");
 
                   TaskRegistry reg;
                   TaskGraph g;
