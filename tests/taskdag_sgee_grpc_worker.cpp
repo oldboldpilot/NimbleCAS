@@ -151,7 +151,7 @@ auto main(int argc, char** argv) -> int {
     cfg.lease_timeout_ms = lease_timeout_ms;
 
     std::cerr << "worker " << worker_id << ": pumping against " << endpoints.size() << " endpoint(s)\n";
-    run_worker_pump(**port, reg, **channel, cfg, stop_src.get_token());
+    run_worker_pump(**port, reg, *channel, cfg, stop_src.get_token());
 
     g_stop.store(true, std::memory_order_relaxed);
     if (watcher.joinable()) {
