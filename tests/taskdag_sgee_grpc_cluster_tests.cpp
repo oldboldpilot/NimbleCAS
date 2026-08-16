@@ -403,6 +403,44 @@ inline auto register_gated_diamond_ops(TaskRegistry& reg, const std::filesystem:
 
 }  // namespace
 
+
+inline auto dump_wal_file(const std::filesystem::path& path) -> void {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        std::println("  WAL {} NOT FOUND", path.string());
+        return;
+    }
+    std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::println("  WAL {} ({} bytes):", path.string(), data.size());
+    std::size_t off = 48;
+    int idx = 1;
+    while (off + 28 <= data.size()) {
+        std::uint32_t magic = 0, lsn = 0, plen = 0;
+        std::uint16_t ptype = 0;
+        std::memcpy(&magic, &data[off], 4);
+        if (magic != 0x57414C52) break;
+        std::memcpy(&lsn, &data[off+4], 4);
+        std::memcpy(&ptype, &data[off+24], 2);
+        std::memcpy(&plen, &data[off+28], 4);
+        if (ptype == 2 && plen >= 21) {
+            std::uint64_t r_idx = 0, r_term = 0;
+            std::uint8_t r_type = 0;
+            std::uint32_t r_cmd_len = 0;
+            std::memcpy(&r_idx, &data[off+32], 8);
+            std::memcpy(&r_term, &data[off+40], 8);
+            std::memcpy(&r_type, &data[off+48], 1);
+            std::memcpy(&r_cmd_len, &data[off+49], 4);
+            int tag = (plen >= 22) ? static_cast<int>(data[off+53]) : -1;
+            const char* tag_name = (tag == 1) ? "Enqueue" : (tag == 2) ? "Lease" : (tag == 3) ? "Complete" : (tag == 4) ? "Fail" : (tag == 5) ? "Heartbeat" : (tag == 6) ? "Sweep" : "Unknown";
+            std::println("    [Entry {}] LSN={} Raft(idx={}, term={}, tag={}({}), cmd_len={})", idx, lsn, r_idx, r_term, tag_name, tag, r_cmd_len);
+        } else {
+            std::println("    [Entry {}] LSN={} ptype={} plen={}", idx, lsn, ptype, plen);
+        }
+        off += 32 + plen;
+        idx++;
+    }
+}
+
 auto main(int /*argc*/, char** /*argv*/) -> int {
     const char* node_env = std::getenv("NIMBLECAS_SGEE_QUEUE_NODE");
     if (node_env == nullptr || *node_env == '\0') {
