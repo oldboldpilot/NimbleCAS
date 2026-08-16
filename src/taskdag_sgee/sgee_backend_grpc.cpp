@@ -4,6 +4,18 @@
 module;
 #include "sgee_capi_grpc.h"
 
+// Weak-symbol declarations for graceful fallback if linked against an older runtime library
+extern "C" {
+__attribute__((weak)) sgee_error_t sgee_grpc_client_open_tls(
+    const char* endpoint,
+    const char* auth_token,
+    uint64_t rpc_deadline_ms,
+    const sgee_grpc_tls_options_t* tls,
+    sgee_grpc_client_t** out_client);
+
+__attribute__((weak)) uint64_t sgee_grpc_last_leader_hint(void);
+}
+
 module nimblecas.taskdag_sgee;
 
 import std;
@@ -27,9 +39,139 @@ struct GrpcBufferGuard {
     auto operator=(const GrpcBufferGuard&) -> GrpcBufferGuard& = delete;
 };
 
+// Validates options and normalizes endpoint list.
+[[nodiscard]] auto validate_grpc_executor_options(
+    const nimblecas::SgeeExecutorConfig& cfg,
+    const nimblecas::SgeeGrpcExecutorOptions& opts) -> nimblecas::Result<std::vector<std::string>> {
+    if (cfg.registry == nullptr || cfg.max_attempts == 0 || cfg.visibility_timeout_ms == 0) {
+        return nimblecas::make_error<std::vector<std::string>>(nimblecas::MathError::domain_error);
+    }
+
+    // TLS validation: all-or-nothing (ca, cert, key must all be present if any TLS field is set)
+    const bool has_ca = !opts.tls.ca_cert_path.empty();
+    const bool has_cert = !opts.tls.cert_path.empty();
+    const bool has_key = !opts.tls.key_path.empty();
+    const bool has_override = !opts.tls.target_name_override.empty();
+    const bool any_tls = has_ca || has_cert || has_key || has_override;
+    const bool all_tls = has_ca && has_cert && has_key;
+    if (any_tls && !all_tls) {
+        return nimblecas::make_error<std::vector<std::string>>(nimblecas::MathError::domain_error);
+    }
+
+    // Endpoints validation
+    std::vector<std::string> effective_endpoints;
+    if (!opts.endpoints.empty()) {
+        for (const auto& ep : opts.endpoints) {
+            if (ep.empty()) {
+                return nimblecas::make_error<std::vector<std::string>>(nimblecas::MathError::domain_error);
+            }
+            effective_endpoints.push_back(ep);
+        }
+    } else if (!opts.endpoint.empty()) {
+        effective_endpoints.push_back(opts.endpoint);
+    } else {
+        return nimblecas::make_error<std::vector<std::string>>(nimblecas::MathError::domain_error);
+    }
+
+    return effective_endpoints;
+}
+
+// Opens clients for each endpoint and builds a GrpcEndpointRing.
+[[nodiscard]] auto open_grpc_endpoint_ring(
+    const std::vector<std::string>& endpoints,
+    const std::string& auth_token,
+    std::uint64_t rpc_deadline_ms,
+    const nimblecas::SgeeGrpcTlsOptions& tls) -> nimblecas::Result<std::shared_ptr<nimblecas::GrpcEndpointRing>> {
+    if (endpoints.empty()) {
+        return nimblecas::make_error<std::shared_ptr<nimblecas::GrpcEndpointRing>>(
+            nimblecas::MathError::domain_error);
+    }
+
+    const bool use_tls = !tls.ca_cert_path.empty();
+    sgee_grpc_tls_options_t tls_c{
+        .ca_cert_pem_path = tls.ca_cert_path.c_str(),
+        .cert_pem_path = tls.cert_path.c_str(),
+        .key_pem_path = tls.key_path.c_str(),
+        .target_name_override = tls.target_name_override.empty() ? nullptr : tls.target_name_override.c_str()
+    };
+
+    auto ring = std::make_shared<nimblecas::GrpcEndpointRing>();
+    ring->nodes.reserve(endpoints.size());
+
+    for (const auto& ep : endpoints) {
+        if (ep.empty()) {
+            return nimblecas::make_error<std::shared_ptr<nimblecas::GrpcEndpointRing>>(
+                nimblecas::MathError::domain_error);
+        }
+        sgee_grpc_client_t* client = nullptr;
+        int rc = SGEE_OK;
+        if (use_tls) {
+            if (&sgee_grpc_client_open_tls != nullptr) {
+                rc = sgee_grpc_client_open_tls(
+                    ep.c_str(),
+                    auth_token.empty() ? nullptr : auth_token.c_str(),
+                    rpc_deadline_ms,
+                    &tls_c,
+                    &client);
+            } else {
+                return nimblecas::make_error<std::shared_ptr<nimblecas::GrpcEndpointRing>>(
+                    nimblecas::MathError::not_implemented);
+            }
+        } else {
+            rc = sgee_grpc_client_open(
+                ep.c_str(),
+                auth_token.empty() ? nullptr : auth_token.c_str(),
+                rpc_deadline_ms,
+                &client);
+        }
+        if (rc != SGEE_OK || client == nullptr) {
+            return nimblecas::make_error<std::shared_ptr<nimblecas::GrpcEndpointRing>>(
+                nimblecas::MathError::distributed_error);
+        }
+        ring->nodes.push_back({.endpoint = ep, .client = client});
+    }
+
+    return ring;
+}
+
+// Advances the ring active_index on a retryable error (rc 9 or -20).
+auto rotate_ring_on_error(nimblecas::GrpcEndpointRing& ring, std::size_t current_idx) -> void {
+    const std::size_t n = ring.nodes.size();
+    if (n <= 1) {
+        return;
+    }
+    std::size_t next_idx = (current_idx + 1) % n;
+    if (&sgee_grpc_last_leader_hint != nullptr) {
+        const std::uint64_t hint = sgee_grpc_last_leader_hint();
+        if (hint >= 1 && hint <= n) {
+            next_idx = static_cast<std::size_t>(hint - 1);
+            if (next_idx == current_idx) {
+                next_idx = (current_idx + 1) % n;
+            }
+        }
+    }
+    std::size_t expected = current_idx;
+    if (ring.active_index.compare_exchange_strong(expected, next_idx)) {
+        ring.failover_rotations.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 }  // namespace
 
 namespace nimblecas {
+
+// ---------------------------------------------------------------------------
+// GrpcEndpointRing
+// ---------------------------------------------------------------------------
+
+GrpcEndpointRing::~GrpcEndpointRing() {
+    for (auto& node : nodes) {
+        if (node.client != nullptr) {
+            sgee_grpc_client_destroy(node.client);
+            node.client = nullptr;
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GrpcBrokerPort
@@ -38,188 +180,305 @@ namespace nimblecas {
 auto GrpcBrokerPort::connect(std::string endpoint, std::string auth_token,
                              std::uint64_t rpc_deadline_ms)
     -> Result<std::unique_ptr<GrpcBrokerPort>> {
-    sgee_grpc_client_t* client = nullptr;
-    const int rc = sgee_grpc_client_open(endpoint.c_str(),
-                                         auth_token.empty() ? nullptr : auth_token.c_str(),
-                                         rpc_deadline_ms, &client);
-    if (rc != SGEE_OK || client == nullptr) {
-        return make_error<std::unique_ptr<GrpcBrokerPort>>(MathError::distributed_error);
+    if (endpoint.empty()) {
+        return make_error<std::unique_ptr<GrpcBrokerPort>>(MathError::domain_error);
     }
-    return std::make_unique<GrpcBrokerPort>(client);
+    return connect(std::vector<std::string>{std::move(endpoint)}, std::move(auth_token),
+                   rpc_deadline_ms, SgeeGrpcTlsOptions{});
 }
 
-GrpcBrokerPort::GrpcBrokerPort(sgee_grpc_client_t* client) : client_(client) {}
+auto GrpcBrokerPort::connect(std::vector<std::string> endpoints,
+                             std::string auth_token,
+                             std::uint64_t rpc_deadline_ms,
+                             const SgeeGrpcTlsOptions& tls)
+    -> Result<std::unique_ptr<GrpcBrokerPort>> {
+    auto ring_res = open_grpc_endpoint_ring(endpoints, auth_token, rpc_deadline_ms, tls);
+    if (!ring_res.has_value()) {
+        return make_error<std::unique_ptr<GrpcBrokerPort>>(ring_res.error());
+    }
+    return std::make_unique<GrpcBrokerPort>(std::move(*ring_res));
+}
 
-GrpcBrokerPort::~GrpcBrokerPort() {
-    if (client_) {
-        sgee_grpc_client_destroy(client_);
-        client_ = nullptr;
+GrpcBrokerPort::GrpcBrokerPort(sgee_grpc_client_t* client) {
+    if (client != nullptr) {
+        ring_ = std::make_shared<GrpcEndpointRing>();
+        ring_->nodes.push_back({.endpoint = "", .client = client});
     }
 }
+
+GrpcBrokerPort::GrpcBrokerPort(std::shared_ptr<GrpcEndpointRing> ring)
+    : ring_(std::move(ring)) {}
+
+GrpcBrokerPort::~GrpcBrokerPort() = default;
 
 auto GrpcBrokerPort::is_open() const noexcept -> bool {
     std::lock_guard lock(mutex_);
-    return client_ != nullptr;
+    return ring_ != nullptr && !ring_->nodes.empty() && ring_->nodes[0].client != nullptr;
+}
+
+auto GrpcBrokerPort::failover_rotations() const noexcept -> std::uint64_t {
+    std::lock_guard lock(mutex_);
+    return ring_ ? ring_->failover_rotations.load(std::memory_order_relaxed) : 0;
 }
 
 auto GrpcBrokerPort::enqueue(std::span<const std::byte> payload,
                              SgeePlacement placement, std::uint32_t max_attempts)
     -> Result<std::uint64_t> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<std::uint64_t>(MathError::distributed_error);
     }
-    std::uint64_t out_id = 0;
-    const int rc = sgee_grpc_enqueue(client_, payload.data(), payload.size(),
-                                     static_cast<int>(placement), max_attempts, &out_id);
-    if (rc != SGEE_OK) {
-        return make_error<std::uint64_t>(MathError::distributed_error);
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            return make_error<std::uint64_t>(MathError::distributed_error);
+        }
+        std::uint64_t out_id = 0;
+        const int rc = sgee_grpc_enqueue(client, payload.data(), payload.size(),
+                                         static_cast<int>(placement), max_attempts, &out_id);
+        if (rc == SGEE_OK) {
+            return out_id;
+        }
+        if (rc != 9 && rc != -20) {
+            return make_error<std::uint64_t>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    return out_id;
+    return make_error<std::uint64_t>(MathError::distributed_error);
 }
 
 auto GrpcBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
     -> Result<std::optional<Lease>> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<std::optional<Lease>>(MathError::distributed_error);
     }
-    std::uint64_t qid = 0;
-    std::uint64_t token_local = 0;
-    std::uint64_t token_term = 0;
-    std::uint64_t token_index = 0;
-    int placement = 0;
-    std::uint32_t attempt = 0;
-    void* out_payload = nullptr;
-    std::size_t out_payload_len = 0;
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
 
-    const int rc = sgee_grpc_lease(client_, worker_id, timeout_ms, &qid, &token_local,
-                                   &token_term, &token_index, &placement, &attempt,
-                                   &out_payload, &out_payload_len);
-    // Frees out_payload on every path below, including a throwing assign() (defensive on null).
-    GrpcBufferGuard payload_guard{out_payload};
-    if (rc == SGEE_ERR_QUEUE_EMPTY) {
-        return std::optional<Lease>{std::nullopt};
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            return make_error<std::optional<Lease>>(MathError::distributed_error);
+        }
+
+        std::uint64_t qid = 0;
+        std::uint64_t token_local = 0;
+        std::uint64_t token_term = 0;
+        std::uint64_t token_index = 0;
+        int placement = 0;
+        std::uint32_t attempt_num = 0;
+        void* out_payload = nullptr;
+        std::size_t out_payload_len = 0;
+
+        const int rc = sgee_grpc_lease(client, worker_id, timeout_ms, &qid, &token_local,
+                                       &token_term, &token_index, &placement, &attempt_num,
+                                       &out_payload, &out_payload_len);
+        GrpcBufferGuard payload_guard{out_payload};
+
+        if (rc == SGEE_ERR_QUEUE_EMPTY) {
+            return std::optional<Lease>{std::nullopt};
+        }
+        if (rc == SGEE_OK) {
+            Payload payload_bytes;
+            if (out_payload != nullptr && out_payload_len > 0) {
+                const auto* ptr = static_cast<const std::byte*>(out_payload);
+                payload_bytes.assign(ptr, ptr + out_payload_len);
+            }
+            leases_[qid] = TokenTriple{
+                .local = token_local,
+                .term = token_term,
+                .index = token_index
+            };
+            return std::optional<Lease>{Lease{
+                .qid = qid,
+                .token = token_local,
+                .attempt = attempt_num,
+                .payload = std::move(payload_bytes)
+            }};
+        }
+        if (rc != 9 && rc != -20) {
+            return make_error<std::optional<Lease>>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    if (rc != SGEE_OK) {
-        return make_error<std::optional<Lease>>(MathError::distributed_error);
-    }
-
-    Payload payload_bytes;
-    if (out_payload != nullptr && out_payload_len > 0) {
-        const auto* ptr = static_cast<const std::byte*>(out_payload);
-        payload_bytes.assign(ptr, ptr + out_payload_len);
-    }
-
-    // Stash the full wire triple so complete/fail/heartbeat can re-attach term/index. A re-lease
-    // after expiry mints a NEW token, so overwrite any prior entry for this qid.
-    leases_[qid] = TokenTriple{.local = token_local, .term = token_term, .index = token_index};
-
-    return std::optional<Lease>{Lease{
-        .qid = qid,
-        .token = token_local,
-        .attempt = attempt,
-        .payload = std::move(payload_bytes)
-    }};
+    return make_error<std::optional<Lease>>(MathError::distributed_error);
 }
 
 auto GrpcBrokerPort::complete(std::uint64_t qid, std::uint64_t token)
     -> Result<void> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<void>(MathError::distributed_error);
     }
     const auto it = leases_.find(qid);
     if (it == leases_.end() || it->second.local != token) {
-        // Stale/unknown caller: this port never took (or already released) this lease. Fail
-        // without an RPC — exactly the fencing a bare CapiBrokerPort delegates to the broker.
         return make_error<void>(MathError::distributed_error);
     }
-    const int rc = sgee_grpc_complete(client_, qid, it->second.local, it->second.term,
-                                      it->second.index);
-    // Erase regardless of outcome: this lease is over either way (a failed complete is not
-    // retried by the pump), so keeping the entry would only leak on a long-lived worker.
-    leases_.erase(it);
-    if (rc != SGEE_OK) {
-        return make_error<void>(MathError::distributed_error);
+    const auto triple = it->second;
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            leases_.erase(qid);
+            return make_error<void>(MathError::distributed_error);
+        }
+        const int rc = sgee_grpc_complete(client, qid, triple.local, triple.term, triple.index);
+        if (rc == SGEE_OK) {
+            leases_.erase(qid);
+            return {};
+        }
+        if (rc != 9 && rc != -20) {
+            leases_.erase(qid);
+            return make_error<void>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    return {};
+    leases_.erase(qid);
+    return make_error<void>(MathError::distributed_error);
 }
 
 auto GrpcBrokerPort::fail(std::uint64_t qid, std::uint64_t token)
     -> Result<void> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<void>(MathError::distributed_error);
     }
     const auto it = leases_.find(qid);
     if (it == leases_.end() || it->second.local != token) {
         return make_error<void>(MathError::distributed_error);
     }
-    const int rc = sgee_grpc_fail(client_, qid, it->second.local, it->second.term,
-                                  it->second.index);
-    // Erase regardless of outcome (see complete()): the lease is over, never revisit this qid.
-    leases_.erase(it);
-    if (rc != SGEE_OK) {
-        return make_error<void>(MathError::distributed_error);
+    const auto triple = it->second;
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            leases_.erase(qid);
+            return make_error<void>(MathError::distributed_error);
+        }
+        const int rc = sgee_grpc_fail(client, qid, triple.local, triple.term, triple.index);
+        if (rc == SGEE_OK) {
+            leases_.erase(qid);
+            return {};
+        }
+        if (rc != 9 && rc != -20) {
+            leases_.erase(qid);
+            return make_error<void>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    return {};
+    leases_.erase(qid);
+    return make_error<void>(MathError::distributed_error);
 }
 
 auto GrpcBrokerPort::heartbeat(std::uint64_t qid, std::uint64_t token,
                                std::uint64_t extend_by_ms) -> Result<void> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<void>(MathError::distributed_error);
     }
     const auto it = leases_.find(qid);
     if (it == leases_.end() || it->second.local != token) {
         return make_error<void>(MathError::distributed_error);
     }
-    // Retain the entry: the lease lives on after a heartbeat.
-    const int rc = sgee_grpc_heartbeat(client_, qid, it->second.local, it->second.term,
-                                       it->second.index, extend_by_ms);
-    if (rc != SGEE_OK) {
-        return make_error<void>(MathError::distributed_error);
+    const auto triple = it->second;
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            return make_error<void>(MathError::distributed_error);
+        }
+        const int rc = sgee_grpc_heartbeat(client, qid, triple.local, triple.term,
+                                           triple.index, extend_by_ms);
+        if (rc == SGEE_OK) {
+            return {};
+        }
+        if (rc != 9 && rc != -20) {
+            return make_error<void>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    return {};
+    return make_error<void>(MathError::distributed_error);
 }
 
 auto GrpcBrokerPort::sweep_expired(std::uint64_t /*now_ms*/)
     -> Result<std::size_t> {
-    // No-op by design: sgee_queue_node's driver background thread sweeps expired leases
-    // autonomously. There is no client-side sweep RPC and none is needed; the coordinator's
-    // per-tick call becomes a free success. now_ms is ignored (see now_ms()).
     return std::size_t{0};
 }
 
 auto GrpcBrokerPort::state(std::uint64_t qid) -> Result<QState> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<QState>(MathError::distributed_error);
     }
-    int st = 0;
-    std::uint32_t attempt = 0;
-    const int rc = sgee_grpc_task_state(client_, qid, &st, &attempt);
-    if (rc != SGEE_OK) {
-        // UNKNOWN_TASK included: the coordinator enqueued this qid, so "unknown" means the node
-        // compacted it away or we are pointed at the wrong endpoint — an honest whole-run abort.
-        return make_error<QState>(MathError::distributed_error);
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            return make_error<QState>(MathError::distributed_error);
+        }
+        int st = 0;
+        std::uint32_t attempt_num = 0;
+        const int rc = sgee_grpc_task_state(client, qid, &st, &attempt_num);
+        if (rc == SGEE_OK) {
+            switch (st) {
+                case SGEE_STATE_PENDING:   return QState::pending;
+                case SGEE_STATE_LEASED:    return QState::leased;
+                case SGEE_STATE_COMPLETED: return QState::completed;
+                case SGEE_STATE_DEAD:      return QState::dead;
+                default:                   return make_error<QState>(MathError::distributed_error);
+            }
+        }
+        if (rc != 9 && rc != -20) {
+            return make_error<QState>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    switch (st) {
-        case SGEE_STATE_PENDING:   return QState::pending;
-        case SGEE_STATE_LEASED:    return QState::leased;
-        case SGEE_STATE_COMPLETED: return QState::completed;
-        case SGEE_STATE_DEAD:      return QState::dead;
-        default:                   return make_error<QState>(MathError::distributed_error);
-    }
+    return make_error<QState>(MathError::distributed_error);
 }
 
 auto GrpcBrokerPort::now_ms() const -> std::uint64_t {
-    // Inert for this port: lease deadlines live on the server's clock and the only coordinator
-    // consumer of now_ms() is the argument to sweep_expired(), which is a no-op here. Returned as
-    // wall-clock ms only to honor the interface's "same domain as the deadlines this port sets"
-    // spirit and to keep any future diagnostics sane.
     const auto now = std::chrono::system_clock::now().time_since_epoch();
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
@@ -232,73 +491,125 @@ auto GrpcBrokerPort::now_ms() const -> std::uint64_t {
 auto GrpcResultChannel::connect(std::string endpoint, bool consume_on_get,
                                 std::string auth_token, std::uint64_t rpc_deadline_ms)
     -> Result<std::unique_ptr<GrpcResultChannel>> {
-    sgee_grpc_client_t* client = nullptr;
-    const int rc = sgee_grpc_client_open(endpoint.c_str(),
-                                         auth_token.empty() ? nullptr : auth_token.c_str(),
-                                         rpc_deadline_ms, &client);
-    if (rc != SGEE_OK || client == nullptr) {
-        return make_error<std::unique_ptr<GrpcResultChannel>>(MathError::distributed_error);
+    if (endpoint.empty()) {
+        return make_error<std::unique_ptr<GrpcResultChannel>>(MathError::domain_error);
     }
-    return std::make_unique<GrpcResultChannel>(client, consume_on_get);
+    return connect(std::vector<std::string>{std::move(endpoint)}, consume_on_get,
+                   std::move(auth_token), rpc_deadline_ms, SgeeGrpcTlsOptions{});
+}
+
+auto GrpcResultChannel::connect(std::vector<std::string> endpoints, bool consume_on_get,
+                                std::string auth_token, std::uint64_t rpc_deadline_ms,
+                                const SgeeGrpcTlsOptions& tls)
+    -> Result<std::unique_ptr<GrpcResultChannel>> {
+    auto ring_res = open_grpc_endpoint_ring(endpoints, auth_token, rpc_deadline_ms, tls);
+    if (!ring_res.has_value()) {
+        return make_error<std::unique_ptr<GrpcResultChannel>>(ring_res.error());
+    }
+    return std::make_unique<GrpcResultChannel>(std::move(*ring_res), consume_on_get);
 }
 
 GrpcResultChannel::GrpcResultChannel(sgee_grpc_client_t* client, bool consume_on_get)
-    : client_(client), consume_on_get_(consume_on_get) {}
-
-GrpcResultChannel::~GrpcResultChannel() {
-    if (client_) {
-        sgee_grpc_client_destroy(client_);
-        client_ = nullptr;
+    : consume_on_get_(consume_on_get) {
+    if (client != nullptr) {
+        ring_ = std::make_shared<GrpcEndpointRing>();
+        ring_->nodes.push_back({.endpoint = "", .client = client});
     }
 }
 
+GrpcResultChannel::GrpcResultChannel(std::shared_ptr<GrpcEndpointRing> ring, bool consume_on_get)
+    : ring_(std::move(ring)), consume_on_get_(consume_on_get) {}
+
+GrpcResultChannel::~GrpcResultChannel() = default;
+
 auto GrpcResultChannel::is_open() const noexcept -> bool {
     std::lock_guard lock(mutex_);
-    return client_ != nullptr;
+    return ring_ != nullptr && !ring_->nodes.empty() && ring_->nodes[0].client != nullptr;
 }
 
 auto GrpcResultChannel::put(std::uint64_t qid, Payload result_envelope) -> Result<void> {
     std::lock_guard lock(mutex_);
-    if (!client_) {
+    if (!ring_ || ring_->nodes.empty()) {
         return make_error<void>(MathError::distributed_error);
     }
-    // Token zeros: the server's result store does not enforce fencing (see the proto note); the
-    // reader is gated by the broker's fenced Complete plus op determinism.
-    const int rc = sgee_grpc_put_result(client_, qid, 0, 0, 0,
-                                        result_envelope.data(), result_envelope.size());
-    if (rc != SGEE_OK) {
-        return make_error<void>(MathError::distributed_error);
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            return make_error<void>(MathError::distributed_error);
+        }
+        const int rc = sgee_grpc_put_result(client, qid, 0, 0, 0,
+                                            result_envelope.data(), result_envelope.size());
+        if (rc == SGEE_OK) {
+            return {};
+        }
+        if (rc != 9 && rc != -20) {
+            return make_error<void>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    return {};
+    return make_error<void>(MathError::distributed_error);
+}
+
+auto GrpcResultChannel::try_get(std::uint64_t qid) const -> Result<std::optional<Payload>> {
+    std::lock_guard lock(mutex_);
+    if (!ring_ || ring_->nodes.empty()) {
+        return make_error<std::optional<Payload>>(MathError::distributed_error);
+    }
+    const std::size_t n = ring_->nodes.size();
+    const std::size_t max_retries = 3 * n;
+
+    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+        const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
+        sgee_grpc_client_t* client = ring_->nodes[idx].client;
+        if (!client) {
+            return make_error<std::optional<Payload>>(MathError::distributed_error);
+        }
+        int found = 0;
+        void* out_bytes = nullptr;
+        std::size_t out_len = 0;
+        const int rc = sgee_grpc_get_result(client, qid, consume_on_get_ ? 1 : 0,
+                                            &found, &out_bytes, &out_len);
+        GrpcBufferGuard bytes_guard{out_bytes};
+        if (rc == SGEE_OK) {
+            if (!found) {
+                return std::optional<Payload>{std::nullopt};
+            }
+            Payload bytes;
+            if (out_bytes != nullptr && out_len > 0) {
+                const auto* ptr = static_cast<const std::byte*>(out_bytes);
+                bytes.assign(ptr, ptr + out_len);
+            }
+            return std::optional<Payload>{std::move(bytes)};
+        }
+        if (rc != 9 && rc != -20) {
+            return make_error<std::optional<Payload>>(MathError::distributed_error);
+        }
+        // Retryable
+        rotate_ring_on_error(*ring_, idx);
+        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    return make_error<std::optional<Payload>>(MathError::distributed_error);
 }
 
 auto GrpcResultChannel::get(std::uint64_t qid) const -> Result<Payload> {
-    std::lock_guard lock(mutex_);
-    if (!client_) {
+    auto res = try_get(qid);
+    if (!res.has_value()) {
+        return make_error<Payload>(res.error());
+    }
+    if (!res->has_value()) {
         return make_error<Payload>(MathError::distributed_error);
     }
-    int found = 0;
-    void* out_bytes = nullptr;
-    std::size_t out_len = 0;
-    const int rc = sgee_grpc_get_result(client_, qid, consume_on_get_ ? 1 : 0, &found,
-                                        &out_bytes, &out_len);
-    // Frees out_bytes on every path below, including a throwing assign() (defensive on null).
-    GrpcBufferGuard bytes_guard{out_bytes};
-    if (rc != SGEE_OK) {
-        return make_error<Payload>(MathError::distributed_error);
-    }
-    if (!found) {
-        // Absent here is a real fault: the coordinator only calls get() after state()==completed,
-        // so a missing result means the node lost its in-memory store (restart) — honest abort.
-        // Matches InMemoryResultChannel::get's contract.
-        return make_error<Payload>(MathError::distributed_error);
-    }
-    Payload bytes;
-    if (out_bytes != nullptr && out_len > 0) {
-        const auto* ptr = static_cast<const std::byte*>(out_bytes);
-        bytes.assign(ptr, ptr + out_len);
-    }
-    return bytes;
+    return std::move(**res);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,34 +618,34 @@ auto GrpcResultChannel::get(std::uint64_t qid) const -> Result<Payload> {
 
 auto sgee_grpc_distributed_executor(SgeeExecutorConfig cfg, SgeeGrpcExecutorOptions opts)
     -> Result<std::unique_ptr<Executor>> {
-    // wal_dir IGNORED (the queue is server-side); num_workers == 0 is VALID (pure remote workers).
-    if (cfg.registry == nullptr || cfg.max_attempts == 0 || cfg.visibility_timeout_ms == 0 ||
-        opts.endpoint.empty()) {
-        return make_error<std::unique_ptr<Executor>>(MathError::domain_error);
+    auto endpoints_res = validate_grpc_executor_options(cfg, opts);
+    if (!endpoints_res) {
+        return make_error<std::unique_ptr<Executor>>(endpoints_res.error());
     }
+    auto effective_endpoints = std::move(*endpoints_res);
+    const bool multi_endpoint = effective_endpoints.size() > 1;
+    if (multi_endpoint && cfg.max_result_recoveries == 0) {
+        cfg.max_result_recoveries = 1;
+    }
+    const bool consume_on_get = !multi_endpoint;
 
-    // Per-run transport: every run() opens a FRESH port + channel pair (independent connections)
-    // to the endpoint. Captured by value so the functor never dangles into `cfg`/`opts` after the
-    // moves below. No local WAL, so RunTransport.wal_path stays empty and the reaper deletes
-    // nothing. Broker-unreachable surfaces at the first RPC in run(), not here (lazy connect).
+    // Per-run transport: every run() opens a FRESH ring of ports + channels shared per run.
     RunTransportFactory make_transport =
-        [endpoint = opts.endpoint, auth = opts.auth_token,
-         deadline = opts.rpc_deadline_ms]() -> Result<RunTransport> {
-            auto port = GrpcBrokerPort::connect(endpoint, auth, deadline);
-            if (!port) {
-                return make_error<RunTransport>(port.error());
+        [endpoints = std::move(effective_endpoints), auth = opts.auth_token,
+         deadline = opts.rpc_deadline_ms, tls = opts.tls, consume_on_get]() -> Result<RunTransport> {
+            auto ring_res = open_grpc_endpoint_ring(endpoints, auth, deadline, tls);
+            if (!ring_res) {
+                return make_error<RunTransport>(ring_res.error());
             }
-            auto channel = GrpcResultChannel::connect(endpoint, /*consume_on_get=*/true, auth,
-                                                      deadline);
-            if (!channel) {
-                return make_error<RunTransport>(channel.error());
-            }
+            auto ring = std::move(*ring_res);
+            auto port = std::make_unique<GrpcBrokerPort>(ring);
+            auto channel = std::make_unique<GrpcResultChannel>(ring, consume_on_get);
+
             RunTransport tr;
-            tr.owned_port = std::move(*port);
+            tr.owned_port = std::move(port);
             tr.port = tr.owned_port.get();
-            tr.owned_channel = std::move(*channel);
+            tr.owned_channel = std::move(channel);
             tr.channel = tr.owned_channel.get();
-            // tr.wal_path stays empty: nothing local to reap.
             return tr;
         };
     return std::make_unique<SgeeDistributedExecutor>(std::move(cfg), std::move(make_transport));

@@ -43,3 +43,10 @@ __pycache__/
 .av_cache/
 .claude/
 .gemini/
+
+# Test Certificates and Keys
+*.pem
+*.crt
+*.key
+*.csr
+*.srl
