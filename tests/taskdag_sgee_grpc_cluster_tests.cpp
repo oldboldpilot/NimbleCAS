@@ -782,8 +782,8 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                           std::format("SGEE_QUEUE_PORT={}", cluster.nodes[i].qport),
                           std::format("SGEE_DATA_DIR={}", cluster.nodes[i].data_dir.string()),
                           "SGEE_SNAPSHOT_RETENTION_MS=3600000",
-                          "SGEE_ELECTION_TIMEOUT_MS=500",
-                          "SGEE_HEARTBEAT_MS=150",
+                          "SGEE_ELECTION_TIMEOUT_MS=80",
+                          "SGEE_HEARTBEAT_MS=25",
                           "SGEE_FORCE_BLOCKING_IO=1",
                           std::format("PORT={}", cluster.nodes[i].hport),
                           std::format("SGEE_TLS_CA_CERT={}", certs.ca_crt),
@@ -811,7 +811,7 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   std::vector<std::string> worker1_args = {
                       "--endpoint", eps[0], "--endpoint", eps[1], "--endpoint", eps[2],
                       "--worker-id", "1",
-                      "--lease-timeout-ms", "3000",
+                      "--lease-timeout-ms", "1000",
                       "--ca-cert", certs.ca_crt,
                       "--cert", certs.client_crt,
                       "--key", certs.client_key,
@@ -830,9 +830,9 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   SgeeExecutorConfig cfg;
                   cfg.with_registry(reg)
                       .with_num_workers(0)
-                      .with_poll_interval_ms(3)
+                      .with_poll_interval_ms(10)
                       .with_max_attempts(5)
-                      .with_visibility_timeout_ms(3'000)
+                      .with_visibility_timeout_ms(1'000)
                       .with_run_deadline_ms(120'000)
                       .with_max_result_recoveries(5);
 
