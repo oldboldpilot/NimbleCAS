@@ -469,11 +469,38 @@ auto main() -> int {
             t.expect(res_0.error() == MathError::not_converged,
                      "budget = 0 returns MathError::not_converged");
 
-            // Forcing budget = 1 prime (less than m_target) must also fail with not_converged
+            // A budget BELOW the Landau-Mignotte target is NOT by itself a failure, and
+            // asserting that it is would be wrong: the candidate is proven by exact trial
+            // division, so a lift that verifies is the true gcd no matter how few primes
+            // produced it (spec section 3.3). The honest invariant is therefore not "a small
+            // budget fails" but "whatever comes back is either an honest not_converged or
+            // the exact gcd -- never a wrong value".
             auto res_1 = modular_gcd(a, b, /*max_primes=*/1);
-            t.expect(!res_1.has_value(), "insufficient budget fails");
-            t.expect(res_1.error() == MathError::not_converged,
-                     "insufficient budget returns MathError::not_converged (never partial candidate)");
+            if (res_1.has_value()) {
+                t.expect(res_1->coefficients() == std::vector<std::int64_t>({5, 1, 2, 3}),
+                         "a verified single-prime lift is the exact gcd, not a partial answer");
+            } else {
+                t.expect(res_1.error() == MathError::not_converged,
+                         "an unverified budget-limited run returns not_converged");
+            }
+
+            // Genuine budget exhaustion, constructed so ONE prime provably cannot suffice:
+            // gcd = x + 900000000, whose constant term exceeds the symmetric range
+            // [-(p-1)/2, (p-1)/2] of a single ~2^30 prime, so the one-prime lift is wrong,
+            // trial division rejects it, and the budget runs out with nothing verified.
+            const auto ga = poly({900000000, 1});
+            const auto wide_a = poly({900000000, 900000001, 1});   // (x + 9e8)(x + 1)
+            const auto wide_b = poly({1800000000, 900000002, 1});  // (x + 9e8)(x + 2)
+
+            auto tight = modular_gcd(wide_a, wide_b, /*max_primes=*/1);
+            t.expect(!tight.has_value(), "one prime cannot cover a coefficient above p/2");
+            t.expect(tight.error() == MathError::not_converged,
+                     "exhausting the budget unverified returns not_converged, never a candidate");
+
+            auto ample = modular_gcd(wide_a, wide_b);
+            t.expect(ample.has_value(), "the same inputs succeed under the default budget");
+            t.expect(ample->coefficients() == ga.coefficients(),
+                     "and the recovered gcd is exactly x + 900000000");
         })
 
         .run();
