@@ -122,6 +122,31 @@ inline constexpr std::size_t k_default_prime_budget = 256;
                                std::size_t max_primes = k_default_prime_budget)
     -> Result<Polynomial>;
 
+// The pinned prime schedule: q_0 = 2^30, q_{k+1} = next_prime(q_k), skipping any prime dividing
+// lc(A) or lc(B).
+//
+// EXPORTED deliberately, so the in-process and distributed drivers share ONE schedule. They were
+// separate copies, which is a silent-divergence hazard of the same shape as two op bodies behind
+// one op id: the drivers are only interchangeable while they consume the same primes in the same
+// order, and nothing would have flagged a drift between two anonymous-namespace copies.
+//
+// The upper bound is load-bearing, not decorative. The image-request codec rejects any p outside
+// (2^30, 2^31), so without this guard a schedule that walked past 2^31 would keep working
+// in-process while the distributed path failed with domain_error -- the two drivers disagreeing at
+// the boundary, and reporting a capacity limit as if it were bad input. Exhausting the single-word
+// window is a representational ceiling that more primes cannot fix, so it is overflow.
+class PrimeSchedule {
+public:
+    explicit PrimeSchedule(std::int64_t lc_a, std::int64_t lc_b);
+
+    [[nodiscard]] auto next() -> Result<std::uint64_t>;
+
+private:
+    std::uint64_t u_lc_a_{0};
+    std::uint64_t u_lc_b_{0};
+    BigInt current_{};
+};
+
 }  // namespace nimblecas
 
 // ===========================================================================
@@ -271,45 +296,6 @@ auto trim_zp(std::vector<std::uint64_t>& coeffs) noexcept -> void {
     }
     return a;
 }
-
-// Prime schedule generator: q_0 = 2^30, q_{k+1} = next_prime(q_k, 0), skipping primes dividing lc(A) or lc(B)
-class PrimeSchedule {
-public:
-    explicit PrimeSchedule(std::int64_t lc_a, std::int64_t lc_b)
-        : current_(BigInt::from_u64(1ULL << 30)) {
-        u_lc_a_ = (lc_a < 0) ? (0ULL - static_cast<std::uint64_t>(lc_a))
-                             : static_cast<std::uint64_t>(lc_a);
-        u_lc_b_ = (lc_b < 0) ? (0ULL - static_cast<std::uint64_t>(lc_b))
-                             : static_cast<std::uint64_t>(lc_b);
-    }
-
-    [[nodiscard]] auto next() -> Result<std::uint64_t> {
-        while (true) {
-            auto next_res = next_prime(current_, 0);
-            if (!next_res) {
-                return make_error<std::uint64_t>(next_res.error());
-            }
-            current_ = *next_res;
-            auto p_opt = bigint_to_u64(current_);
-            if (!p_opt) {
-                return make_error<std::uint64_t>(MathError::overflow);
-            }
-            const std::uint64_t p = *p_opt;
-            if (u_lc_a_ > 0 && (u_lc_a_ % p == 0)) {
-                continue;
-            }
-            if (u_lc_b_ > 0 && (u_lc_b_ % p == 0)) {
-                continue;
-            }
-            return p;
-        }
-    }
-
-private:
-    std::uint64_t u_lc_a_{0};
-    std::uint64_t u_lc_b_{0};
-    BigInt current_{};
-};
 
 }  // namespace
 
@@ -798,6 +784,41 @@ auto merge_images(std::span<const ZpImage> images, std::int64_t gamma,
 // ---------------------------------------------------------------------------
 // In-process Reference Driver
 // ---------------------------------------------------------------------------
+
+PrimeSchedule::PrimeSchedule(std::int64_t lc_a, std::int64_t lc_b)
+    : current_(BigInt::from_u64(1ULL << 30)) {
+    u_lc_a_ = (lc_a < 0) ? (0ULL - static_cast<std::uint64_t>(lc_a))
+                         : static_cast<std::uint64_t>(lc_a);
+    u_lc_b_ = (lc_b < 0) ? (0ULL - static_cast<std::uint64_t>(lc_b))
+                         : static_cast<std::uint64_t>(lc_b);
+}
+
+auto PrimeSchedule::next() -> Result<std::uint64_t> {
+    while (true) {
+        auto next_res = next_prime(current_, 0);
+        if (!next_res) {
+            return make_error<std::uint64_t>(next_res.error());
+        }
+        current_ = *next_res;
+        auto p_opt = bigint_to_u64(current_);
+        if (!p_opt) {
+            return make_error<std::uint64_t>(MathError::overflow);
+        }
+        const std::uint64_t p = *p_opt;
+        // The single-word window is exhausted. Walking past it would keep working in-process while
+        // the image-request codec rejected the same prime as out-of-range, so stop here and say so.
+        if (p >= (1ULL << 31)) {
+            return make_error<std::uint64_t>(MathError::overflow);
+        }
+        if (u_lc_a_ > 0 && (u_lc_a_ % p == 0)) {
+            continue;
+        }
+        if (u_lc_b_ > 0 && (u_lc_b_ % p == 0)) {
+            continue;
+        }
+        return p;
+    }
+}
 
 auto modular_gcd(const Polynomial& a, const Polynomial& b, std::size_t max_primes)
     -> Result<Polynomial> {

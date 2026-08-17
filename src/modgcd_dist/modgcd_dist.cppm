@@ -56,59 +56,7 @@ namespace {
     return std::gcd(a, b);
 }
 
-// Convert BigInt to std::uint64_t
-[[nodiscard]] auto bigint_to_u64(const BigInt& x) -> std::optional<std::uint64_t> {
-    if (x.is_negative()) {
-        return std::nullopt;
-    }
-    const std::string s = x.to_string();
-    std::uint64_t out = 0;
-    const auto* end = s.data() + s.size();
-    const auto res = std::from_chars(s.data(), end, out);
-    if (res.ec != std::errc{} || res.ptr != end) {
-        return std::nullopt;
-    }
-    return out;
-}
-
-// Prime schedule generator: q_0 = 2^30, q_{k+1} = next_prime(q_k, 0), skipping primes dividing lc(A) or lc(B)
-class PrimeSchedule {
-public:
-    explicit PrimeSchedule(std::int64_t lc_a, std::int64_t lc_b)
-        : current_(BigInt::from_u64(1ULL << 30)) {
-        u_lc_a_ = (lc_a < 0) ? (0ULL - static_cast<std::uint64_t>(lc_a))
-                             : static_cast<std::uint64_t>(lc_a);
-        u_lc_b_ = (lc_b < 0) ? (0ULL - static_cast<std::uint64_t>(lc_b))
-                             : static_cast<std::uint64_t>(lc_b);
-    }
-
-    [[nodiscard]] auto next() -> Result<std::uint64_t> {
-        while (true) {
-            auto next_res = next_prime(current_, 0);
-            if (!next_res) {
-                return make_error<std::uint64_t>(next_res.error());
-            }
-            current_ = *next_res;
-            auto p_opt = bigint_to_u64(current_);
-            if (!p_opt) {
-                return make_error<std::uint64_t>(MathError::overflow);
-            }
-            const std::uint64_t p = *p_opt;
-            if (u_lc_a_ > 0 && (u_lc_a_ % p == 0)) {
-                continue;
-            }
-            if (u_lc_b_ > 0 && (u_lc_b_ % p == 0)) {
-                continue;
-            }
-            return p;
-        }
-    }
-
-private:
-    std::uint64_t u_lc_a_{0};
-    std::uint64_t u_lc_b_{0};
-    BigInt current_{};
-};
+// PrimeSchedule now comes from nimblecas.modgcd -- one schedule, shared by both drivers.
 
 }  // namespace
 
