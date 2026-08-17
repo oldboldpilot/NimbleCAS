@@ -150,7 +150,25 @@ struct GrpcBufferGuard {
 inline constexpr auto k_transport_retry_budget = std::chrono::seconds(5);
 inline constexpr auto k_retry_sweep_pause = std::chrono::milliseconds(50);
 
-// Advances the ring active_index on a retryable error (rc 9 or -20).
+// SGEE C ABI transport retry constants:
+// - SGEE_ERR_CONSENSUS_BASE (9): follower refusing a write (NotLeader), defined in sgee_capi.h
+// - SGEE_ERR_GRPC_TRANSPORT (-20): RPC never completed (unreachable / deadline / cancelled), defined in sgee_capi_grpc.h
+//
+// These static assertions pin the expected ABI error codes so that any future header change
+// breaks the build loudly at compile time instead of silently degrading leader-following / failover at runtime.
+static_assert(SGEE_ERR_CONSENSUS_BASE == 9,
+              "SGEE_ERR_CONSENSUS_BASE value drifted; expected 9 for Raft follower NotLeader rejection");
+static_assert(SGEE_ERR_GRPC_TRANSPORT == -20,
+              "SGEE_ERR_GRPC_TRANSPORT value drifted; expected -20 for gRPC transport failure");
+
+// Returns true if the return code indicates a transient / retryable transport condition:
+// - SGEE_ERR_CONSENSUS_BASE: follower refusal (NotLeader) -> rotate to new leader
+// - SGEE_ERR_GRPC_TRANSPORT: transport failure (unreachable, deadline, cancelled) -> retry / failover
+[[nodiscard]] constexpr auto is_retryable_transport_rc(int rc) noexcept -> bool {
+    return rc == SGEE_ERR_CONSENSUS_BASE || rc == SGEE_ERR_GRPC_TRANSPORT;
+}
+
+// Advances the ring active_index on a retryable error (SGEE_ERR_CONSENSUS_BASE or SGEE_ERR_GRPC_TRANSPORT).
 auto rotate_ring_on_error(nimblecas::GrpcEndpointRing& ring, std::size_t current_idx) -> void {
     const std::size_t n = ring.nodes.size();
     if (n <= 1) {
@@ -259,7 +277,7 @@ auto GrpcBrokerPort::enqueue(std::span<const std::byte> payload,
         if (rc == SGEE_OK) {
             return out_id;
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             return make_error<std::uint64_t>(MathError::distributed_error);
         }
         // Retryable
@@ -326,7 +344,7 @@ auto GrpcBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
                 .payload = std::move(payload_bytes)
             }};
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             return make_error<std::optional<Lease>>(MathError::distributed_error);
         }
         // Retryable
@@ -368,7 +386,7 @@ auto GrpcBrokerPort::complete(std::uint64_t qid, std::uint64_t token)
             leases_.erase(qid);
             return {};
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             leases_.erase(qid);
             return make_error<void>(MathError::distributed_error);
         }
@@ -412,7 +430,7 @@ auto GrpcBrokerPort::fail(std::uint64_t qid, std::uint64_t token)
             leases_.erase(qid);
             return {};
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             leases_.erase(qid);
             return make_error<void>(MathError::distributed_error);
         }
@@ -455,7 +473,7 @@ auto GrpcBrokerPort::heartbeat(std::uint64_t qid, std::uint64_t token,
         if (rc == SGEE_OK) {
             return {};
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             return make_error<void>(MathError::distributed_error);
         }
         // Retryable
@@ -502,7 +520,7 @@ auto GrpcBrokerPort::state(std::uint64_t qid) -> Result<QState> {
                 default:                   return make_error<QState>(MathError::distributed_error);
             }
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             return make_error<QState>(MathError::distributed_error);
         }
         // Retryable
@@ -586,7 +604,7 @@ auto GrpcResultChannel::put(std::uint64_t qid, Payload result_envelope) -> Resul
         if (rc == SGEE_OK) {
             return {};
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             return make_error<void>(MathError::distributed_error);
         }
         // Retryable
@@ -633,7 +651,7 @@ auto GrpcResultChannel::try_get(std::uint64_t qid) const -> Result<std::optional
             }
             return std::optional<Payload>{std::move(bytes)};
         }
-        if (rc != 9 && rc != -20) {
+        if (!is_retryable_transport_rc(rc)) {
             return make_error<std::optional<Payload>>(MathError::distributed_error);
         }
         // Retryable

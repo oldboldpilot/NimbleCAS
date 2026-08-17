@@ -7,6 +7,8 @@
 // (b) Q2: Leader failover mid-round during image computation: leader is SIGKILL'd mid-run,
 //     survivor node takes leadership with higher term, and modular_gcd_with completes bit-identically
 //     with failover rotations verified.
+// (c) Q3: mTLS negative security leg: client presenting no client certificate is rejected at the transport
+//     layer with MathError::distributed_error upon attempting RPCs.
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -486,6 +488,25 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       return;
                   }
 
+                  // Quorum agreement verification: all 3 nodes report ok and match term
+                  std::size_t q1_leaders = 0;
+                  std::size_t q1_followers = 0;
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      const auto st = get_node_status(cluster.nodes[i].hport);
+                      t.expect(st.ok, std::format("node {} is healthy", i + 1));
+                      if (st.ok) {
+                          t.expect(st.current_term == leader_opt->term,
+                                   std::format("node {} matches quorum term {}", i + 1, leader_opt->term));
+                          if (st.is_leader) {
+                              ++q1_leaders;
+                          } else {
+                              ++q1_followers;
+                          }
+                      }
+                  }
+                  t.expect(q1_leaders == 1 && q1_followers == 2,
+                           "Raft quorum verified: exactly 1 leader and 2 followers across 3 nodes");
+
                   // Spawn 2 external modgcd_sgee_worker processes with all 3 endpoints + mTLS
                   const auto eps = cluster.endpoints();
                   std::vector<std::string> worker1_args = {
@@ -509,6 +530,9 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   cluster.workers.push_back(
                       spawn_logged(worker_path, worker2_args, w_env2, cluster.worker_log(1)));
                   t.expect(cluster.workers[0] > 0 && cluster.workers[1] > 0, "two modgcd workers spawned");
+                  if (cluster.workers[0] <= 0 || cluster.workers[1] <= 0) {
+                      return;
+                  }
 
                   // T4 inputs:
                   // a = 3x⁵+2x⁴+22x³+19x²+7x+35 [35, 7, 19, 22, 2, 3]
@@ -520,6 +544,9 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   TaskRegistry reg;
                   auto reg_res = nimblecas::register_modgcd_ops(reg);
                   t.expect(reg_res.has_value(), "register_modgcd_ops succeeds on coordinator");
+                  if (!reg_res.has_value()) {
+                      return;
+                  }
 
                   SgeeExecutorConfig cfg;
                   cfg.with_registry(reg)
@@ -561,9 +588,15 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   // In-process references
                   const auto inproc_gcd = nimblecas::modular_gcd(a, b);
                   t.expect(inproc_gcd.has_value(), "in-process modular_gcd succeeds");
+                  if (!inproc_gcd.has_value()) {
+                      return;
+                  }
 
                   const auto poly_gcd = a.gcd(b);
                   t.expect(poly_gcd.has_value(), "Polynomial::gcd succeeds");
+                  if (!poly_gcd.has_value()) {
+                      return;
+                  }
 
                   // THE HEADLINE ACCEPTANCE CLAIM: BIT-IDENTITY
                   t.expect(dist_gcd->is_equal(*inproc_gcd),
@@ -578,12 +611,15 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   t.expect(dist_gcd->coefficient(2) == 2, "c2 == 2");
                   t.expect(dist_gcd->coefficient(3) == 3, "c3 == 3");
 
-                  // Clean teardown
-                  for (auto& w : cluster.workers) {
-                      const int st = stop_process(w);
-                      w = -1;
+                  // Clean teardown and worker log checks
+                  for (std::size_t i = 0; i < cluster.workers.size(); ++i) {
+                      const int st = stop_process(cluster.workers[i]);
+                      cluster.workers[i] = -1;
                       t.expect(st >= 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0,
-                               "worker exited cleanly (status 0)");
+                               std::format("worker {} exited cleanly (status 0)", i + 1));
+                      const auto w_log = read_file(cluster.worker_log(i));
+                      t.expect(w_log.find(std::format("worker {}: clean stop", i + 1)) != std::string::npos,
+                               std::format("worker {} completed pump and logged clean stop", i + 1));
                   }
                   for (std::size_t i = 0; i < cluster.nodes.size(); ++i) {
                       const int st = stop_process(cluster.nodes[i].pid);
@@ -696,6 +732,9 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   cluster.workers.push_back(
                       spawn_logged(worker_path, worker2_args, w_env2, cluster.worker_log(1)));
                   t.expect(cluster.workers[0] > 0 && cluster.workers[1] > 0, "two modgcd workers spawned");
+                  if (cluster.workers[0] <= 0 || cluster.workers[1] <= 0) {
+                      return;
+                  }
 
                   // Inputs T4
                   const Polynomial a({35, 7, 19, 22, 2, 3});
@@ -704,6 +743,9 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   TaskRegistry reg;
                   auto reg_res = nimblecas::register_modgcd_ops(reg);
                   t.expect(reg_res.has_value(), "register_modgcd_ops succeeds");
+                  if (!reg_res.has_value()) {
+                      return;
+                  }
 
                   SgeeGrpcTlsOptions tls{
                       .ca_cert_path = certs.ca_crt,
@@ -746,17 +788,52 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       std::this_thread::sleep_for(std::chrono::milliseconds(10));
                   }
                   t.expect(task_leased, "image task was leased by worker mid-round");
+                  if (!task_leased) {
+                      {
+                          std::ofstream f(gate_path);
+                          f << "release\n";
+                      }
+                      runner.join();
+                      return;
+                  }
 
                   // Identify current leader
                   auto [curr_count, curr_leader] = poll_leader(cluster.hports(), cluster.pids());
                   t.expect(curr_count == 1, "exactly one leader identified before kill");
+                  if (curr_count != 1) {
+                      {
+                          std::ofstream f(gate_path);
+                          f << "release\n";
+                      }
+                      runner.join();
+                      return;
+                  }
                   const int victim_idx = curr_leader.node_index;
                   const std::uint64_t victim_term = curr_leader.term;
                   t.expect(victim_idx >= 0 && victim_idx < 3, "victim index is valid");
+                  if (victim_idx < 0 || victim_idx >= 3) {
+                      {
+                          std::ofstream f(gate_path);
+                          f << "release\n";
+                      }
+                      runner.join();
+                      return;
+                  }
+
+                  // Snapshot failover rotations immediately before kill to prove strict increase
+                  const auto rotations_before = (*port_res)->failover_rotations();
 
                   // SIGKILL the leader
                   const pid_t victim_pid = cluster.nodes[victim_idx].pid;
                   t.expect(victim_pid > 0, "victim node pid is valid");
+                  if (victim_pid <= 0) {
+                      {
+                          std::ofstream f(gate_path);
+                          f << "release\n";
+                      }
+                      runner.join();
+                      return;
+                  }
                   ::kill(victim_pid, SIGKILL);
                   int kill_st = 0;
                   ::waitpid(victim_pid, &kill_st, 0);
@@ -800,6 +877,9 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
 
                   const auto poly_gcd = a.gcd(b);
                   t.expect(poly_gcd.has_value(), "Polynomial::gcd succeeds");
+                  if (!poly_gcd.has_value()) {
+                      return;
+                  }
 
                   // THE ACCEPTANCE CLAIMS FOR Q2
                   t.expect(dist_gcd->is_equal(*poly_gcd),
@@ -810,9 +890,11 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   t.expect(dist_gcd->coefficient(2) == 2, "c2 == 2");
                   t.expect(dist_gcd->coefficient(3) == 3, "c3 == 3");
 
-                  // Anti-vacuous proof of failover: rotations >= 1
-                  const auto rotations = (*port_res)->failover_rotations();
-                  t.expect(rotations >= 1, "failover rotations occurred and were recorded (rotations >= 1)");
+                  // Anti-vacuous proof of failover: strict increase in rotations in response to SIGKILL
+                  const auto rotations_after = (*port_res)->failover_rotations();
+                  t.expect(rotations_after > rotations_before,
+                           std::format("failover caused client ring rotation in response to leader kill (rotations after [{}] > before [{}])",
+                                       rotations_after, rotations_before));
 
                   // Clean teardown of survivor nodes and workers
                   for (auto& w : cluster.workers) {
@@ -827,6 +909,139 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                           cluster.nodes[i].pid = -1;
                           t.expect(st >= 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0,
                                    std::format("survivor node {} exited cleanly (status 0)", i + 1));
+                      }
+                  }
+              })
+        .test("q3_mtls_rejection_unauthenticated_client_fails_with_distributed_error",
+              [&](TestContext& t) {
+                  // --- (Q3) mTLS NEGATIVE REJECTION LEG ------------------------------------------
+                  const auto ports = pick_free_ports(9);
+                  t.expect(ports.size() == 9, "picked 9 free loopback ports");
+                  if (ports.size() != 9) {
+                      return;
+                  }
+
+                  Cluster3Node cluster;
+                  cluster.node_path = node_path;
+                  cluster.worker_path = worker_path;
+                  cluster.base_dir =
+                      std::filesystem::temp_directory_path() /
+                      std::format("nc-modgcd-cluster-q3-{}", static_cast<long>(::getpid()));
+                  std::filesystem::create_directories(cluster.base_dir, ec);
+
+                  const auto certs_opt = generate_test_certs(cluster.base_dir / "certs", cert_script_path);
+                  t.expect(certs_opt.has_value(), "test certificates generated");
+                  if (!certs_opt) {
+                      return;
+                  }
+                  const auto& certs = *certs_opt;
+
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      ClusterNode n;
+                      n.cport = ports[i * 3 + 0];
+                      n.qport = ports[i * 3 + 1];
+                      n.hport = ports[i * 3 + 2];
+                      n.data_dir = cluster.base_dir / std::format("node{}", i);
+                      std::filesystem::create_directories(n.data_dir, ec);
+                      cluster.nodes.push_back(std::move(n));
+                  }
+
+                  const std::string peers = std::format(
+                      "1=[::1]:{},2=[::1]:{},3=[::1]:{}",
+                      cluster.nodes[0].cport, cluster.nodes[1].cport, cluster.nodes[2].cport);
+
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      auto env_vars = make_env({
+                          std::format("SGEE_NODE_ID={}", i + 1),
+                          std::format("SGEE_PEERS={}", peers),
+                          std::format("SGEE_CONSENSUS_PORT={}", cluster.nodes[i].cport),
+                          std::format("SGEE_QUEUE_PORT={}", cluster.nodes[i].qport),
+                          std::format("SGEE_DATA_DIR={}", cluster.nodes[i].data_dir.string()),
+                          "SGEE_SNAPSHOT_RETENTION_MS=3600000",
+                          "SGEE_ELECTION_TIMEOUT_MS=500",
+                          "SGEE_HEARTBEAT_MS=150",
+                          "SGEE_FORCE_BLOCKING_IO=1",
+                          std::format("PORT={}", cluster.nodes[i].hport),
+                          std::format("SGEE_TLS_CA_CERT={}", certs.ca_crt),
+                          std::format("SGEE_TLS_CERT={}", certs.node_crt),
+                          std::format("SGEE_TLS_KEY={}", certs.node_key),
+                      });
+                      cluster.nodes[i].pid =
+                          spawn_logged(node_path, {}, env_vars, cluster.node_log(i));
+                      t.expect(cluster.nodes[i].pid > 0, std::format("node {} spawned", i + 1));
+                      if (cluster.nodes[i].pid <= 0) {
+                          return;
+                      }
+                  }
+
+                  const auto leader_opt =
+                      await_stable_leader(cluster.hports(), cluster.pids(), std::chrono::seconds(20));
+                  t.expect(leader_opt.has_value(), "cluster elected leader within 20s");
+                  if (!leader_opt) {
+                      return;
+                  }
+
+                  const auto eps = cluster.endpoints();
+                  TaskRegistry reg;
+                  auto reg_res = nimblecas::register_modgcd_ops(reg);
+                  t.expect(reg_res.has_value(), "register_modgcd_ops succeeds");
+                  if (!reg_res.has_value()) {
+                      return;
+                  }
+
+                  // 1. Direct BrokerPort RPC test: lazy connect succeeds, but RPC (enqueue) fails with distributed_error
+                  auto unauth_port = GrpcBrokerPort::connect(eps, /*auth_token=*/"", /*rpc_deadline_ms=*/1000, SgeeGrpcTlsOptions{});
+                  t.expect(unauth_port.has_value(), "lazy GrpcBrokerPort::connect succeeds without TLS credentials");
+                  if (unauth_port.has_value()) {
+                      // The payload content is irrelevant: the point is to force a REAL RPC,
+                      // since connect() alone never touches the network.
+                      const std::array<std::byte, 3> probe{std::byte{1}, std::byte{2}, std::byte{3}};
+                      auto enqueue_res =
+                          (*unauth_port)->enqueue(probe, nimblecas::SgeePlacement::cpu, 1);
+                      t.expect(!enqueue_res.has_value(),
+                               "RPC (enqueue) rejected by mTLS server when client presents no credentials");
+                      if (!enqueue_res.has_value()) {
+                          t.expect(enqueue_res.error() == MathError::distributed_error,
+                                   "rejection is transport-class MathError::distributed_error");
+                      }
+                  }
+
+                  // 2. Distributed modular_gcd_with executor test: run fails with distributed_error
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg)
+                      .with_num_workers(0)
+                      .with_poll_interval_ms(5)
+                      .with_max_attempts(2)
+                      .with_visibility_timeout_ms(1'000)
+                      .with_run_deadline_ms(2'000)
+                      .with_max_result_recoveries(0);
+
+                  SgeeGrpcExecutorOptions unauth_opts{
+                      .endpoints = eps,
+                      .tls = SgeeGrpcTlsOptions{},  // Plaintext / no client certificate
+                  };
+
+                  auto unauth_exec = nimblecas::sgee_grpc_distributed_executor(cfg, unauth_opts);
+                  t.expect(unauth_exec.has_value(), "unauthenticated executor constructed (lazy connect)");
+                  if (unauth_exec.has_value()) {
+                      const Polynomial a({35, 7, 19, 22, 2, 3});
+                      const Polynomial b({55, 6, 26, 32, -1, 3});
+                      const auto bad_dist_gcd = nimblecas::modular_gcd_with(a, b, **unauth_exec, reg);
+                      t.expect(!bad_dist_gcd.has_value(),
+                               "modular_gcd_with rejected when client presents no certificate");
+                      if (!bad_dist_gcd.has_value()) {
+                          t.expect(bad_dist_gcd.error() == MathError::distributed_error,
+                                   "modular_gcd_with error is transport-class MathError::distributed_error");
+                      }
+                  }
+
+                  // Clean teardown
+                  for (std::size_t i = 0; i < cluster.nodes.size(); ++i) {
+                      if (cluster.nodes[i].pid > 0) {
+                          const int st = stop_process(cluster.nodes[i].pid);
+                          cluster.nodes[i].pid = -1;
+                          t.expect(st >= 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0,
+                                   std::format("node {} exited cleanly (status 0)", i + 1));
                       }
                   }
               })
