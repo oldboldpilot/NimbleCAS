@@ -7,6 +7,7 @@
 // (c) Leader failover mid-run: deterministic constructed mid-run via a GATE op, leader is SIGKILL'd,
 //     survivor node takes leadership with higher term, and the DAG completes bit-identically to serial_executor
 //     with failover rotations verified.
+// (d) mTLS negative leg: client presenting no certificate is rejected at transport level (distributed_error).
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -883,24 +884,24 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       .cert_path = certs.client_crt,
                       .key_path = certs.client_key,
                   };
-                  SgeeGrpcExecutorOptions opts{
-                      .endpoints = eps,
-                      .tls = tls,
-                  };
 
-                  auto exec_res = nimblecas::sgee_grpc_distributed_executor(cfg, opts);
-                  t.expect(exec_res.has_value(), "gRPC distributed executor factory succeeds");
-                  if (!exec_res.has_value()) {
+                  auto port_res = GrpcBrokerPort::connect(eps, /*auth_token=*/"", /*rpc_deadline_ms=*/0, tls);
+                  t.expect(port_res.has_value(), "connected GrpcBrokerPort with Raft ring");
+                  if (!port_res.has_value()) {
                       return;
                   }
+                  auto port = std::move(*port_res);
+                  auto channel = std::make_unique<GrpcResultChannel>(port->ring(), /*consume_on_get=*/false);
+
+                  SgeeDistributedExecutor exec(cfg, *port, *channel);
 
                   // Sequence: start run() on a thread -> wait until worker enters gate op ->
-                  // identify leader via /statusz -> SIGKILL it -> wait for survivor to report is_leader
-                  // with HIGHER term -> create gate file -> join.
-                  auto exec = std::move(*exec_res);
+                  // snapshot client rotations -> identify leader via /statusz -> SIGKILL it ->
+                  // wait for survivor to report is_leader with HIGHER term -> create gate file -> join ->
+                  // assert client failover rotations strictly increased.
                   Result<TaskRunResult> dist_result;
                   std::thread runner([&]() {
-                      dist_result = exec->run(g);
+                      dist_result = exec.run(g);
                   });
 
                   // Wait until worker is actively executing the gate task
@@ -914,6 +915,12 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       std::this_thread::sleep_for(std::chrono::milliseconds(10));
                   }
                   t.expect(gate_leased, "gate task was leased by a worker mid-run");
+                  if (!gate_leased) {
+                      std::ofstream f(gate_path);
+                      f << "release\n";
+                      runner.join();
+                      return;
+                  }
 
                   // Identify the leader
                   auto [curr_count, curr_leader] = poll_leader(cluster.hports(), cluster.pids());
@@ -921,10 +928,25 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   const int victim_idx = curr_leader.node_index;
                   const std::uint64_t victim_term = curr_leader.term;
                   t.expect(victim_idx >= 0 && victim_idx < 3, "victim index is valid");
+                  if (curr_count != 1 || victim_idx < 0 || victim_idx >= 3) {
+                      std::ofstream f(gate_path);
+                      f << "release\n";
+                      runner.join();
+                      return;
+                  }
+
+                  // Snapshot client failover rotations immediately before killing the leader
+                  const auto rotations_before = port->failover_rotations();
 
                   // SIGKILL the leader
                   const pid_t victim_pid = cluster.nodes[victim_idx].pid;
                   t.expect(victim_pid > 0, "victim node pid is valid");
+                  if (victim_pid <= 0) {
+                      std::ofstream f(gate_path);
+                      f << "release\n";
+                      runner.join();
+                      return;
+                  }
                   ::kill(victim_pid, SIGKILL);
                   int kill_st = 0;
                   ::waitpid(victim_pid, &kill_st, 0);
@@ -946,6 +968,12 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   t.expect(new_leader_elected, "survivor elected leader with higher term after kill");
                   t.expect(new_leader.node_index != victim_idx, "new leader is a survivor (id != killed)");
                   t.expect(new_leader.term > victim_term, "new leader term > killed leader term");
+                  if (!new_leader_elected) {
+                      std::ofstream f(gate_path);
+                      f << "release\n";
+                      runner.join();
+                      return;
+                  }
 
                   // Release the gate
                   {
@@ -998,6 +1026,10 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                            "probe == 14010");
                   t.expect(dist_res.executed == 6, "all six tasks executed");
 
+                  // Client failover assertion: the client must have rotated to follow the new leader
+                  const auto rotations_after = port->failover_rotations();
+                  t.expect(rotations_after > rotations_before,
+                           "client rotated active node to follow leader failover (rotations_after > rotations_before)");
 
                   // Clean teardown of survivor nodes and workers
                   for (auto& w : cluster.workers) {
@@ -1015,6 +1047,140 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                       }
                   }
                   (void)ref_ids;
+              })
+        .test("mtls_cluster_rejects_client_presenting_no_certificate",
+              [&](TestContext& t) {
+                  // --- (d) mTLS NEGATIVE LEG: REJECTION OF UNVERIFIED CLIENT -----------------
+                  // Against a node with mTLS active, a client presenting no client certificate
+                  // must fail to perform RPCs.
+                  // Under TLS 1.3, rejection surfaces as a connection teardown (post-handshake),
+                  // and opening a gRPC channel connects lazily (never contacts the server immediately).
+                  // A successful connect() proves nothing -- a real RPC must fail with transport-class
+                  // MathError::distributed_error.
+                  const auto ports = pick_free_ports(9);
+                  t.expect(ports.size() == 9, "picked 9 free loopback ports");
+                  if (ports.size() != 9) {
+                      return;
+                  }
+
+                  Cluster3Node cluster;
+                  cluster.node_path = node_path;
+                  cluster.worker_path = worker_path;
+                  cluster.base_dir =
+                      std::filesystem::temp_directory_path() /
+                      std::format("nc-cluster-mtls-reject-{}", static_cast<long>(::getpid()));
+                  std::filesystem::create_directories(cluster.base_dir, ec);
+
+                  const auto certs_opt = generate_test_certs(cluster.base_dir / "certs", cert_script_path);
+                  t.expect(certs_opt.has_value(), "test certificates generated");
+                  if (!certs_opt) {
+                      return;
+                  }
+                  const auto& certs = *certs_opt;
+
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      ClusterNode n;
+                      n.cport = ports[i * 3 + 0];
+                      n.qport = ports[i * 3 + 1];
+                      n.hport = ports[i * 3 + 2];
+                      n.data_dir = cluster.base_dir / std::format("node{}", i);
+                      std::filesystem::create_directories(n.data_dir, ec);
+                      cluster.nodes.push_back(std::move(n));
+                  }
+
+                  const std::string peers = std::format(
+                      "1=[::1]:{},2=[::1]:{},3=[::1]:{}",
+                      cluster.nodes[0].cport, cluster.nodes[1].cport, cluster.nodes[2].cport);
+
+                  for (std::size_t i = 0; i < 3; ++i) {
+                      auto env_vars = make_env({
+                          std::format("SGEE_NODE_ID={}", i + 1),
+                          std::format("SGEE_PEERS={}", peers),
+                          std::format("SGEE_CONSENSUS_PORT={}", cluster.nodes[i].cport),
+                          std::format("SGEE_QUEUE_PORT={}", cluster.nodes[i].qport),
+                          std::format("SGEE_DATA_DIR={}", cluster.nodes[i].data_dir.string()),
+                          "SGEE_SNAPSHOT_RETENTION_MS=3600000",
+                          "SGEE_ELECTION_TIMEOUT_MS=500",
+                          "SGEE_HEARTBEAT_MS=150",
+                          "SGEE_FORCE_BLOCKING_IO=1",
+                          std::format("PORT={}", cluster.nodes[i].hport),
+                          std::format("SGEE_TLS_CA_CERT={}", certs.ca_crt),
+                          std::format("SGEE_TLS_CERT={}", certs.node_crt),
+                          std::format("SGEE_TLS_KEY={}", certs.node_key),
+                      });
+                      cluster.nodes[i].pid =
+                          spawn_logged(node_path, {}, env_vars, cluster.node_log(i));
+                      t.expect(cluster.nodes[i].pid > 0, std::format("node {} spawned", i + 1));
+                      if (cluster.nodes[i].pid <= 0) {
+                          return;
+                      }
+                  }
+
+                  const auto leader_opt =
+                      await_stable_leader(cluster.hports(), cluster.pids(), std::chrono::seconds(20));
+                  t.expect(leader_opt.has_value(), "cluster elected leader within 20s");
+                  if (!leader_opt) {
+                      return;
+                  }
+
+                  const auto eps = cluster.endpoints();
+
+                  // 1. Connect GrpcBrokerPort without TLS credentials (no client certificate)
+                  auto port_res = GrpcBrokerPort::connect(eps, /*auth_token=*/"", /*rpc_deadline_ms=*/1000);
+                  t.expect(port_res.has_value(), "lazy gRPC channel open succeeds without immediate handshake");
+                  if (!port_res.has_value()) {
+                      return;
+                  }
+                  auto port = std::move(*port_res);
+
+                  // 2. Perform a real RPC (enqueue) -- must fail with MathError::distributed_error due to transport teardown
+                  const std::vector<std::byte> dummy_payload = {
+                      std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}
+                  };
+                  auto enqueue_res = port->enqueue(dummy_payload, nimblecas::SgeePlacement::direct, 3);
+                  t.expect(!enqueue_res.has_value(),
+                           "RPC without client certificate is rejected by mTLS cluster");
+                  if (!enqueue_res.has_value()) {
+                      t.expect(enqueue_res.error() == MathError::distributed_error,
+                               "rejection surfaces as transport failure (MathError::distributed_error)");
+                  }
+
+                  // 3. Coordinator run without TLS credentials -- must fail whole-run with distributed_error
+                  TaskRegistry reg;
+                  TaskGraph g;
+                  ops::build_diamond(reg, g);
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg)
+                      .with_num_workers(0)
+                      .with_poll_interval_ms(5)
+                      .with_max_attempts(1)
+                      .with_visibility_timeout_ms(1'000)
+                      .with_run_deadline_ms(5'000);
+
+                  SgeeGrpcExecutorOptions opts{
+                      .endpoints = eps,
+                      .tls = SgeeGrpcTlsOptions{},
+                  };
+
+                  auto exec_res = nimblecas::sgee_grpc_distributed_executor(cfg, opts);
+                  t.expect(exec_res.has_value(), "gRPC distributed executor factory succeeds with plaintext options");
+                  if (exec_res.has_value()) {
+                      const auto dist = (*exec_res)->run(g);
+                      t.expect(!dist.has_value(),
+                               "distributed run without client certificate fails against mTLS cluster");
+                      if (!dist.has_value()) {
+                          t.expect(dist.error() == MathError::distributed_error,
+                                   "unauthenticated distributed run aborts with MathError::distributed_error");
+                      }
+                  }
+
+                  // Clean teardown
+                  for (std::size_t i = 0; i < cluster.nodes.size(); ++i) {
+                      const int st = stop_process(cluster.nodes[i].pid);
+                      cluster.nodes[i].pid = -1;
+                      t.expect(st >= 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0,
+                               std::format("node {} exited cleanly (status 0)", i + 1));
+                  }
               })
         .run();
 }
