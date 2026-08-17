@@ -368,6 +368,116 @@ auto main() -> int {
                   t.expect(dist_res.executed == ser_res.executed, "executed counts match (5)");
                   t.expect(dist_res.executed == 5, "executed == 5");
               })
+        .test("bound_literals_distributed_execution_and_ordering_contract",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  // Level-0 op consuming 2 bound literals:
+                  (void)reg.register_op("test.add_lits/v1",
+                                        [](std::span<const Payload> ps) -> Result<Payload> {
+                                            if (ps.size() != 2) {
+                                                return nimblecas::make_error<Payload>(MathError::domain_error);
+                                            }
+                                            return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1]));
+                                        });
+                  // Unary op consuming 1 literal:
+                  (void)reg.register_op("test.echo_lit/v1",
+                                        [](std::span<const Payload> ps) -> Result<Payload> {
+                                            if (ps.size() != 1) {
+                                                return nimblecas::make_error<Payload>(MathError::domain_error);
+                                            }
+                                            return ps[0];
+                                        });
+                  // Mixed op consuming 2 bound literals and 2 parent deps:
+                  // Asserts ordering: literals first, then parent outputs in declared order
+                  (void)reg.register_op("test.mixed_lits_deps/v1",
+                                        [](std::span<const Payload> ps) -> Result<Payload> {
+                                            if (ps.size() != 4) {
+                                                return nimblecas::make_error<Payload>(MathError::domain_error);
+                                            }
+                                            const auto l0 = decode_i64(ps[0]);
+                                            const auto l1 = decode_i64(ps[1]);
+                                            const auto d0 = decode_i64(ps[2]);
+                                            const auto d1 = decode_i64(ps[3]);
+                                            return encode_i64((l0 * 1000 + l1) * 1000000 + (d0 * 1000 + d1));
+                                        });
+                  // Op with empty args (verifying empty-literals default):
+                  (void)reg.register_op("test.zero_args/v1",
+                                        [](std::span<const Payload> ps) -> Result<Payload> {
+                                            return encode_i64(static_cast<std::int64_t>(ps.size()));
+                                        });
+
+                  TaskGraph g;
+                  // 1. Level-0 named tasks with bound literals:
+                  const auto a0 = g.add_named_task(reg, "test.add_lits/v1",
+                                                   std::vector<Payload>{encode_i64(10), encode_i64(25)})
+                                       .value();
+                  const auto a1 = g.add_named_task(reg, "test.echo_lit/v1",
+                                                   std::vector<Payload>{encode_i64(40)})
+                                       .value();
+                  const auto a_empty = g.add_named_task(reg, "test.zero_args/v1").value();
+
+                  // Verify literals accessor
+                  t.expect(g.literals(a0).size() == 2, "a0 literals size == 2");
+                  t.expect(decode_i64(g.literals(a0)[0]) == 10 && decode_i64(g.literals(a0)[1]) == 25,
+                           "a0 literals content matches");
+                  t.expect(g.literals(a1).size() == 1 && decode_i64(g.literals(a1)[0]) == 40,
+                           "a1 literals content matches");
+                  t.expect(g.literals(a_empty).empty(), "a_empty has empty literals");
+
+                  // 2. Downstream task with BOTH bound literals and parent outputs:
+                  // literals = {5, 6}, deps = {a0, a1} (outputs should be 35 and 40)
+                  const auto b_mixed = g.add_named_task(reg, "test.mixed_lits_deps/v1",
+                                                       std::vector<Payload>{encode_i64(5), encode_i64(6)},
+                                                       std::vector<TaskId>{a0, a1})
+                                           .value();
+
+                  t.expect(g.literals(b_mixed).size() == 2, "b_mixed literals size == 2");
+                  t.expect(g.deps(b_mixed).size() == 2, "b_mixed deps size == 2");
+
+                  // Run on serial reference executor
+                  const auto ser = nimblecas::serial_executor();
+                  const auto ser_res = ser->run(g).value();
+
+                  // Run on local_parallel executor
+                  const auto par = nimblecas::local_parallel_executor();
+                  const auto par_res = par->run(g).value();
+
+                  // Run on SgeeDistributedExecutor
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor dist_exec(cfg, port, results);
+                  const auto dist_res = dist_exec.run(g).value();
+
+                  // Check bit-identity between serial, parallel, and distributed
+                  t.expect(dist_res.outputs.size() == ser_res.outputs.size(), "output sizes match");
+                  t.expect(par_res.outputs.size() == ser_res.outputs.size(), "parallel output sizes match");
+
+                  bool dist_match = (dist_res.outputs.size() == ser_res.outputs.size());
+                  for (std::size_t i = 0; dist_match && i < dist_res.outputs.size(); ++i) {
+                      dist_match = results_equal(dist_res.outputs[i], ser_res.outputs[i]);
+                  }
+                  t.expect(dist_match, "distributed outputs are BIT-IDENTICAL to serial_executor");
+
+                  bool par_match = (par_res.outputs.size() == ser_res.outputs.size());
+                  for (std::size_t i = 0; par_match && i < par_res.outputs.size(); ++i) {
+                      par_match = results_equal(par_res.outputs[i], ser_res.outputs[i]);
+                  }
+                  t.expect(par_match, "local_parallel outputs are BIT-IDENTICAL to serial_executor");
+
+                  // Hand-check values
+                  t.expect(decode_i64(dist_res.outputs[a0.value].value()) == 35,
+                           "level-0 task a0 received bound literals: 10 + 25 = 35");
+                  t.expect(decode_i64(dist_res.outputs[a1.value].value()) == 40,
+                           "level-0 task a1 received bound literal: 40");
+                  t.expect(decode_i64(dist_res.outputs[a_empty.value].value()) == 0,
+                           "task without literals received 0 args");
+                  // Hand value for b_mixed: (5 * 1000 + 6) * 1000000 + (35 * 1000 + 40) = 5006035040
+                  t.expect(decode_i64(dist_res.outputs[b_mixed.value].value()) == 5006035040LL,
+                           "distributed task received literals first, then parent outputs in declared order");
+                  t.expect(dist_res.executed == 4, "all 4 tasks executed");
+              })
         .test("error_poisoning_parity_under_distributed_execution",
               [](TestContext& t) {
                   TaskRegistry reg;

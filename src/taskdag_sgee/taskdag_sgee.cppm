@@ -1328,10 +1328,14 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 continue;
             }
 
-            // Gather inputs
+            // Gather inputs (bound literals first, then parent outputs in declared dependency order)
+            const auto lits = g.literals(id);
             const auto task_deps = g.deps(id);
             std::vector<Payload> args;
-            args.reserve(task_deps.size());
+            args.reserve(lits.size() + task_deps.size());
+            for (const Payload& lit : lits) {
+                args.push_back(lit);
+            }
             for (const TaskId d : task_deps) {
                 args.push_back(outputs[d.value].value());
             }

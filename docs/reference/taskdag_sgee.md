@@ -29,6 +29,9 @@ Depends on [`core`](core.md) (`Result` / `MathError::distributed_error`) and
 - **Determinism contract:** When `run()` succeeds, `TaskRunResult::outputs` is **bit-identical**
   to `serial_executor()->run(g)` on the same graph with the same registry. The distributed
   executor is a transport, not a recomputation.
+- **Envelope argument semantics:** `TaskEnvelope::args` carries **bound literals
+  first, followed by parent outputs in declared dependency order**. The worker pump
+  passes `env.args` verbatim to the registered `TaskFn`, matching local execution bit-for-bit.
 
 ## Scope note (Part 1 vs Part 2)
 
@@ -145,7 +148,7 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | Type / Function | Signature / Description |
 | :--- | :--- |
 | `SgeePlacement` | `enum class { direct=0, cpu=1, gpu=2, docker=3, distributed=4, cloud=5 }` |
-| `TaskEnvelope` | `struct { u64 registry_fp; string op_id; vector<Payload> args; }` |
+| `TaskEnvelope` | `struct { u64 registry_fp; string op_id; vector<Payload> args; }` — `args` carries bound literals prepended before parent outputs in declared dependency order. |
 | `ResultEnvelope` | `struct { Status status; MathError math_err; double seconds; Payload bytes; }` |
 | `encode_task` / `decode_task` | Binary codec framing `"NCDT"` (version 1 LE), capped at 64 MiB. |
 | `encode_result` / `decode_result` | Binary codec framing `"NCRT"` (version 1 LE). |
