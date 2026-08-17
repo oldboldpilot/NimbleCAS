@@ -985,6 +985,14 @@ target_sources(nimblecas_modgcd PUBLIC
 target_link_libraries(nimblecas_modgcd
   PUBLIC nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint nimblecas_core std_module)
 
+# ---- nimblecas.modgcd_dist : distributed modular polynomial GCD driver ----
+add_library(nimblecas_modgcd_dist STATIC)
+target_sources(nimblecas_modgcd_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/modgcd_dist/modgcd_dist.cppm)
+target_link_libraries(nimblecas_modgcd_dist
+  PUBLIC nimblecas_modgcd nimblecas_taskdag nimblecas_polynomial nimblecas_numbertheory
+         nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.splitfield : Trager factorization / root adjunction / splitting fields ----
 add_library(nimblecas_splitfield STATIC)
 target_sources(nimblecas_splitfield PUBLIC
@@ -1395,6 +1403,25 @@ if(NIMBLECAS_SGEE_GRPC)
     SKIP_RETURN_CODE 77
     RUN_SERIAL TRUE
     ENVIRONMENT "NIMBLECAS_SGEE_GRPC_WORKER=$<TARGET_FILE:taskdag_sgee_grpc_worker>;NIMBLECAS_SGEE_QUEUE_NODE=${NIMBLECAS_SGEE_ROOT}/build-grpc/sgee_queue_node;NIMBLECAS_GEN_TEST_CERTS_SH=${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_test_certs.sh")
+
+  add_executable(modgcd_sgee_worker tests/modgcd_sgee_worker.cpp)
+  target_link_libraries(modgcd_sgee_worker
+    PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_modgcd nimblecas_polynomial nimblecas_core std_module)
+  set_target_properties(modgcd_sgee_worker PROPERTIES
+    BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
+
+  add_executable(modgcd_sgee_grpc_cluster_tests tests/modgcd_sgee_grpc_cluster_tests.cpp)
+  target_link_libraries(modgcd_sgee_grpc_cluster_tests
+    PRIVATE nimblecas_modgcd_dist nimblecas_modgcd nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint
+            nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
+  set_target_properties(modgcd_sgee_grpc_cluster_tests PROPERTIES
+    BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
+  add_dependencies(modgcd_sgee_grpc_cluster_tests modgcd_sgee_worker)
+  add_test(NAME modgcd_sgee_grpc_cluster_tests COMMAND modgcd_sgee_grpc_cluster_tests)
+  set_tests_properties(modgcd_sgee_grpc_cluster_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    RUN_SERIAL TRUE
+    ENVIRONMENT "NIMBLECAS_MODGCD_GRPC_WORKER=$<TARGET_FILE:modgcd_sgee_worker>;NIMBLECAS_SGEE_QUEUE_NODE=${NIMBLECAS_SGEE_ROOT}/build-grpc/sgee_queue_node;NIMBLECAS_GEN_TEST_CERTS_SH=${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_test_certs.sh")
 endif()
 
 add_executable(modgcd_tests tests/modgcd_tests.cpp)
@@ -1402,6 +1429,13 @@ target_link_libraries(modgcd_tests
   PRIVATE nimblecas_modgcd nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME modgcd_tests COMMAND modgcd_tests)
+
+add_executable(modgcd_dist_tests tests/modgcd_dist_tests.cpp)
+target_link_libraries(modgcd_dist_tests
+  PRIVATE nimblecas_modgcd_dist nimblecas_modgcd nimblecas_taskdag_sgee nimblecas_taskdag
+          nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME modgcd_dist_tests COMMAND modgcd_dist_tests)
 
 add_executable(splitfield_tests tests/splitfield_tests.cpp)
 target_link_libraries(splitfield_tests
