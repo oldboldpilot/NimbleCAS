@@ -978,6 +978,13 @@ else()
   target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_grpc_backend_stub.cpp)
 endif()
 
+# ---- nimblecas.modgcd : distributed modular polynomial GCD math core (Brown's GCD for Z[x]) ----
+add_library(nimblecas_modgcd STATIC)
+target_sources(nimblecas_modgcd PUBLIC
+  FILE_SET CXX_MODULES FILES src/modgcd/modgcd.cppm)
+target_link_libraries(nimblecas_modgcd
+  PUBLIC nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint nimblecas_core std_module)
+
 # ---- nimblecas.splitfield : Trager factorization / root adjunction / splitting fields ----
 add_library(nimblecas_splitfield STATIC)
 target_sources(nimblecas_splitfield PUBLIC
@@ -1389,6 +1396,12 @@ if(NIMBLECAS_SGEE_GRPC)
     RUN_SERIAL TRUE
     ENVIRONMENT "NIMBLECAS_SGEE_GRPC_WORKER=$<TARGET_FILE:taskdag_sgee_grpc_worker>;NIMBLECAS_SGEE_QUEUE_NODE=${NIMBLECAS_SGEE_ROOT}/build-grpc/sgee_queue_node;NIMBLECAS_GEN_TEST_CERTS_SH=${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_test_certs.sh")
 endif()
+
+add_executable(modgcd_tests tests/modgcd_tests.cpp)
+target_link_libraries(modgcd_tests
+  PRIVATE nimblecas_modgcd nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME modgcd_tests COMMAND modgcd_tests)
 
 add_executable(splitfield_tests tests/splitfield_tests.cpp)
 target_link_libraries(splitfield_tests

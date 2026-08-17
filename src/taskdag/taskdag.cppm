@@ -51,12 +51,13 @@ export namespace nimblecas {
 // is outside this module's concern.
 using Payload = std::vector<std::byte>;
 
-// A task's compute step: given its parents' outputs (in the exact order dependencies were
-// declared to add_task), produces this task's own output or fails. MUST be a PURE function
-// of `args` — no shared mutable state, no visible side effects — because
-// local_parallel_executor invokes every task in a wavefront level concurrently; levels are
-// independent by construction (a task's depth is strictly greater than every one of its
-// dependencies' depths), so this is the only requirement placed on TaskFn.
+// A task's compute step: given its arguments (bound literals first, then parents'
+// outputs in the exact order dependencies were declared to add_task / add_named_task),
+// produces this task's own output or fails. MUST be a PURE function of `args` — no
+// shared mutable state, no visible side effects — because local_parallel_executor
+// invokes every task in a wavefront level concurrently; levels are independent by
+// construction (a task's depth is strictly greater than every one of its dependencies'
+// depths), so this is the only requirement placed on TaskFn.
 using TaskFn = std::function<Result<Payload>(std::span<const Payload>)>;
 
 // Canonical identifier for a registered task operation string (e.g. "nimblecas.poly.eval_batch/v1").
@@ -200,6 +201,15 @@ public:
     [[nodiscard]] auto add_named_task(const TaskRegistry& reg, OpId op,
                                       std::span<const TaskId> deps = {},
                                       CostHint hint = {}) -> Result<TaskId> {
+        return add_named_task(reg, std::move(op), std::vector<Payload>{}, deps, hint);
+    }
+
+    // Appends a new named task with bound literal arguments. Fails with domain_error
+    // (adding nothing) if `op` is not in `reg` or any entry of `deps` is unknown.
+    [[nodiscard]] auto add_named_task(const TaskRegistry& reg, OpId op,
+                                      std::vector<Payload> literals,
+                                      std::span<const TaskId> deps = {},
+                                      CostHint hint = {}) -> Result<TaskId> {
         const TaskFn* fn_ptr = reg.find(op);
         if (fn_ptr == nullptr) {
             return make_error<TaskId>(MathError::domain_error);
@@ -218,7 +228,8 @@ public:
                                .deps = std::vector<TaskId>(deps.begin(), deps.end()),
                                .hint = hint,
                                .depth = new_depth,
-                               .op_id = std::move(op)});
+                               .op_id = std::move(op),
+                               .literals = std::move(literals)});
         if (new_depth >= levels_.size()) {
             levels_.resize(new_depth + 1);
         }
@@ -239,6 +250,12 @@ public:
     [[nodiscard]] auto deps(TaskId id) const noexcept -> std::span<const TaskId> {
         assert(id.value < tasks_.size() && "TaskGraph::deps: id not issued by this graph");
         return tasks_[id.value].deps;
+    }
+
+    // Bound literal arguments for this task (empty for tasks added without literals).
+    [[nodiscard]] auto literals(TaskId id) const noexcept -> std::span<const Payload> {
+        assert(id.value < tasks_.size() && "TaskGraph::literals: id not issued by this graph");
+        return tasks_[id.value].literals;
     }
 
     // This task's wavefront level: 0 for a task with no dependencies, else
@@ -283,6 +300,7 @@ private:
         CostHint hint;
         std::size_t depth{0};
         std::string op_id{};
+        std::vector<Payload> literals{};
     };
 
     std::vector<Task> tasks_{};
@@ -378,8 +396,13 @@ struct TaskOutcome {
     }
 
     // Every dependency succeeded (or there are none): actually run this task.
+    // Args contract: literals first, then parent outputs in declared dependency order.
+    const std::span<const Payload> lits = g.literals(id);
     std::vector<Payload> args;
-    args.reserve(task_deps.size());
+    args.reserve(lits.size() + task_deps.size());
+    for (const Payload& lit : lits) {
+        args.push_back(lit);
+    }
     for (const TaskId d : task_deps) {
         args.push_back(outputs[d.value].value());
     }

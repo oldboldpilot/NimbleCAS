@@ -19,14 +19,16 @@ primitive `local_parallel_executor` fans a wavefront level out over).
 
 ## Honesty boundary — single-node core with named-task extension
 
-**This is a single-node, local fork-join scheduler, now featuring an additive
-`TaskRegistry` and `add_named_task` path for named operations.** `Payload`
-(`std::vector<std::byte>`) is serializable by construction. `TaskFn` closures
-cannot be serialized to remote processes. Named tasks identified by a
-registered `OpId` (`"<domain>.<op>/v<N>"`) allow a remote/distributed backend
-(such as [`nimblecas.taskdag_sgee`](taskdag_sgee.md)) to ship op identifiers and
-serialized arguments while executing identical code across nodes. Named tasks
-run on local executors bit-identically to plain closure tasks.
+**This is a single-node, local fork-join scheduler, featuring an additive
+`TaskRegistry` and `add_named_task` path for named operations, including
+per-task bound literal payloads.** `Payload` (`std::vector<std::byte>`) is
+serializable by construction. `TaskFn` closures cannot be serialized to remote
+processes. Named tasks identified by a registered `OpId` (`"<domain>.<op>/v<N>"`)
+allow a remote/distributed backend (such as [`nimblecas.taskdag_sgee`](taskdag_sgee.md))
+to ship op identifiers and serialized arguments (bound literals and parent outputs)
+while executing identical code across nodes. Bound literals enable runtime data injection
+into level-0 named tasks and parameter binding for downstream tasks. Named tasks run on
+local executors bit-identically to plain closure tasks.
 
 ## Determinism contract
 
@@ -34,7 +36,7 @@ run on local executors bit-identically to plain closure tasks.
 `TaskRunResult::outputs` for the same `TaskGraph`, for any thread count:
 
 - A `TaskGraph` is built **incrementally**: `add_task(fn, deps, hint)` or
-  `add_named_task(reg, op, deps, hint)` appends one task whose dependencies must
+  `add_named_task(reg, op, ...)` appends one task whose dependencies must
   already have been issued `TaskId`s, so the graph is **acyclic by construction** —
   no cycle check is ever needed or possible to fail.
 - Each task's `depth = 1 + max(parent depth)` (`0` with no deps) places it in
@@ -42,8 +44,10 @@ run on local executors bit-identically to plain closure tasks.
   on; within a level every task is independent of every other task in that
   level (their dependencies all sit at strictly smaller depth), so an
   executor is free to run a level's tasks concurrently.
-- Every `TaskFn` is required to be a **pure** function of its parents'
-  payloads (no shared mutable state, no visible side effects) — the only
+- The **args contract**: a `TaskFn` receives its arguments as **bound literals
+  first, followed by parents' outputs in declared dependency order**.
+- Every `TaskFn` is required to be a **pure** function of its arguments
+  (no shared mutable state, no visible side effects) — the only
   requirement `TaskFn` places on a caller, since `local_parallel_executor`
   invokes every task in a wavefront level concurrently.
 - `local_parallel_executor`'s per-level fan-out goes through
@@ -71,13 +75,15 @@ All entry points live in namespace `nimblecas`, `[[nodiscard]]`.
 | Type / Function | Signature | Behavior |
 | :--- | :--- | :--- |
 | `Payload` | `using Payload = std::vector<std::byte>;` | A task's output (or another task's input): an opaque byte blob, serializable by construction. |
-| `TaskFn` | `using TaskFn = std::function<Result<Payload>(std::span<const Payload>)>;` | A task's compute step: parents' outputs (in the exact order given to `add_task`) → this task's output or error. Must be **pure**. |
+| `TaskFn` | `using TaskFn = std::function<Result<Payload>(std::span<const Payload>)>;` | A task's compute step: bound literals followed by parents' outputs (in declared dependency order) → this task's output or error. Must be **pure**. |
 | `OpId` | `using OpId = std::string;` | Versioned canonical string identifier for an op (`<domain>.<op>/v<N>`). |
 | `TaskRegistry` | `class TaskRegistry` | Registry mapping versioned `OpId`s to `TaskFn` bodies. `register_op`, `find`, `size`, `fingerprint` (FNV-1a). |
 | `TaskId` | `struct { std::size_t value{0}; }` | Opaque handle; `TaskId` order == issuance order == a valid topological order. |
 | `CostHint` | `struct { double mean_seconds{0.0}; double variance{0.0}; }` | A recorded cost estimate, readable via `TaskGraph::hint(id)`. |
 | `TaskGraph::add_task` | `auto add_task(TaskFn fn, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a closure task depending on `deps`. Fails with `domain_error`, **without adding the task**, if any `deps` entry names an unissued `TaskId`. |
-| `TaskGraph::add_named_task` | `auto add_named_task(const TaskRegistry& reg, OpId op, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a named task looking up `op` in `reg`. Fails with `domain_error` if `op` is unregistered or `deps` invalid. |
+| `TaskGraph::add_named_task` | `auto add_named_task(const TaskRegistry& reg, OpId op, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a named task with empty literals looking up `op` in `reg`. Fails with `domain_error` if `op` is unregistered or `deps` invalid. |
+| `TaskGraph::add_named_task` | `auto add_named_task(const TaskRegistry& reg, OpId op, std::vector<Payload> literals, std::span<const TaskId> deps = {}, CostHint hint = {}) -> Result<TaskId>` | Appends a named task with bound literal arguments prepended to task args. Fails with `domain_error` if `op` is unregistered or `deps` invalid. |
+| `TaskGraph::literals` | `auto literals(TaskId id) const noexcept -> std::span<const Payload>` | Bound literal arguments for this task (empty if none bound). |
 | `TaskGraph::op_id` | `auto op_id(TaskId id) const noexcept -> std::string_view` | The registered op name for named tasks, or empty for plain closures. |
 | `TaskGraph::size` | `auto size() const noexcept -> std::size_t` | Number of tasks issued so far. |
 | `TaskGraph::deps` / `depth` / `hint` / `num_levels` / `level` / `invoke` | — | Accessors for `Executor` implementations; not part of the curated graph-building surface. |
