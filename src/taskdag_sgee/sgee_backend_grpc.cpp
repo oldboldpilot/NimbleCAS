@@ -134,6 +134,22 @@ struct GrpcBufferGuard {
     return ring;
 }
 
+// How long a transport call keeps trying to find a leader before giving up honestly.
+//
+// This MUST be able to span a full Raft election, and the previous count-based budget could not:
+// 3*n attempts with a 100ms pause every n gave ~200ms on a 3-node ring, while an election at the
+// 80ms base timeout used by the cluster tests routinely runs longer under load. A leader is simply
+// ABSENT for the duration of an election, so a budget shorter than one turns a routine, survivable
+// failover into an aborted run — a spurious distributed_error for a cluster that was working.
+// SGEE's own server sizes its await budget as 4*(2*election + heartbeat) for exactly this reason.
+//
+// Deadline-based rather than attempt-based: what matters is wall-clock coverage of the election,
+// not a number of RPCs, since attempts against a dead node fail fast and would burn a count budget
+// in milliseconds. On expiry the call still fails honestly with distributed_error — this widens the
+// window in which recovery is possible, it never fabricates or papers over a result.
+inline constexpr auto k_transport_retry_budget = std::chrono::seconds(5);
+inline constexpr auto k_retry_sweep_pause = std::chrono::milliseconds(50);
+
 // Advances the ring active_index on a retryable error (rc 9 or -20).
 auto rotate_ring_on_error(nimblecas::GrpcEndpointRing& ring, std::size_t current_idx) -> void {
     const std::size_t n = ring.nodes.size();
@@ -229,9 +245,9 @@ auto GrpcBrokerPort::enqueue(std::span<const std::byte> payload,
         return make_error<std::uint64_t>(MathError::distributed_error);
     }
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -248,8 +264,12 @@ auto GrpcBrokerPort::enqueue(std::span<const std::byte> payload,
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     return make_error<std::uint64_t>(MathError::distributed_error);
@@ -262,9 +282,9 @@ auto GrpcBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
         return make_error<std::optional<Lease>>(MathError::distributed_error);
     }
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -311,8 +331,12 @@ auto GrpcBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     return make_error<std::optional<Lease>>(MathError::distributed_error);
@@ -330,9 +354,9 @@ auto GrpcBrokerPort::complete(std::uint64_t qid, std::uint64_t token)
     }
     const auto triple = it->second;
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -350,8 +374,12 @@ auto GrpcBrokerPort::complete(std::uint64_t qid, std::uint64_t token)
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     leases_.erase(qid);
@@ -370,9 +398,9 @@ auto GrpcBrokerPort::fail(std::uint64_t qid, std::uint64_t token)
     }
     const auto triple = it->second;
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -390,8 +418,12 @@ auto GrpcBrokerPort::fail(std::uint64_t qid, std::uint64_t token)
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     leases_.erase(qid);
@@ -410,9 +442,9 @@ auto GrpcBrokerPort::heartbeat(std::uint64_t qid, std::uint64_t token,
     }
     const auto triple = it->second;
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -428,8 +460,12 @@ auto GrpcBrokerPort::heartbeat(std::uint64_t qid, std::uint64_t token,
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     return make_error<void>(MathError::distributed_error);
@@ -446,9 +482,9 @@ auto GrpcBrokerPort::state(std::uint64_t qid) -> Result<QState> {
         return make_error<QState>(MathError::distributed_error);
     }
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -471,8 +507,12 @@ auto GrpcBrokerPort::state(std::uint64_t qid) -> Result<QState> {
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     return make_error<QState>(MathError::distributed_error);
@@ -533,9 +573,9 @@ auto GrpcResultChannel::put(std::uint64_t qid, Payload result_envelope) -> Resul
         return make_error<void>(MathError::distributed_error);
     }
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -551,8 +591,12 @@ auto GrpcResultChannel::put(std::uint64_t qid, Payload result_envelope) -> Resul
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     return make_error<void>(MathError::distributed_error);
@@ -564,9 +608,9 @@ auto GrpcResultChannel::try_get(std::uint64_t qid) const -> Result<std::optional
         return make_error<std::optional<Payload>>(MathError::distributed_error);
     }
     const std::size_t n = ring_->nodes.size();
-    const std::size_t max_retries = 3 * n;
+    const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
 
-    for (std::size_t attempt = 0; attempt < max_retries; ++attempt) {
+    for (std::size_t attempt = 0;; ++attempt) {
         const std::size_t idx = ring_->active_index.load(std::memory_order_relaxed) % n;
         sgee_grpc_client_t* client = ring_->nodes[idx].client;
         if (!client) {
@@ -594,8 +638,12 @@ auto GrpcResultChannel::try_get(std::uint64_t qid) const -> Result<std::optional
         }
         // Retryable
         rotate_ring_on_error(*ring_, idx);
-        if (attempt + 1 < max_retries && (attempt + 1) % n == 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (std::chrono::steady_clock::now() >= retry_deadline) {
+            break;
+        }
+        // Pause once per full sweep of the ring, so a wedged cluster is not hot-spun.
+        if ((attempt + 1) % n == 0) {
+            std::this_thread::sleep_for(k_retry_sweep_pause);
         }
     }
     return make_error<std::optional<Payload>>(MathError::distributed_error);
