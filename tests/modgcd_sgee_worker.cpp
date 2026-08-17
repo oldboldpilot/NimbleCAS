@@ -19,6 +19,7 @@ import std;
 import nimblecas.core;
 import nimblecas.polynomial;
 import nimblecas.modgcd;
+import nimblecas.modgcd_dist;
 import nimblecas.taskdag;
 import nimblecas.taskdag_sgee;
 

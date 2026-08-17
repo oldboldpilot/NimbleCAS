@@ -1406,7 +1406,8 @@ if(NIMBLECAS_SGEE_GRPC)
 
   add_executable(modgcd_sgee_worker tests/modgcd_sgee_worker.cpp)
   target_link_libraries(modgcd_sgee_worker
-    PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_modgcd nimblecas_polynomial nimblecas_core std_module)
+    PRIVATE nimblecas_modgcd_dist nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_modgcd
+            nimblecas_polynomial nimblecas_numbertheory nimblecas_bigint nimblecas_core std_module)
   set_target_properties(modgcd_sgee_worker PROPERTIES
     BUILD_RPATH "${NIMBLECAS_SGEE_GRPC_LIB_DIR}")
 

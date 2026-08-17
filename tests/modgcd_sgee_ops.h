@@ -7,8 +7,9 @@
 // both sides yield identical fingerprints — the invariant that lets a task envelope minted by the
 // coordinator be accepted by the worker pump.
 //
-// The including TU MUST import nimblecas.core, nimblecas.polynomial, nimblecas.modgcd, and
-// nimblecas.taskdag (with import std in scope) BEFORE including this header.
+// The including TU MUST import nimblecas.core, nimblecas.polynomial, nimblecas.modgcd,
+// nimblecas.modgcd_dist, and nimblecas.taskdag (with import std in scope) BEFORE including this
+// header — modgcd_dist supplies the production op registration this delegates to.
 
 #ifndef NIMBLECAS_MODGCD_SGEE_OPS_H
 #define NIMBLECAS_MODGCD_SGEE_OPS_H
