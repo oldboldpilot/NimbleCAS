@@ -17,23 +17,13 @@ namespace nimblecas::modgcd_ops {
 
 inline constexpr std::string_view k_modgcd_image_op_id = "nimblecas.modgcd.image/v1";
 
-// Registers the modular GCD image op "nimblecas.modgcd.image/v1" into reg.
-// Decodes an ImageRequest from the bound literal, invokes gcd_image_mod_p, and encodes the resulting ZpImage.
+// Registers the production modular GCD image op by DELEGATING to nimblecas.modgcd_dist.
+// Deliberately not a re-implementation: the coordinator's modular_gcd_with() mints envelopes for
+// this op id, so a second copy of the op body here could drift from the one the driver expects and
+// silently change what a worker computes. The fingerprint would not catch it — it hashes op ids,
+// not op bodies. One implementation, used by both sides.
 [[nodiscard]] inline auto register_modgcd_ops(TaskRegistry& reg) -> Result<void> {
-    return reg.register_op(k_modgcd_image_op_id, [](std::span<const Payload> ps) -> Result<Payload> {
-        if (ps.empty()) {
-            return make_error<Payload>(MathError::domain_error);
-        }
-        const auto req = decode_image_request(ps[0]);
-        if (!req) {
-            return make_error<Payload>(req.error());
-        }
-        const auto img = gcd_image_mod_p(req->a, req->b, req->p, req->gamma);
-        if (!img) {
-            return make_error<Payload>(img.error());
-        }
-        return encode_image_result(*img);
-    });
+    return nimblecas::register_modgcd_ops(reg);
 }
 
 // Registers a gated modular GCD image op into reg.
@@ -42,13 +32,17 @@ inline constexpr std::string_view k_modgcd_image_op_id = "nimblecas.modgcd.image
 // 2. Blocks execution until gate_file exists or a timeout occurs.
 // 3. Executes the image kernel normally.
 // Notice the OpId registered is still "nimblecas.modgcd.image/v1", so the registry fingerprint is identical.
+//
+// This one CANNOT delegate — it has to interpose a blocking gate before the kernel runs — so its
+// tail must stay a mirror of the production body above. It is test-only scaffolding for the
+// failover leg; if the production kernel ever changes, this must change with it.
 [[nodiscard]] inline auto register_gated_modgcd_ops(TaskRegistry& reg,
                                                      const std::filesystem::path& gate_file = {},
                                                      const std::filesystem::path& gate_entered_file = {}) -> Result<void> {
     if (gate_file.empty()) {
         return register_modgcd_ops(reg);
     }
-    return reg.register_op(k_modgcd_image_op_id,
+    return reg.register_op(OpId{k_modgcd_image_op_id},
                            [gate_file, gate_entered_file,
                             entered_flag = std::make_shared<std::atomic<bool>>(false)](
                                std::span<const Payload> ps) -> Result<Payload> {
