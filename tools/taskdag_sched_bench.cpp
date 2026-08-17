@@ -26,7 +26,6 @@ import nimblecas.taskdag_sgee;
 import nimblecas.taskdag_sched;
 
 using namespace nimblecas;
-using namespace nimblecas::taskdag_sched;
 
 namespace {
 
