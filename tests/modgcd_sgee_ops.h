@@ -41,7 +41,9 @@ inline constexpr std::string_view k_modgcd_image_op_id = "nimblecas.modgcd.image
                                                      const std::filesystem::path& gate_file = {},
                                                      const std::filesystem::path& gate_entered_file = {}) -> Result<void> {
     if (gate_file.empty()) {
-        return register_modgcd_ops(reg);
+        // Qualified: an unqualified call is ambiguous here, since ADL on TaskRegistry also finds
+        // nimblecas::register_modgcd_ops alongside this namespace's same-named wrapper.
+        return modgcd_ops::register_modgcd_ops(reg);
     }
     return reg.register_op(OpId{k_modgcd_image_op_id},
                            [gate_file, gate_entered_file,
