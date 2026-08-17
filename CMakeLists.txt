@@ -951,7 +951,7 @@ add_library(nimblecas_taskdag_sgee STATIC)
 target_sources(nimblecas_taskdag_sgee PUBLIC
   FILE_SET CXX_MODULES FILES src/taskdag_sgee/taskdag_sgee.cppm)
 target_link_libraries(nimblecas_taskdag_sgee
-  PUBLIC nimblecas_taskdag nimblecas_core std_module)
+  PUBLIC nimblecas_taskdag_sched nimblecas_taskdag nimblecas_core std_module)
 
 if(NIMBLECAS_SGEE)
   find_path(NIMBLECAS_SGEE_CAPI_INCLUDE sgee_capi.h
