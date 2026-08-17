@@ -55,6 +55,30 @@ local executors bit-identically to plain closure tasks.
   the accumulation back into `outputs` always happens in a single fixed index
   order — never in thread-completion order. No atomics-driven
   nondeterminism.
+- That fan-out uses **grain 1**, deliberately, rather than
+  `parallel::default_grain` (256). The default is tuned for *elementwise*
+  work — expression nodes, coefficients — where one item costs nanoseconds
+  and forking would cost more than it saves. A task-DAG task is the opposite:
+  an arbitrary user computation that may run for milliseconds or seconds, so
+  the fork is negligible and one task per range is correct. Grain only ever
+  affects *scheduling*, never results.
+
+  Measured on `mgpu` (36 hardware threads), a single level of independent
+  ~8 ms tasks, best of 5 interleaved reps, versus `serial_executor`:
+
+  | tasks in level | grain 256 (before) | grain 1 (after) |
+  | ---: | ---: | ---: |
+  | 4 | 1.00× | 1.93× |
+  | 64 | 1.00× | 15.93× |
+  | 255 | 1.00× | 25.31× |
+  | 300 | 1.98× | 27.11× |
+  | 512 | 1.99× | 28.52× |
+
+  Two separate effects. Below the grain a level took the **serial** path
+  outright (exactly 1.00×). Above it, the level was split into only
+  `ceil(n/256)` blocks — so even 512 tasks used **two** of 36 cores. Outputs
+  were verified bit-identical to `serial_executor` at every size in both
+  configurations; only wall-clock changed.
 
 ## Error poisoning
 
