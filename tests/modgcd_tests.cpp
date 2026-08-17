@@ -477,8 +477,8 @@ auto main() -> int {
             // the exact gcd -- never a wrong value".
             auto res_1 = modular_gcd(a, b, /*max_primes=*/1);
             if (res_1.has_value()) {
-                t.expect(res_1->coefficients() == std::vector<std::int64_t>({5, 1, 2, 3}),
-                         "a verified single-prime lift is the exact gcd, not a partial answer");
+                expect_poly(t, *res_1, {5, 1, 2, 3},
+                            "a verified single-prime lift is the exact gcd");
             } else {
                 t.expect(res_1.error() == MathError::not_converged,
                          "an unverified budget-limited run returns not_converged");
@@ -488,7 +488,6 @@ auto main() -> int {
             // gcd = x + 900000000, whose constant term exceeds the symmetric range
             // [-(p-1)/2, (p-1)/2] of a single ~2^30 prime, so the one-prime lift is wrong,
             // trial division rejects it, and the budget runs out with nothing verified.
-            const auto ga = poly({900000000, 1});
             const auto wide_a = poly({900000000, 900000001, 1});   // (x + 9e8)(x + 1)
             const auto wide_b = poly({1800000000, 900000002, 1});  // (x + 9e8)(x + 2)
 
@@ -499,8 +498,10 @@ auto main() -> int {
 
             auto ample = modular_gcd(wide_a, wide_b);
             t.expect(ample.has_value(), "the same inputs succeed under the default budget");
-            t.expect(ample->coefficients() == ga.coefficients(),
-                     "and the recovered gcd is exactly x + 900000000");
+            if (ample.has_value()) {
+                expect_poly(t, *ample, {900000000, 1},
+                            "and the recovered gcd is exactly x + 900000000");
+            }
         })
 
         .run();
