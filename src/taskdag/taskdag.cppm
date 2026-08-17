@@ -152,10 +152,14 @@ struct TaskId {
     [[nodiscard]] auto operator==(const TaskId&) const noexcept -> bool = default;
 };
 
-// Recorded (not yet exploited) cost estimate for a task, in seconds, e.g. from a prior
-// profiling run. A future cost-aware scheduler (critical-path ordering, load balancing
-// across a distributed backend) can read it via TaskGraph::hint(id); neither shipped
-// executor here uses it — both are plain level-synchronous wavefront schedulers.
+// Recorded cost estimate for a task, in seconds, e.g. from a prior profiling run.
+//
+// Neither executor SCHEDULES with it — both are plain level-synchronous wavefront schedulers, and
+// a future cost-aware scheduler (critical-path ordering, load balancing across a distributed
+// backend) would read it via TaskGraph::hint(id). It is not unused, though: the SGEE coordinator
+// sums mean_seconds to derive a default run deadline when none is configured. A hint is therefore
+// advisory about TIME, never about RESULTS — a wrong or absent estimate can only affect how long
+// the run is willing to wait, never what it computes.
 struct CostHint {
     double mean_seconds{0.0};
     double variance{0.0};
@@ -472,10 +476,21 @@ public:
             // order-preserving: outcomes[i] always corresponds to ids[i] regardless of
             // scheduling, so the write-back loop below is a fixed, deterministic index
             // order — bit-identical to SerialExecutor's sequential one.
+            // Grain 1, NOT parallel::default_grain (256). That default exists for elementwise
+            // work — expression nodes, coefficients — where a single item costs nanoseconds and
+            // forking genuinely costs more than it saves. A task-DAG task is the opposite kind of
+            // thing: it is an arbitrary user computation, potentially milliseconds or seconds of
+            // work, so the fork is negligible against it and one task per range is right.
+            // With the default, every level under 256 tasks ran SERIALLY on this "parallel"
+            // executor — which is most real levels, including every modgcd round. The existing
+            // parity test happens to use 500 leaves, comfortably over the threshold, which is why
+            // that went unnoticed.
+            // Determinism is unaffected: transform_index is order-preserving at any grain, and the
+            // write-back below indexes by position regardless.
             std::vector<TaskOutcome> outcomes =
                 parallel::transform_index(ids.size(), [&](std::size_t i) {
                     return run_or_poison(g, ids[i], outputs, origins);
-                });
+                }, /*grain=*/1);
             for (std::size_t i = 0; i < ids.size(); ++i) {
                 const TaskId id = ids[i];
                 if (outcomes[i].executed) {

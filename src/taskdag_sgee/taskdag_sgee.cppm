@@ -1295,7 +1295,15 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
         for (std::size_t i = 0; i < n; ++i) {
             total_cost += std::max(0.0, g.hint(TaskId{i}).mean_seconds);
         }
-        run_deadline_ms = std::max<std::uint64_t>(60'000, static_cast<std::uint64_t>(10.0 * total_cost * 1000.0));
+        // Clamp BEFORE the cast. total_cost is caller-supplied via CostHint, so an absurd or
+        // infinite hint would otherwise make this double->uint64 conversion undefined — a bad
+        // estimate must at worst give a bad deadline, never UB.
+        constexpr double k_max_deadline_ms = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;  // 30 days
+        const double derived_ms = 10.0 * total_cost * 1000.0;
+        const double clamped_ms = (std::isfinite(derived_ms) && derived_ms > 0.0)
+                                      ? std::min(derived_ms, k_max_deadline_ms)
+                                      : 0.0;
+        run_deadline_ms = std::max<std::uint64_t>(60'000, static_cast<std::uint64_t>(clamped_ms));
     }
 
     const auto start_time = std::chrono::steady_clock::now();
