@@ -993,7 +993,11 @@ auto main(int /*argc*/, char** /*argv*/) -> int {
                   auto unauth_port = GrpcBrokerPort::connect(eps, /*auth_token=*/"", /*rpc_deadline_ms=*/1000, SgeeGrpcTlsOptions{});
                   t.expect(unauth_port.has_value(), "lazy GrpcBrokerPort::connect succeeds without TLS credentials");
                   if (unauth_port.has_value()) {
-                      auto enqueue_res = (*unauth_port)->enqueue("nimblecas.modgcd.image/v1", {1, 2, 3});
+                      // The payload content is irrelevant: the point is to force a REAL RPC,
+                      // since connect() alone never touches the network.
+                      const std::array<std::byte, 3> probe{std::byte{1}, std::byte{2}, std::byte{3}};
+                      auto enqueue_res =
+                          (*unauth_port)->enqueue(probe, nimblecas::SgeePlacement::cpu, 1);
                       t.expect(!enqueue_res.has_value(),
                                "RPC (enqueue) rejected by mTLS server when client presents no credentials");
                       if (!enqueue_res.has_value()) {
