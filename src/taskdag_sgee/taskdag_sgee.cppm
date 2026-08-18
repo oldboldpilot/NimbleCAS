@@ -22,6 +22,7 @@ export module nimblecas.taskdag_sgee;
 import std;
 import nimblecas.core;
 import nimblecas.taskdag;
+import nimblecas.taskdag_sched;
 
 export namespace nimblecas {
 
@@ -681,6 +682,9 @@ struct SgeeExecutorConfig {
     std::uint64_t run_deadline_ms{0};
     std::size_t max_result_recoveries{0};
     std::function<SgeePlacement(const TaskGraph&, TaskId)> placement{};
+    bool cost_ordering{false};
+    ScheduleParams schedule_params{};
+    const CostTable* cost_table{nullptr};
 
     auto with_wal_dir(std::filesystem::path p) -> SgeeExecutorConfig& {
         wal_dir = std::move(p);
@@ -725,6 +729,21 @@ struct SgeeExecutorConfig {
     auto with_placement(std::function<SgeePlacement(const TaskGraph&, TaskId)> f)
         -> SgeeExecutorConfig& {
         placement = std::move(f);
+        return *this;
+    }
+
+    auto with_cost_ordering(bool enable) -> SgeeExecutorConfig& {
+        cost_ordering = enable;
+        return *this;
+    }
+
+    auto with_schedule_params(ScheduleParams p) -> SgeeExecutorConfig& {
+        schedule_params = p;
+        return *this;
+    }
+
+    auto with_cost_table(const CostTable* t) -> SgeeExecutorConfig& {
+        cost_table = t;
         return *this;
     }
 };
@@ -1309,7 +1328,13 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
     const auto start_time = std::chrono::steady_clock::now();
 
     for (std::size_t lvl = 0; lvl < g.num_levels(); ++lvl) {
-        const std::span<const TaskId> level_tasks = g.level(lvl);
+        const std::span<const TaskId> raw_level = g.level(lvl);
+        const std::vector<TaskId> ordered_tasks =
+            cfg_.cost_ordering
+                ? level_order(g, raw_level, cfg_.cost_table, cfg_.schedule_params)
+                : std::vector<TaskId>{};
+        const std::span<const TaskId> level_tasks =
+            cfg_.cost_ordering ? std::span<const TaskId>(ordered_tasks) : raw_level;
         struct PendingTaskInfo {
             TaskId id;
             Payload encoded_payload;

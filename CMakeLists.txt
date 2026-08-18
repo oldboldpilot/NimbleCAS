@@ -932,6 +932,13 @@ target_sources(nimblecas_taskdag PUBLIC
 target_link_libraries(nimblecas_taskdag
   PUBLIC nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.taskdag_sched : cost-aware task scheduling & deterministic ordering ----
+add_library(nimblecas_taskdag_sched STATIC)
+target_sources(nimblecas_taskdag_sched PUBLIC
+  FILE_SET CXX_MODULES FILES src/taskdag_sched/taskdag_sched.cppm)
+target_link_libraries(nimblecas_taskdag_sched
+  PUBLIC nimblecas_taskdag nimblecas_parallel nimblecas_core std_module)
+
 # ---- nimblecas.taskdag_sgee : SGEE distributed task-DAG backend — opt-in via -DNIMBLECAS_SGEE=ON ----
 option(NIMBLECAS_SGEE "Enable the SGEE distributed taskdag backend" OFF)
 # The cross-process gRPC backend is INDEPENDENT of NIMBLECAS_SGEE: it links libsgee_capi_grpc
@@ -944,7 +951,7 @@ add_library(nimblecas_taskdag_sgee STATIC)
 target_sources(nimblecas_taskdag_sgee PUBLIC
   FILE_SET CXX_MODULES FILES src/taskdag_sgee/taskdag_sgee.cppm)
 target_link_libraries(nimblecas_taskdag_sgee
-  PUBLIC nimblecas_taskdag nimblecas_core std_module)
+  PUBLIC nimblecas_taskdag_sched nimblecas_taskdag nimblecas_core std_module)
 
 if(NIMBLECAS_SGEE)
   find_path(NIMBLECAS_SGEE_CAPI_INCLUDE sgee_capi.h
@@ -1365,6 +1372,11 @@ add_executable(taskdag_tests tests/taskdag_tests.cpp)
 target_link_libraries(taskdag_tests
   PRIVATE nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_tests COMMAND taskdag_tests)
+
+add_executable(taskdag_sched_tests tests/taskdag_sched_tests.cpp)
+target_link_libraries(taskdag_sched_tests
+  PRIVATE nimblecas_taskdag_sched nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME taskdag_sched_tests COMMAND taskdag_sched_tests)
 
 add_executable(taskdag_sgee_tests tests/taskdag_sgee_tests.cpp)
 target_link_libraries(taskdag_sgee_tests
@@ -2166,6 +2178,12 @@ target_link_libraries(cpu_bench
 add_executable(mc_bench tools/mc_bench.cpp)
 target_link_libraries(mc_bench
   PRIVATE nimblecas_pricing nimblecas_core std_module)
+
+# Task DAG scheduler cost-aware ordering benchmark harness (ROADMAP §6.1 / M6).
+add_executable(taskdag_sched_bench tools/taskdag_sched_bench.cpp)
+target_link_libraries(taskdag_sched_bench
+  PRIVATE nimblecas_taskdag_sched nimblecas_taskdag_sgee nimblecas_taskdag
+          nimblecas_parallel nimblecas_core std_module)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
