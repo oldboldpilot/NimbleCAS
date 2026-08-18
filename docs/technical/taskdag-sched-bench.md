@@ -89,3 +89,73 @@ taskset -c 0-15 ./build/tools/taskdag_sched_bench --reps 30 --warmups 3 --csv do
 
 ### Raw Repetition CSV Schema
 `rep,workload,config,policy,baseline_seconds,ordered_seconds,ratio`
+
+## Measured result — NEGATIVE (2026-08-18)
+
+The pre-registered rule in `M6_SPEC.md` §2.5 was fixed **before this code existed**, and the
+harness evaluates it itself. The verdict:
+
+> **DECISION: NEGATIVE — LPT ordering did not achieve pre-registered speedup thresholds.**
+> Ordering remains off-by-default.
+
+The rule required a *conjunction*: ≥10% median makespan reduction on SKEW-LAST **and** ≥5% on
+SKEW-PERM at 4 workers. SKEW-LAST passed comfortably; SKEW-PERM did not hold up across
+permutations, so the conjunction fails and the milestone is recorded as negative.
+
+Host: `mgpu`, 36 cores, all 36 pinned. 30 interleaved repetitions after warmups, median of paired
+per-repetition ratios, sign test. Raw per-repetition data:
+[`taskdag-sched-bench-results.csv`](taskdag-sched-bench-results.csv); full run log:
+[`taskdag-sched-bench-run.txt`](taskdag-sched-bench-run.txt). No number here is absent from that CSV.
+
+| Workload | Config | Δ median | p | Verdict |
+| :--- | :--- | ---: | ---: | :--- |
+| SKEW-LAST | 2 workers | +25.9% | 1.9e-09 | strong win |
+| SKEW-LAST | 4 workers | +14.3% | 5.8e-08 | strong win |
+| SKEW-LAST | 8 workers | +10.8% | 5.8e-08 | strong win |
+| SKEW-PERM-1 | 4 workers | +7.8% | 1.4e-03 | win |
+| SKEW-PERM-2 | 4 workers | +1.8% | 3.6e-01 | **tie** |
+| SKEW-PERM-3 | 4 workers | +3.1% | 1.6e-02 | **inconclusive** |
+| SKEW-PERM-4 | 4 workers | +14.4% | 1.9e-09 | strong win |
+| SKEW-PERM-5 | 4 workers | +8.7% | 6.0e-05 | win |
+| UNIFORM | 2 / 4 / 8 workers | +0.4% / +0.1% / +0.1% | ns | tie (control held) |
+| ZIPF (λ = 0, 0.5, 1.0) | 4 workers | +0.9% / −0.5% / +0.1% | ns | tie |
+| SANITY-FLOOR-SKEW | 33 workers | +1.3% | 5.9e-01 | tie (floor held) |
+| SKEW-LAST | local_parallel | +2.4% | 5.2e-03 | inconclusive |
+
+### What this actually says
+
+Ordering **does** help on the case LPT is built for: when the expensive task is enqueued last, a
+FIFO queue starts it last and every worker waits on it, and reordering recovers 10–26%. That effect
+is real and strongly significant.
+
+It does **not** generalise. Across five seeded permutations of the same task costs the win ranges
+from +1.8% (a tie) to +14.4%, so the benefit depends on how adversarial the insertion order happens
+to be, not on the skew itself. ZIPF — a realistically skewed level — shows nothing at any risk
+margin. Since real callers do not systematically enqueue their heaviest task last, the expected win
+is small and unreliable, which is exactly what the ≥5%-on-SKEW-PERM clause was written to detect.
+
+The variance risk margin (λ) never moved anything measurable and stays at its default of 0.
+
+### Why the numbers can be believed
+
+Two guards had to hold, and both did:
+
+- **UNIFORM (negative control)** stayed within ±0.4%. Had it "improved", the harness would have been
+  timing its own sort rather than the schedule.
+- **The sanity floor** (33 workers ≥ 33 tasks, where ordering provably cannot matter) tied at 1.3%,
+  p = 0.59.
+
+**An earlier session was thrown out by that floor.** Pinned to 16 cores, the floor showed a 3.2%
+"win" (p = 0.016) and the harness declared `INVALID_SESSION`. The premise of the floor is that every
+task starts immediately, which needs enough *cores*, not merely enough workers — with 33 workers on
+16 cores the heavy task still queues, so ordering still pays. That session also showed +27.6% and
++17.3% on SKEW-LAST; those numbers were discarded along with the rest of it, because the same run
+demonstrated the clock moving where it provably should not.
+
+### Consequence
+
+Per the pre-registered rule, `nimblecas.taskdag_sched` ships **off by default**
+(`SgeeExecutorConfig::cost_ordering == false`). It is kept rather than deleted because the
+SKEW-LAST result is genuine and reproducible: a caller who knows their heavy tasks are enqueued
+late can opt in and measure their own workload. Turning it on by default would trade a reliable
+no-op for an unreliable few percent.

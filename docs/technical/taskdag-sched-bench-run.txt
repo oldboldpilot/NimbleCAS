@@ -1,0 +1,43 @@
+═══════════════════════════════════════════════════════════════════════════════════════════
+ NimbleCAS M6 Task-DAG Cost-Aware Scheduling Benchmark (ROADMAP §6.1)
+ Host: unknown_host | Cores: 36 | Commit: HEAD
+ Interleaved Reps: 30 (Warmups: 3)
+═══════════════════════════════════════════════════════════════════════════════════════════
+Calibrated: unit cost (1x) = 501082 rounds (~0.0062s), heavy (32x) = 16034624 rounds (~0.2000s)
+
+
+--- SUMMARY RESULTS TABLE ---
+| Workload           | Config          | Policy     | N  | BaseMed(s) | BaseIQR(s) | OrdMed(s)  | OrdIQR(s)  | Ratio  | Δ(%)   | p-value    | Verdict      |
+|:-------------------|:----------------|:-----------|:---|:-----------|:-----------|:-----------|:-----------|:-------|:-------|:-----------|:-------------|
+| SKEW-LAST          | sgee_w2         | LPT(λ=0)   | 30 |   0.136945 |   0.005328 |   0.101519 |   0.007316 | 0.7408 | +25.9% |   1.86e-09 | STRONG_WIN   |
+| SKEW-LAST          | sgee_w4         | LPT(λ=0)   | 30 |   0.116398 |   0.008692 |   0.100392 |   0.007582 | 0.8566 | +14.3% |   5.77e-08 | STRONG_WIN   |
+| SKEW-LAST          | sgee_w8         | LPT(λ=0)   | 30 |   0.104929 |   0.010723 |   0.096007 |   0.004509 | 0.8923 | +10.8% |   5.77e-08 | STRONG_WIN   |
+| SKEW-PERM-1        | sgee_w4         | LPT(λ=0)   | 30 |   0.104267 |   0.007964 |   0.096578 |   0.009842 | 0.9220 |  +7.8% |   1.43e-03 | WIN          |
+| SKEW-PERM-2        | sgee_w4         | LPT(λ=0)   | 30 |   0.097024 |   0.010136 |   0.097416 |   0.010624 | 0.9818 |  +1.8% |   3.62e-01 | TIE          |
+| SKEW-PERM-3        | sgee_w4         | LPT(λ=0)   | 30 |   0.102070 |   0.011969 |   0.096236 |   0.008987 | 0.9690 |  +3.1% |   1.61e-02 | INCONCLUSIVE |
+| SKEW-PERM-4        | sgee_w4         | LPT(λ=0)   | 30 |   0.113512 |   0.010522 |   0.100210 |   0.007310 | 0.8564 | +14.4% |   1.86e-09 | STRONG_WIN   |
+| SKEW-PERM-5        | sgee_w4         | LPT(λ=0)   | 30 |   0.108652 |   0.007697 |   0.098312 |   0.009110 | 0.9134 |  +8.7% |   5.95e-05 | WIN          |
+| UNIFORM            | sgee_w2         | LPT(λ=0)   | 30 |   0.195430 |   0.007617 |   0.191224 |   0.007078 | 0.9962 |  +0.4% |   8.56e-01 | TIE          |
+| UNIFORM            | sgee_w4         | LPT(λ=0)   | 30 |   0.100903 |   0.004921 |   0.101134 |   0.003138 | 0.9993 |  +0.1% |   1.00e+00 | TIE          |
+| UNIFORM            | sgee_w8         | LPT(λ=0)   | 30 |   0.054657 |   0.000476 |   0.054637 |   0.000304 | 0.9993 |  +0.1% |   5.85e-01 | TIE          |
+| ZIPF               | sgee_w4         | LPT(λ=0.0) | 30 |   0.098868 |   0.006689 |   0.097515 |   0.004046 | 0.9906 |  +0.9% |   8.56e-01 | TIE          |
+| ZIPF               | sgee_w4         | LPT(λ=0.5) | 30 |   0.098059 |   0.004591 |   0.097740 |   0.007521 | 1.0048 |  -0.5% |   8.56e-01 | TIE          |
+| ZIPF               | sgee_w4         | LPT(λ=1.0) | 30 |   0.098986 |   0.005981 |   0.097176 |   0.006187 | 0.9987 |  +0.1% |   1.00e+00 | TIE          |
+| SANITY-FLOOR-SKEW  | sgee_w33        | LPT(λ=0)   | 30 |   0.095968 |   0.003464 |   0.095442 |   0.005945 | 0.9868 |  +1.3% |   5.85e-01 | TIE          |
+| SKEW-LAST          | local_parallel  | LPT(λ=0)   | 30 |   0.093915 |   0.003837 |   0.091574 |   0.002092 | 0.9756 |  +2.4% |   5.22e-03 | INCONCLUSIVE |
+
+═══════════════════════════════════════════════════════════════════════════════════════════
+ PRE-REGISTERED DECISION EVALUATION (M6_SPEC.md §2.5)
+═══════════════════════════════════════════════════════════════════════════════════════════
+[PASS] SKEW-LAST (w=4): 14.3% reduction >= 10% threshold (p=5.77e-08 < 0.01).
+[WARN] SKEW-PERM-2 (w=4): 1.8% reduction below 5% threshold (p=3.62e-01).
+[WARN] SKEW-PERM-3 (w=4): 3.1% reduction below 5% threshold (p=1.61e-02).
+[PASS] Sanity floor: w=33 tied within noise (delta 1.32%, p=5.85e-01).
+[PASS] UNIFORM negative control showed ~0 (within 2% bound across all worker counts).
+
+--- FINAL VERDICT ---
+DECISION: NEGATIVE — LPT ordering did not achieve pre-registered speedup thresholds.
+          Honesty policy (Rule 32/43/58/59): record in reference docs; ordering remains off-by-default.
+
+Raw per-repetition CSV written to: /tmp/m6_bench36.csv
+DONE_RC=0

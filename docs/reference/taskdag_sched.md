@@ -30,11 +30,19 @@ Depends on [`core`](core.md), [`parallel`](parallel.md), and [`taskdag`](taskdag
   to the unknown state (`{0.0, 0.0}`); usable means are clamped to `[1e-9, 1e9]` seconds;
   variances to `[0.0, 1e18]` seconds². Sanitization guarantees a strict weak ordering
   and prevents floating-point comparison undefined behavior.
-- **No performance claim is asserted.** Whether cost-aware ordering yields any wall-clock
-  reduction on a given workload is **unmeasured pending execution of the pre-registered
-  benchmark harness** (ROADMAP §6.1 / M6_SPEC §2.5). On uniform-cost levels (such as
-  `modgcd` rounds), single-worker runs, systems where worker count exceeds level size, or
-  hint-free graphs, ordering provably changes nothing.
+- **Measured, and the measurement was NEGATIVE — it is off by default.** The pre-registered
+  benchmark (ROADMAP §6.1 / M6_SPEC §2.5) has now been run; results and raw per-repetition
+  data are in [taskdag-sched-bench.md](../technical/taskdag-sched-bench.md). Ordering wins
+  **10–26%** on the adversarial case it is built for (the heaviest task enqueued *last*, so a
+  FIFO queue starts it last), but across seeded permutations of the same costs the win ranges
+  from **+1.8% (a tie) to +14.4%**, and a realistically skewed ZIPF level shows **nothing**.
+  The benefit therefore depends on how adversarial the insertion order happens to be, not on
+  skew itself, so the pre-registered ≥5%-on-permutations clause failed and the verdict is
+  recorded as negative. Enable it only if you know your heavy tasks are enqueued late, and
+  measure your own workload. On uniform-cost levels (such as `modgcd` rounds), single-worker
+  runs, systems where worker count exceeds level size, or hint-free graphs, ordering provably
+  changes nothing — and the benchmark's sanity floor and UNIFORM control both confirmed that
+  empirically.
 - **Affinity is metadata mapping, not placement optimization.** `Affinity` tags are mapped
   deterministically to wire placement codes (`cpu_only` → 1, `gpu_only` → 2, `hybrid` → 1
   today); placement enforcement and load-balancing across devices are properties of the

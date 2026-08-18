@@ -33,6 +33,14 @@ Every module above is honest about its exact-over-`Q` vs numerical boundary, bui
 - A **WebGPU/WASM interactive** plotting + document front-end (§7.11/§7.13); the full-CAS WASM compile (Emscripten toolchain is set up — see [WASM build](architecture/wasm-build.md)).
 - Breadth items: SDE schemes beyond the current set, nonlinear/variable-coefficient higher-index DAEs, boundary/nonlinear PDEs beyond the current builders.
 - The full JIT/multi-GPU (§5) scaling path.
+- **§6.1 was measured and came back NEGATIVE.** Cost-aware (LPT) scheduling is implemented in
+  `nimblecas.taskdag_sched` and wired into the SGEE coordinator, but ships **off by default**: under
+  a decision rule fixed before the code existed, it wins 10–26% only when the heaviest task is
+  enqueued last, and ranges from a tie to +14.4% across permutations of the same costs, with no
+  effect on a realistically skewed level. Details and raw data:
+  [taskdag-sched-bench.md](technical/taskdag-sched-bench.md). Full §6.1 — dynamic balancing across
+  CPU/GPU/remote — remains unbuildable as written: there is no GPU task path, the broker leases
+  strict FIFO and ignores placement, so affinity is transmitted but not enforced.
 - **§6.2 item 1 is built; the rest of §6 is not.** `taskdag` + `taskdag_sgee` carry a task DAG in-process, across processes over gRPC, and across a **3-node Raft quorum with mTLS and leader failover** — outputs bit-identical to `serial_executor()`, every transport failure an honest `distributed_error`. On top of that, **`modgcd` + `modgcd_dist` distribute a real computation**: Brown's modular GCD for univariate Z[x], one image task per prime, CRT-merged and verified by exact trial division, byte-identical whether it runs serially or across the quorum. Still open: **§6.1's stochastic scheduling** (tasks carry no execution-time estimate or variance model, and affinity is a placement hint the coordinator does not optimize over), and the remaining §6.2 items — **distributed hash-consing** and **data-locality scheduling**. Multivariate GCD is out of scope for now (no multivariate polynomial representation exists). The result store also remains in-memory and per-node: Raft replicates the queue, not results, so recovery is a deterministic re-execution rather than durability.
 
 ---
