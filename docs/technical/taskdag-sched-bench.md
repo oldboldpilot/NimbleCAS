@@ -159,3 +159,34 @@ Per the pre-registered rule, `nimblecas.taskdag_sched` ships **off by default**
 SKEW-LAST result is genuine and reproducible: a caller who knows their heavy tasks are enqueued
 late can opt in and measure their own workload. Turning it on by default would trade a reliable
 no-op for an unreliable few percent.
+
+## Known issue — the gRPC cluster tests are load-sensitive (not an M6 regression)
+
+Recorded here because it was observed during this milestone's verification, and because the
+measured rates matter more than the impression.
+
+`taskdag_sgee_grpc_cluster_tests` and `modgcd_sgee_grpc_cluster_tests` drive a real 3-node Raft
+quorum with an 80 ms base election timeout. On a **quiet** machine both suites passed 4/4 and the
+modgcd failover leg passed 10/10. On a **shared, loaded** machine (`mgpu`, load average ~7, another
+user's CUDA suite running) the pair passed **5/6**, with the failover leg aborting on
+`distributed_error` and, once, the mTLS rejection leg failing (that one passed 6/6 on retry).
+
+This is not caused by M6: `cost_ordering` defaults to false and no cluster test enables it, so
+M6's only effect on that path is one bool test per level.
+
+Two hypotheses were considered and rejected on evidence rather than plausibility:
+- *Mixed toolchain* — NimbleCAS was rebuilt with clang 22.1.8 while `libsgee_capi_grpc.so` was
+  built by the previous compiler. But that boundary is a **pure C ABI**, which is exactly what such
+  a difference is safe across. (An attempted SGEE rebuild was also a no-op: ninja does not track
+  the compiler binary as a dependency, so nothing recompiled.)
+- *A new defect in the retry path* — the client retry budget was already fixed this milestone to be
+  deadline-based rather than attempt-based, and that took the failover leg from ~25% failures to
+  10/10 on a quiet box.
+
+The residual cause is timing: under CPU contention a Raft election can exceed the client's fixed
+5 s transport retry budget, and the run aborts honestly rather than incorrectly. The principled fix
+is to derive that budget from the cluster's election timeout the way SGEE's server derives its own
+await budget (`4*(2*election + heartbeat)`), instead of a constant chosen by hand. That is
+deliberately **not** done here: this milestone already demonstrated that tuning a constant until the
+symptom disappears produces a number that encodes a misunderstanding. It needs the election timing
+plumbed to the client, which is a change to the C ABI's surface and belongs on its own branch.
