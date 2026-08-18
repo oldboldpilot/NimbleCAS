@@ -119,10 +119,8 @@ struct Calibration {
     if (!std::isfinite(rounds_per_sec) || rounds_per_sec > k_max_plausible_rounds_per_sec ||
         rounds_per_sec < k_min_plausible_rounds_per_sec) {
         std::cerr << std::format(
-            "CALIBRATION IMPLAUSIBLE: {:.3e} rounds/s from {} rounds in {:.9f}s.
-"
-            "The timing loop was probably optimized away. Refusing to emit measurements.
-",
+            "CALIBRATION IMPLAUSIBLE: {:.3e} rounds/s from {} rounds in {:.9f}s.\n"
+            "The timing loop was probably optimized away. Refusing to emit measurements.\n",
             rounds_per_sec, test_rounds, elapsed);
         std::exit(2);
     }
