@@ -95,15 +95,37 @@ struct Calibration {
     volatile std::uint64_t dummy = spin_kernel(50'000);
     (void)dummy;
 
+    // The sink MUST be volatile. spin_kernel is [[nodiscard]] noexcept and touches no memory,
+    // so discarding its result with (void) lets -O3 delete the entire timing loop as dead code.
+    // That is not a hypothetical: it measured elapsed ~= 0 and concluded ~1e13 rounds/second,
+    // which sized the "heavy" task at 75.8 BILLION rounds and made a benchmark meant to take
+    // minutes run for 22 hours without emitting a line. The warmup above already used volatile;
+    // the measured call did not.
     const auto t0 = std::chrono::steady_clock::now();
-    const std::uint64_t res = spin_kernel(test_rounds);
+    volatile std::uint64_t sink = spin_kernel(test_rounds);
     const auto t1 = std::chrono::steady_clock::now();
-    (void)res;
+    (void)sink;
 
     const double elapsed = std::chrono::duration<double>(t1 - t0).count();
     const double rounds_per_sec = (elapsed > 0.0)
                                       ? (static_cast<double>(test_rounds) / elapsed)
                                       : 2.0e7;
+
+    // Refuse to proceed on a physically impossible rate rather than silently mis-size the
+    // workload. A benchmark that quietly calibrates wrong is worse than one that stops: it
+    // still emits a table, and the table looks fine.
+    constexpr double k_max_plausible_rounds_per_sec = 1.0e10;  // ~10 GHz of 128-bit modmuls
+    constexpr double k_min_plausible_rounds_per_sec = 1.0e5;
+    if (!std::isfinite(rounds_per_sec) || rounds_per_sec > k_max_plausible_rounds_per_sec ||
+        rounds_per_sec < k_min_plausible_rounds_per_sec) {
+        std::cerr << std::format(
+            "CALIBRATION IMPLAUSIBLE: {:.3e} rounds/s from {} rounds in {:.9f}s.
+"
+            "The timing loop was probably optimized away. Refusing to emit measurements.
+",
+            rounds_per_sec, test_rounds, elapsed);
+        std::exit(2);
+    }
 
     // Heavy task has cost 32 => unit cost (cost 1) targets target_heavy_seconds / 32.0
     const double target_unit_sec = target_heavy_seconds / 32.0;
