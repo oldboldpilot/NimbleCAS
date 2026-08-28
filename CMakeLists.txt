@@ -1395,6 +1395,12 @@ target_link_libraries(taskdag_sgee_tests
   PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_sgee_tests COMMAND taskdag_sgee_tests)
 
+add_executable(taskdag_sgee_memo_tests tests/taskdag_sgee_memo_tests.cpp)
+target_link_libraries(taskdag_sgee_memo_tests
+  PRIVATE nimblecas_taskdag_sgee nimblecas_memo_dist nimblecas_taskdag nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME taskdag_sgee_memo_tests COMMAND taskdag_sgee_memo_tests)
+
 # Cross-process gRPC integration test + its worker binary (NIMBLECAS_SGEE_GRPC=ON only). The test
 # spawns a real sgee_queue_node (path from the NIMBLECAS_SGEE_QUEUE_NODE env var) and two worker
 # processes; it honestly skips (CTest 77) when that env var is unset.
