@@ -2203,6 +2203,12 @@ target_link_libraries(taskdag_sched_bench
   PRIVATE nimblecas_taskdag_sched nimblecas_taskdag_sgee nimblecas_taskdag
           nimblecas_parallel nimblecas_core std_module)
 
+# Content-addressed memoization benchmark harness (ROADMAP §6.2 item 2 / M7).
+add_executable(memo_dist_bench tools/memo_dist_bench.cpp)
+target_link_libraries(memo_dist_bench
+  PRIVATE nimblecas_memo_dist nimblecas_taskdag_sgee nimblecas_taskdag
+          nimblecas_parallel nimblecas_core std_module)
+
 add_executable(parallel_tests tests/parallel_tests.cpp)
 target_link_libraries(parallel_tests
   PRIVATE nimblecas_parallel nimblecas_testing std_module)
