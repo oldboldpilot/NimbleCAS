@@ -354,7 +354,7 @@ edges and the rationale.
 ## Build & test quickstart
 
 ```bash
-# Linux/macOS — clang++-22 + libc++ + CMake >= 3.30 + Ninja
+# Linux/macOS — clang++-23 + libc++ + CMake >= 3.30 + Ninja
 scripts/build.sh                         # configure, build, run tests (ctest)
 NIMBLECAS_SANITIZE=ON scripts/build.sh   # ASan + UBSan + LSan build
 

@@ -21,7 +21,7 @@ if [[ ! -f "${STDCPPM}" ]]; then
   exit 1
 fi
 
-CXX="${NIMBLECAS_CLANGXX:-clang++-22}"
+CXX="${NIMBLECAS_CLANGXX:-clang++-23}"
 OUT="${REPO_ROOT}/build-san-memory"; rm -rf "${OUT}"; mkdir -p "${OUT}"; cd "${OUT}"
 SRC="${REPO_ROOT}/src"; TST="${REPO_ROOT}/tests"
 

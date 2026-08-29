@@ -1,7 +1,7 @@
 # NimbleCAS — C++23 high-performance Computer Algebra System.
 # @author Olumuyiwa Oluwasanmi
 #
-# Build (on the clang-22 server): scripts/build.sh
+# Build (on the clang-23 server): scripts/build.sh
 # See docs/QUICKSTART.md.
 
 cmake_minimum_required(VERSION 3.30)
@@ -15,6 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(LibcxxLocate)     # ask clang++ where ITS libc++ is (feeds the two below)
 include(CanonicalFlags)   # global canonical compile/link flags (Rule 50)
 include(StdModule)        # std_module target providing `import std` (Rules 12/41)
 
@@ -1392,7 +1393,8 @@ add_test(NAME taskdag_sched_tests COMMAND taskdag_sched_tests)
 
 add_executable(taskdag_sgee_tests tests/taskdag_sgee_tests.cpp)
 target_link_libraries(taskdag_sgee_tests
-  PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
+  PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag_sched nimblecas_taskdag nimblecas_core
+          nimblecas_testing std_module)
 add_test(NAME taskdag_sgee_tests COMMAND taskdag_sgee_tests)
 
 add_executable(taskdag_sgee_memo_tests tests/taskdag_sgee_memo_tests.cpp)

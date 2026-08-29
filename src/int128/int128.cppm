@@ -4,7 +4,7 @@
 // A speed tier that sits between the int64 Rational (nimblecas.ratpoly, ~9.2e18 of
 // magnitude) and the incoming unbounded arbitrary-precision path
 // (nimblecas.bigint / BigRational). It is built on the compiler-native `__int128`,
-// which clang-22 lowers to a pair of 64-bit registers on x86-64 — so scalar 128-bit
+// which clang-23 lowers to a pair of 64-bit registers on x86-64 — so scalar 128-bit
 // add/sub/mul/div stay in registers and are far cheaper than a heap bignum for values
 // that fit. `Rational128` mirrors Rational exactly (make(num,den) -> Result, denominator
 // kept positive so the numerator sign carries the value's sign, reduced by gcd,
@@ -35,7 +35,7 @@ export namespace nimblecas {
 // ---------------------------------------------------------------------------
 // Int128 — the compiler-native signed 128-bit integer.
 // ---------------------------------------------------------------------------
-// `__int128` is a first-class arithmetic type on the build target (clang-22,
+// `__int128` is a first-class arithmetic type on the build target (clang-23,
 // x86-64); it simply lacks the standard-library plumbing that `int64_t` gets
 // (no std::to_string, no operator<< in <ostream>, no std::numeric_limits guarantees
 // portably). The free functions below supply the pieces we actually need.

@@ -327,7 +327,7 @@ To meet the speed demands of modern simulations and real-time physical modeling,
 NimbleCAS must adhere strictly to the rules of the official project code policy (`cpp_details.txt`).
 
 ### 4.1. Language Style & Safety
-- **Toolchain**: Built using `clang++-22` on Windows.
+- **Toolchain**: Built using `clang++-23` on Windows.
 - **C++26 Reflection Readiness**: The codebase must be structured to immediately transition to C++26 once a compiler toolchain supporting standard reflection (`std::meta` and the `^` operator) is stable. Symbolic visitor patterns, AST serialization, and JSON schema generations must be prepared to swap manual templates for compiler-driven reflection.
 - **Default Parallel Library & Windows PPL**: Concurrency maps to **Intel oneTBB** as the default parallel backend for all non-Windows target platforms, while Windows compilation paths leverage the Microsoft Concurrency Runtime's **Parallel Patterns Library (PPL)**.
 - **Modules**: Built using C++23 modules (`import std`). Header files are replaced with precompiled modules (`.pcm`) explicitly mapped in the build system.

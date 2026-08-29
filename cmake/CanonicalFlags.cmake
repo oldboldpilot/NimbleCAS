@@ -81,3 +81,26 @@ if(NIMBLECAS_SANITIZER AND NOT WIN32)
     message(FATAL_ERROR "Unknown NIMBLECAS_SANITIZER='${NIMBLECAS_SANITIZER}'")
   endif()
 endif()
+
+# Pin the RUNTIME libc++ to the one belonging to THIS compiler.
+#
+# The directory comes from cmake/LibcxxLocate.cmake, which asks clang++ itself rather than
+# templating a distro path from a version number: same-major but different-installation is a
+# real configuration, and it produces exactly the partial, one-binary-only load failure this
+# pin exists to remove.
+#
+# Skipped for MemorySanitizer, which needs an INSTRUMENTED libc++ (scripts/build_msan.sh sets
+# its own rpath to the MSan-built tree). Pinning the stock library there would be backwards and
+# would bury the run in false positives from uninstrumented library code.
+if(NOT WIN32 AND NOT NIMBLECAS_SANITIZER STREQUAL "memory")
+  if(NIMBLECAS_LIBCXX_RUNTIME_DIR)
+    add_link_options("-Wl,-rpath,${NIMBLECAS_LIBCXX_RUNTIME_DIR}")
+  else()
+    # Say it out loud. A guard against loading the wrong libc++ that silently does not apply is
+    # worse than no guard, because the build looks identical either way.
+    message(WARNING
+      "Could not locate this compiler's libc++.so.1, so no runtime rpath was pinned. Binaries "
+      "will load whichever libc++ the loader finds first, which on a host with more than one "
+      "LLVM may not be the one they were compiled against.")
+  endif()
+endif()

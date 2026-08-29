@@ -4,7 +4,7 @@
 
 NimbleCAS is cross-platform C++23 and builds under two clang toolchains:
 
-- **Linux/macOS:** `clang++-22` with **libc++** (provides `share/libc++/v1/std.cppm`
+- **Linux/macOS:** `clang++-23` with **libc++** (provides `share/libc++/v1/std.cppm`
   for `import std`), CMake ≥ 3.30, Ninja. Reference host `oluwasanmi-multigpu-server`.
 - **Windows:** the **clang + MSVC-STL** toolchain bundled with Visual Studio
   (`clang++.exe` targeting `x86_64-pc-windows-msvc`), using `import std` from the MSVC
@@ -57,11 +57,11 @@ Adds AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer (Rules 36/56)
 | `src/testing/testing.cppm` | `nimblecas.testing` — internal test framework |
 | `tests/` | test executables (registered with ctest) |
 | `cmake/` | `CanonicalFlags.cmake`, `StdModule.cmake` |
-| `config/toolchain.cmake` | clang-22 toolchain file |
+| `config/toolchain.cmake` | clang-23 toolchain file |
 | `scripts/` | `build_common.sh` (canonical flags), `build.sh` (driver) |
 
 ## Notes / deviations
 
-The build currently uses the **system libc++-22** std module rather than a vendored
+The build currently uses the **system libc++-23** std module rather than a vendored
 `external/libcxx-v1` tree (Code Policy Rule 51). This is fine on the fixed build server;
 vendoring is required before multi-host / cloud builds for bit-reproducibility.

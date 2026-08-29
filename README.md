@@ -196,7 +196,7 @@ explicit and reproducible without CMake's version-locked experimental `import st
 NimbleCAS is cross-platform C++23 and builds under clang with two standard libraries:
 
 ```bash
-# Linux/macOS — clang++-22 + libc++ + CMake >= 3.30 + Ninja
+# Linux/macOS — clang++-23 + libc++ + CMake >= 3.30 + Ninja
 scripts/build.sh                         # configure, build, run tests
 NIMBLECAS_SANITIZE=ON scripts/build.sh   # ASan + UBSan + LSan build
 

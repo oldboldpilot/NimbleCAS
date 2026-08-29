@@ -4,6 +4,7 @@
 import std;
 import nimblecas.core;
 import nimblecas.taskdag;
+import nimblecas.taskdag_sched;
 import nimblecas.taskdag_sgee;
 import nimblecas.testing;
 
@@ -22,6 +23,9 @@ using nimblecas::ResultChannel;
 using nimblecas::run_worker_pump;
 using nimblecas::SgeeDistributedExecutor;
 using nimblecas::SgeeExecutorConfig;
+using nimblecas::Affinity;
+using nimblecas::AffinityTable;
+using nimblecas::affinity_placement;
 using nimblecas::SgeePlacement;
 using nimblecas::TaskFn;
 using nimblecas::WorkerPumpConfig;
@@ -1321,5 +1325,194 @@ auto main() -> int {
                   std::filesystem::remove_all(wal_dir, ec);
               })
 #endif
+
+        // ── affinity_placement (ROADMAP §6.1 / §6.2 item 3) ───────────────────────────
+        // These pin the LABEL, not the routing. No worker acts on a placement today --
+        // sgee_broker_lease takes no filter -- so what is testable is that the right label
+        // is produced, that it survives the table going away, and that it never touches
+        // results. See docs/technical/sgee-locality-abi.md.
+        .test("affinity_placement_maps_each_affinity",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("aff.cpu/v1", [](auto) -> Result<Payload> { return encode_i64(1); });
+                  (void)reg.register_op("aff.gpu/v1", [](auto) -> Result<Payload> { return encode_i64(2); });
+                  (void)reg.register_op("aff.hyb/v1", [](auto) -> Result<Payload> { return encode_i64(3); });
+
+                  TaskGraph g;
+                  const auto c = g.add_named_task(reg, "aff.cpu/v1");
+                  const auto gp = g.add_named_task(reg, "aff.gpu/v1");
+                  const auto h = g.add_named_task(reg, "aff.hyb/v1");
+                  t.expect(c.has_value() && gp.has_value() && h.has_value(), "three named tasks issue");
+
+                  AffinityTable table;
+                  table.emplace("aff.cpu/v1", Affinity::cpu_only);
+                  table.emplace("aff.gpu/v1", Affinity::gpu_only);
+                  table.emplace("aff.hyb/v1", Affinity::hybrid);
+
+                  const auto place = affinity_placement(table);
+                  t.expect(place(g, *c) == SgeePlacement::cpu, "cpu_only maps to SgeePlacement::cpu");
+                  t.expect(place(g, *gp) == SgeePlacement::gpu, "gpu_only maps to SgeePlacement::gpu");
+                  t.expect(place(g, *h) == SgeePlacement::cpu, "hybrid maps to SgeePlacement::cpu");
+              })
+
+        .test("affinity_placement_falls_back_for_unlisted_and_unnamed",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("aff.known/v1", [](auto) -> Result<Payload> { return encode_i64(1); });
+                  (void)reg.register_op("aff.unlisted/v1", [](auto) -> Result<Payload> { return encode_i64(2); });
+
+                  TaskGraph g;
+                  const auto known = g.add_named_task(reg, "aff.known/v1");
+                  const auto unlisted = g.add_named_task(reg, "aff.unlisted/v1");
+                  // A plain closure task carries no op id at all.
+                  const auto unnamed = g.add_task([](auto) -> Result<Payload> { return encode_i64(3); });
+                  t.expect(known.has_value() && unlisted.has_value() && unnamed.has_value(),
+                           "named, unlisted and unnamed tasks all issue");
+
+                  AffinityTable table;
+                  table.emplace("aff.known/v1", Affinity::gpu_only);
+
+                  const auto def = affinity_placement(table);
+                  t.expect(def(g, *known) == SgeePlacement::gpu, "a listed op still maps normally");
+                  t.expect(def(g, *unlisted) == SgeePlacement::cpu, "an unlisted op takes the default fallback");
+                  t.expect(def(g, *unnamed) == SgeePlacement::cpu, "an unnamed task takes the default fallback");
+
+                  // An explicit fallback must be honoured everywhere the table does not answer.
+                  const auto expl = affinity_placement(table, SgeePlacement::distributed);
+                  t.expect(expl(g, *known) == SgeePlacement::gpu, "explicit fallback does not override a hit");
+                  t.expect(expl(g, *unlisted) == SgeePlacement::distributed, "unlisted op takes the explicit fallback");
+                  t.expect(expl(g, *unnamed) == SgeePlacement::distributed, "unnamed task takes the explicit fallback");
+
+                  const AffinityTable empty_table;
+                  const auto none = affinity_placement(empty_table, SgeePlacement::cloud);
+                  t.expect(none(g, *known) == SgeePlacement::cloud, "an empty table falls back for every task");
+              })
+
+        .test("affinity_placement_copies_the_table",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("aff.copy/v1", [](auto) -> Result<Payload> { return encode_i64(1); });
+                  TaskGraph g;
+                  const auto id = g.add_named_task(reg, "aff.copy/v1");
+                  t.expect(id.has_value(), "task issues");
+
+                  std::function<SgeePlacement(const TaskGraph&, TaskId)> place;
+                  {
+                      // Built from a table destroyed before the function is ever called. A
+                      // referencing implementation would dangle here and mis-route SILENTLY.
+                      AffinityTable scoped;
+                      scoped.emplace("aff.copy/v1", Affinity::gpu_only);
+                      place = affinity_placement(scoped);
+                  }
+                  t.expect(place(g, *id) == SgeePlacement::gpu,
+                           "the mapping survives destruction of the source table");
+
+                  // Mutating the source afterwards must not reach through either.
+                  AffinityTable live;
+                  live.emplace("aff.copy/v1", Affinity::gpu_only);
+                  const auto place2 = affinity_placement(live);
+                  live.clear();
+                  live.emplace("aff.copy/v1", Affinity::cpu_only);
+                  t.expect(place2(g, *id) == SgeePlacement::gpu,
+                           "later mutation of the source table does not change the built function");
+              })
+
+        .test("affinity_placement_is_deterministic",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  TaskGraph g;
+                  const auto ids = build_diamond(reg, g);
+                  (void)ids;
+                  // These op ids MUST match what build_diamond registers. An id that matches
+                  // nothing makes every lookup miss, every task take the fallback, and the whole
+                  // test compare the fallback against itself.
+                  AffinityTable table;
+                  table.emplace("test.const7/v1", Affinity::gpu_only);
+                  table.emplace("test.mul2/v1", Affinity::hybrid);
+                  const auto place = affinity_placement(table, SgeePlacement::cloud);
+
+                  // Guard the guard: at least one task must actually HIT the table, or the
+                  // determinism this test pins is the determinism of a constant function.
+                  bool any_hit = false;
+                  for (std::size_t i = 0; i < g.size(); ++i) {
+                      if (place(g, TaskId{i}) != SgeePlacement::cloud) {
+                          any_hit = true;
+                      }
+                  }
+                  t.expect(any_hit, "the affinity table matches at least one task in the graph");
+
+                  std::vector<SgeePlacement> first;
+                  for (std::size_t i = 0; i < g.size(); ++i) {
+                      first.push_back(place(g, TaskId{i}));
+                  }
+                  bool stable = true;
+                  for (int rep = 0; rep < 4 && stable; ++rep) {
+                      for (std::size_t i = 0; i < g.size() && stable; ++i) {
+                          stable = (place(g, TaskId{i}) == first[i]);
+                      }
+                  }
+                  t.expect(stable, "repeated calls yield the identical placement for every task");
+
+                  // Call order must not matter either: walk the graph backwards.
+                  bool order_free = true;
+                  for (std::size_t i = g.size(); i-- > 0 && order_free;) {
+                      order_free = (place(g, TaskId{i}) == first[i]);
+                  }
+                  t.expect(order_free, "placement does not depend on the order tasks are queried in");
+              })
+
+        .test("affinity_placement_does_not_change_outputs",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  TaskGraph g;
+                  const auto ids = build_diamond(reg, g);
+                  (void)ids;
+
+                  const auto run_with = [&reg, &g](bool with_placement) {
+                      FakeBrokerPort port;
+                      InMemoryResultChannel results;
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                      if (with_placement) {
+                          // Real op ids from build_diamond, and gpu_only so the labels actually
+                          // DIFFER from the cpu a null placement produces. With a table that
+                          // matches nothing this test would compare cpu against cpu and pass
+                          // even if a non-default label did corrupt results.
+                          AffinityTable table;
+                          table.emplace("test.const7/v1", Affinity::gpu_only);
+                          table.emplace("test.mul2/v1", Affinity::gpu_only);
+                          table.emplace("test.add3/v1", Affinity::gpu_only);
+                          table.emplace("test.add/v1", Affinity::gpu_only);
+                          table.emplace("test.probe/v1", Affinity::gpu_only);
+                          cfg.with_placement(affinity_placement(table));
+                      }
+                      SgeeDistributedExecutor exec(cfg, port, results);
+                      return exec.run(g);
+                  };
+
+                  // Prove the placed run really labels differently from the plain one, so the
+                  // bit-identity assertion below is comparing gpu-labelled work against
+                  // cpu-labelled work rather than two identically-labelled runs.
+                  {
+                      AffinityTable probe_table;
+                      probe_table.emplace("test.const7/v1", Affinity::gpu_only);
+                      const auto probe = affinity_placement(probe_table);
+                      t.expect(probe(g, TaskId{0}) == SgeePlacement::gpu,
+                               "the diamond's first task is labelled gpu, not the cpu default");
+                  }
+
+                  const auto plain = run_with(false);
+                  const auto placed = run_with(true);
+                  t.expect(plain.has_value() && placed.has_value(), "both runs succeed");
+                  if (plain.has_value() && placed.has_value()) {
+                      bool same = (plain->outputs.size() == placed->outputs.size());
+                      for (std::size_t i = 0; same && i < plain->outputs.size(); ++i) {
+                          same = results_equal(plain->outputs[i], placed->outputs[i]);
+                      }
+                      t.expect(same, "placement leaves outputs bit-identical");
+                      t.expect(plain->executed == placed->executed,
+                               "placement does not change how many tasks executed");
+                  }
+              })
         .run();
 }

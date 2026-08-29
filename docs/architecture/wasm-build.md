@@ -6,7 +6,7 @@ This page records the state of compiling NimbleCAS to WebAssembly. There are two
 distinct tracks, and only the first is a "quick win":
 
 1. **Freestanding compute kernel** (DONE) — `src/webkernel/kernel.cpp` compiled with
-   `clang++-22 --target=wasm32` (no Emscripten), exporting a dependency-free numeric
+   `clang++-23 --target=wasm32` (no Emscripten), exporting a dependency-free numeric
    ABI the browser front-end loads. See [webkernel.md](../reference/webkernel.md).
 2. **The full modular CAS to WASM** (SLICE DONE) — the exact symbolic core
    (`core → parallel → symbolic → cache → simplify → diff → latex → reader`) now

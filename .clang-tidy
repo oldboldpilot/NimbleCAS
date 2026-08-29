@@ -1,0 +1,36 @@
+# NimbleCAS clang-tidy configuration (Code Policy Rules 34 / 50).
+# @author Olumuyiwa Oluwasanmi
+#
+# Run with scripts/tidy.sh, which points clang-tidy-23 at build/compile_commands.json.
+#
+# The enabled set is deliberately narrow: checks that find BUGS and checks that enforce
+# rules this codebase actually holds. Broad style families are left off rather than
+# enabled-and-suppressed, because a config full of NOLINTs teaches a reader nothing.
+#
+# Disabled with reasons, so the omissions are decisions rather than oversights:
+#   *-magic-numbers                  mathematical code is full of exact constants
+#   *-avoid-do-while                 used deliberately in a few tight kernels
+#   misc-include-cleaner             C++23 named modules; the include graph is not the truth here
+#   modernize-use-trailing-return-type  already mandatory and universally followed
+#   readability-identifier-length    i, j, k, n, p are the right names in numerical code
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  concurrency-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-const-return-type,
+  readability-misleading-indentation,
+  readability-redundant-*,
+  -bugprone-easily-swappable-parameters,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -readability-identifier-length,
+  -*-magic-numbers,
+  -*-avoid-do-while
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*/(src|tools|tests)/.*$'
+FormatStyle: none

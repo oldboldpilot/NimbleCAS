@@ -12,7 +12,7 @@
 
 set -euo pipefail
 REPO_ROOT="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" rev-parse --show-toplevel)"
-CXX="${NIMBLECAS_CLANGXX:-clang++-22}"
+CXX="${NIMBLECAS_CLANGXX:-clang++-23}"
 SRC="${REPO_ROOT}/src/webkernel/kernel.cpp"
 OUT="${REPO_ROOT}/web/kernel.wasm"
 
