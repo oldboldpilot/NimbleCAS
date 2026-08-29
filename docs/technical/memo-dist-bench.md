@@ -21,13 +21,13 @@ something. So task cost is the swept axis. A negative result was an acceptable o
 
 | | |
 | :--- | :--- |
-| Machine | `oluwasanmi-tradingbot-server`, 32 cores, load average 1.26 at start |
+| Machine | `oluwasanmi-tradingbot-server`, 32 cores, load average 2.37 at start |
 | Toolchain | `clang++-22` (22.1.8) + libc++, Release, `-O3 -march=x86-64-v3` |
 | Graph | 64 tasks in one level, seeded generator (seed 1337), duplicate ratio ∈ {0.25, 0.50, 0.75} |
 | Task cost | ∈ {0.05, 0.1, 0.5, 1, 5, 10, 50} ms of calibrated spin |
 | Workers | 4 |
 | Repetitions | 9 per arm per cell, arms **alternated within** each repetition |
-| Calibration | 1.654 × 10⁸ spin rounds/second |
+| Calibration | 1.65 × 10⁸ spin rounds/second |
 
 Three arms: **A** plain, **B** `dedup_identical_tasks`, **C** dedup plus a memo **pre-warmed**
 by one prior run of the same graph, so C measures the all-hits case.
@@ -46,27 +46,31 @@ theoretical saving actually realised.
 
 | task ms | dup R | A median (s) | B median (s) | save % | ideal % | **eff %** | C median (s) | save % |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0.05 | 0.25 | 0.00336 | 0.00303 | 10.0 | 25.0 | **40.1** | 0.00109 | 67.5 |
-| 0.05 | 0.50 | 0.00338 | 0.00276 | 18.3 | 50.0 | **36.6** | 0.00109 | 67.8 |
-| 0.05 | 0.75 | 0.00341 | 0.00249 | 26.8 | 75.0 | **35.8** | 0.00109 | 67.9 |
-| 0.10 | 0.25 | 0.00427 | 0.00372 | 12.8 | 25.0 | **51.4** | 0.00109 | 74.5 |
-| 0.10 | 0.50 | 0.00424 | 0.00321 | 24.2 | 50.0 | **48.5** | 0.00109 | 74.2 |
-| 0.10 | 0.75 | 0.00424 | 0.00270 | 36.3 | 75.0 | **48.5** | 0.00109 | 74.4 |
-| 0.50 | 0.25 | 0.01114 | 0.00890 | 20.1 | 25.0 | **80.5** | 0.00109 | 90.2 |
-| 0.50 | 0.50 | 0.01063 | 0.00618 | 41.9 | 50.0 | **83.7** | 0.00108 | 89.8 |
-| 0.50 | 0.75 | 0.01009 | 0.00415 | 58.8 | 75.0 | **78.4** | 0.00109 | 89.2 |
-| 1.00 | 0.25 | 0.01795 | 0.01459 | 18.7 | 25.0 | **75.0** | 0.00109 | 93.9 |
-| 1.00 | 0.50 | 0.01782 | 0.01052 | 41.0 | 50.0 | **82.0** | 0.00109 | 93.9 |
-| 1.00 | 0.75 | 0.01784 | 0.00605 | 66.1 | 75.0 | **88.2** | 0.00109 | 93.9 |
-| 5.00 | 0.25 | 0.07858 | 0.05963 | 24.1 | 25.0 | **96.4** | 0.00109 | 98.6 |
-| 5.00 | 0.50 | 0.07763 | 0.04073 | 47.5 | 50.0 | **95.1** | 0.00109 | 98.6 |
-| 5.00 | 0.75 | 0.07851 | 0.02141 | 72.7 | 75.0 | **97.0** | 0.00111 | 98.6 |
-| 10.0 | 0.25 | 0.14842 | 0.11650 | 21.5 | 25.0 | **86.0** | 0.00111 | 99.3 |
-| 10.0 | 0.50 | 0.15003 | 0.07890 | 47.4 | 50.0 | **94.8** | 0.00111 | 99.3 |
-| 10.0 | 0.75 | 0.15054 | 0.04073 | 72.9 | 75.0 | **97.3** | 0.00112 | 99.3 |
-| 50.0 | 0.25 | 0.72124 | 0.54247 | 24.8 | 25.0 | **99.1** | 0.00114 | 99.8 |
-| 50.0 | 0.50 | 0.72903 | 0.36602 | 49.8 | 50.0 | **99.6** | 0.00114 | 99.8 |
-| 50.0 | 0.75 | 0.72248 | 0.18702 | 74.1 | 75.0 | **98.8** | 0.00113 | 99.8 |
+| 0.05 | 0.25 | 0.00341 | 0.00309 | 9.4 | 25 | **37.4** | 0.00108 | 68.1 |
+| 0.05 | 0.50 | 0.00336 | 0.00276 | 17.9 | 50 | **35.8** | 0.00108 | 67.8 |
+| 0.05 | 0.75 | 0.00334 | 0.00247 | 26.2 | 75 | **35.0** | 0.00109 | 67.5 |
+| 0.1 | 0.25 | 0.00421 | 0.00370 | 12.2 | 25 | **48.9** | 0.00110 | 73.9 |
+| 0.1 | 0.50 | 0.00416 | 0.00319 | 23.5 | 50 | **46.9** | 0.00109 | 73.9 |
+| 0.1 | 0.75 | 0.00414 | 0.00268 | 35.3 | 75 | **47.1** | 0.00109 | 73.8 |
+| 0.5 | 0.25 | 0.01154 | 0.00944 | 18.2 | 25 | **72.7** | 0.00109 | 90.6 |
+| 0.5 | 0.50 | 0.01152 | 0.00736 | 36.1 | 50 | **72.2** | 0.00109 | 90.5 |
+| 0.5 | 0.75 | 0.01153 | 0.00530 | 54.1 | 75 | **72.1** | 0.00109 | 90.6 |
+| 1 | 0.25 | 0.01955 | 0.01549 | 20.8 | 25 | **83.0** | 0.00109 | 94.4 |
+| 1 | 0.50 | 0.01956 | 0.01138 | 41.8 | 50 | **83.7** | 0.00109 | 94.4 |
+| 1 | 0.75 | 0.01955 | 0.00732 | 62.5 | 75 | **83.4** | 0.00109 | 94.4 |
+| 5 | 0.25 | 0.08782 | 0.06639 | 24.4 | 25 | **97.6** | 0.00110 | 98.8 |
+| 5 | 0.50 | 0.08269 | 0.04353 | 47.4 | 50 | **94.7** | 0.00109 | 98.7 |
+| 5 | 0.75 | 0.08479 | 0.02360 | 72.2 | 75 | **96.2** | 0.00109 | 98.7 |
+| 10 | 0.25 | 0.16831 | 0.12951 | 23.1 | 25 | **92.2** | 0.00113 | 99.3 |
+| 10 | 0.50 | 0.17237 | 0.08789 | 49.0 | 50 | **98.0** | 0.00113 | 99.3 |
+| 10 | 0.75 | 0.17329 | 0.04599 | 73.5 | 75 | **97.9** | 0.00111 | 99.4 |
+| 50 | 0.25 | 0.81401 | 0.61390 | 24.6 | 25 | **98.3** | 0.00114 | 99.9 |
+| 50 | 0.50 | 0.82487 | 0.41217 | 50.0 | 50 | **100.1** | 0.00115 | 99.9 |
+| 50 | 0.75 | 0.85372 | 0.21582 | 74.7 | 75 | **99.6** | 0.00114 | 99.9 |
+
+One cell reads `eff% = 100.1`. That is noise, not a result: a saving cannot exceed the ideal,
+and the excess is well inside the run-to-run spread. It is left as measured rather than
+rounded down, because silently tidying a number is how a table stops being data.
 
 **No cell is negative.** Every arm B and arm C median beats its arm A median, and the
 min/max spreads in the raw output do not overlap between arms in any cell except the two
@@ -75,8 +79,8 @@ cheapest task sizes.
 ### The finding: efficiency tracks task cost, and is indifferent to duplicate ratio
 
 Read the `eff%` column down, not across. At a fixed task cost the three duplicate ratios
-agree closely — 40.1 / 36.6 / 35.8 at 0.05 ms, 96.4 / 95.1 / 97.0 at 5 ms — while across task
-costs the value climbs monotonically from ~36% to ~99%.
+agree closely — 37.4 / 35.8 / 35.0 at 0.05 ms, 97.6 / 94.7 / 96.2 at 5 ms — while across task
+costs the value climbs from ~35% to ~99%.
 
 So **how much of the theoretical saving you actually get is a property of your task size, not
 of how much duplication you have.** Duplication decides the size of the prize; task cost
@@ -87,13 +91,31 @@ less, and most of what it removes is given straight back to coordination.
 ### The floor that memoization cannot remove
 
 Arm C dispatches **nothing** — every task is a memo hit — so all of arm C is coordinator
-work. Its median is **1.093 ms** (min 1.056, max 1.175) and it is **flat across all 21
+work. Its median is **1.092 ms** (min 1.059, max 1.172) and it is **flat across all 21
 cells**, including the ones where a task costs 50 ms.
 
 That constant is the useful number: at 64 tasks it is **17.1 µs per task** of coordinator
 cost — encoding the envelope, fingerprinting it, the table lookup, and the bookkeeping — that
 no amount of memoization removes. It is also why the cheap-task cells do poorly: at 0.05 ms
 per task the coordinator's own 17 µs is a third of the task itself.
+
+## This is a re-measurement, and why
+
+An earlier sweep was run before an adversarial review found that `content_key` was being
+computed on **every** task of **every** run, including when both switches are off, and the
+value discarded. Arm A — the plain baseline — was therefore paying for a hash it never used,
+which flattered arms B and C. That was fixed, and this whole sweep re-run against the code
+that actually ships. The numbers here supersede the earlier ones.
+
+The correction moved efficiency by a few points in both directions, mostly **down** on cheap
+tasks (0.05 ms: 40.1 → 37.4; 0.1 ms: 51.4 → 48.9; 0.5 ms: 80.5 → 72.7), which is the expected
+direction once the baseline stops doing unnecessary work. The conclusion is unchanged and the
+coordinator floor is identical to three significant figures.
+
+One caveat on comparing the two sweeps: the machine was busier for this one (load 2.37 versus
+1.26), and arm A's absolute times are correspondingly higher in the expensive cells. That is
+precisely why the arms alternate **within** each repetition — comparisons *inside* a sweep are
+sound, comparisons *between* sweeps are not, and only the former is used to draw a conclusion.
 
 ## What this does NOT establish
 
