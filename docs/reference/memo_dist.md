@@ -120,3 +120,14 @@ cluster. `outputs` stay bit-for-bit identical either way; `executed` does not, a
 it counts tasks actually dispatched, which is precisely what these options reduce.
 
 See [`taskdag_sgee`](taskdag_sgee.md) for the coordinator-side wiring.
+
+## Measured
+
+The benefit was measured, not assumed — see
+[memo-dist-bench.md](../technical/memo-dist-bench.md) for the harness, the raw 567-row data,
+and the caveats. The short version: **how many tasks are removed is exact**, but the fraction
+of that saving which becomes wall-clock time depends on **task cost alone**, climbing from
+~36% of the theoretical maximum at 0.05 ms per task to ~99% at 50 ms, and is essentially
+indifferent to how many duplicates the graph contains. A memoized run that dispatches nothing
+still costs a flat **17.1 µs per task** of coordinator work, which is the floor no table can
+remove. The verdict was POSITIVE; both switches nonetheless default off.
