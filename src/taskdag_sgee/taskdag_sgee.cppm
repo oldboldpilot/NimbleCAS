@@ -1075,6 +1075,14 @@ auto decode_result(std::span<const std::byte> bytes) -> Result<ResultEnvelope> {
     const double seconds = read_f64_le(bytes, 8);
     const std::uint64_t len = read_u64_le(bytes, 16);
 
+    // encode_result writes len == 0 for EVERY non-ok status, so a non-ok envelope carrying
+    // payload bytes was not produced by this codec. The comment above always claimed this
+    // check; it now exists, because a memo makes foreign-authored envelopes a reachable input
+    // to this decoder rather than only ever bytes a trusted worker just wrote.
+    if (status_raw != 0 && len != 0) {
+        return make_error<ResultEnvelope>(MathError::syntax_error);
+    }
+
     // No-wrap length check: bytes.size() >= 24 is established above, so bytes.size() - 24 is safe.
     if (len != bytes.size() - 24) {
         return make_error<ResultEnvelope>(MathError::syntax_error);
@@ -1477,29 +1485,41 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 if (!hit_res.has_value()) {
                     return make_error<TaskRunResult>(MathError::distributed_error);
                 }
+
+                // An entry that will not decode, or that carries a status that is never
+                // published (only ok and math_error are -- see is_memoizable_status), means the
+                // TABLE is wrong, not that the task failed. Treat it as a miss and dispatch.
+                //
+                // Deliberately NOT an abort. A miss is by construction observationally
+                // identical to a hit, so recomputing is exactly as honest and strictly more
+                // available: aborting would let one malformed entry -- which any writer to a
+                // shared table can create -- permanently fail every future run of every graph
+                // containing that task, with no way to purge it. An accelerator must not be able
+                // to do that. The recomputation shows up in `executed`.
+                bool served_from_memo = false;
                 if (hit_res->has_value()) {
-                    auto dec_res = sgee_bridge::decode_result(**hit_res);
-                    if (!dec_res.has_value()) {
-                        return make_error<TaskRunResult>(MathError::distributed_error);
+                    const auto dec_res = sgee_bridge::decode_result(**hit_res);
+                    if (dec_res.has_value()) {
+                        const auto& memo_env = *dec_res;
+                        if (memo_env.status == sgee_bridge::ResultEnvelope::Status::ok) {
+                            outputs[id.value] = memo_env.bytes;
+                            origins[id.value] = std::nullopt;
+                            served_from_memo = true;
+                        } else if (memo_env.status ==
+                                   sgee_bridge::ResultEnvelope::Status::math_error) {
+                            outputs[id.value] = make_error<Payload>(memo_env.math_err);
+                            origins[id.value] = id.value;
+                            served_from_memo = true;
+                        }
                     }
-                    const auto& memo_env = *dec_res;
-                    if (memo_env.status == sgee_bridge::ResultEnvelope::Status::ok) {
-                        outputs[id.value] = memo_env.bytes;
-                        origins[id.value] = std::nullopt;
-                    } else if (memo_env.status == sgee_bridge::ResultEnvelope::Status::math_error) {
-                        outputs[id.value] = make_error<Payload>(memo_env.math_err);
-                        origins[id.value] = id.value;
-                    } else {
-                        // Only ok and math_error are ever published (is_memoizable_status).
-                        // Anything else in the table means the table is corrupt, not that the
-                        // task failed -- do not silently treat it as a result.
-                        return make_error<TaskRunResult>(MathError::distributed_error);
-                    }
-                    // 0.0, not the recorded time: nothing ran here, and reporting a borrowed
-                    // duration would put fictional work into measured_seconds.
+                }
+
+                if (served_from_memo) {
+                    // 0.0, not the stored duration: nothing ran here, and reporting a borrowed
+                    // time would put fictional work into measured_seconds.
                     seconds[id.value] = 0.0;
-                    // Settled without dispatch: index it (but NOT as in-flight) so a later
-                    // twin costs a map lookup rather than a second trip to the memo.
+                    // Settled without dispatch: index it (but NOT as in-flight) so a later twin
+                    // costs a map lookup rather than a second trip to the memo.
                     if (cfg_.dedup_identical_tasks) {
                         run_index[key].emplace_back(id, *enc_res);
                     }

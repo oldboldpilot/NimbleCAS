@@ -5,8 +5,17 @@
 // and distributed evaluation. The task-DAG codec emits a canonical, fixed-width little-endian
 // byte encoding for every task (registry fingerprint, OpId, and arguments). Two tasks represent
 // the identical mathematical computation if and only if those canonical byte representations
-// are equal. This module provides a fast 128-bit ContentKey fingerprint for sharding and
-// bucket indexing, coupled with full-key verification to ensure zero false hits.
+// are equal AND the same implementations sit behind those op ids. This module provides a fast
+// 128-bit ContentKey fingerprint for sharding and bucket indexing, coupled with full-key
+// verification to ensure zero false hits.
+//
+// THAT PROVISO IS NOT A FORMALITY. TaskRegistry::fingerprint() is FNV-1a over the sorted op-ID
+// STRINGS -- it hashes names, not bodies. Editing an op's implementation without changing its
+// id moves nothing, so every existing entry stays live and keeps serving the old code's
+// results. A per-call cache never sees this because it dies with the call; a memo that outlives
+// the run, which is the whole point here, turns it into a wrong answer that persists. Any
+// semantic change to a registered op REQUIRES a version bump (<domain>.<op>/vN) or a discarded
+// memo. Nothing enforces that -- the /vN grammar is checked syntactically, never semantically.
 //
 // It deliberately does NOT key on Expr::structural_hash(): that is built from std::hash, whose
 // values are implementation-defined and therefore differ across standard libraries, library
@@ -17,7 +26,9 @@
 // executing the underlying pure TaskFn. Because a 128-bit hash is not a proof of equality,
 // lookup always performs byte-for-byte comparison of the full key bytes against stored entries.
 // A fingerprint collision results in a key_mismatches count and returns nullopt (treated as a
-// miss) — it NEVER returns an incorrect cached result.
+// miss) — it NEVER returns an incorrect cached result. key_mismatches counts only a TRUE
+// 128-bit collision: sharing a bucket is not one, because a bucket is addressed by
+// (hi % shard_count, lo) and its occupants may differ in hi entirely.
 //
 // VALUE SHIPPABILITY & DETERMINISTIC ERROR CACHING. Only results that are pure, deterministic
 // functions of their input arguments may be cached. Successful evaluations (ok) and domain/math
@@ -88,6 +99,8 @@ public:
     DistributedMemo(DistributedMemo&&) = delete;
     auto operator=(DistributedMemo&&) -> DistributedMemo& = delete;
 
+    // Implementations MUST be thread-safe: the advertised deployment is one table shared by
+    // several executors, and nothing above this interface serialises access to it.
     [[nodiscard]] virtual auto name() const -> std::string_view = 0;
 
     // Returns the stored value, or nullopt for a miss. A fingerprint collision whose
@@ -125,6 +138,11 @@ public:
 
 private:
     struct Entry {
+        // The full fingerprint, not just the bytes. The bucket is addressed by
+        // (hi % shard_count, lo), so `hi` is otherwise never compared in full and two
+        // entries can share a bucket while their 128-bit keys differ. Keeping the key here
+        // lets `key_mismatches` mean what it claims: a genuine ContentKey collision.
+        ContentKey fp{};
         Payload key;
         Payload value;
     };
@@ -244,7 +262,17 @@ auto InProcessMemo::lookup(const ContentKey& key, std::span<const std::byte> ful
     //
     // A mismatch is ALSO a miss: `hits + misses` must equal the number of lookups, or
     // measured hit rates silently under-count their denominator.
-    if (!it->second.empty()) {
+    // Count a mismatch only for an occupant whose FULL 128-bit fingerprint equals `key`
+    // while its bytes differ. Sharing a bucket is not a collision: the bucket is addressed
+    // by (hi % shard_count, lo), so occupants may differ in `hi` entirely. Counting those
+    // would let ordinary traffic inflate the one statistic offered as evidence that the
+    // exactness rule fired.
+    //
+    // A mismatch is ALSO a miss: `hits + misses` must equal the number of lookups, or
+    // measured hit rates silently under-count their denominator.
+    const bool true_collision =
+        std::ranges::any_of(it->second, [&key](const Entry& e) { return e.fp == key; });
+    if (true_collision) {
         mismatches_.fetch_add(1, std::memory_order_relaxed);
     }
     misses_.fetch_add(1, std::memory_order_relaxed);
@@ -253,13 +281,6 @@ auto InProcessMemo::lookup(const ContentKey& key, std::span<const std::byte> ful
 
 auto InProcessMemo::publish(const ContentKey& key, std::span<const std::byte> full_key,
                             std::span<const std::byte> value) -> Result<void> {
-    // Check oversize value limit before acquiring locks.
-    // Refusing to cache oversized values is not an error: caller recomputes.
-    if (value.size() > max_value_bytes_) {
-        rejected_.fetch_add(1, std::memory_order_relaxed);
-        return {};
-    }
-
     assert(!shards_.empty() && "InProcessMemo has no shards");
     const std::size_t shard_idx = static_cast<std::size_t>(key.hi % shards_.size());
     Shard& shard = *shards_[shard_idx];
@@ -287,6 +308,14 @@ auto InProcessMemo::publish(const ContentKey& key, std::span<const std::byte> fu
         }
     }
 
+    // Oversize values are refused, but only AFTER the duplicate scan above: re-publishing a
+    // key already held is a no-op, and reporting it as a capacity rejection would misattribute
+    // it. Refusing to cache is not an error either way -- the caller simply recomputes.
+    if (value.size() > max_value_bytes_) {
+        rejected_.fetch_add(1, std::memory_order_relaxed);
+        return {};
+    }
+
     // Check table entry capacity.
     // Bounded-capacity, no-eviction table: when capacity is reached, new entries are
     // rejected without eviction to ensure deterministic and reproducible execution.
@@ -300,6 +329,7 @@ auto InProcessMemo::publish(const ContentKey& key, std::span<const std::byte> fu
     std::vector<Entry>& bucket =
         (it != shard.buckets.end()) ? it->second : shard.buckets[key.lo];
     bucket.push_back(Entry{
+        .fp = key,
         .key = Payload(full_key.begin(), full_key.end()),
         .value = Payload(value.begin(), value.end())
     });

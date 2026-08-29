@@ -46,11 +46,31 @@ Depends on [`core`](core.md) and [`taskdag`](taskdag.md). Consumed by
 ## Why the key is the encoded task, not the expression
 
 `sgee_bridge::encode_task` already emits a canonical byte string per task — fixed-width
-little-endian fields, no padding, no ordering ambiguity — carrying the registry fingerprint
-(which pins the code version), the op id, and every argument. Because a `TaskFn` is
-contractually pure, two tasks are the same computation **if and only if** those bytes are
-equal. So the memo keys on those bytes and inherits version-safety for free: a registry
-change moves the fingerprint, which moves every key, which retires the old entries.
+little-endian fields, no padding, no ordering ambiguity — carrying the registry fingerprint,
+the op id, and every argument. Because a `TaskFn` is contractually pure, two tasks are the same
+computation **if and only if** those bytes are equal, *given the same implementations behind
+those op ids*. That proviso is the important one.
+
+### ⚠ The registry fingerprint does NOT pin the implementation
+
+`TaskRegistry::fingerprint()` is FNV-1a over the **sorted op-ID strings**. It hashes the
+*names*, not the *bodies*. So:
+
+- Adding or removing an unrelated op moves the fingerprint and retires **every** entry —
+  harmless over-invalidation.
+- **Editing an op's implementation without changing its id moves nothing at all.** Every
+  existing entry stays live and keeps serving the old implementation's results.
+
+For a per-call cache that gap is invisible, because the table dies with the call. A memo that
+outlives the run — which is the entire point of this module — turns it into a wrong answer
+that persists. The operational rule is therefore not optional:
+
+> **Any semantic change to a registered op REQUIRES bumping its version (`<domain>.<op>/vN`)
+> or discarding the memo.** The `/vN` grammar is enforced syntactically by `validate_op_id`;
+> nothing enforces that you bump it when you should.
+
+This is a property of the registry, not of this module, and it is stated here because this
+module is what makes it dangerous.
 
 ## API
 
@@ -89,10 +109,12 @@ auto hit = memo.lookup(k, key);           // Result<std::optional<Payload>>
 if (hit.has_value() && hit->has_value()) {
     use(**hit);                           // verified against the full key, byte for byte
 } else {
-    const auto computed = run_the_task();
-    // Publish only what is a function of the key.
+    const sgee_bridge::ResultEnvelope computed = run_the_task();
+    // Publish only what is a function of the key, and only if it encodes.
     if (is_memoizable_status(static_cast<int>(computed.status))) {
-        (void)memo.publish(k, key, encode_result(computed));
+        if (const auto enc = sgee_bridge::encode_result(computed); enc.has_value()) {
+            (void)memo.publish(k, key, *enc);   // a refusal to cache is not an error
+        }
     }
 }
 
@@ -116,8 +138,26 @@ auto cfg = SgeeExecutorConfig{}
 `dedup_identical_tasks` needs no table: it collapses tasks byte-identical to one already
 dispatched in this run. `memo` is consulted before dispatch and published to after every
 collected result, so it memoizes across runs and, given a shared implementation, across the
-cluster. `outputs` stay bit-for-bit identical either way; `executed` does not, and must not —
-it counts tasks actually dispatched, which is precisely what these options reduce.
+cluster.
+
+**What changes and what does not.** `outputs` stay bit-for-bit identical either way, failed
+tasks included. Two things do change, by design: `executed` counts tasks actually dispatched,
+which is precisely what these options reduce, and `measured_seconds` is **0.0** for every hit
+and every collapsed duplicate — nothing ran, and reporting a borrowed duration would put
+fictional work into a timing field.
+
+**A bad entry cannot fail a run.** A memo value that will not decode, or that carries a status
+never published, is treated as a **miss**: the task is dispatched and computed for real. A miss
+is by construction observationally identical to a hit, so this is exactly as honest as aborting
+and strictly more available — otherwise one malformed entry in a shared table would permanently
+fail every future run of every graph containing that task, and there is no purge API. A memo
+implementation that reports its own failure from `lookup` or `publish` **does** abort the run:
+that is a component saying it is broken, not a bad row.
+
+**Memory.** With `dedup_identical_tasks` on, the run index retains the full encoded payload of
+every distinct dispatched task for the **whole run**, and those payloads embed complete parent
+outputs. On graphs with large intermediates that is a real cost; without dedup the same bytes
+were retained only per level.
 
 See [`taskdag_sgee`](taskdag_sgee.md) for the coordinator-side wiring.
 
