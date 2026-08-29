@@ -114,7 +114,14 @@ using AffinityTable = std::map<OpId, Affinity, std::less<>>;
 // ===========================================================================
 namespace nimblecas {
 
-namespace {
+namespace taskdag_sched_detail {  // module-local by module linkage; NOT an anonymous namespace.
+// It used to be `namespace { }`. Inside a NAMED MODULE that is redundant -- module linkage
+// already keeps these out of other translation units -- and it is actively harmful: an
+// anonymous-namespace type mangles as _GLOBAL__N_1 identically in every TU, so instantiating a
+// template over one (here std::vector/std::optional<TaskOutcome> via parallel::transform_index)
+// produces several definitions sharing a mangled name. clang++-22 tolerated it; clang++-23
+// rejects it outright under -fsanitize=address, where the instantiations are emitted rather
+// than discarded. A named namespace gives the type one unambiguous mangling.
 
 // Outcome of running or poisoning a single task.
 struct TaskOutcome {
@@ -223,7 +230,7 @@ private:
     std::size_t grain_{1};
 };
 
-}  // namespace
+}  // namespace taskdag_sched_detail
 
 auto sanitize(const CostHint& hint) noexcept -> CostHint {
     if (!std::isfinite(hint.mean_seconds) || hint.mean_seconds <= 0.0) {
@@ -319,7 +326,7 @@ auto to_placement(Affinity a) noexcept -> std::uint8_t {
 
 auto cost_ordered_local_executor(const CostTable* table, ScheduleParams params,
                                  std::size_t grain) -> std::unique_ptr<Executor> {
-    return std::make_unique<CostOrderedLocalExecutor>(table, params, grain);
+    return std::make_unique<taskdag_sched_detail::CostOrderedLocalExecutor>(table, params, grain);
 }
 
 }  // namespace nimblecas

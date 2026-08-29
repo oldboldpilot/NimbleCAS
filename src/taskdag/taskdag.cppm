@@ -354,7 +354,14 @@ public:
 // ===========================================================================
 namespace nimblecas {
 
-namespace {
+namespace taskdag_detail {  // module-local by module linkage; NOT an anonymous namespace.
+// It used to be `namespace { }`. Inside a NAMED MODULE that is redundant -- module linkage
+// already keeps these out of other translation units -- and it is actively harmful: an
+// anonymous-namespace type mangles as _GLOBAL__N_1 identically in every TU, so instantiating a
+// template over one (here std::vector/std::optional<TaskOutcome> via parallel::transform_index)
+// produces several definitions sharing a mangled name. clang++-22 tolerated it; clang++-23
+// rejects it outright under -fsanitize=address, where the instantiations are emitted rather
+// than discarded. A named namespace gives the type one unambiguous mangling.
 
 // Outcome of attempting to run (or poison) a single task within a wavefront level.
 struct TaskOutcome {
@@ -506,14 +513,14 @@ public:
     }
 };
 
-}  // namespace
+}  // namespace taskdag_detail
 
 auto serial_executor() -> std::unique_ptr<Executor> {
-    return std::make_unique<SerialExecutor>();
+    return std::make_unique<taskdag_detail::SerialExecutor>();
 }
 
 auto local_parallel_executor() -> std::unique_ptr<Executor> {
-    return std::make_unique<LocalParallelExecutor>();
+    return std::make_unique<taskdag_detail::LocalParallelExecutor>();
 }
 
 }  // namespace nimblecas
