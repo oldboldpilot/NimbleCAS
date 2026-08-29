@@ -62,13 +62,13 @@ appends an attribution trailer to commits, suppress it for this repo.
 
 ## Build & test
 
-NimbleCAS requires **`clang++-22` + libc++** (for `import std` and C++23 modules) —
+NimbleCAS requires **`clang++-23` + libc++** (for `import std` and C++23 modules) —
 most agent sandboxes running only a system `g++`/older `clang` **cannot** build this
 repo; don't assume a failing build means the code is broken without confirming the
 toolchain matches. See **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for full detail.
 
 ```bash
-# Linux/macOS — clang++-22 + libc++ + CMake >= 3.30 + Ninja
+# Linux/macOS — clang++-23 + libc++ + CMake >= 3.30 + Ninja
 scripts/build.sh                         # configure, build, run tests (ctest)
 NIMBLECAS_SANITIZE=ON scripts/build.sh   # + ASan/UBSan/LSan
 NIMBLECAS_SANITIZER=thread|memory scripts/build.sh   # TSan / MSan — see docs/testing/sanitizers.md

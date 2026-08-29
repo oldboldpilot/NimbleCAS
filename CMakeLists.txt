@@ -1,7 +1,7 @@
 # NimbleCAS — C++23 high-performance Computer Algebra System.
 # @author Olumuyiwa Oluwasanmi
 #
-# Build (on the clang-22 server): scripts/build.sh
+# Build (on the clang-23 server): scripts/build.sh
 # See docs/QUICKSTART.md.
 
 cmake_minimum_required(VERSION 3.30)

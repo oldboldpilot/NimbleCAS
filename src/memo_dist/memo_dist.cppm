@@ -125,7 +125,7 @@ class InProcessMemo final : public DistributedMemo {
 public:
     explicit InProcessMemo(std::size_t shard_count = 32,
                            std::size_t max_entries = 100'000,
-                           std::size_t max_value_bytes = 16u * 1024u * 1024u);
+                           std::size_t max_value_bytes = std::size_t{16} * 1024 * 1024);
 
     [[nodiscard]] auto name() const -> std::string_view override;
 
@@ -156,7 +156,7 @@ private:
     };
 
     std::size_t max_entries_{100'000};
-    std::size_t max_value_bytes_{16u * 1024u * 1024u};
+    std::size_t max_value_bytes_{std::size_t{16} * 1024 * 1024};
     std::vector<std::unique_ptr<Shard>> shards_{};
     std::atomic<std::size_t> total_entries_{0};
 

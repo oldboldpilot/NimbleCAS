@@ -6,7 +6,7 @@ Source: `src/webkernel/kernel.cpp` · Build: `scripts/build_wasm.sh` -> `web/ker
 
 A tiny **freestanding wasm32 compute kernel** that the [browser front-end](../../web/README.md)
 loads to sample functions live in-page. It is compiled with clang's native
-WebAssembly target — `clang++-22 --target=wasm32` — with **no Emscripten and no
+WebAssembly target — `clang++-23 --target=wasm32` — with **no Emscripten and no
 libc / libc++**, and it exports a small, dependency-free numeric ABI (currently
 Horner polynomial evaluation). The prebuilt `web/kernel.wasm` (**~842 bytes**) is
 committed as a front-end asset so the viewer's "Sample a polynomial live" control
@@ -69,10 +69,10 @@ length can never read past the scratch array.
 
 `scripts/build_wasm.sh` compiles the single source file to `web/kernel.wasm`. It
 resolves the repo root via `git`, honors `NIMBLECAS_CLANGXX` (default
-`clang++-22`), and invokes:
+`clang++-23`), and invokes:
 
 ```sh
-clang++-22 --target=wasm32 -std=c++23 -O3 -nostdlib -fno-exceptions -fno-rtti \
+clang++-23 --target=wasm32 -std=c++23 -O3 -nostdlib -fno-exceptions -fno-rtti \
   -Wl,--no-entry \
   -Wl,--export=poly_eval \
   -Wl,--export=poly_eval_buffer \

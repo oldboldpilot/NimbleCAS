@@ -121,7 +121,7 @@ Keep this table and the [`Index.md`](Index.md) catalog in sync as each module la
 
 ## Build, test & review (this repo does NOT build on Windows)
 
-- Build/test on the Linux server (`clang++-22` + libc++): edit on Windows → commit →
+- Build/test on the Linux server (`clang++-23` + libc++): edit on Windows → commit →
   `git push mgpu <branch>` → `ssh mgpu 'cd /scratch/NimbleCAS && ninja -C build <targets> && ctest --test-dir build'`.
 - After every major unit: an **adversarial code review** (hunt for bugs/UB/races/policy
   violations), then commit + push to all remotes (github + gitea + mgpu) and the NAS

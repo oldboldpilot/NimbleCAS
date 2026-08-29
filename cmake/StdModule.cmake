@@ -27,9 +27,21 @@ if(WIN32)
       CACHE FILEPATH "Path to the standard library std module source (MSVC std.ixx)")
 else()
   # libc++ std module source (share/libc++/v1/std.cppm).
-  # DEVIATION (documented): uses the system libc++-22 tree rather than a vendored
+  # DEVIATION (documented): uses the system libc++ tree rather than a vendored
   # external/libcxx-v1 (Rule 51). Fine on the fixed build server; vendor for cloud.
-  set(NIMBLECAS_LIBCXX_SHARE "/usr/lib/llvm-22/share/libc++/v1"
+  #
+  # The LLVM directory is DERIVED FROM THE COMPILER, never hardcoded. std.cppm must come
+  # from the same libc++ release as the clang++ compiling it -- a mismatched pair produces
+  # a std module that either fails to build or, worse, builds against a different standard
+  # library than everything else links to. Hardcoding one version also meant every toolchain
+  # bump broke configure in a way whose message named the wrong culprit.
+  string(REGEX MATCH "^[0-9]+" NIMBLECAS_LLVM_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
+  if(NOT NIMBLECAS_LLVM_MAJOR)
+    message(FATAL_ERROR
+      "Could not determine the LLVM major version from CMAKE_CXX_COMPILER_VERSION "
+      "('${CMAKE_CXX_COMPILER_VERSION}'). Set -DNIMBLECAS_LIBCXX_SHARE=<dir> explicitly.")
+  endif()
+  set(NIMBLECAS_LIBCXX_SHARE "/usr/lib/llvm-${NIMBLECAS_LLVM_MAJOR}/share/libc++/v1"
       CACHE PATH "Directory containing libc++'s std.cppm / std.compat.cppm")
   set(NIMBLECAS_STD_MODULE_SRC "${NIMBLECAS_LIBCXX_SHARE}/std.cppm"
       CACHE FILEPATH "Path to the standard library std module source (libc++ std.cppm)")
@@ -37,8 +49,10 @@ endif()
 
 if(NOT EXISTS "${NIMBLECAS_STD_MODULE_SRC}")
   message(FATAL_ERROR
-    "std module source not found at ${NIMBLECAS_STD_MODULE_SRC}. "
-    "Set -DNIMBLECAS_STD_MODULE_SRC=<path> to std.cppm (libc++) or std.ixx (MSVC).")
+    "std module source not found at ${NIMBLECAS_STD_MODULE_SRC} "
+    "(derived from compiler version ${CMAKE_CXX_COMPILER_VERSION}). "
+    "Install the matching libc++ development package, or set "
+    "-DNIMBLECAS_STD_MODULE_SRC=<path> to std.cppm (libc++) or std.ixx (MSVC).")
 endif()
 
 cmake_path(GET NIMBLECAS_STD_MODULE_SRC PARENT_PATH _ncas_std_dir)

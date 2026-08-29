@@ -165,7 +165,7 @@ scanner resolves `import std;` with explicit, reproducible dependency edges
 
 | Platform | std module source |
 | :--- | :--- |
-| Linux/macOS (clang + libc++) | libc++'s `std.cppm` (e.g. `/usr/lib/llvm-22/share/libc++/v1/std.cppm`) |
+| Linux/macOS (clang + libc++) | libc++'s `std.cppm` (`/usr/lib/llvm-<major>/share/libc++/v1/std.cppm`, the major derived from the compiler) |
 | Windows (clang targeting `windows-msvc` + MSVC STL) | the MSVC toolset's `std.ixx` |
 
 A handful of macro-only facilities that `import std` cannot provide (notably

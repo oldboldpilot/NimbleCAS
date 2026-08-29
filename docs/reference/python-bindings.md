@@ -92,7 +92,7 @@ and validate against — there is one Monte-Carlo implementation, not three.
 | `analytics.max_drawdown`, `analytics.value_at_risk` | `analytics::…` |
 | `analytics.min_variance_weights(cov)`, `analytics.tangency_weights(...)` | `analytics::…` |
 
-Verified through the built extension on clang++-22 (nanobind 2.13):
+Verified through the built extension on clang++-23 (nanobind 2.13):
 
 ```python
 import nimblecas_ext as n

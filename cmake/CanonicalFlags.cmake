@@ -49,6 +49,21 @@ else()
     -fstack-protector-strong
     -DNDEBUG)
   add_link_options(-stdlib=libc++ -fexperimental-library -pthread)
+
+  # Pin the RUNTIME libc++ to the one belonging to THIS compiler.
+  #
+  # Without this, the loader picks whichever libc++.so.1 comes first on the ld.so path, which
+  # on a machine that has hosted more than one LLVM is not necessarily the one the code was
+  # compiled against. The failure is nasty precisely because it is partial: the program links
+  # and almost everything runs, and then one binary that happens to touch a symbol new in this
+  # release dies at load time with an undefined symbol -- so it reads as a broken test rather
+  # than a broken library path.
+  #
+  # Derived from the compiler, never hardcoded, so a toolchain bump carries it automatically.
+  string(REGEX MATCH "^[0-9]+" _ncas_llvm_major "${CMAKE_CXX_COMPILER_VERSION}")
+  if(_ncas_llvm_major AND EXISTS "/usr/lib/llvm-${_ncas_llvm_major}/lib/libc++.so.1")
+    add_link_options("-Wl,-rpath,/usr/lib/llvm-${_ncas_llvm_major}/lib")
+  endif()
 endif()
 
 # Sanitizer builds (Code Policy Rules 36 / 56). Select one via

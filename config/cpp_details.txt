@@ -103,12 +103,12 @@ in which case we should use the appropriate STL algorithms and data structures t
     (NO -fopenmp: the codebase is TBB-only as of 2026-06-06 — OpenMP was dropped from CANONICAL_FLAGS; parallelism is exclusively oneTBB.)
     -D_LIBCPP_ENABLE_EXPERIMENTAL -fexperimental-library
     -nostdinc++ -isystem external/libcxx-v1/include
-    Toolchain: clang++-22 only. AVX-512 is engaged via [[gnu::target("avx512f,avx512dq,fma")]] per-function attributes, NOT global -mavx512f flags, so the binary stays portable across machines that lack AVX-512.
+    Toolchain: clang++-23 only. AVX-512 is engaged via [[gnu::target("avx512f,avx512dq,fma")]] per-function attributes, NOT global -mavx512f flags, so the binary stays portable across machines that lack AVX-512.
 
 51. VENDORED STD MODULE AND LIBCXX — MANDATORY (April 2026). Never use system-provided std.cppm or libc++ headers. The repo vendors both:
     - modules/std.cppm — libc++ C++23 std module export
     - external/libcxx-v1/include/ — full libc++ header tree
-    All build scripts must source scripts/build_common.sh which resolves REPO_ROOT via git rev-parse and uses repo-relative paths exclusively. Absolute system paths (e.g. /usr/lib/llvm-22/share/libc++/v1/) are NEVER used because cloud boxes (Vast.ai, Packet) may have different LLVM versions installed, causing silent partial builds that fail deep in compilation — wasting GPU $/hr before the error surfaces.
+    All build scripts must source scripts/build_common.sh which resolves REPO_ROOT via git rev-parse and uses repo-relative paths exclusively. Absolute system paths (e.g. /usr/lib/llvm-23/share/libc++/v1/) are NEVER used because cloud boxes (Vast.ai, Packet) may have different LLVM versions installed, causing silent partial builds that fail deep in compilation — wasting GPU $/hr before the error surfaces.
 
 52. EXPLICIT MODULE FILE PATHS — NO -fprebuilt-module-path (April 2026). Every .pcm consumer must explicitly specify each dependency via -fmodule-file=<name>=<path>. NEVER use -fprebuilt-module-path as it silently picks up the wrong PCM from an unrelated build tree and yields opaque BMI errors. This explicit discipline enables parallel variant builds (e.g., modules/ canonical + modules_experimental/ AVX-512 variant) to coexist without conflict. Each build tree owns its own PCM stack identified by explicit relative paths.
 

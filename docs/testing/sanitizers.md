@@ -1,7 +1,7 @@
 # Sanitizer & Memory-Safety Testing
 
 Per Code Policy Rule 36, NimbleCAS is exercised under the full sanitizer set plus
-valgrind. All runs are on the Linux/clang-22/libc++ build (the reference toolchain).
+valgrind. All runs are on the Linux/clang-23/libc++ build (the reference toolchain).
 
 ## Running
 
@@ -53,7 +53,7 @@ git clone --depth 1 --branch llvmorg-22.1.8 --filter=blob:none --sparse \
     https://github.com/llvm/llvm-project /scratch/llvm-project
 cd /scratch/llvm-project && git sparse-checkout set runtimes libcxx libcxxabi libunwind cmake libc
 cmake -S /scratch/llvm-project/runtimes -B /scratch/msan-libcxx -G Ninja \
-  -DCMAKE_C_COMPILER=clang-22 -DCMAKE_CXX_COMPILER=clang++-22 \
+  -DCMAKE_C_COMPILER=clang-23 -DCMAKE_CXX_COMPILER=clang++-23 \
   -DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
   -DLLVM_USE_SANITIZER=MemoryWithOrigins -DCMAKE_BUILD_TYPE=Release \
   -DLLVM_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXXABI_INCLUDE_TESTS=OFF \

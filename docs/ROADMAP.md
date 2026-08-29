@@ -8,7 +8,7 @@ This document defines the C++23 technical architecture, class interfaces, module
 
 This section tracks what is **built, tested, and adversarially reviewed** against the plan below. Every module named here has a page under [Module reference](Index.md#module-reference); the boundaries stated there (exact-over-`Q` vs numerical, decidability, overflow) are authoritative. The plan (sections 1–13) is retained as the design record and forward-looking scope.
 
-**Done (built on the `clang++-22` + libc++ server, `ctest` green, ASan/UBSan clean, per-module review):**
+**Done (built on the `clang++-23` + libc++ server, `ctest` green, ASan/UBSan clean, per-module review):**
 
 - **Symbolic core & calculus** — `core`, `symbolic`, `simplify`, `cache`, `diff`, `series`, `laplace`, `vectorcalc`, `limits` (continuity/L'Hôpital/rational-at-∞, honest `MathError` off the decidable class), `tensor` (Christoffel/Riemann/Ricci/Einstein/geodesics/Laplace–Beltrami — differential geometry over `Q`), `forms` (exterior calculus: wedge/`d`/Hodge), `reader` (text→`Expr` eval surface), `latex`; plus **`symconst`** (π/e/γ/φ as symbolic `Expr` leaves + numeric bridge to `constants`).
 - **Polynomial / rational-function chain** — `polynomial`, `ratpoly`, `polyexpr`, `pfd`, `ratint`, `resultant`, `rothstein`, `integrate`, `roots`, `recurrence`, `pade`.

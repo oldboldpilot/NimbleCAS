@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# NimbleCAS clang-tidy runner (Code Policy Rules 34 / 50).
+# @author Olumuyiwa Oluwasanmi
+#
+# Usage:
+#   scripts/tidy.sh                     # every TU in the compile database
+#   scripts/tidy.sh src/memo_dist       # only TUs whose path contains this substring
+#   BUILD_DIR=build-c23 scripts/tidy.sh # against a different configured build
+#
+# Requires a configured build directory: CMAKE_EXPORT_COMPILE_COMMANDS is ON, so
+# compile_commands.json is written by cmake. This does NOT build anything.
+#
+# Checks come from the repo-root .clang-tidy. Exit status is clang-tidy's, so this is
+# usable as a gate; it is not wired into the build, because running tidy over every
+# module TU on every compile would dominate build time for no gain per edit.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/build_common.sh
+source "${SCRIPT_DIR}/build_common.sh"
+
+BUILD_DIR="${BUILD_DIR:-${REPO_ROOT}/build}"
+FILTER="${1:-}"
+
+if [[ ! -f "${BUILD_DIR}/compile_commands.json" ]]; then
+  echo "No compile database at ${BUILD_DIR}/compile_commands.json." >&2
+  echo "Configure a build first (scripts/build.sh), or set BUILD_DIR." >&2
+  exit 1
+fi
+
+if ! command -v "${NIMBLECAS_CLANG_TIDY}" >/dev/null 2>&1; then
+  echo "${NIMBLECAS_CLANG_TIDY} not found on PATH." >&2
+  echo "Install it, or override: NIMBLECAS_CLANG_TIDY=clang-tidy-NN scripts/tidy.sh" >&2
+  exit 1
+fi
+
+mapfile -t FILES < <(
+  python3 - "${BUILD_DIR}/compile_commands.json" "${FILTER}" <<'PY'
+import json, sys
+db = json.load(open(sys.argv[1]))
+needle = sys.argv[2]
+seen = set()
+for e in db:
+    f = e["file"]
+    if needle and needle not in f:
+        continue
+    if f in seen:
+        continue
+    seen.add(f)
+    print(f)
+PY
+)
+
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  echo "No translation units matched${FILTER:+ filter '${FILTER}'}." >&2
+  exit 1
+fi
+
+echo "Running ${NIMBLECAS_CLANG_TIDY} over ${#FILES[@]} translation unit(s) in ${BUILD_DIR}..."
+"${NIMBLECAS_CLANG_TIDY}" -p "${BUILD_DIR}" "${FILES[@]}"
