@@ -722,5 +722,393 @@ auto main() -> int {
                   t.expect_eq(res_dedup.executed, std::size_t{2},
                               "dedup executed count is 2 (e0 and c0 executed once each)");
               })
+
+        // -------------------------------------------------------------------
+        // 10. corrupt_memo_entry_is_a_miss_not_a_run_failure
+        // -------------------------------------------------------------------
+        .test("corrupt_memo_entry_is_a_miss_not_a_run_failure",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c42/v1", [](auto) -> Result<Payload> { return encode_i64(42); });
+                  (void)reg.register_op("op.mul2/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(decode_i64(ps[0]) * 2);
+                  });
+
+                  TaskGraph g;
+                  const auto t0 = g.add_named_task(reg, "op.c42/v1").value();
+                  const auto t1 = g.add_named_task(reg, "op.mul2/v1", std::vector<TaskId>{t0}).value();
+
+                  // Reference plain run without memo
+                  FakeBrokerPort port_plain;
+                  InMemoryResultChannel chan_plain;
+                  SgeeExecutorConfig cfg_plain;
+                  cfg_plain.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec_plain(cfg_plain, port_plain, chan_plain);
+                  const auto res_plain = exec_plain.run(g).value();
+                  t.expect_eq(res_plain.executed, std::size_t{2}, "plain run executes both tasks");
+
+                  // Determine exact TaskEnvelope and key for t0
+                  const TaskEnvelope env0{
+                      .registry_fp = reg.fingerprint(),
+                      .op_id = "op.c42/v1",
+                      .args = {}
+                  };
+                  const Payload full_key0 = encode_task(env0).value();
+                  const ContentKey ck0 = content_key(full_key0);
+
+                  // Leg 1: Publish deliberate garbage bytes that are not a decodable ResultEnvelope
+                  InProcessMemo memo_garbage(8, 1000, 1024 * 1024);
+                  const Payload garbage{std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+                  const auto pub_garbage = memo_garbage.publish(ck0, full_key0, garbage);
+                  t.expect(pub_garbage.has_value(), "garbage entry published to memo");
+                  t.expect_eq(memo_garbage.stats().publishes, std::uint64_t{1}, "1 publish recorded");
+
+                  FakeBrokerPort port_garbage;
+                  InMemoryResultChannel chan_garbage;
+                  SgeeExecutorConfig cfg_garbage;
+                  cfg_garbage.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1)
+                             .with_memo(memo_garbage);
+                  SgeeDistributedExecutor exec_garbage(cfg_garbage, port_garbage, chan_garbage);
+                  const auto res_garbage_result = exec_garbage.run(g);
+                  t.expect(res_garbage_result.has_value(),
+                           "run with garbage memo entry SUCCEEDS (treated as miss, not failure)");
+                  const auto& res_garbage = res_garbage_result.value();
+
+                  t.expect(outputs_bit_identical(res_garbage.outputs, res_plain.outputs),
+                           "outputs are BIT-IDENTICAL between garbage-memo run and plain run");
+                  t.expect_eq(res_garbage.executed, std::size_t{2},
+                              "executed count is NOT reduced (corrupt entry forced recomputation)");
+                  t.expect_eq(res_garbage.executed, res_plain.executed,
+                              "executed count matches plain run exactly");
+                  t.expect_eq(decode_i64(res_garbage.outputs[t0.value].value()), std::int64_t{42}, "t0 == 42");
+                  t.expect_eq(decode_i64(res_garbage.outputs[t1.value].value()), std::int64_t{84}, "t1 == 84");
+
+                  // Leg 2: Publish a well-formed ResultEnvelope whose status is bridge_error
+                  const ResultEnvelope bridge_err_env{
+                      .status = ResultEnvelope::Status::bridge_error,
+                      .math_err = MathError::division_by_zero,
+                      .seconds = 0.0,
+                      .bytes = {}
+                  };
+                  const Payload bridge_err_bytes = encode_result(bridge_err_env).value();
+
+                  InProcessMemo memo_bridge(8, 1000, 1024 * 1024);
+                  const auto pub_bridge = memo_bridge.publish(ck0, full_key0, bridge_err_bytes);
+                  t.expect(pub_bridge.has_value(), "bridge_error entry published to memo");
+                  t.expect_eq(memo_bridge.stats().publishes, std::uint64_t{1}, "1 publish recorded");
+
+                  FakeBrokerPort port_bridge;
+                  InMemoryResultChannel chan_bridge;
+                  SgeeExecutorConfig cfg_bridge;
+                  cfg_bridge.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1)
+                            .with_memo(memo_bridge);
+                  SgeeDistributedExecutor exec_bridge(cfg_bridge, port_bridge, chan_bridge);
+                  const auto res_bridge_result = exec_bridge.run(g);
+                  t.expect(res_bridge_result.has_value(),
+                           "run with bridge_error memo entry SUCCEEDS (treated as miss, not failure)");
+                  const auto& res_bridge = res_bridge_result.value();
+
+                  t.expect(outputs_bit_identical(res_bridge.outputs, res_plain.outputs),
+                           "outputs are BIT-IDENTICAL between bridge-memo run and plain run");
+                  t.expect_eq(res_bridge.executed, std::size_t{2},
+                              "executed count is NOT reduced (bridge_error entry forced recomputation)");
+                  t.expect_eq(res_bridge.executed, res_plain.executed,
+                              "executed count matches plain run exactly");
+                  t.expect_eq(decode_i64(res_bridge.outputs[t0.value].value()), std::int64_t{42}, "t0 == 42");
+                  t.expect_eq(decode_i64(res_bridge.outputs[t1.value].value()), std::int64_t{84}, "t1 == 84");
+              })
+
+        // -------------------------------------------------------------------
+        // 11. memo_and_result_recovery_publish_exactly_once
+        // -------------------------------------------------------------------
+        .test("memo_and_result_recovery_publish_exactly_once",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c42/v1", [](auto) -> Result<Payload> { return encode_i64(42); });
+                  (void)reg.register_op("op.mul2/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(decode_i64(ps[0]) * 2);
+                  });
+
+                  TaskGraph g;
+                  const auto t0 = g.add_named_task(reg, "op.c42/v1").value();
+                  const auto t1 = g.add_named_task(reg, "op.mul2/v1", std::vector<TaskId>{t0}).value();
+
+                  // Plain reference run
+                  FakeBrokerPort port_plain;
+                  InMemoryResultChannel chan_plain;
+                  SgeeExecutorConfig cfg_plain;
+                  cfg_plain.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec_plain(cfg_plain, port_plain, chan_plain);
+                  const auto res_plain = exec_plain.run(g).value();
+                  t.expect_eq(res_plain.executed, std::size_t{2}, "plain run executes both tasks");
+
+                  // Fault injection: result channel that swallows the first put() call, simulating a
+                  // completed task whose result was lost, forcing the coordinator's result recovery path.
+                  class SwallowingResultChannel final : public nimblecas::ResultChannel {
+                  public:
+                      explicit SwallowingResultChannel(std::size_t swallow_first_n) : remaining_(swallow_first_n) {}
+                      [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
+                          std::lock_guard lock(mutex_);
+                          if (remaining_ > 0) {
+                              --remaining_;
+                              return {};
+                          }
+                          return inner_.put(qid, std::move(p));
+                      }
+                      [[nodiscard]] auto get(std::uint64_t qid) const -> Result<Payload> override {
+                          return inner_.get(qid);
+                      }
+                      [[nodiscard]] auto try_get(std::uint64_t qid) const -> Result<std::optional<Payload>> override {
+                          return inner_.try_get(qid);
+                      }
+
+                  private:
+                      mutable std::mutex mutex_;
+                      std::size_t remaining_;
+                      nimblecas::InMemoryResultChannel inner_;
+                  };
+
+                  FakeBrokerPort port_rec;
+                  SwallowingResultChannel chan_rec{1};  // swallows the 1st completed task's result
+                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  SgeeExecutorConfig cfg_rec;
+                  cfg_rec.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1)
+                         .with_max_result_recoveries(2)
+                         .with_memo(memo);
+                  SgeeDistributedExecutor exec_rec(cfg_rec, port_rec, chan_rec);
+                  const auto res_rec_result = exec_rec.run(g);
+
+                  t.expect(res_rec_result.has_value(), "recovery run succeeds");
+                  const auto& res_rec = res_rec_result.value();
+
+                  t.expect(outputs_bit_identical(res_rec.outputs, res_plain.outputs),
+                           "recovery run outputs are BIT-IDENTICAL to plain reference");
+                  t.expect_eq(res_rec.executed, std::size_t{2}, "executed count is 2 (both tasks executed)");
+                  t.expect_eq(port_rec.enqueue_count(), std::uint64_t{3},
+                              "port enqueued 3 times (t0 once + t0 recovery re-enqueue + t1 once)");
+
+                  const auto stats = memo.stats();
+                  t.expect_eq(stats.publishes, std::uint64_t{2},
+                              "memo.stats().publishes counts each task exactly ONCE (2 total), NOT once per recovery attempt");
+                  t.expect_eq(stats.hits, std::uint64_t{0}, "zero hits on cold cache");
+                  t.expect_eq(stats.misses, std::uint64_t{2}, "2 misses (1 per task)");
+                  t.expect_eq(stats.key_mismatches, std::uint64_t{0}, "zero key mismatches");
+
+                  t.expect_eq(decode_i64(res_rec.outputs[t0.value].value()), std::int64_t{42}, "t0 == 42");
+                  t.expect_eq(decode_i64(res_rec.outputs[t1.value].value()), std::int64_t{84}, "t1 == 84");
+              })
+
+        // -------------------------------------------------------------------
+        // 12. two_executors_sharing_one_memo_stay_correct
+        // -------------------------------------------------------------------
+        .test("two_executors_sharing_one_memo_stay_correct",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  (void)reg.register_op("op.c10/v1", [](auto) -> Result<Payload> { return encode_i64(10); });
+                  (void)reg.register_op("op.c20/v1", [](auto) -> Result<Payload> { return encode_i64(20); });
+                  (void)reg.register_op("op.c30/v1", [](auto) -> Result<Payload> { return encode_i64(30); });
+                  (void)reg.register_op("op.mul2/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(decode_i64(ps[0]) * 2);
+                  });
+                  (void)reg.register_op("op.add/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1]));
+                  });
+                  (void)reg.register_op("op.sub/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(decode_i64(ps[0]) - decode_i64(ps[1]));
+                  });
+
+                  // Graph 1: 4 tasks (a1: c10, b1: c20, c1: mul2(a1)->20, d1: add(c1,b1)->40)
+                  TaskGraph g1;
+                  const auto a1 = g1.add_named_task(reg, "op.c10/v1").value();
+                  const auto b1 = g1.add_named_task(reg, "op.c20/v1").value();
+                  const auto c1 = g1.add_named_task(reg, "op.mul2/v1", std::vector<TaskId>{a1}).value();
+                  const auto d1 = g1.add_named_task(reg, "op.add/v1", std::vector<TaskId>{c1, b1}).value();
+
+                  // Graph 2: 5 tasks (a2: c10 [shared], b2: c20 [shared], c2: c30 [distinct],
+                  //                   d2: mul2(a2)->20 [shared], e2: sub(c2,d2)->10 [distinct])
+                  TaskGraph g2;
+                  const auto a2 = g2.add_named_task(reg, "op.c10/v1").value();
+                  const auto b2 = g2.add_named_task(reg, "op.c20/v1").value();
+                  const auto c2 = g2.add_named_task(reg, "op.c30/v1").value();
+                  const auto d2 = g2.add_named_task(reg, "op.mul2/v1", std::vector<TaskId>{a2}).value();
+                  const auto e2 = g2.add_named_task(reg, "op.sub/v1", std::vector<TaskId>{c2, d2}).value();
+
+                  // Standalone reference runs without memo
+                  FakeBrokerPort port_ref1;
+                  InMemoryResultChannel chan_ref1;
+                  SgeeExecutorConfig cfg_ref1;
+                  cfg_ref1.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec_ref1(cfg_ref1, port_ref1, chan_ref1);
+                  const auto res_ref1 = exec_ref1.run(g1).value();
+
+                  FakeBrokerPort port_ref2;
+                  InMemoryResultChannel chan_ref2;
+                  SgeeExecutorConfig cfg_ref2;
+                  cfg_ref2.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                  SgeeDistributedExecutor exec_ref2(cfg_ref2, port_ref2, chan_ref2);
+                  const auto res_ref2 = exec_ref2.run(g2).value();
+
+                  // Run two executors CONCURRENTLY on std::threads sharing one InProcessMemo
+                  InProcessMemo shared_memo(8, 1000, 1024 * 1024);
+
+                  Result<TaskRunResult> res1_res = nimblecas::make_error<TaskRunResult>(MathError::not_implemented);
+                  Result<TaskRunResult> res2_res = nimblecas::make_error<TaskRunResult>(MathError::not_implemented);
+
+                  std::thread thread1([&]() {
+                      FakeBrokerPort port1;
+                      InMemoryResultChannel chan1;
+                      SgeeExecutorConfig cfg1;
+                      cfg1.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1)
+                          .with_memo(shared_memo);
+                      SgeeDistributedExecutor exec1(cfg1, port1, chan1);
+                      res1_res = exec1.run(g1);
+                  });
+
+                  std::thread thread2([&]() {
+                      FakeBrokerPort port2;
+                      InMemoryResultChannel chan2;
+                      SgeeExecutorConfig cfg2;
+                      cfg2.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1)
+                          .with_memo(shared_memo);
+                      SgeeDistributedExecutor exec2(cfg2, port2, chan2);
+                      res2_res = exec2.run(g2);
+                  });
+
+                  thread1.join();
+                  thread2.join();
+
+                  t.expect(res1_res.has_value(), "concurrent run 1 succeeds");
+                  t.expect(res2_res.has_value(), "concurrent run 2 succeeds");
+
+                  const auto& res1 = res1_res.value();
+                  const auto& res2 = res2_res.value();
+
+                  t.expect(outputs_bit_identical(res1.outputs, res_ref1.outputs),
+                           "run 1 outputs are BIT-IDENTICAL to g1 alone with no memo");
+                  t.expect(outputs_bit_identical(res2.outputs, res_ref2.outputs),
+                           "run 2 outputs are BIT-IDENTICAL to g2 alone with no memo");
+
+                  const auto stats = shared_memo.stats();
+                  t.expect_eq(stats.key_mismatches, std::uint64_t{0},
+                              "stats().key_mismatches == 0 across concurrent runs");
+                  t.expect_eq(stats.hits + stats.misses, static_cast<std::uint64_t>(g1.size() + g2.size()),
+                              "total lookups equals sum of tasks in both graphs (9)");
+                  t.expect(stats.publishes >= 5 && stats.publishes <= 9,
+                           "publishes is between distinct computations (5) and total tasks (9)");
+
+                  t.expect_eq(decode_i64(res1.outputs[a1.value].value()), std::int64_t{10}, "res1 a1 == 10");
+                  t.expect_eq(decode_i64(res1.outputs[b1.value].value()), std::int64_t{20}, "res1 b1 == 20");
+                  t.expect_eq(decode_i64(res1.outputs[c1.value].value()), std::int64_t{20}, "res1 c1 == 20");
+                  t.expect_eq(decode_i64(res1.outputs[d1.value].value()), std::int64_t{40}, "res1 d1 == 40");
+
+                  t.expect_eq(decode_i64(res2.outputs[a2.value].value()), std::int64_t{10}, "res2 a2 == 10");
+                  t.expect_eq(decode_i64(res2.outputs[b2.value].value()), std::int64_t{20}, "res2 b2 == 20");
+                  t.expect_eq(decode_i64(res2.outputs[c2.value].value()), std::int64_t{30}, "res2 c2 == 30");
+                  t.expect_eq(decode_i64(res2.outputs[d2.value].value()), std::int64_t{20}, "res2 d2 == 20");
+                  t.expect_eq(decode_i64(res2.outputs[e2.value].value()), std::int64_t{10}, "res2 e2 == 10");
+              })
+
+        // -------------------------------------------------------------------
+        // 13. memo_never_publishes_a_transport_failure
+        // -------------------------------------------------------------------
+        .test("memo_never_publishes_a_transport_failure",
+              [](TestContext& t) {
+                  TaskRegistry reg_coord;
+                  (void)reg_coord.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+
+                  // Worker registry has an extra op, creating a fingerprint skew that produces a real bridge_error
+                  TaskRegistry reg_worker;
+                  (void)reg_worker.register_op("op.c7/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  (void)reg_worker.register_op("op.extra/v1", [](auto) -> Result<Payload> { return encode_i64(0); });
+                  t.expect(reg_coord.fingerprint() != reg_worker.fingerprint(),
+                           "fingerprint mismatch produces registry skew");
+
+                  TaskGraph g;
+                  const auto t0 = g.add_named_task(reg_coord, "op.c7/v1").value();
+
+                  // Compute exact TaskEnvelope and ContentKey for t0 under reg_coord
+                  const TaskEnvelope env0{
+                      .registry_fp = reg_coord.fingerprint(),
+                      .op_id = "op.c7/v1",
+                      .args = {}
+                  };
+                  const Payload key_bytes0 = encode_task(env0).value();
+                  const ContentKey ck0 = content_key(key_bytes0);
+
+                  InProcessMemo memo(8, 1000, 1024 * 1024);
+
+                  // Run 1: Drive a real bridge_error through the executor with memo attached
+                  FakeBrokerPort port1;
+                  InMemoryResultChannel chan1;
+                  SgeeExecutorConfig cfg1;
+                  cfg1.with_registry(reg_coord).with_num_workers(0).with_poll_interval_ms(1)
+                      .with_memo(memo);
+                  SgeeDistributedExecutor exec1(cfg1, port1, chan1);
+
+                  std::jthread pump([&](std::stop_token st) {
+                      nimblecas::run_worker_pump(port1, reg_worker, chan1,
+                                                 nimblecas::WorkerPumpConfig{
+                                                     .worker_id = 1,
+                                                     .lease_timeout_ms = 100'000,
+                                                     .idle_backoff_ms = 1,
+                                                     .heartbeat_every_ms = 0
+                                                 }, st);
+                  });
+                  const auto res1 = exec1.run(g);
+                  pump.request_stop();
+                  pump.join();
+
+                  t.expect(!res1.has_value() && res1.error() == MathError::distributed_error,
+                           "run 1 aborts with distributed_error on bridge_error");
+                  t.expect(port1.state(1).has_value() && *port1.state(1) == nimblecas::BrokerPort::QState::completed,
+                           "worker completed task with bridge_error");
+
+                  // Verify the result envelope in channel was genuinely a bridge_error
+                  const auto chan_bytes = chan1.get(1);
+                  t.expect(chan_bytes.has_value(), "result channel holds result envelope");
+                  if (chan_bytes.has_value()) {
+                      const auto dec = decode_result(*chan_bytes);
+                      t.expect(dec.has_value() && dec->status == ResultEnvelope::Status::bridge_error,
+                               "result envelope status is bridge_error");
+                  }
+
+                  // Assert memo contains NO entry for that task afterwards
+                  const auto direct_lookup = memo.lookup(ck0, key_bytes0);
+                  t.expect(direct_lookup.has_value(), "direct lookup succeeds");
+                  t.expect(!direct_lookup->has_value(),
+                           "memo contains NO entry for the bridge_error task (lookup is a miss)");
+                  t.expect_eq(memo.stats().publishes, std::uint64_t{0},
+                              "stats().publishes did not count the transport failure (0 publishes)");
+
+                  // Assert direct status classification refuses bridge_error
+                  t.expect(!is_memoizable_status(static_cast<int>(ResultEnvelope::Status::bridge_error)),
+                           "is_memoizable_status refuses bridge_error");
+                  t.expect(is_memoizable_status(static_cast<int>(ResultEnvelope::Status::ok)),
+                           "is_memoizable_status admits ok");
+                  t.expect(is_memoizable_status(static_cast<int>(ResultEnvelope::Status::math_error)),
+                           "is_memoizable_status admits math_error");
+
+                  // Run 2: Second run with matching worker computes the task for real (executed includes it)
+                  FakeBrokerPort port2;
+                  InMemoryResultChannel chan2;
+                  SgeeExecutorConfig cfg2;
+                  cfg2.with_registry(reg_coord).with_num_workers(2).with_poll_interval_ms(1)
+                      .with_memo(memo);
+                  SgeeDistributedExecutor exec2(cfg2, port2, chan2);
+                  const auto res2 = exec2.run(g);
+                  t.expect(res2.has_value(), "run 2 on healthy cluster succeeds");
+                  const auto& run2_res = res2.value();
+
+                  t.expect_eq(run2_res.executed, std::size_t{1},
+                              "run 2 computes the task for real (executed == 1, not served from memo)");
+                  t.expect(run2_res.outputs[t0.value].has_value(), "t0 output has value");
+                  t.expect_eq(decode_i64(run2_res.outputs[t0.value].value()), std::int64_t{7}, "t0 == 7");
+
+                  const auto stats2 = memo.stats();
+                  t.expect_eq(stats2.publishes, std::uint64_t{1},
+                              "memo recorded 1 publish after healthy execution");
+                  t.expect_eq(stats2.hits, std::uint64_t{0}, "zero memo hits (both runs encountered a miss)");
+              })
         .run();
 }
+
