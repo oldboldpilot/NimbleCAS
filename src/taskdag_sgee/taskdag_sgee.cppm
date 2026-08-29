@@ -23,6 +23,7 @@ import std;
 import nimblecas.core;
 import nimblecas.taskdag;
 import nimblecas.taskdag_sched;
+import nimblecas.memo_dist;
 
 export namespace nimblecas {
 
@@ -686,6 +687,33 @@ struct SgeeExecutorConfig {
     ScheduleParams schedule_params{};
     const CostTable* cost_table{nullptr};
 
+    // ── Content-addressed memoization (ROADMAP §6.2 item 2) ──────────────────────────
+    // Both default OFF, so an executor configured as before behaves exactly as before.
+    //
+    // `memo`, when set, is consulted before every enqueue and published to after every
+    // result: a task whose canonical bytes are already known is never dispatched. The
+    // table outlives the run, so it memoizes ACROSS runs and (for a shared implementation)
+    // across the cluster. The caller owns it; it must outlive the executor.
+    //
+    // `dedup_identical_tasks` needs no EXTERNAL table: it collapses tasks that are
+    // byte-identical to one ALREADY SEEN IN THIS RUN, dispatching the first and copying its
+    // output to the rest. That is the redundancy a DAG creates on its own. It is not free,
+    // though -- it keeps a run-wide index holding the full encoded bytes of every distinct
+    // dispatched task until the run ends, and those bytes embed complete parent outputs. On a
+    // graph with large intermediates that is real memory the plain path releases at each level
+    // boundary, and unlike InProcessMemo the index is unbounded.
+    //
+    // Both preserve `outputs` bit-for-bit -- a skipped task is a pure function of bytes
+    // that were computed anyway. Two things are NOT preserved, and must not be: `executed`
+    // counts tasks actually dispatched, which is precisely the quantity these options reduce,
+    // and `measured_seconds` is 0.0 for every hit and every collapsed duplicate, because
+    // nothing ran and a borrowed duration would be fictional work in a timing field.
+    //
+    // Neither can fail a run. A memo lookup or publish that reports failure, and an entry that
+    // will not decode, are all treated as misses.
+    DistributedMemo* memo{nullptr};
+    bool dedup_identical_tasks{false};
+
     auto with_wal_dir(std::filesystem::path p) -> SgeeExecutorConfig& {
         wal_dir = std::move(p);
         return *this;
@@ -693,6 +721,16 @@ struct SgeeExecutorConfig {
 
     auto with_registry(const TaskRegistry& r) -> SgeeExecutorConfig& {
         registry = &r;
+        return *this;
+    }
+
+    auto with_memo(DistributedMemo& m) -> SgeeExecutorConfig& {
+        memo = &m;
+        return *this;
+    }
+
+    auto with_dedup_identical_tasks(bool on) -> SgeeExecutorConfig& {
+        dedup_identical_tasks = on;
         return *this;
     }
 
@@ -1046,6 +1084,14 @@ auto decode_result(std::span<const std::byte> bytes) -> Result<ResultEnvelope> {
     const double seconds = read_f64_le(bytes, 8);
     const std::uint64_t len = read_u64_le(bytes, 16);
 
+    // encode_result writes len == 0 for EVERY non-ok status, so a non-ok envelope carrying
+    // payload bytes was not produced by this codec. The comment above always claimed this
+    // check; it now exists, because a memo makes foreign-authored envelopes a reachable input
+    // to this decoder rather than only ever bytes a trusted worker just wrote.
+    if (status_raw != 0 && len != 0) {
+        return make_error<ResultEnvelope>(MathError::syntax_error);
+    }
+
     // No-wrap length check: bytes.size() >= 24 is established above, so bytes.size() - 24 is safe.
     if (len != bytes.size() - 24) {
         return make_error<ResultEnvelope>(MathError::syntax_error);
@@ -1325,6 +1371,27 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
         run_deadline_ms = std::max<std::uint64_t>(60'000, static_cast<std::uint64_t>(clamped_ms));
     }
 
+    // Run-wide index of tasks already dispatched, keyed by ContentKey and holding EVERY
+    // candidate under that fingerprint together with its full encoded bytes. The vector is
+    // not paranoia: two different tasks may share a ContentKey, and collapsing them would
+    // return one task's answer for another. A candidate counts only on a full byte match.
+    std::map<ContentKey, std::vector<std::pair<TaskId, Payload>>> run_index;
+
+    // Resolve a byte-identical task already dispatched in this run, or nullopt.
+    const auto find_identical_task =
+        [&run_index](const ContentKey& key, const Payload& encoded) -> std::optional<TaskId> {
+        const auto it = run_index.find(key);
+        if (it == run_index.end()) {
+            return std::nullopt;
+        }
+        for (const auto& [tid, bytes] : it->second) {
+            if (bytes == encoded) {
+                return tid;
+            }
+        }
+        return std::nullopt;
+    };
+
     const auto start_time = std::chrono::steady_clock::now();
 
     for (std::size_t lvl = 0; lvl < g.num_levels(); ++lvl) {
@@ -1341,6 +1408,18 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             std::size_t recoveries{0};
         };
         std::unordered_map<std::uint64_t, PendingTaskInfo> pending_tasks;
+
+        // Tasks collapsed onto a twin still IN FLIGHT this level: their outputs cannot be
+        // copied until the level drains, so record them and settle up afterwards.
+        std::vector<std::pair<TaskId, TaskId>> pending_aliases;
+
+        // Which tasks this level has dispatched but not yet collected. This CANNOT be
+        // inferred from `outputs`: Result<Payload> default-constructs to a VALID empty
+        // payload, so an untouched slot and a task that legitimately returned no bytes are
+        // indistinguishable there. Copying an unresolved slot would hand a twin an empty
+        // answer and call it a result. Levels below this one are always fully drained, so
+        // membership here is the exact test for "still in flight".
+        std::unordered_set<std::size_t> dispatched_this_level;
 
         for (const TaskId id : level_tasks) {
             // Check poisoning
@@ -1382,6 +1461,95 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             auto enc_res = sgee_bridge::encode_task(env);
             if (!enc_res.has_value()) {
                 return make_error<TaskRunResult>(MathError::distributed_error);
+            }
+
+            // ── Content-addressed short-circuits, in cost order: the run index is a map
+            // lookup, the memo may be a network round trip, and dispatch is the whole
+            // cluster. Try them in that order and never pay for a later one needlessly.
+            //
+            // The guard is not a micro-optimisation. content_key is two multiplies and two
+            // XORs per byte, serially dependent and unvectorizable, over an encoded task that
+            // may reach k_max_task_payload_bytes. Computing it unconditionally would tax every
+            // existing default-configured run -- which is meant to behave exactly as before in
+            // cost, not only in output -- to produce a value nothing would read.
+            const bool content_addressing_on =
+                cfg_.dedup_identical_tasks || cfg_.memo != nullptr;
+            const ContentKey key =
+                content_addressing_on ? content_key(*enc_res) : ContentKey{};
+
+            if (cfg_.dedup_identical_tasks) {
+                if (const auto twin = find_identical_task(key, *enc_res)) {
+                    // Byte-identical to a task already dispatched this run. If its output
+                    // is already settled, take it now; otherwise it is in flight in THIS
+                    // level, so defer until the level drains.
+                    if (!dispatched_this_level.contains(twin->value)) {
+                        outputs[id.value] = outputs[twin->value];
+                        // A task that fails IS its own failure origin -- that is what a local
+                        // executor records for the same computation, and matching it keeps
+                        // descendants' poisoning identical to the single-node run.
+                        origins[id.value] =
+                            outputs[id.value].has_value() ? std::nullopt
+                                                          : std::optional<std::size_t>{id.value};
+                    } else {
+                        pending_aliases.emplace_back(id, *twin);
+                    }
+                    seconds[id.value] = 0.0;
+                    continue;
+                }
+            }
+
+            if (cfg_.memo != nullptr) {
+                // A memo that reports its own failure is treated as a miss, exactly like a
+                // corrupt entry below: turning ON a CACHE must never turn a run that would
+                // have succeeded into one that fails. A network-backed table having a bad
+                // moment would otherwise abort a whole distributed run, and a bad write by
+                // another process into a shared table would abort every run after it.
+                auto hit_res = cfg_.memo->lookup(key, *enc_res);
+
+                // An entry that will not decode, or that carries a status that is never
+                // published (only ok and math_error are -- see is_memoizable_status), means the
+                // TABLE is wrong, not that the task failed. Treat it as a miss and dispatch.
+                //
+                // Deliberately NOT an abort. A miss is by construction observationally
+                // identical to a hit, so recomputing is exactly as honest and strictly more
+                // available: aborting would let one malformed entry -- which any writer to a
+                // shared table can create -- permanently fail every future run of every graph
+                // containing that task, with no way to purge it. An accelerator must not be able
+                // to do that. The recomputation shows up in `executed`.
+                bool served_from_memo = false;
+                if (hit_res.has_value() && hit_res->has_value()) {
+                    const auto dec_res = sgee_bridge::decode_result(**hit_res);
+                    if (dec_res.has_value()) {
+                        const auto& memo_env = *dec_res;
+                        if (memo_env.status == sgee_bridge::ResultEnvelope::Status::ok) {
+                            outputs[id.value] = memo_env.bytes;
+                            origins[id.value] = std::nullopt;
+                            served_from_memo = true;
+                        } else if (memo_env.status ==
+                                   sgee_bridge::ResultEnvelope::Status::math_error) {
+                            outputs[id.value] = make_error<Payload>(memo_env.math_err);
+                            origins[id.value] = id.value;
+                            served_from_memo = true;
+                        }
+                    }
+                }
+
+                if (served_from_memo) {
+                    // 0.0, not the stored duration: nothing ran here, and reporting a borrowed
+                    // time would put fictional work into measured_seconds.
+                    seconds[id.value] = 0.0;
+                    // Settled without dispatch: index it (but NOT as in-flight) so a later twin
+                    // costs a map lookup rather than a second trip to the memo.
+                    if (cfg_.dedup_identical_tasks) {
+                        run_index[key].emplace_back(id, *enc_res);
+                    }
+                    continue;
+                }
+            }
+
+            if (cfg_.dedup_identical_tasks) {
+                run_index[key].emplace_back(id, *enc_res);
+                dispatched_this_level.insert(id.value);
             }
 
             const SgeePlacement placement = cfg_.placement ? cfg_.placement(g, id) : SgeePlacement::cpu;
@@ -1459,6 +1627,21 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                         return make_error<TaskRunResult>(MathError::distributed_error);
                     }
                     const auto& res_env = *dec_res;
+
+                    // Publish before applying. Only a result that is a deterministic FUNCTION
+                    // OF THE KEY may be cached: is_memoizable_status admits ok and math_error,
+                    // and refuses bridge_error, which reports the state of the cluster at one
+                    // moment rather than a property of the input. Caching that would make one
+                    // transient fault permanent for every future lookup of these bytes.
+                    if (cfg_.memo != nullptr &&
+                        is_memoizable_status(static_cast<int>(res_env.status))) {
+                        const ContentKey pub_key = content_key(info.encoded_payload);
+                        // Discarded deliberately. Publishing is an optimisation for some LATER
+                        // run; a table that refuses the write must not throw away results this
+                        // run has already collected.
+                        (void)cfg_.memo->publish(pub_key, info.encoded_payload, res_bytes);
+                    }
+
                     if (res_env.status == sgee_bridge::ResultEnvelope::Status::ok) {
                         outputs[info.id.value] = res_env.bytes;
                         origins[info.id.value] = std::nullopt;
@@ -1489,6 +1672,16 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             if (!pending_tasks.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.poll_interval_ms));
             }
+        }
+
+        // The level has drained, so every twin is settled: copy each collapsed task's answer
+        // across. Iterating `pending_aliases` in issuance order keeps this deterministic.
+        for (const auto& [alias, twin] : pending_aliases) {
+            outputs[alias.value] = outputs[twin.value];
+            origins[alias.value] = outputs[alias.value].has_value()
+                                       ? std::nullopt
+                                       : std::optional<std::size_t>{alias.value};
+            seconds[alias.value] = 0.0;
         }
     }
 

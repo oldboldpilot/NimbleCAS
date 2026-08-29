@@ -220,6 +220,39 @@ const auto res = dist_exec.run(g).value();
 decode_i64(res.outputs[d.value].value()); // 24 — BIT-IDENTICAL to serial_executor()
 ```
 
+## Content-addressed memoization (ROADMAP §6.2 item 2)
+
+Two `SgeeExecutorConfig` switches, **both default off**, so an executor configured as before
+behaves exactly as before:
+
+| Setting | Effect |
+| :--- | :--- |
+| `.with_dedup_identical_tasks(bool)` | Collapses tasks byte-identical to one already dispatched **in this run**. Needs no table. |
+| `.with_memo(DistributedMemo&)` | Consulted before every dispatch, published to after every collected result, so it memoizes **across runs**. Caller owns it; it must outlive the executor. |
+
+They are tried in cost order — a map lookup, then a possible network round trip, then the whole
+cluster — and the key is the canonical encoded `TaskEnvelope`, whose registry fingerprint retires
+every entry automatically when the registry changes. See [`memo_dist`](memo_dist.md).
+
+**What is preserved and what is not.** `TaskRunResult::outputs` stays **bit-for-bit identical**,
+failed tasks included: a skipped task is a pure function of bytes that were computed anyway.
+`executed` is **not** preserved and must not be — it counts tasks actually dispatched, which is
+precisely the quantity these options reduce. Nothing else changes, including poisoning: an alias
+or memo hit that carries a `MathError` records itself as its own failure origin, exactly as a
+single-node executor would for the same computation.
+
+**Only deterministic results are published.** `is_memoizable_status` admits `ok` and
+`math_error`; `bridge_error` is refused, because it reports the state of the cluster at one
+moment rather than a property of the input, and caching it would make one transient fault
+permanent for every later lookup of those bytes.
+
+Two implementation notes worth carrying forward, both recorded because getting them wrong is
+silent. The run index maps a `ContentKey` to a **vector** of candidates matched on full bytes,
+since two different tasks may share a fingerprint and collapsing them would return one task's
+answer for another. And in-flight tasks are tracked in an explicit set rather than inferred from
+`outputs`: `Result<Payload>` default-constructs to a **valid empty payload**, so an untouched
+slot is indistinguishable there from a task that legitimately returned no bytes.
+
 ## See also
 
 - [`nimblecas.taskdag`](taskdag.md) — local task-DAG scheduler.

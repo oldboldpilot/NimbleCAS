@@ -939,6 +939,13 @@ target_sources(nimblecas_taskdag_sched PUBLIC
 target_link_libraries(nimblecas_taskdag_sched
   PUBLIC nimblecas_taskdag nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.memo_dist : content-addressed distributed memoization (hash-consing) ----
+add_library(nimblecas_memo_dist STATIC)
+target_sources(nimblecas_memo_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/memo_dist/memo_dist.cppm)
+target_link_libraries(nimblecas_memo_dist
+  PUBLIC nimblecas_taskdag nimblecas_core std_module)
+
 # ---- nimblecas.taskdag_sgee : SGEE distributed task-DAG backend — opt-in via -DNIMBLECAS_SGEE=ON ----
 option(NIMBLECAS_SGEE "Enable the SGEE distributed taskdag backend" OFF)
 # The cross-process gRPC backend is INDEPENDENT of NIMBLECAS_SGEE: it links libsgee_capi_grpc
@@ -951,7 +958,7 @@ add_library(nimblecas_taskdag_sgee STATIC)
 target_sources(nimblecas_taskdag_sgee PUBLIC
   FILE_SET CXX_MODULES FILES src/taskdag_sgee/taskdag_sgee.cppm)
 target_link_libraries(nimblecas_taskdag_sgee
-  PUBLIC nimblecas_taskdag_sched nimblecas_taskdag nimblecas_core std_module)
+  PUBLIC nimblecas_taskdag_sched nimblecas_memo_dist nimblecas_taskdag nimblecas_core std_module)
 
 if(NIMBLECAS_SGEE)
   find_path(NIMBLECAS_SGEE_CAPI_INCLUDE sgee_capi.h
@@ -1373,6 +1380,11 @@ target_link_libraries(taskdag_tests
   PRIVATE nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_tests COMMAND taskdag_tests)
 
+add_executable(memo_dist_tests tests/memo_dist_tests.cpp)
+target_link_libraries(memo_dist_tests
+  PRIVATE nimblecas_memo_dist nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME memo_dist_tests COMMAND memo_dist_tests)
+
 add_executable(taskdag_sched_tests tests/taskdag_sched_tests.cpp)
 target_link_libraries(taskdag_sched_tests
   PRIVATE nimblecas_taskdag_sched nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
@@ -1382,6 +1394,12 @@ add_executable(taskdag_sgee_tests tests/taskdag_sgee_tests.cpp)
 target_link_libraries(taskdag_sgee_tests
   PRIVATE nimblecas_taskdag_sgee nimblecas_taskdag nimblecas_core nimblecas_testing std_module)
 add_test(NAME taskdag_sgee_tests COMMAND taskdag_sgee_tests)
+
+add_executable(taskdag_sgee_memo_tests tests/taskdag_sgee_memo_tests.cpp)
+target_link_libraries(taskdag_sgee_memo_tests
+  PRIVATE nimblecas_taskdag_sgee nimblecas_memo_dist nimblecas_taskdag nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME taskdag_sgee_memo_tests COMMAND taskdag_sgee_memo_tests)
 
 # Cross-process gRPC integration test + its worker binary (NIMBLECAS_SGEE_GRPC=ON only). The test
 # spawns a real sgee_queue_node (path from the NIMBLECAS_SGEE_QUEUE_NODE env var) and two worker
@@ -2183,6 +2201,12 @@ target_link_libraries(mc_bench
 add_executable(taskdag_sched_bench tools/taskdag_sched_bench.cpp)
 target_link_libraries(taskdag_sched_bench
   PRIVATE nimblecas_taskdag_sched nimblecas_taskdag_sgee nimblecas_taskdag
+          nimblecas_parallel nimblecas_core std_module)
+
+# Content-addressed memoization benchmark harness (ROADMAP §6.2 item 2 / M7).
+add_executable(memo_dist_bench tools/memo_dist_bench.cpp)
+target_link_libraries(memo_dist_bench
+  PRIVATE nimblecas_memo_dist nimblecas_taskdag_sgee nimblecas_taskdag
           nimblecas_parallel nimblecas_core std_module)
 
 add_executable(parallel_tests tests/parallel_tests.cpp)
