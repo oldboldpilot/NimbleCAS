@@ -88,6 +88,26 @@ module is what makes it dangerous.
 disagree with the supplied full key. A mismatch is also counted as a miss, so
 `hits + misses` equals the number of lookups and a measured hit rate has an honest denominator.
 
+## Error model
+
+| Situation | Result | Rationale |
+| :--- | :--- | :--- |
+| `lookup` of an absent key | `Result` **ok**, value `nullopt` | A miss is not an error |
+| `lookup` where the fingerprint matches but the bytes differ | `Result` **ok**, value `nullopt`, `key_mismatches++` | The exactness rule; a collision costs an entry, never an answer |
+| `publish` of a value over `max_value_bytes` | `Result` **ok**, `rejected++` | Refusing to cache is not an error — the caller recomputes |
+| `publish` when `max_entries` is reached | `Result` **ok**, `rejected++` | Bounded, no eviction, so behaviour stays reproducible |
+| `publish` of a key already held | `Result` **ok**, `publishes++` | First writer wins; pure ops must agree anyway |
+| `InProcessMemo` | never returns an error | Every refusal above is a success with a counter |
+
+A `DistributedMemo` implementation *may* return an error — a network-backed one will. **The
+executor treats that as a miss**, along with an entry that will not decode: turning on a cache
+must never turn a run that would have succeeded into one that fails. See the error model in
+[`taskdag_sgee`](taskdag_sgee.md) for the run-level aborts, none of which the memo adds to.
+
+`stats()` is a snapshot of five independently-read counters, so a caller reading it *while*
+other threads use the table may see `hits + misses` momentarily disagree with the number of
+lookups. The identity holds once traffic stops.
+
 `is_memoizable_status` takes a plain `int` rather than `ResultEnvelope::Status` so that this
 module need not import `taskdag_sgee`. The dependency runs the other way, and keeping the
 import graph acyclic is why `taskdag_sched::to_placement` likewise returns a raw `uint8_t`.

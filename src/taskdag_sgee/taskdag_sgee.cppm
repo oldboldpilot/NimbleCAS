@@ -695,13 +695,22 @@ struct SgeeExecutorConfig {
     // table outlives the run, so it memoizes ACROSS runs and (for a shared implementation)
     // across the cluster. The caller owns it; it must outlive the executor.
     //
-    // `dedup_identical_tasks` needs no table: it collapses tasks that are byte-identical
-    // to one ALREADY SEEN IN THIS RUN, dispatching the first and copying its output to the
-    // rest. That is the redundancy a DAG creates on its own, and it is caught for free.
+    // `dedup_identical_tasks` needs no EXTERNAL table: it collapses tasks that are
+    // byte-identical to one ALREADY SEEN IN THIS RUN, dispatching the first and copying its
+    // output to the rest. That is the redundancy a DAG creates on its own. It is not free,
+    // though -- it keeps a run-wide index holding the full encoded bytes of every distinct
+    // dispatched task until the run ends, and those bytes embed complete parent outputs. On a
+    // graph with large intermediates that is real memory the plain path releases at each level
+    // boundary, and unlike InProcessMemo the index is unbounded.
     //
     // Both preserve `outputs` bit-for-bit -- a skipped task is a pure function of bytes
-    // that were computed anyway. `executed` is NOT preserved, and must not be: it counts
-    // tasks actually dispatched, which is precisely the quantity these two options reduce.
+    // that were computed anyway. Two things are NOT preserved, and must not be: `executed`
+    // counts tasks actually dispatched, which is precisely the quantity these options reduce,
+    // and `measured_seconds` is 0.0 for every hit and every collapsed duplicate, because
+    // nothing ran and a borrowed duration would be fictional work in a timing field.
+    //
+    // Neither can fail a run. A memo lookup or publish that reports failure, and an entry that
+    // will not decode, are all treated as misses.
     DistributedMemo* memo{nullptr};
     bool dedup_identical_tasks{false};
 
@@ -1457,7 +1466,16 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             // ── Content-addressed short-circuits, in cost order: the run index is a map
             // lookup, the memo may be a network round trip, and dispatch is the whole
             // cluster. Try them in that order and never pay for a later one needlessly.
-            const ContentKey key = content_key(*enc_res);
+            //
+            // The guard is not a micro-optimisation. content_key is two multiplies and two
+            // XORs per byte, serially dependent and unvectorizable, over an encoded task that
+            // may reach k_max_task_payload_bytes. Computing it unconditionally would tax every
+            // existing default-configured run -- which is meant to behave exactly as before in
+            // cost, not only in output -- to produce a value nothing would read.
+            const bool content_addressing_on =
+                cfg_.dedup_identical_tasks || cfg_.memo != nullptr;
+            const ContentKey key =
+                content_addressing_on ? content_key(*enc_res) : ContentKey{};
 
             if (cfg_.dedup_identical_tasks) {
                 if (const auto twin = find_identical_task(key, *enc_res)) {
@@ -1481,10 +1499,12 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             }
 
             if (cfg_.memo != nullptr) {
+                // A memo that reports its own failure is treated as a miss, exactly like a
+                // corrupt entry below: turning ON a CACHE must never turn a run that would
+                // have succeeded into one that fails. A network-backed table having a bad
+                // moment would otherwise abort a whole distributed run, and a bad write by
+                // another process into a shared table would abort every run after it.
                 auto hit_res = cfg_.memo->lookup(key, *enc_res);
-                if (!hit_res.has_value()) {
-                    return make_error<TaskRunResult>(MathError::distributed_error);
-                }
 
                 // An entry that will not decode, or that carries a status that is never
                 // published (only ok and math_error are -- see is_memoizable_status), means the
@@ -1497,7 +1517,7 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 // containing that task, with no way to purge it. An accelerator must not be able
                 // to do that. The recomputation shows up in `executed`.
                 bool served_from_memo = false;
-                if (hit_res->has_value()) {
+                if (hit_res.has_value() && hit_res->has_value()) {
                     const auto dec_res = sgee_bridge::decode_result(**hit_res);
                     if (dec_res.has_value()) {
                         const auto& memo_env = *dec_res;
@@ -1616,10 +1636,10 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                     if (cfg_.memo != nullptr &&
                         is_memoizable_status(static_cast<int>(res_env.status))) {
                         const ContentKey pub_key = content_key(info.encoded_payload);
-                        auto pub_res = cfg_.memo->publish(pub_key, info.encoded_payload, res_bytes);
-                        if (!pub_res.has_value()) {
-                            return make_error<TaskRunResult>(MathError::distributed_error);
-                        }
+                        // Discarded deliberately. Publishing is an optimisation for some LATER
+                        // run; a table that refuses the write must not throw away results this
+                        // run has already collected.
+                        (void)cfg_.memo->publish(pub_key, info.encoded_payload, res_bytes);
                     }
 
                     if (res_env.status == sgee_bridge::ResultEnvelope::Status::ok) {

@@ -537,6 +537,15 @@ auto main() -> int {
                       cks[i] = content_key(as_bytes(keys[i]));
                   }
 
+                  // Which keys a writer actually published. Not every key is: the index is
+                  // (tid*17 + op*31) % total_keys and only every third op writes. Without this
+                  // the "was anything LOST?" half of the verification below cannot be checked,
+                  // and a key silently dropped by a race would pass unnoticed.
+                  std::vector<std::atomic<bool>> published(total_keys);
+                  for (auto& flag : published) {
+                      flag.store(false, std::memory_order_relaxed);
+                  }
+
                   std::atomic<bool> start_gate{false};
                   std::atomic<std::size_t> wrong_values{0};
                   std::atomic<std::size_t> lookup_hits{0};
@@ -560,6 +569,8 @@ auto main() -> int {
                                                                 as_bytes(vals[key_idx]));
                                   if (!res.has_value()) {
                                       wrong_values.fetch_add(1, std::memory_order_relaxed);
+                                  } else {
+                                      published[key_idx].store(true, std::memory_order_relaxed);
                                   }
                               } else {
                                   // Lookup key
@@ -597,11 +608,16 @@ auto main() -> int {
                           if (*res.value() != vals[i]) {
                               ++post_corrupt;
                           }
+                      } else if (published[i].load(std::memory_order_relaxed)) {
+                          // Published during the race, absent afterwards: the table lost it.
+                          ++post_missing;
                       }
                   }
 
                   t.expect_eq(post_corrupt, std::size_t{0},
                               "post-concurrency verification: no corrupted values in table");
+                  t.expect_eq(post_missing, std::size_t{0},
+                              "post-concurrency verification: no published key went missing");
 
                   const auto final_stats = memo.stats();
                   t.expect_eq(final_stats.key_mismatches, std::uint64_t{0},

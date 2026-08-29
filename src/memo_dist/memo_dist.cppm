@@ -113,6 +113,9 @@ public:
     [[nodiscard]] virtual auto publish(const ContentKey& key, std::span<const std::byte> full_key,
                                        std::span<const std::byte> value) -> Result<void> = 0;
 
+    // A snapshot, not an atomic one: the counters are read independently, so a caller reading
+    // stats() WHILE other threads are using the table may observe hits + misses momentarily
+    // disagreeing with the number of lookups. The identity holds once the traffic stops.
     [[nodiscard]] virtual auto stats() const -> MemoStats = 0;
 };
 
@@ -150,7 +153,6 @@ private:
     struct Shard {
         mutable std::mutex m;
         std::unordered_map<std::uint64_t, std::vector<Entry>> buckets;
-        std::size_t entries{0};
     };
 
     std::size_t max_entries_{100'000};
@@ -213,10 +215,11 @@ auto is_memoizable_status(int status) noexcept -> bool {
 InProcessMemo::InProcessMemo(std::size_t shard_count, std::size_t max_entries,
                              std::size_t max_value_bytes)
     : max_entries_(max_entries), max_value_bytes_(max_value_bytes) {
+    // Clamp rather than assert: a caller asking for zero shards wants a working table, not a
+    // crash, and an assert placed after the clamp could never fire anyway.
     if (shard_count == 0) {
         shard_count = 1;
     }
-    assert(shard_count > 0 && "InProcessMemo requires at least one shard");
     shards_.reserve(shard_count);
     for (std::size_t i = 0; i < shard_count; ++i) {
         shards_.push_back(std::make_unique<Shard>());
@@ -326,14 +329,15 @@ auto InProcessMemo::publish(const ContentKey& key, std::span<const std::byte> fu
         return {};
     }
 
+    // Build the entry BEFORE touching the map. If either copy throws, the map is untouched
+    // and no empty bucket is left behind for a later lookup to find.
+    Entry entry{.fp = key,
+                .key = Payload(full_key.begin(), full_key.end()),
+                .value = Payload(value.begin(), value.end())};
+
     std::vector<Entry>& bucket =
         (it != shard.buckets.end()) ? it->second : shard.buckets[key.lo];
-    bucket.push_back(Entry{
-        .fp = key,
-        .key = Payload(full_key.begin(), full_key.end()),
-        .value = Payload(value.begin(), value.end())
-    });
-    ++shard.entries;
+    bucket.push_back(std::move(entry));
     total_entries_.fetch_add(1, std::memory_order_relaxed);
     publishes_.fetch_add(1, std::memory_order_relaxed);
     return {};
