@@ -30,19 +30,44 @@ else()
   # DEVIATION (documented): uses the system libc++ tree rather than a vendored
   # external/libcxx-v1 (Rule 51). Fine on the fixed build server; vendor for cloud.
   #
-  # The LLVM directory is DERIVED FROM THE COMPILER, never hardcoded. std.cppm must come
-  # from the same libc++ release as the clang++ compiling it -- a mismatched pair produces
-  # a std module that either fails to build or, worse, builds against a different standard
-  # library than everything else links to. Hardcoding one version also meant every toolchain
-  # bump broke configure in a way whose message named the wrong culprit.
-  string(REGEX MATCH "^[0-9]+" NIMBLECAS_LLVM_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
-  if(NOT NIMBLECAS_LLVM_MAJOR)
-    message(FATAL_ERROR
-      "Could not determine the LLVM major version from CMAKE_CXX_COMPILER_VERSION "
-      "('${CMAKE_CXX_COMPILER_VERSION}'). Set -DNIMBLECAS_LIBCXX_SHARE=<dir> explicitly.")
+  # The location comes from cmake/LibcxxLocate.cmake, which asks clang++ where its OWN
+  # libc++.so.1 is and takes the prefix from that. std.cppm must come from the same libc++
+  # release as the clang++ compiling it: a mismatched pair either fails to build or, worse,
+  # builds against a different standard library than everything else links to.
+  #
+  # Deriving `/usr/lib/llvm-<major>` from the version number instead would still be a guess --
+  # it fixes the version but hardcodes a Debian layout, so a source-built clang on a host that
+  # also has a packaged LLVM of the same major would silently take the packaged one.
+  if(NIMBLECAS_LIBCXX_PREFIX)
+    set(_ncas_std_share "${NIMBLECAS_LIBCXX_PREFIX}/share/libc++/v1")
+  else()
+    set(_ncas_std_share "")
   endif()
-  set(NIMBLECAS_LIBCXX_SHARE "/usr/lib/llvm-${NIMBLECAS_LLVM_MAJOR}/share/libc++/v1"
+
+  if(NOT NIMBLECAS_LIBCXX_SHARE AND NOT NIMBLECAS_STD_MODULE_SRC AND NOT _ncas_std_share)
+    # Do not invent a path. An unconditional FATAL_ERROR here would also make the escape hatch
+    # this message names unreachable, so it is guarded on the caller not having answered.
+    message(FATAL_ERROR
+      "Could not locate this compiler's libc++ (asked "
+      "'${CMAKE_CXX_COMPILER} -print-file-name=libc++.so.1'). Pass "
+      "-DNIMBLECAS_LIBCXX_SHARE=<dir containing std.cppm> or "
+      "-DNIMBLECAS_STD_MODULE_SRC=<path to std.cppm> explicitly.")
+  endif()
+
+  set(NIMBLECAS_LIBCXX_SHARE "${_ncas_std_share}"
       CACHE PATH "Directory containing libc++'s std.cppm / std.compat.cppm")
+
+  # A CACHE variable survives a toolchain change in an existing build dir. If the cached path
+  # is not the one this compiler reports, say so rather than silently compiling one release's
+  # std.cppm with another release's clang -- the exact failure this derivation prevents, and it
+  # leaves no other trace.
+  if(_ncas_std_share AND NOT NIMBLECAS_LIBCXX_SHARE STREQUAL _ncas_std_share)
+    message(WARNING
+      "NIMBLECAS_LIBCXX_SHARE ('${NIMBLECAS_LIBCXX_SHARE}') is not what this compiler reports "
+      "('${_ncas_std_share}'). This is usually a STALE CMake cache from a previous toolchain. "
+      "Delete the build directory, or set it deliberately.")
+  endif()
+
   set(NIMBLECAS_STD_MODULE_SRC "${NIMBLECAS_LIBCXX_SHARE}/std.cppm"
       CACHE FILEPATH "Path to the standard library std module source (libc++ std.cppm)")
 endif()

@@ -1,7 +1,7 @@
 # Sanitizer & Memory-Safety Testing
 
 Per Code Policy Rule 36, NimbleCAS is exercised under the full sanitizer set plus
-valgrind. All runs are on the Linux/clang-23/libc++ build (the reference toolchain).
+valgrind, on the Linux/clang/libc++ build (the reference toolchain).
 
 ## Running
 
@@ -17,14 +17,18 @@ under sanitizers. valgrind runs against the ordinary release `build/`.
 
 ## Status
 
-| Tool | Result |
-| :--- | :--- |
-| AddressSanitizer (ASan) | clean |
-| LeakSanitizer (LSan) | clean |
-| UndefinedBehaviorSanitizer (UBSan) | clean |
-| ThreadSanitizer (TSan) | **0 races in NimbleCAS code** (see TBB note) |
-| valgrind memcheck (`--leak-check=full`) | no leaks, no errors |
-| MemorySanitizer (MSan) | **clean** against an MSan-instrumented libc++ (see note) |
+**Each row records the toolchain the result was actually measured under.** The repository moved
+to clang-23 on 2026-08-29; rows still marked clang-22 have **not** been re-measured since, and
+saying so is cheaper than implying a run that did not happen.
+
+| Tool | Result | Measured under |
+| :--- | :--- | :--- |
+| AddressSanitizer (ASan) | clean — 163/163 | **clang-23** (re-run 2026-08-29) |
+| LeakSanitizer (LSan) | clean | **clang-23** (runs with ASan) |
+| ThreadSanitizer (TSan) | **0 races in NimbleCAS code** — 163/163 (see TBB note) | **clang-23** (re-run 2026-08-29) |
+| UndefinedBehaviorSanitizer (UBSan) | clean | clang-22 — not re-run |
+| valgrind memcheck (`--leak-check=full`) | no leaks, no errors | clang-22 — not re-run |
+| MemorySanitizer (MSan) | **clean** against an MSan-instrumented libc++ (see note) | clang-22 — not re-run, and needs an MSan libc++ rebuilt from matching 23.x sources first |
 
 ## ThreadSanitizer + oneTBB
 
@@ -46,10 +50,17 @@ The *system* libc++ is not, so against it MSan reports false "use-of-uninitializ
 inside ordinary `std::string`/`std::vector` operations. Building an MSan-instrumented
 libc++ resolves this, and against it NimbleCAS is **MSan-clean**.
 
-Build the MSan libc++ once (from the matching llvm-project source):
+Build the MSan libc++ once (from the **matching** llvm-project source).
+
+> **The tag must match the compiler's release.** An MSan libc++ built from one LLVM major and
+> used with a clang from another is the same std.cppm/runtime mismatch that
+> `cmake/StdModule.cmake` derives its paths to avoid — it will either fail to build or, worse,
+> instrument a different standard library than the code links against. Check
+> `clang++-23 --version` and use the tag it reports; the command below is written for the
+> 23.1.x line this repo currently pins.
 
 ```bash
-git clone --depth 1 --branch llvmorg-22.1.8 --filter=blob:none --sparse \
+git clone --depth 1 --branch llvmorg-23.1.0 --filter=blob:none --sparse \
     https://github.com/llvm/llvm-project /scratch/llvm-project
 cd /scratch/llvm-project && git sparse-checkout set runtimes libcxx libcxxabi libunwind cmake libc
 cmake -S /scratch/llvm-project/runtimes -B /scratch/msan-libcxx -G Ninja \

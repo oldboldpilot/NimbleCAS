@@ -7,8 +7,10 @@
 #   scripts/tidy.sh src/memo_dist       # only TUs whose path contains this substring
 #   BUILD_DIR=build-c23 scripts/tidy.sh # against a different configured build
 #
-# Requires a configured build directory: CMAKE_EXPORT_COMPILE_COMMANDS is ON, so
-# compile_commands.json is written by cmake. This does NOT build anything.
+# Requires a BUILT build directory, not merely a configured one. CMAKE_EXPORT_COMPILE_COMMANDS
+# is ON so cmake writes compile_commands.json at configure time, but clang-tidy on a C++23 module
+# translation unit needs the .pcm files its imports resolve to, and those only exist after a
+# build. This script itself builds nothing.
 #
 # Checks come from the repo-root .clang-tidy. Exit status is clang-tidy's, so this is
 # usable as a gate; it is not wired into the build, because running tidy over every
@@ -26,6 +28,11 @@ FILTER="${1:-}"
 if [[ ! -f "${BUILD_DIR}/compile_commands.json" ]]; then
   echo "No compile database at ${BUILD_DIR}/compile_commands.json." >&2
   echo "Configure a build first (scripts/build.sh), or set BUILD_DIR." >&2
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 not found on PATH; it is needed to read the compile database." >&2
   exit 1
 fi
 

@@ -1423,9 +1423,23 @@ auto main() -> int {
                   TaskGraph g;
                   const auto ids = build_diamond(reg, g);
                   (void)ids;
+                  // These op ids MUST match what build_diamond registers. An id that matches
+                  // nothing makes every lookup miss, every task take the fallback, and the whole
+                  // test compare the fallback against itself.
                   AffinityTable table;
-                  table.emplace("test.const/v1", Affinity::gpu_only);
-                  const auto place = affinity_placement(table, SgeePlacement::cpu);
+                  table.emplace("test.const7/v1", Affinity::gpu_only);
+                  table.emplace("test.mul2/v1", Affinity::hybrid);
+                  const auto place = affinity_placement(table, SgeePlacement::cloud);
+
+                  // Guard the guard: at least one task must actually HIT the table, or the
+                  // determinism this test pins is the determinism of a constant function.
+                  bool any_hit = false;
+                  for (std::size_t i = 0; i < g.size(); ++i) {
+                      if (place(g, TaskId{i}) != SgeePlacement::cloud) {
+                          any_hit = true;
+                      }
+                  }
+                  t.expect(any_hit, "the affinity table matches at least one task in the graph");
 
                   std::vector<SgeePlacement> first;
                   for (std::size_t i = 0; i < g.size(); ++i) {
@@ -1460,13 +1474,32 @@ auto main() -> int {
                       SgeeExecutorConfig cfg;
                       cfg.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
                       if (with_placement) {
+                          // Real op ids from build_diamond, and gpu_only so the labels actually
+                          // DIFFER from the cpu a null placement produces. With a table that
+                          // matches nothing this test would compare cpu against cpu and pass
+                          // even if a non-default label did corrupt results.
                           AffinityTable table;
-                          table.emplace("test.const/v1", Affinity::gpu_only);
+                          table.emplace("test.const7/v1", Affinity::gpu_only);
+                          table.emplace("test.mul2/v1", Affinity::gpu_only);
+                          table.emplace("test.add3/v1", Affinity::gpu_only);
+                          table.emplace("test.add/v1", Affinity::gpu_only);
+                          table.emplace("test.probe/v1", Affinity::gpu_only);
                           cfg.with_placement(affinity_placement(table));
                       }
                       SgeeDistributedExecutor exec(cfg, port, results);
                       return exec.run(g);
                   };
+
+                  // Prove the placed run really labels differently from the plain one, so the
+                  // bit-identity assertion below is comparing gpu-labelled work against
+                  // cpu-labelled work rather than two identically-labelled runs.
+                  {
+                      AffinityTable probe_table;
+                      probe_table.emplace("test.const7/v1", Affinity::gpu_only);
+                      const auto probe = affinity_placement(probe_table);
+                      t.expect(probe(g, TaskId{0}) == SgeePlacement::gpu,
+                               "the diamond's first task is labelled gpu, not the cpu default");
+                  }
 
                   const auto plain = run_with(false);
                   const auto placed = run_with(true);

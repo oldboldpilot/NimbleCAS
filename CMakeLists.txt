@@ -15,6 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(LibcxxLocate)     # ask clang++ where ITS libc++ is (feeds the two below)
 include(CanonicalFlags)   # global canonical compile/link flags (Rule 50)
 include(StdModule)        # std_module target providing `import std` (Rules 12/41)
 

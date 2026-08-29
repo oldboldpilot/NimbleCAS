@@ -845,14 +845,24 @@ private:
 // `cpu_only` -> cpu, `gpu_only` -> gpu, `hybrid` -> cpu. A task whose op id is absent from the
 // table, and any UNNAMED (closure) task -- which has no op id to look up -- takes `fallback`.
 //
+// PRECONDITION: every TaskId passed to the returned function must have been ISSUED BY the
+// TaskGraph passed alongside it. The function forwards to TaskGraph::op_id, which is guarded
+// by an assert only, and the canonical flags define NDEBUG -- so in a shipping build an
+// out-of-range id, or an id belonging to a different graph, is an out-of-bounds read yielding
+// a string_view over garbage and hence a silently wrong label. The executor's own call sites
+// always pass its own graph; this matters because the returned function is public API and is
+// designed to outlive the expression that built it.
+//
 // The table is COPIED into the returned closure, not referenced. A placement function commonly
 // outlives the expression that built it, and a dangling AffinityTable would be a silent wrong
 // routing rather than a crash. Affinity tables are small; the copy is the cheap side of that trade.
 //
 // ── HONESTY BOUNDARY (Rule 32) ───────────────────────────────────────────────────────────
 // THIS IS HALF A MECHANISM, AND TURNING IT ON CHANGES NOTHING TODAY. It labels every task
-// correctly and the label travels coordinator -> broker -> worker through the C ABI, which
-// carries one `int placement` per task end to end. But NO WORKER ACTS ON IT: `sgee_broker_lease`
+// correctly and the ABI carries one `int placement` per task from enqueue through to lease. But the
+// label never actually reaches a worker: `CapiBrokerPort::lease` and `GrpcBrokerPort::lease`
+// both DISCARD `out_placement`, and `BrokerPort::Lease` has no field to hold it, so it dies
+// inside the port. Nor could a worker use it if it had it: `sgee_broker_lease`
 // hands out the earliest pending task and accepts no placement filter, and the CAPI port drops
 // the `out_placement` it is given. So a GPU-only task is still leased by whichever worker asks
 // first.
