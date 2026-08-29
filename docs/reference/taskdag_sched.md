@@ -132,3 +132,14 @@ assert(res.outputs.size() == ser_res.outputs.size());
 - [`nimblecas.taskdag`](taskdag.md) — Single-node task-DAG scheduler and `Executor` interface.
 - [`nimblecas.parallel`](parallel.md) — Deterministic fork–join runtime (`transform_index`).
 - [Documentation hub](../Index.md)
+
+## `Affinity` is now wired
+
+`Affinity`, `AffinityTable` and `to_placement` were reachable only from unit tests until M8.
+[`taskdag_sgee::affinity_placement`](taskdag_sgee.md) now consumes an `AffinityTable` to build a
+`placement` function for the distributed executor. `to_placement` still returns a raw
+`std::uint8_t` rather than `SgeePlacement`, because the import graph runs `taskdag_sgee` →
+`taskdag_sched` and must stay acyclic; the consumer maps the code back.
+
+Note the honesty boundary stated there: the label is produced and transported correctly, but no
+worker acts on it yet, because the SGEE C ABI's lease takes no placement filter.

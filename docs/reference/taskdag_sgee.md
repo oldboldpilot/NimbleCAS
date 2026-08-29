@@ -253,6 +253,38 @@ answer for another. And in-flight tasks are tracked in an explicit set rather th
 `outputs`: `Result<Payload>` default-constructs to a **valid empty payload**, so an untouched
 slot is indistinguishable there from a task that legitimately returned no bytes.
 
+## Affinity → placement (ROADMAP §6.1 / §6.2 item 3)
+
+```cpp
+auto affinity_placement(const AffinityTable& table,
+                        SgeePlacement fallback = SgeePlacement::cpu)
+    -> std::function<SgeePlacement(const TaskGraph&, TaskId)>;
+```
+
+Builds the `SgeeExecutorConfig::placement` function from a frozen per-op
+[`AffinityTable`](taskdag_sched.md): `cpu_only` → `cpu`, `gpu_only` → `gpu`, `hybrid` → `cpu`.
+An op absent from the table, and any **unnamed** closure task (which has no op id to look up),
+take `fallback`.
+
+The table is **copied** into the returned closure, not referenced. A placement function commonly
+outlives the expression that built it, and a dangling `AffinityTable` would be silent wrong
+routing rather than a crash.
+
+> **⚠ This is half a mechanism, and turning it on changes nothing today.** It labels every task
+> correctly, and the label travels coordinator → broker → worker through the C ABI, which carries
+> one `int placement` per task end to end. **But no worker acts on it**: `sgee_broker_lease` hands
+> out the earliest pending task and accepts no placement filter, and `CapiBrokerPort` drops the
+> `out_placement` it is given. A GPU-only task is still leased by whichever worker asks first.
+>
+> It exists because it is the piece that lives in this repo, and because `Affinity` and
+> `to_placement` were otherwise dead code reachable only from unit tests. It becomes real routing
+> the moment the lease side can filter. **Do not read a placement label as a guarantee about where
+> a task ran.** See [sgee-locality-abi.md](../technical/sgee-locality-abi.md) for exactly what the
+> C ABI must add.
+
+Placement never affects results: `TaskRunResult::outputs` and `executed` are identical with and
+without it, which is asserted directly in `tests/taskdag_sgee_tests.cpp`.
+
 ## See also
 
 - [`nimblecas.taskdag`](taskdag.md) — local task-DAG scheduler.

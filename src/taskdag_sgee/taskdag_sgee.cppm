@@ -837,6 +837,35 @@ private:
     RunTransportFactory make_transport_;
 };
 
+// ---------------------------------------------------------------------------
+// Affinity -> placement (ROADMAP §6.1 "Hardware Affinities")
+// ---------------------------------------------------------------------------
+//
+// Builds the `SgeeExecutorConfig::placement` function from a frozen per-op AffinityTable:
+// `cpu_only` -> cpu, `gpu_only` -> gpu, `hybrid` -> cpu. A task whose op id is absent from the
+// table, and any UNNAMED (closure) task -- which has no op id to look up -- takes `fallback`.
+//
+// The table is COPIED into the returned closure, not referenced. A placement function commonly
+// outlives the expression that built it, and a dangling AffinityTable would be a silent wrong
+// routing rather than a crash. Affinity tables are small; the copy is the cheap side of that trade.
+//
+// ── HONESTY BOUNDARY (Rule 32) ───────────────────────────────────────────────────────────
+// THIS IS HALF A MECHANISM, AND TURNING IT ON CHANGES NOTHING TODAY. It labels every task
+// correctly and the label travels coordinator -> broker -> worker through the C ABI, which
+// carries one `int placement` per task end to end. But NO WORKER ACTS ON IT: `sgee_broker_lease`
+// hands out the earliest pending task and accepts no placement filter, and the CAPI port drops
+// the `out_placement` it is given. So a GPU-only task is still leased by whichever worker asks
+// first.
+//
+// It is built and tested now because it is the piece that lives in this repo, and because
+// `Affinity`/`to_placement` were otherwise dead code reachable only from unit tests. It becomes
+// real routing the moment the lease side can filter -- see docs/technical/sgee-locality-abi.md
+// for exactly what that requires. Until then, do not read a placement label as a guarantee about
+// where a task ran.
+[[nodiscard]] auto affinity_placement(const AffinityTable& table,
+                                      SgeePlacement fallback = SgeePlacement::cpu)
+    -> std::function<SgeePlacement(const TaskGraph&, TaskId)>;
+
 // Factory (NIMBLECAS_SGEE=ON). Validates config (invalid -> domain_error) and returns an executor
 // whose every run() opens a FRESH per-run CapiBrokerPort on a process-unique WAL, deleted on success
 // and retained on failure. The factory does NOT open a broker itself: broker-open failure surfaces
@@ -921,6 +950,33 @@ constexpr std::uint32_t k_task_magic = 0x4E434454;   // "NCDT" in LE
 constexpr std::uint32_t k_result_magic = 0x4E435254; // "NCRT" in LE
 
 }  // namespace
+
+auto affinity_placement(const AffinityTable& table, SgeePlacement fallback)
+    -> std::function<SgeePlacement(const TaskGraph&, TaskId)> {
+    return [table, fallback](const TaskGraph& g, TaskId id) -> SgeePlacement {
+        const std::string_view op = g.op_id(id);
+        if (op.empty()) {
+            // An unnamed closure task carries no op id, so there is nothing to look up.
+            return fallback;
+        }
+        const auto it = table.find(op);
+        if (it == table.end()) {
+            return fallback;
+        }
+        // to_placement returns a raw uint8_t so that taskdag_sched need not import this module
+        // (the dependency runs the other way). Map it back here, and treat any code this enum
+        // does not name as unroutable rather than casting blindly into an invalid enumerator.
+        switch (to_placement(it->second)) {
+            case 0: return SgeePlacement::direct;
+            case 1: return SgeePlacement::cpu;
+            case 2: return SgeePlacement::gpu;
+            case 3: return SgeePlacement::docker;
+            case 4: return SgeePlacement::distributed;
+            case 5: return SgeePlacement::cloud;
+            default: return fallback;
+        }
+    };
+}
 
 namespace sgee_bridge {
 
