@@ -1109,6 +1109,98 @@ auto main() -> int {
                               "memo recorded 1 publish after healthy execution");
                   t.expect_eq(stats2.hits, std::uint64_t{0}, "zero memo hits (both runs encountered a miss)");
               })
+
+        // ── The §6 durability claim, end to end ───────────────────────────────────────
+        // ROADMAP §6 recorded that "the result store remains in-memory and per-node ...
+        // recovery is a deterministic re-execution rather than durability". A file-backed
+        // DistributedMemo closes that: results survive the process that computed them.
+        .test("file_memo_makes_a_distributed_run_survive_a_restart",
+              [](TestContext& t) {
+                  std::error_code ec;
+                  const auto dir = std::filesystem::temp_directory_path(ec) / "ncas_m9_exec_restart";
+                  std::filesystem::remove_all(dir, ec);
+                  std::filesystem::create_directories(dir, ec);
+                  const auto path = dir / "results.memo";
+
+                  // A small diamond, built inline so this test owns its own graph.
+                  TaskRegistry reg;
+                  (void)reg.register_op("m9.seed/v1", [](auto) -> Result<Payload> { return encode_i64(7); });
+                  (void)reg.register_op("m9.dbl/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 2); });
+                  (void)reg.register_op("m9.inc3/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + 3); });
+                  (void)reg.register_op("m9.sum/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + decode_i64(ps[1])); });
+
+                  TaskGraph g;
+                  const auto a = g.add_named_task(reg, "m9.seed/v1");
+                  t.expect(a.has_value(), "seed task issues");
+                  if (!a.has_value()) { std::filesystem::remove_all(dir, ec); return; }
+                  const auto b = g.add_named_task(reg, "m9.dbl/v1", std::vector<TaskId>{*a});
+                  const auto c = g.add_named_task(reg, "m9.inc3/v1", std::vector<TaskId>{*a});
+                  t.expect(b.has_value() && c.has_value(), "both middle tasks issue");
+                  if (!b.has_value() || !c.has_value()) { std::filesystem::remove_all(dir, ec); return; }
+                  const auto d = g.add_named_task(reg, "m9.sum/v1", std::vector<TaskId>{*b, *c});
+                  t.expect(d.has_value(), "join task issues");
+                  if (!d.has_value()) { std::filesystem::remove_all(dir, ec); return; }
+
+                  const auto run_with_memo = [&reg, &g](nimblecas::DistributedMemo* memo) {
+                      FakeBrokerPort port;
+                      InMemoryResultChannel results;
+                      SgeeExecutorConfig cfg;
+                      cfg.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1);
+                      if (memo != nullptr) {
+                          cfg.with_memo(*memo);
+                      }
+                      SgeeDistributedExecutor exec(cfg, port, results);
+                      return exec.run(g);
+                  };
+
+                  // A plain run, for the bit-identity comparison.
+                  const auto reference = run_with_memo(nullptr);
+                  t.expect(reference.has_value(), "the reference run succeeds");
+                  if (!reference.has_value()) { std::filesystem::remove_all(dir, ec); return; }
+
+                  std::size_t first_executed = 0;
+                  {
+                      auto memo = nimblecas::FileMemo::create(path);
+                      t.expect(memo.has_value(), "FileMemo::create for the first run");
+                      if (!memo.has_value()) { std::filesystem::remove_all(dir, ec); return; }
+                      const auto first = run_with_memo(memo->get());
+                      t.expect(first.has_value(), "the first memoized run succeeds");
+                      if (first.has_value()) {
+                          first_executed = first->executed;
+                          t.expect(first_executed == reference->executed,
+                                   "a cold memo dispatches every task, exactly as a plain run does");
+                      }
+                      t.expect((*memo)->size() > 0, "the first run left records on disk");
+                  }  // the memo -- and, in the story, the coordinator process -- goes away
+
+                  {
+                      // A NEW memo object over the SAME file: this is the restart.
+                      auto memo = nimblecas::FileMemo::create(path);
+                      t.expect(memo.has_value(), "FileMemo::create reopens the store after restart");
+                      if (!memo.has_value()) { std::filesystem::remove_all(dir, ec); return; }
+                      t.expect(!(*memo)->log_was_damaged(),
+                                  "the store closed cleanly and reopens undamaged");
+
+                      const auto second = run_with_memo(memo->get());
+                      t.expect(second.has_value(), "the run after restart succeeds");
+                      if (second.has_value()) {
+                          t.expect_eq(second->executed, std::size_t{0},
+                                      "NOTHING is dispatched after restart: every task is served from disk");
+                          t.expect(first_executed > 0,
+                                   "and the first run really had dispatched work, so that is a saving");
+
+                          bool identical = (second->outputs.size() == reference->outputs.size());
+                          for (std::size_t i = 0; identical && i < second->outputs.size(); ++i) {
+                              identical = results_equal(second->outputs[i], reference->outputs[i]);
+                          }
+                          t.expect(identical,
+                                   "outputs recovered from disk are bit-identical to a plain run");
+                      }
+                      t.expect((*memo)->stats().hits > 0, "the hits came from the file-backed store");
+                  }
+
+                  std::filesystem::remove_all(dir, ec);
+              })
         .run();
 }
 

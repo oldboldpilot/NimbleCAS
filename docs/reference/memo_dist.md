@@ -82,6 +82,7 @@ module is what makes it dangerous.
 | `struct MemoStats` | `hits`, `misses`, `publishes`, `key_mismatches`, `rejected` |
 | `class DistributedMemo` | Abstract: `name()`, `lookup()`, `publish()`, `stats()` |
 | `class InProcessMemo` | Sharded, mutex-guarded, bounded, no eviction |
+| `class FileMemo` | Append-only log on disk plus an in-memory index; survives the process |
 | `is_memoizable_status(int) -> bool` | True for `0` and `1` only |
 
 `key_mismatches` counts only a **genuine** collision — a non-empty bucket whose occupants all
@@ -180,6 +181,125 @@ outputs. On graphs with large intermediates that is a real cost; without dedup t
 were retained only per level.
 
 See [`taskdag_sgee`](taskdag_sgee.md) for the coordinator-side wiring.
+
+## `FileMemo` — the same table, made durable
+
+`InProcessMemo` dies with the process, so a coordinator restart re-executes everything it had
+already computed. `FileMemo` outlives it:
+
+```cpp
+auto memo = FileMemo::create("results.memo");        // Result<std::unique_ptr<FileMemo>>
+if (!memo.has_value()) { /* honest domain_error: bad path, unwritable, or I/O error mid-log */ }
+cfg.with_memo(**memo);
+```
+
+An **append-only** log with an in-memory index. Append-only suits the data: a memo entry is
+immutable by construction, because the value is a pure function of the key, so nothing ever
+needs rewriting. `create()` is a factory rather than a throwing constructor because a missing
+directory, an unwritable file, or an I/O error partway through the log are ordinary runtime
+conditions.
+
+Framing is little-endian throughout, for the same reason `ContentKey` is defined by byte
+arithmetic: a store written on one machine must be readable on another.
+
+```
+u32 magic | u16 version | u16 reserved | u64 fp_hi | u64 fp_lo
+u32 key_len | u32 value_len | key bytes | value bytes | u64 checksum
+```
+
+The first four bytes of the file are literally `N C M R` — asserted by a test, because a format
+spec that misdescribes its own bytes is useless to anyone writing an independent reader. The
+checksum covers everything before it, so a record boundary cannot be shifted nor the key/value
+split moved without failing it.
+
+**The `ContentKey` is stored, not recomputed.** `publish` indexes under the key the *caller*
+supplied, and the interface nowhere requires that to equal `content_key(full_key)`. Recomputing
+it at load would silently re-key such an entry and make it unreachable — so `FileMemo` would
+honour a different contract from `InProcessMemo` across exactly one event, a restart.
+
+### Honesty under a fault model the in-memory table never faces
+
+- **A hit is still confirmed by a full-key byte comparison.** The checksum proves a record is
+  *intact*; only the byte comparison proves it is *this key*.
+- **A damaged record is a miss.** Truncation is caught by the length bound, in-place damage by
+  the checksum. A damaged store costs work; it cannot produce a wrong value.
+- **Loading stops at the first unreadable record**, and the log is then **truncated** to the end
+  of the last good one. A record *behind* a bad one is deliberately not served, even if intact —
+  scanning past a record you cannot verify is how a corrupt log starts yielding plausible
+  garbage. Truncating matters too: a value's own bytes can contain something that parses as a
+  record, and after a short repair those bytes would land on a record boundary.
+- **A genuine I/O error while loading is not treated as end-of-log.** `create()` fails instead.
+  A short read mistaken for EOF would truncate a healthy log at the point of the error and
+  destroy durable records.
+- `log_was_damaged()` reports whether a damaged tail was found and cut. A **boolean, not a
+  count** — loading stops at the first bad record, so how many were lost beyond it is precisely
+  what cannot be known.
+
+### Durability is bounded, and the bound is stated rather than oversold
+
+Every publish writes and flushes, so records survive the **process** dying — a crash, a kill,
+an exit. They are **not** proof against **power loss**: reaching stable storage requires
+`fsync`/`fdatasync`/`FlushFileBuffers`, and `std::fstream` exposes no descriptor to call it on.
+
+There is deliberately **no "sync" option**. Through this API it could only close and reopen the
+stream, which pushes the library's buffers into the OS page cache — exactly what `flush()`
+already did — and would charge two syscalls per publish for no added guarantee. Power-loss
+durability needs the native file API and is **not implemented**. Saying so is better than
+shipping a flag whose name promises it.
+
+### One writer per path, and no bound
+
+Nothing locks the file. Two `FileMemo` objects over one path each keep their own append offset
+and overwrite each other's records. A reader rejects the wreckage rather than serving it, so
+this cannot produce a wrong *answer* — but it can destroy a store. **One process, one `FileMemo`
+per path.** Many threads through a single `FileMemo` are fine; it is internally locked.
+
+Unlike `InProcessMemo` there is **no `max_entries` analogue and no eviction**: the log grows
+until the disk refuses it, after which publishes are refused and the store keeps serving what it
+holds. `InProcessMemo`'s entry bound exists to keep behaviour reproducible; here the bound is the
+filesystem.
+
+### Error model
+
+| Situation | Result |
+| :--- | :--- |
+| `create` on a bad path, unwritable file, or **I/O error mid-log** | `MathError::domain_error` |
+| `create` on a log with a damaged tail | **succeeds**, tail truncated, `log_was_damaged()` true |
+| `lookup` of a damaged or absent record | **ok**, `nullopt` — a miss |
+| `publish` of an oversize value | **ok**, `rejected++` |
+| `publish` when the write fails (disk full, EIO) | **ok**, `rejected++` — the cache degrades, the run does not fail |
+
+The last row is worth reading twice: a dying disk is observationally identical to routine
+oversize refusal. Both raise `rejected`, and neither fails the caller's run — which is the right
+trade for a cache, but means `rejected` alone cannot distinguish a full disk from a working store.
+
+### What durability costs
+
+Measured, not assumed. `tools/memo_dist_bench --file-memo <path>` runs the all-hits arm against
+a `FileMemo` instead of the in-memory table; everything else is identical, and a fresh store is
+written per cell so no cell inherits another's warmth.
+
+| task ms | in-memory arm C (s) | file-backed arm C (s) |
+| ---: | ---: | ---: |
+| 0.1 | 0.001083 | 0.001088 |
+| 1 | 0.001085 | 0.001091 |
+| 10 | 0.001112 | 0.001116 |
+
+64 tasks, duplicate ratio 0.5, 7 repetitions, medians. The two are **within 0.5% and well inside
+the run-to-run spread** — on this workload durability is not measurably slower.
+
+Read that narrowly. It measures a **warm** store of 32 records served by the OS page cache, on
+one machine. It says nothing about a store large enough to miss the page cache, or about the
+write path at scale.
+
+### What this closes
+
+ROADMAP §6 recorded that "the result store remains in-memory and per-node … recovery is a
+deterministic re-execution rather than durability." With a `FileMemo` attached, a distributed run
+repeated after the coordinator restarts dispatches **nothing** and returns outputs bit-identical
+to a plain run — asserted in `tests/taskdag_sgee_memo_tests.cpp`. The harness there is the
+in-process `FakeBrokerPort`, and the "restart" is destroying and recreating the memo over the
+same file; no test drives a `FileMemo` through the gRPC/Raft path.
 
 ## Measured
 
