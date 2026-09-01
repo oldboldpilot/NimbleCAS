@@ -26,7 +26,7 @@ saying so is cheaper than implying a run that did not happen.
 | AddressSanitizer (ASan) | clean — 163/163 | **clang-23** (re-run 2026-08-29) |
 | LeakSanitizer (LSan) | clean | **clang-23** (runs with ASan) |
 | ThreadSanitizer (TSan) | **0 races in NimbleCAS code** — 163/163 (see TBB note) | **clang-23** (re-run 2026-08-29) |
-| UndefinedBehaviorSanitizer (UBSan) | clean | clang-22 — not re-run |
+| UndefinedBehaviorSanitizer (UBSan) | clean — 163/163 | **clang-23** (re-run 2026-09-01) |
 | valgrind memcheck (`--leak-check=full`) | no leaks, no errors | clang-22 — not re-run |
 | MemorySanitizer (MSan) | **clean** against an MSan-instrumented libc++ (see note) | clang-22 — not re-run, and needs an MSan libc++ rebuilt from matching 23.x sources first |
 

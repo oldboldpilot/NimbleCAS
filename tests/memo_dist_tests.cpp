@@ -10,7 +10,9 @@ import nimblecas.testing;
 using nimblecas::ContentKey;
 using nimblecas::content_key;
 using nimblecas::DistributedMemo;
+using nimblecas::FileMemo;
 using nimblecas::InProcessMemo;
+using nimblecas::MathError;
 using nimblecas::is_memoizable_status;
 using nimblecas::MemoStats;
 using nimblecas::Payload;
@@ -20,6 +22,21 @@ using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 
 namespace {
+
+// A fresh directory per test, so a failure in one cannot leave state that changes another.
+[[nodiscard]] auto temp_memo_dir(std::string_view tag) -> std::filesystem::path {
+    std::error_code ec;
+    const auto dir = std::filesystem::temp_directory_path(ec) /
+                     std::format("ncas_filememo_{}", tag);
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    return dir;
+}
+
+auto remove_memo_dir(const std::filesystem::path& dir) -> void {
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
 
 [[nodiscard]] auto to_payload(std::string_view s) -> Payload {
     Payload p;
@@ -624,6 +641,493 @@ auto main() -> int {
                               "zero key mismatches during race-free concurrent execution");
                   t.expect_eq(final_stats.rejected, std::uint64_t{0},
                               "zero rejected publishes during concurrent execution");
+              })
+
+        // ── FileMemo: the same table, made durable ────────────────────────────────────
+        .test("file_memo_survives_process_restart",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("restart");
+                  const auto path = dir / "memo.log";
+
+                  const auto k1 = to_payload("durable_task_key_one");
+                  const auto v1 = to_payload("durable_task_value_one");
+                  const auto k2 = to_payload("durable_task_key_two");
+                  const auto v2 = to_payload("durable_task_value_two");
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "FileMemo::create succeeds on a fresh path");
+                      if (!memo.has_value()) { return; }
+                      t.expect((*memo)->publish(content_key(as_bytes(k1)), as_bytes(k1), as_bytes(v1)).has_value(), "publish k1");
+                      t.expect((*memo)->publish(content_key(as_bytes(k2)), as_bytes(k2), as_bytes(v2)).has_value(), "publish k2");
+                      t.expect_eq((*memo)->size(), std::size_t{2}, "two records indexed before close");
+                  }  // destroyed: stands in for the process exiting
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "FileMemo::create reopens the existing log");
+                      if (!memo.has_value()) { return; }
+                      t.expect_eq((*memo)->size(), std::size_t{2}, "both records recovered from disk");
+                      t.expect(!(*memo)->log_was_damaged(), "no damage reported on a clean log");
+
+                      const auto r1 = (*memo)->lookup(content_key(as_bytes(k1)), as_bytes(k1));
+                      t.expect(r1.has_value() && r1->has_value(), "k1 hits after restart");
+                      if (r1.has_value() && r1->has_value()) {
+                          t.expect(**r1 == v1, "k1 returns exactly the bytes published before restart");
+                      }
+                      const auto r2 = (*memo)->lookup(content_key(as_bytes(k2)), as_bytes(k2));
+                      t.expect(r2.has_value() && r2->has_value() && **r2 == v2,
+                               "k2 returns exactly the bytes published before restart");
+
+                      const auto absent = to_payload("never_published");
+                      const auto r3 = (*memo)->lookup(content_key(as_bytes(absent)), as_bytes(absent));
+                      t.expect(r3.has_value() && !r3->has_value(), "an absent key is a clean miss after restart");
+                  }
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_torn_tail_is_a_miss_not_a_wrong_value",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("torn");
+                  const auto path = dir / "memo.log";
+
+                  const auto k1 = to_payload("intact_record_key");
+                  const auto v1 = to_payload("intact_record_value");
+                  const auto k2 = to_payload("torn_record_key");
+                  const auto v2 = to_payload("torn_record_value_that_is_long_enough_to_cut");
+
+                  std::uintmax_t good_prefix = 0;
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "create");
+                      if (!memo.has_value()) { return; }
+                      (void)(*memo)->publish(content_key(as_bytes(k1)), as_bytes(k1), as_bytes(v1));
+                      good_prefix = (*memo)->good_prefix_bytes();
+                      (void)(*memo)->publish(content_key(as_bytes(k2)), as_bytes(k2), as_bytes(v2));
+                  }
+
+                  // Simulate a crash mid-append: cut the file so the SECOND record is partial.
+                  std::error_code fec;
+                  const auto full_size = std::filesystem::file_size(path, fec);
+                  t.expect(!fec && full_size > good_prefix, "the second record actually occupies bytes");
+                  std::filesystem::resize_file(path, good_prefix + (full_size - good_prefix) / 2, fec);
+                  t.expect(!fec, "the log can be truncated to simulate a crash");
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "a torn log still opens");
+                      if (!memo.has_value()) { return; }
+
+                      t.expect_eq((*memo)->size(), std::size_t{1}, "only the intact record is indexed");
+                      t.expect((*memo)->log_was_damaged(), "the torn tail is reported, not hidden");
+                      t.expect_eq((*memo)->good_prefix_bytes(), good_prefix,
+                                  "the good prefix ends exactly at the last complete record");
+
+                      const auto r1 = (*memo)->lookup(content_key(as_bytes(k1)), as_bytes(k1));
+                      t.expect(r1.has_value() && r1->has_value() && **r1 == v1,
+                               "the record before the tear is still exact");
+
+                      // THE POINT: the torn record must be a MISS, never a partial value.
+                      const auto r2 = (*memo)->lookup(content_key(as_bytes(k2)), as_bytes(k2));
+                      t.expect(r2.has_value(), "a torn record does not make lookup an error");
+                      t.expect(!r2->has_value(), "a torn record is a MISS, never a truncated value");
+
+                      // And the store must still be writable: a new publish overwrites the
+                      // damaged tail rather than appending past it.
+                      const auto k3 = to_payload("after_the_tear_key");
+                      const auto v3 = to_payload("after_the_tear_value");
+                      t.expect((*memo)->publish(content_key(as_bytes(k3)), as_bytes(k3), as_bytes(v3)).has_value(),
+                               "publishing after a tear succeeds");
+                      const auto r3 = (*memo)->lookup(content_key(as_bytes(k3)), as_bytes(k3));
+                      t.expect(r3.has_value() && r3->has_value() && **r3 == v3, "the new record reads back");
+                  }
+
+                  // ...and it survives one more restart, proving the repair was durable.
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "reopen after repair");
+                      if (!memo.has_value()) { return; }
+                      t.expect_eq((*memo)->size(), std::size_t{2}, "intact record plus the one written over the tear");
+                      t.expect(!(*memo)->log_was_damaged(),
+                               "the tear was cut at open, so the repaired log reopens CLEAN");
+                      const auto k3 = to_payload("after_the_tear_key");
+                      const auto r3 = (*memo)->lookup(content_key(as_bytes(k3)), as_bytes(k3));
+                      t.expect(r3.has_value() && r3->has_value(), "the repaired record persists");
+                  }
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_corrupt_record_is_a_miss",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("corrupt");
+                  const auto path = dir / "memo.log";
+                  const auto k = to_payload("corruptible_key");
+                  const auto v = to_payload("corruptible_value_bytes");
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "create");
+                      if (!memo.has_value()) { return; }
+                      (void)(*memo)->publish(content_key(as_bytes(k)), as_bytes(k), as_bytes(v));
+                  }
+
+                  // Flip one bit INSIDE the stored value, leaving the framing intact. Only the
+                  // checksum can catch this; without it the store would serve altered bytes.
+                  std::error_code sec;
+                  const auto size = std::filesystem::file_size(path, sec);
+                  t.expect(!sec && size > 20, "record written");
+                  {
+                      std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
+                      t.expect(static_cast<bool>(f), "reopen the log for corruption");
+                      const auto pos = static_cast<std::streamoff>(size - 12);
+                      f.seekg(pos, std::ios::beg);
+                      char byte = 0;
+                      f.read(&byte, 1);
+                      byte = static_cast<char>(byte ^ 0x40);
+                      f.seekp(pos, std::ios::beg);
+                      f.write(&byte, 1);
+                  }
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "a corrupt log still opens");
+                      if (!memo.has_value()) { return; }
+                      const auto r = (*memo)->lookup(content_key(as_bytes(k)), as_bytes(k));
+                      t.expect(r.has_value(), "corruption does not make lookup an error");
+                      t.expect(!r->has_value(), "a checksum failure is a MISS, never the altered bytes");
+                  }
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_forged_collision_never_serves_the_wrong_answer",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("collide");
+                  const auto path = dir / "memo.log";
+                  auto memo = FileMemo::create(path);
+                  t.expect(memo.has_value(), "create");
+                  if (!memo.has_value()) { return; }
+
+                  // Two DIFFERENT full keys deliberately published under one ContentKey.
+                  const auto forged = ContentKey{0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL};
+                  const auto key_a = to_payload("file_memo_task_A");
+                  const auto val_a = to_payload("result_of_A");
+                  const auto key_b = to_payload("file_memo_task_B_different");
+
+                  t.expect((*memo)->publish(forged, as_bytes(key_a), as_bytes(val_a)).has_value(), "publish under the forged key");
+
+                  const auto hit = (*memo)->lookup(forged, as_bytes(key_a));
+                  t.expect(hit.has_value() && hit->has_value() && **hit == val_a,
+                           "the matching full key returns exactly its own value");
+
+                  const auto collide = (*memo)->lookup(forged, as_bytes(key_b));
+                  t.expect(collide.has_value(), "a collision is not an error");
+                  t.expect(!collide->has_value(),
+                           "a fingerprint collision with a different full key MUST miss, never serve A's value");
+                  t.expect_eq((*memo)->stats().key_mismatches, std::uint64_t{1},
+                              "the collision is counted as a genuine key mismatch");
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_is_interchangeable_with_in_process_memo",
+              [](TestContext& t) {
+                  // Same operations, same observable answers: FileMemo must be a drop-in
+                  // DistributedMemo, since the executor holds only the base interface.
+                  const auto dir = temp_memo_dir("iface");
+                  const auto path = dir / "memo.log";
+                  auto file_memo = FileMemo::create(path);
+                  t.expect(file_memo.has_value(), "create");
+                  if (!file_memo.has_value()) { return; }
+
+                  InProcessMemo mem;
+                  DistributedMemo& a = mem;
+                  DistributedMemo& b = **file_memo;
+
+                  t.expect(a.name() == "in_process", "in-process reports its name");
+                  t.expect(b.name() == "file", "file-backed reports its name");
+
+                  bool all_agree = true;
+                  for (int i = 0; i < 24; ++i) {
+                      const auto key = to_payload(std::format("iface_key_{:03d}", i));
+                      const auto val = to_payload(std::format("iface_val_{:03d}_payload", i));
+                      const auto ck = content_key(as_bytes(key));
+
+                      const auto miss_a = a.lookup(ck, as_bytes(key));
+                      const auto miss_b = b.lookup(ck, as_bytes(key));
+                      all_agree = all_agree && miss_a.has_value() && miss_b.has_value() &&
+                                  !miss_a->has_value() && !miss_b->has_value();
+
+                      (void)a.publish(ck, as_bytes(key), as_bytes(val));
+                      (void)b.publish(ck, as_bytes(key), as_bytes(val));
+
+                      const auto hit_a = a.lookup(ck, as_bytes(key));
+                      const auto hit_b = b.lookup(ck, as_bytes(key));
+                      all_agree = all_agree && hit_a.has_value() && hit_b.has_value() &&
+                                  hit_a->has_value() && hit_b->has_value() && **hit_a == val &&
+                                  **hit_b == val;
+                  }
+                  t.expect(all_agree, "both implementations answer identically for 24 keys");
+                  t.expect_eq(a.stats().hits, b.stats().hits, "hit counts agree");
+                  t.expect_eq(a.stats().misses, b.stats().misses, "miss counts agree");
+                  t.expect_eq(a.stats().publishes, b.stats().publishes, "publish counts agree");
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_duplicate_publish_keeps_the_first_and_does_not_grow",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("dup");
+                  const auto path = dir / "memo.log";
+                  auto memo = FileMemo::create(path);
+                  t.expect(memo.has_value(), "create");
+                  if (!memo.has_value()) { return; }
+
+                  const auto k = to_payload("repeatedly_published_key");
+                  const auto v = to_payload("the_one_true_value");
+                  const auto ck = content_key(as_bytes(k));
+
+                  (void)(*memo)->publish(ck, as_bytes(k), as_bytes(v));
+                  const auto after_first = (*memo)->good_prefix_bytes();
+                  for (int i = 0; i < 5; ++i) {
+                      (void)(*memo)->publish(ck, as_bytes(k), as_bytes(v));
+                  }
+                  t.expect_eq((*memo)->good_prefix_bytes(), after_first,
+                              "re-publishing an existing key appends nothing");
+                  t.expect_eq((*memo)->size(), std::size_t{1}, "still exactly one record");
+                  t.expect_eq((*memo)->stats().publishes, std::uint64_t{6},
+                              "every publish call still counts as a publish");
+                  const auto r = (*memo)->lookup(ck, as_bytes(k));
+                  t.expect(r.has_value() && r->has_value() && **r == v, "the value is unchanged");
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_oversize_value_is_refused_not_an_error",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("oversize");
+                  const auto path = dir / "memo.log";
+                  auto memo = FileMemo::create(path, /*max_value_bytes=*/64);
+                  t.expect(memo.has_value(), "create with a tiny value bound");
+                  if (!memo.has_value()) { return; }
+
+                  const auto k = to_payload("oversize_key");
+                  const Payload big(256, std::byte{0x5A});
+                  const auto ck = content_key(as_bytes(k));
+
+                  const auto pub = (*memo)->publish(ck, as_bytes(k), std::span<const std::byte>(big));
+                  t.expect(pub.has_value(), "refusing to cache is SUCCESS, not an error");
+                  t.expect_eq((*memo)->stats().rejected, std::uint64_t{1}, "the refusal is counted");
+                  t.expect_eq((*memo)->good_prefix_bytes(), std::uintmax_t{0}, "nothing was written");
+                  const auto r = (*memo)->lookup(ck, as_bytes(k));
+                  t.expect(r.has_value() && !r->has_value(), "and it reads back as a plain miss");
+                  remove_memo_dir(dir);
+              })
+
+        .test("file_memo_bad_path_is_an_honest_error",
+              [](TestContext& t) {
+                  // A directory that does not exist is a runtime condition, not a crash.
+                  std::error_code ec;
+                  const std::filesystem::path bad =
+                      std::filesystem::temp_directory_path(ec) / "ncas_no_such_dir_m9" / "sub" / "memo.log";
+                  std::filesystem::remove_all(bad.parent_path().parent_path(), ec);
+                  const auto memo = FileMemo::create(bad);
+                  t.expect(!memo.has_value(), "creating under a missing directory fails");
+                  if (!memo.has_value()) {
+                      t.expect(memo.error() == MathError::domain_error,
+                               "and fails with an honest domain_error, not a crash");
+                  }
+              })
+
+        // A good record BEHIND a bad one must NOT be loaded. This is the claim the module
+        // emphasises most and, until this test, the one nothing exercised: every earlier
+        // corruption case damaged the last record, where "stop at the first bad one" and
+        // "stop at the end" are indistinguishable.
+        .test("file_memo_stops_at_the_first_bad_record_and_does_not_scan_past_it",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("behind");
+                  const auto path = dir / "memo.log";
+
+                  const auto k1 = to_payload("record_one_key");
+                  const auto v1 = to_payload("record_one_value");
+                  const auto k2 = to_payload("record_two_key");
+                  const auto v2 = to_payload("record_two_value");
+                  const auto k3 = to_payload("record_three_key");
+                  const auto v3 = to_payload("record_three_value");
+
+                  std::uintmax_t after_first = 0;
+                  std::uintmax_t after_second = 0;
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "create");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      (void)(*memo)->publish(content_key(as_bytes(k1)), as_bytes(k1), as_bytes(v1));
+                      after_first = (*memo)->good_prefix_bytes();
+                      (void)(*memo)->publish(content_key(as_bytes(k2)), as_bytes(k2), as_bytes(v2));
+                      after_second = (*memo)->good_prefix_bytes();
+                      (void)(*memo)->publish(content_key(as_bytes(k3)), as_bytes(k3), as_bytes(v3));
+                      t.expect_eq((*memo)->size(), std::size_t{3}, "three records written");
+                  }
+
+                  // Damage a byte INSIDE record two, leaving records one and three untouched
+                  // and all framing intact, so only the checksum can catch it.
+                  {
+                      std::fstream f(path, std::ios::binary | std::ios::in | std::ios::out);
+                      t.expect(static_cast<bool>(f), "reopen for corruption");
+                      const auto pos = static_cast<std::streamoff>(after_second - 4);
+                      f.seekg(pos, std::ios::beg);
+                      char byte = 0;
+                      f.read(&byte, 1);
+                      byte = static_cast<char>(byte ^ 0x20);
+                      f.seekp(pos, std::ios::beg);
+                      f.write(&byte, 1);
+                  }
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "a log damaged in the middle still opens");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+
+                      t.expect_eq((*memo)->size(), std::size_t{1},
+                                  "ONLY the record before the damage is indexed");
+                      t.expect((*memo)->log_was_damaged(), "the damage is reported");
+                      t.expect_eq((*memo)->good_prefix_bytes(), after_first,
+                                  "the good prefix ends at the last record before the damage");
+
+                      const auto r1 = (*memo)->lookup(content_key(as_bytes(k1)), as_bytes(k1));
+                      t.expect(r1.has_value() && r1->has_value() && **r1 == v1,
+                               "the record before the damage is still exact");
+
+                      const auto r2 = (*memo)->lookup(content_key(as_bytes(k2)), as_bytes(k2));
+                      t.expect(r2.has_value() && !r2->has_value(), "the damaged record misses");
+
+                      // THE POINT: record three was perfectly intact, and must STILL be gone.
+                      // Serving it would mean the loader scanned past a record it could not
+                      // verify, which is how a corrupt log starts yielding plausible garbage.
+                      const auto r3 = (*memo)->lookup(content_key(as_bytes(k3)), as_bytes(k3));
+                      t.expect(r3.has_value() && !r3->has_value(),
+                               "an INTACT record behind the damaged one is NOT served");
+                  }
+                  remove_memo_dir(dir);
+              })
+
+        // A repair record SHORTER than the damaged remnant. Without truncation at open the
+        // remnant's tail would survive past the repair, leaving the store permanently flagged
+        // as damaged and putting former value bytes on a record boundary.
+        .test("file_memo_repair_shorter_than_the_damage_still_leaves_a_clean_log",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("shortfix");
+                  const auto path = dir / "memo.log";
+
+                  const auto k1 = to_payload("kept_key");
+                  const auto v1 = to_payload("kept_value");
+                  const auto k2 = to_payload("long_record_key_padded_out_considerably");
+                  const Payload v2(400, std::byte{0x7E});
+
+                  std::uintmax_t after_first = 0;
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "create");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      (void)(*memo)->publish(content_key(as_bytes(k1)), as_bytes(k1), as_bytes(v1));
+                      after_first = (*memo)->good_prefix_bytes();
+                      (void)(*memo)->publish(content_key(as_bytes(k2)), as_bytes(k2),
+                                             std::span<const std::byte>(v2));
+                  }
+
+                  // Cut most of the long record away, leaving a substantial remnant.
+                  std::error_code rec;
+                  const auto full = std::filesystem::file_size(path, rec);
+                  t.expect(!rec && full > after_first + 200, "the long record is long");
+                  std::filesystem::resize_file(path, after_first + 200, rec);
+                  t.expect(!rec, "truncate to leave a 200-byte remnant");
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "opens");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      t.expect((*memo)->log_was_damaged(), "the remnant is reported");
+                      std::error_code cec;
+                      t.expect_eq(std::filesystem::file_size(path, cec), after_first,
+                                  "the remnant is CUT at open, not left in place");
+
+                      // A repair record far shorter than the 200-byte remnant that was there.
+                      const auto k3 = to_payload("s");
+                      const auto v3 = to_payload("t");
+                      t.expect((*memo)->publish(content_key(as_bytes(k3)), as_bytes(k3), as_bytes(v3)).has_value(),
+                               "the short repair publishes");
+                  }
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "reopens after the short repair");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      t.expect(!(*memo)->log_was_damaged(),
+                               "the log is CLEAN afterwards -- no permanently standing damage flag");
+                      t.expect_eq((*memo)->size(), std::size_t{2}, "the kept record and the repair");
+                  }
+                  remove_memo_dir(dir);
+              })
+
+        // publish() indexes under the ContentKey the CALLER supplied, and the interface nowhere
+        // requires that to equal content_key(full_key). The record therefore STORES the key
+        // rather than recomputing it on load; otherwise such an entry would be re-keyed on
+        // restart and become unreachable, so FileMemo would honour a different contract than
+        // InProcessMemo across exactly one event.
+        .test("file_memo_keeps_a_caller_chosen_content_key_across_restart",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("rekey");
+                  const auto path = dir / "memo.log";
+
+                  const auto forged = ContentKey{0xABCDEF0123456789ULL, 0x1122334455667788ULL};
+                  const auto key = to_payload("bytes_whose_content_key_is_something_else");
+                  const auto val = to_payload("value_under_a_caller_chosen_key");
+                  t.expect(!(content_key(as_bytes(key)) == forged),
+                           "the chosen key really differs from content_key(full_key)");
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "create");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      t.expect((*memo)->publish(forged, as_bytes(key), as_bytes(val)).has_value(), "publish");
+                      const auto hit = (*memo)->lookup(forged, as_bytes(key));
+                      t.expect(hit.has_value() && hit->has_value() && **hit == val,
+                               "it hits before restart");
+                  }
+
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "reopen");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      const auto hit = (*memo)->lookup(forged, as_bytes(key));
+                      t.expect(hit.has_value() && hit->has_value(),
+                               "and it STILL hits after restart -- the key was stored, not recomputed");
+                      if (hit.has_value() && hit->has_value()) {
+                          t.expect(**hit == val, "with exactly the published bytes");
+                      }
+                  }
+                  remove_memo_dir(dir);
+              })
+
+        // The published format spec must describe the actual bytes. Written little-endian, the
+        // magic constant has to put 'N','C','M','R' on disk in that order -- an independent
+        // reader built from the documentation must be able to find them.
+        .test("file_memo_magic_bytes_on_disk_match_the_documented_spec",
+              [](TestContext& t) {
+                  const auto dir = temp_memo_dir("magic");
+                  const auto path = dir / "memo.log";
+                  {
+                      auto memo = FileMemo::create(path);
+                      t.expect(memo.has_value(), "create");
+                      if (!memo.has_value()) { remove_memo_dir(dir); return; }
+                      const auto k = to_payload("magic_key");
+                      const auto v = to_payload("magic_value");
+                      (void)(*memo)->publish(content_key(as_bytes(k)), as_bytes(k), as_bytes(v));
+                  }
+                  std::ifstream f(path, std::ios::binary);
+                  t.expect(static_cast<bool>(f), "reopen the log to inspect its bytes");
+                  std::array<char, 4> magic{};
+                  f.read(magic.data(), 4);
+                  t.expect_eq(f.gcount(), std::streamsize{4}, "four magic bytes present");
+                  t.expect(magic[0] == 'N' && magic[1] == 'C' && magic[2] == 'M' && magic[3] == 'R',
+                           "the file literally begins with the documented magic NCMR");
+                  remove_memo_dir(dir);
               })
         .run();
 }

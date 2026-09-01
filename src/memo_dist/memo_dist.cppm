@@ -167,6 +167,139 @@ private:
     mutable std::atomic<std::uint64_t> rejected_{0};
 };
 
+
+// ---------------------------------------------------------------------------
+// FileMemo — the same table, made DURABLE (ROADMAP §6.2)
+// ---------------------------------------------------------------------------
+//
+// InProcessMemo dies with the process, so a coordinator restart re-executes everything it
+// had already computed. FileMemo outlives the process: an APPEND-ONLY log on disk plus an
+// in-memory index of where each record lives.
+//
+// Append-only suits the data: a memo entry is immutable by construction, because the value is
+// a pure function of the key, so nothing ever needs rewriting. The one place the writer does
+// NOT simply append is when it repairs a damaged tail, and that case is handled by truncating
+// at open (below) rather than by seeking past unverified bytes.
+//
+// ── HONESTY BOUNDARY (Rule 32) ───────────────────────────────────────────────────────────
+//
+//   * A hit is confirmed by a FULL-KEY byte comparison, so a ContentKey collision costs an
+//     entry, never an answer.
+//   * Every record carries its own checksum. A truncated record is caught by the length bound
+//     and a damaged one by the checksum; either way it is a MISS and the task is recomputed.
+//     A damaged store can cost work; it cannot produce a wrong value.
+//   * Loading stops at the FIRST unreadable record rather than skipping it, and the log is then
+//     TRUNCATED to the end of the last good record. Scanning past a bad record for ones that
+//     merely look right is how a corrupt log starts serving plausible garbage -- and leaving
+//     the bytes in place is worse, because a value's own bytes can contain something that
+//     parses as a record, and after a short repair those bytes would land on a record boundary.
+//   * A genuine I/O ERROR while loading is NOT treated as end-of-log. Refusing to open is the
+//     only safe response: a short read taken for EOF would truncate a healthy log at the point
+//     the error happened, destroying durable records.
+//
+// DURABILITY IS BOUNDED, AND THE BOUND IS STATED RATHER THAN OVERSOLD. Every publish issues a
+// write and flushes it out of the library's buffers, so records survive the PROCESS dying --
+// a crash, a kill, an exit. They are NOT proof against POWER LOSS: reaching stable storage
+// needs fsync/fdatasync/FlushFileBuffers, and std::fstream exposes no file descriptor to call
+// it on. There is deliberately no "sync" option, because through this API it could only close
+// and reopen the stream, which pushes the library's buffers into the OS page cache -- exactly
+// what flush() already did -- and would charge two syscalls per publish for no added
+// guarantee. Power-loss durability needs the native file API and is not implemented; it is
+// better to say so than to ship a flag whose name promises it.
+//
+// SINGLE WRITER PER PATH. Nothing locks the file. Two FileMemo objects over one path each keep
+// their own append offset and will overwrite each other's records. A reader rejects the
+// wreckage rather than serving it, so this cannot produce a wrong ANSWER, but it can destroy a
+// store. One process, one FileMemo per path. Many threads through ONE FileMemo are fine.
+//
+// UNBOUNDED, unlike InProcessMemo. There is no max_entries analogue and nothing is ever
+// evicted: the log grows until the disk does not accept it, after which publishes are refused
+// and the store keeps serving what it already holds. InProcessMemo's entry bound exists to keep
+// behaviour reproducible; here the bound is the filesystem.
+class FileMemo final : public DistributedMemo {
+  public:
+    // Opens (creating if absent) the log at `path` and indexes what is already there, then
+    // truncates any damaged tail. `create()` rather than a throwing constructor: a bad path, an
+    // unreadable file, or a missing directory are ordinary runtime conditions, and so is an I/O
+    // error mid-log -- all of them return an honest error instead of a half-built object.
+    [[nodiscard]] static auto create(std::filesystem::path path,
+                                     std::size_t max_value_bytes = std::size_t{16} * 1024 * 1024)
+        -> Result<std::unique_ptr<FileMemo>>;
+
+    ~FileMemo() override = default;
+
+    [[nodiscard]] auto name() const -> std::string_view override;
+
+    [[nodiscard]] auto lookup(const ContentKey& key, std::span<const std::byte> full_key)
+        -> Result<std::optional<Payload>> override;
+
+    [[nodiscard]] auto publish(const ContentKey& key, std::span<const std::byte> full_key,
+                               std::span<const std::byte> value) -> Result<void> override;
+
+    [[nodiscard]] auto stats() const -> MemoStats override;
+
+    // Records successfully indexed from the log.
+    [[nodiscard]] auto size() const -> std::size_t;
+
+    // Whether the log carried a damaged or truncated tail when it was opened, which was then
+    // cut away. A boolean, not a count: loading stops at the first bad record, so how many
+    // records were lost beyond it is exactly what cannot be known. Worth surfacing because it
+    // is otherwise invisible -- the store simply behaves as though it holds less.
+    [[nodiscard]] auto log_was_damaged() const -> bool;
+
+    // Byte length of the log's verified prefix, which is also the offset the next record is
+    // appended at. After open this is the whole file, because a damaged tail is truncated.
+    [[nodiscard]] auto good_prefix_bytes() const -> std::uintmax_t;
+
+  private:
+    // Private-tag construction so make_unique works without exposing the constructor, and
+    // without the raw `new` the code policy bans.
+    struct PrivateTag {
+        explicit PrivateTag() = default;
+    };
+
+  public:
+    explicit FileMemo(PrivateTag) {}
+
+  private:
+    struct Located {
+        ContentKey fp{};
+        std::uintmax_t offset{0};
+    };
+
+    enum class ReadOutcome : std::uint8_t {
+        ok,        // a complete, checksum-verified record
+        end,       // cleanly out of records: EOF or a short/damaged tail
+        io_error,  // the stream itself failed; the log's contents are UNKNOWN past here
+    };
+
+    [[nodiscard]] auto read_record_at(std::uintmax_t offset, ContentKey& out_fp, Payload& out_key,
+                                      Payload& out_value) -> ReadOutcome;
+
+    std::filesystem::path path_{};
+    std::size_t max_value_bytes_{std::size_t{16} * 1024 * 1024};
+    std::uintmax_t good_prefix_{0};
+    bool damaged_{false};
+
+    // Cached because read_record_at consults it to bound an allocation, and that runs once per
+    // record on the dispatch path -- a stat() per lookup against a 17 us/task coordinator floor
+    // is not free. Only this class writes the file, and always under m_, so it cannot drift.
+    std::uintmax_t file_size_{0};
+
+    // One mutex for the whole store. FileMemo is bounded by disk, not by lock contention, and
+    // sharding would buy nothing while making the append order -- which IS the file format --
+    // harder to reason about.
+    mutable std::mutex m_;
+    std::map<ContentKey, std::vector<Located>> index_;
+    std::fstream file_;
+
+    mutable std::atomic<std::uint64_t> hits_{0};
+    mutable std::atomic<std::uint64_t> misses_{0};
+    mutable std::atomic<std::uint64_t> publishes_{0};
+    mutable std::atomic<std::uint64_t> mismatches_{0};
+    mutable std::atomic<std::uint64_t> rejected_{0};
+};
+
 // A result may be memoized only if it is a deterministic FUNCTION OF THE KEY.
 // ok (0) and math_error (1) qualify: a pure op given identical bytes always produces them.
 // bridge_error (2) does NOT: it reports a transport/coordination failure, a property of the
@@ -355,6 +488,406 @@ auto InProcessMemo::stats() const -> MemoStats {
 
 auto InProcessMemo::size() const noexcept -> std::size_t {
     return total_entries_.load(std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// FileMemo implementation
+// ---------------------------------------------------------------------------
+namespace filememo_detail {
+
+// Record framing, little-endian throughout so a store written on one machine is readable on
+// another — the same reason ContentKey is defined by byte arithmetic rather than std::hash.
+//
+//   u32 magic | u16 version=1 | u16 reserved=0 | u64 fp_hi | u64 fp_lo
+//   u32 key_len | u32 value_len | key bytes | value bytes | u64 checksum
+//
+// The checksum covers the header, the key and the value — everything before itself — so a
+// record boundary cannot be shifted, nor the key/value split moved, without failing it.
+//
+// The ContentKey is STORED, not recomputed on load. `publish` indexes under the key the caller
+// supplied, and the interface nowhere requires that to equal content_key(full_key); recomputing
+// it at load would silently re-key such an entry and make it unreachable after a restart, so
+// FileMemo would honour a different contract than InProcessMemo across exactly one event.
+inline constexpr std::uint32_t k_record_magic = 0x524D434E;  // bytes 'N','C','M','R' on disk
+inline constexpr std::uint16_t k_record_version = 1;
+inline constexpr std::size_t k_header_bytes = 32;
+inline constexpr std::size_t k_checksum_bytes = 8;
+inline constexpr std::size_t k_min_record_bytes = k_header_bytes + k_checksum_bytes;
+
+inline auto put_u16(std::uint16_t v, Payload& out) -> void {
+    out.push_back(static_cast<std::byte>(v & 0xFFu));
+    out.push_back(static_cast<std::byte>((v >> 8) & 0xFFu));
+}
+
+inline auto put_u32(std::uint32_t v, Payload& out) -> void {
+    for (int i = 0; i < 4; ++i) {
+        out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xFFu));
+    }
+}
+
+inline auto put_u64(std::uint64_t v, Payload& out) -> void {
+    for (int i = 0; i < 8; ++i) {
+        out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xFFu));
+    }
+}
+
+[[nodiscard]] inline auto get_u16(std::span<const std::byte> b, std::size_t off) -> std::uint16_t {
+    return static_cast<std::uint16_t>(static_cast<std::uint16_t>(b[off]) |
+                                      (static_cast<std::uint16_t>(b[off + 1]) << 8));
+}
+
+[[nodiscard]] inline auto get_u32(std::span<const std::byte> b, std::size_t off) -> std::uint32_t {
+    std::uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) {
+        v |= static_cast<std::uint32_t>(b[off + static_cast<std::size_t>(i)]) << (8 * i);
+    }
+    return v;
+}
+
+[[nodiscard]] inline auto get_u64(std::span<const std::byte> b, std::size_t off) -> std::uint64_t {
+    std::uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) {
+        v |= static_cast<std::uint64_t>(b[off + static_cast<std::size_t>(i)]) << (8 * i);
+    }
+    return v;
+}
+
+// Reuse the module's own fingerprint as the record checksum. It is not cryptographic and does
+// not need to be: it guards against a torn write and bit rot, not an adversary with write
+// access, and a record that passes it is STILL verified by a full-key comparison before its
+// value is served.
+[[nodiscard]] inline auto checksum(std::span<const std::byte> bytes) noexcept -> std::uint64_t {
+    return content_key(bytes).hi;
+}
+
+}  // namespace filememo_detail
+
+auto FileMemo::create(std::filesystem::path path, std::size_t max_value_bytes)
+    -> Result<std::unique_ptr<FileMemo>> {
+    namespace fd = filememo_detail;
+
+    auto memo = std::make_unique<FileMemo>(PrivateTag{});
+    memo->path_ = std::move(path);
+    memo->max_value_bytes_ = max_value_bytes;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(memo->path_, ec)) {
+        // Create, then reopen for update: opening a missing file with in|out fails rather than
+        // creating it, which is why this is two steps.
+        std::ofstream make(memo->path_, std::ios::binary | std::ios::app);
+        if (!make) {
+            return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+        }
+    }
+
+    memo->file_.open(memo->path_, std::ios::binary | std::ios::in | std::ios::out);
+    if (!memo->file_) {
+        return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+    }
+
+    {
+        std::error_code size_ec;
+        const auto initial = std::filesystem::file_size(memo->path_, size_ec);
+        if (size_ec) {
+            return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+        }
+        memo->file_size_ = initial;
+    }
+
+    // Index what is already on disk, stopping at the FIRST record that does not verify.
+    std::uintmax_t offset = 0;
+    for (;;) {
+        ContentKey fp{};
+        Payload key;
+        Payload value;
+        const ReadOutcome outcome = memo->read_record_at(offset, fp, key, value);
+        if (outcome == ReadOutcome::io_error) {
+            // NOT end-of-log. Everything past here is unknown, and taking it for EOF would let
+            // the next publish overwrite healthy durable records at this offset. Refuse.
+            return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+        }
+        if (outcome == ReadOutcome::end) {
+            break;
+        }
+        auto& bucket = memo->index_[fp];
+        const bool already = std::ranges::any_of(bucket, [&](const Located& loc) {
+            ContentKey k_fp{};
+            Payload k;
+            Payload v;
+            return memo->read_record_at(loc.offset, k_fp, k, v) == ReadOutcome::ok && k == key;
+        });
+        // First writer wins on disk exactly as in memory: the ops are pure, so a later record
+        // for the same key carries the same value, and preferring the earlier one keeps the
+        // store's meaning independent of append order.
+        if (!already) {
+            bucket.push_back(Located{.fp = fp, .offset = offset});
+        }
+        offset += static_cast<std::uintmax_t>(fd::k_header_bytes + key.size() + value.size() +
+                                              fd::k_checksum_bytes);
+    }
+    memo->good_prefix_ = offset;
+
+    if (memo->file_size_ > offset) {
+        // A damaged or truncated tail. CUT IT, rather than leaving it and appending over it.
+        // Leaving it would keep the store permanently flagged as damaged even after a repair,
+        // and worse: a repair record shorter than the remnant leaves the remnant's middle
+        // sitting on a record boundary, where bytes an op's own RESULT controlled become parse
+        // candidates. Truncation removes that class entirely.
+        memo->damaged_ = true;
+        std::error_code trunc_ec;
+        std::filesystem::resize_file(memo->path_, offset, trunc_ec);
+        if (trunc_ec) {
+            return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+        }
+        memo->file_size_ = offset;
+        // The stream cached a size from before the truncation; reopen so later reads and the
+        // append cursor agree with the file that now exists.
+        memo->file_.close();
+        memo->file_.open(memo->path_, std::ios::binary | std::ios::in | std::ios::out);
+        if (!memo->file_) {
+            return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+        }
+    }
+
+    memo->file_.clear();
+    memo->file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!memo->file_) {
+        return make_error<std::unique_ptr<FileMemo>>(MathError::domain_error);
+    }
+
+    return memo;
+}
+
+auto FileMemo::read_record_at(std::uintmax_t offset, ContentKey& out_fp, Payload& out_key,
+                              Payload& out_value) -> ReadOutcome {
+    namespace fd = filememo_detail;
+
+    // A record cannot even fit: cleanly out of records, not an error.
+    if (offset > file_size_ || file_size_ - offset < fd::k_min_record_bytes) {
+        return ReadOutcome::end;
+    }
+
+    file_.clear();
+    file_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (file_.bad()) {
+        return ReadOutcome::io_error;
+    }
+    if (!file_) {
+        return ReadOutcome::end;
+    }
+
+    std::array<char, fd::k_header_bytes> header_buf{};
+    file_.read(header_buf.data(), static_cast<std::streamsize>(header_buf.size()));
+    if (file_.bad()) {
+        return ReadOutcome::io_error;
+    }
+    if (file_.gcount() != static_cast<std::streamsize>(header_buf.size())) {
+        return ReadOutcome::end;
+    }
+    const auto header = std::as_bytes(std::span<const char>(header_buf));
+
+    if (fd::get_u32(header, 0) != fd::k_record_magic ||
+        fd::get_u16(header, 4) != fd::k_record_version) {
+        return ReadOutcome::end;
+    }
+    // `reserved` must be zero. Accepting a non-zero value would forfeit the field for any
+    // future use, because old readers would already have tolerated records that set it.
+    if (fd::get_u16(header, 6) != 0) {
+        return ReadOutcome::end;
+    }
+
+    const ContentKey fp{.hi = fd::get_u64(header, 8), .lo = fd::get_u64(header, 16)};
+    const std::uint32_t key_len = fd::get_u32(header, 24);
+    const std::uint32_t value_len = fd::get_u32(header, 28);
+
+    // Bound the allocation BEFORE reserving anything. key_len and value_len are u32, so `need`
+    // cannot overflow uintmax_t, and `offset` never exceeds the file size. The configured value
+    // bound applies on the way IN as well as on the way out, so a foreign or hand-written file
+    // cannot make this allocate more than this store was configured to hold.
+    const std::uintmax_t need = static_cast<std::uintmax_t>(fd::k_header_bytes) + key_len +
+                                value_len + fd::k_checksum_bytes;
+    if (need > file_size_ - offset || value_len > max_value_bytes_) {
+        return ReadOutcome::end;
+    }
+
+    Payload body(static_cast<std::size_t>(key_len) + value_len);
+    if (!body.empty()) {
+        file_.read(reinterpret_cast<char*>(body.data()),
+                   static_cast<std::streamsize>(body.size()));
+        if (file_.bad()) {
+            return ReadOutcome::io_error;
+        }
+        if (file_.gcount() != static_cast<std::streamsize>(body.size())) {
+            return ReadOutcome::end;
+        }
+    }
+
+    std::array<char, fd::k_checksum_bytes> sum_buf{};
+    file_.read(sum_buf.data(), static_cast<std::streamsize>(sum_buf.size()));
+    if (file_.bad()) {
+        return ReadOutcome::io_error;
+    }
+    if (file_.gcount() != static_cast<std::streamsize>(sum_buf.size())) {
+        return ReadOutcome::end;
+    }
+    const std::uint64_t stored = fd::get_u64(std::as_bytes(std::span<const char>(sum_buf)), 0);
+
+    Payload covered;
+    covered.reserve(fd::k_header_bytes + body.size());
+    covered.insert(covered.end(), header.begin(), header.end());
+    covered.insert(covered.end(), body.begin(), body.end());
+    if (fd::checksum(covered) != stored) {
+        return ReadOutcome::end;
+    }
+
+    out_fp = fp;
+    out_key.assign(body.begin(), body.begin() + static_cast<std::ptrdiff_t>(key_len));
+    out_value.assign(body.begin() + static_cast<std::ptrdiff_t>(key_len), body.end());
+    return ReadOutcome::ok;
+}
+
+auto FileMemo::name() const -> std::string_view {
+    return "file";
+}
+
+auto FileMemo::lookup(const ContentKey& key, std::span<const std::byte> full_key)
+    -> Result<std::optional<Payload>> {
+    const std::lock_guard<std::mutex> lock(m_);
+
+    const auto it = index_.find(key);
+    if (it == index_.end()) {
+        misses_.fetch_add(1, std::memory_order_relaxed);
+        return std::optional<Payload>{std::nullopt};
+    }
+
+    bool true_collision = false;
+    for (const Located& loc : it->second) {
+        ContentKey stored_fp{};
+        Payload stored_key;
+        Payload stored_value;
+        if (read_record_at(loc.offset, stored_fp, stored_key, stored_value) != ReadOutcome::ok) {
+            // Indexed but no longer readable. A miss, and the task is recomputed -- never a
+            // guess at what the record used to hold.
+            continue;
+        }
+        // ── EXACTNESS RULE (Code Policy Rule 32) ───────────────────────────
+        // The checksum proves the record is INTACT; it does not prove it is THIS key. Only a
+        // full byte comparison does, and a fingerprint collision must cost an entry rather than
+        // yield another task's answer.
+        if (stored_key.size() == full_key.size() &&
+            std::equal(stored_key.begin(), stored_key.end(), full_key.begin())) {
+            hits_.fetch_add(1, std::memory_order_relaxed);
+            return std::optional<Payload>{std::move(stored_value)};
+        }
+        // Count a mismatch only for a record whose FULL 128-bit fingerprint equals `key` while
+        // its bytes differ -- the same strict definition InProcessMemo uses, so the counter
+        // means the same thing in both and cannot be inflated by ordinary traffic.
+        if (stored_fp == key) {
+            true_collision = true;
+        }
+    }
+
+    if (true_collision) {
+        mismatches_.fetch_add(1, std::memory_order_relaxed);
+    }
+    misses_.fetch_add(1, std::memory_order_relaxed);
+    return std::optional<Payload>{std::nullopt};
+}
+
+auto FileMemo::publish(const ContentKey& key, std::span<const std::byte> full_key,
+                       std::span<const std::byte> value) -> Result<void> {
+    namespace fd = filememo_detail;
+
+    const std::lock_guard<std::mutex> lock(m_);
+
+    // Already held? First writer wins, and re-appending would grow the log without adding
+    // information. Counted as a publish, matching InProcessMemo.
+    if (const auto it = index_.find(key); it != index_.end()) {
+        for (const Located& loc : it->second) {
+            ContentKey k_fp{};
+            Payload k;
+            Payload v;
+            if (read_record_at(loc.offset, k_fp, k, v) == ReadOutcome::ok &&
+                k.size() == full_key.size() && std::equal(k.begin(), k.end(), full_key.begin())) {
+                publishes_.fetch_add(1, std::memory_order_relaxed);
+                return {};
+            }
+        }
+    }
+
+    if (value.size() > max_value_bytes_ ||
+        full_key.size() > std::numeric_limits<std::uint32_t>::max() ||
+        value.size() > std::numeric_limits<std::uint32_t>::max()) {
+        rejected_.fetch_add(1, std::memory_order_relaxed);
+        return {};
+    }
+
+    Payload record;
+    record.reserve(fd::k_header_bytes + full_key.size() + value.size() + fd::k_checksum_bytes);
+    fd::put_u32(fd::k_record_magic, record);
+    fd::put_u16(fd::k_record_version, record);
+    fd::put_u16(0, record);  // reserved
+    fd::put_u64(key.hi, record);
+    fd::put_u64(key.lo, record);
+    fd::put_u32(static_cast<std::uint32_t>(full_key.size()), record);
+    fd::put_u32(static_cast<std::uint32_t>(value.size()), record);
+    record.insert(record.end(), full_key.begin(), full_key.end());
+    record.insert(record.end(), value.begin(), value.end());
+    fd::put_u64(fd::checksum(record), record);
+
+    const std::uintmax_t offset = good_prefix_;
+
+    file_.clear();
+    file_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
+    file_.write(reinterpret_cast<const char*>(record.data()),
+                static_cast<std::streamsize>(record.size()));
+    // Flush before checking: a buffered failure surfaces here rather than being swallowed.
+    file_.flush();
+    if (!file_) {
+        // A write that did not land must not be indexed -- indexing it would promise a record
+        // the file does not contain. `good_prefix_` is left where it was, so the next publish
+        // overwrites whatever partial bytes reached the disk.
+        file_.clear();
+        std::error_code resync_ec;
+        if (const auto actual = std::filesystem::file_size(path_, resync_ec); !resync_ec) {
+            file_size_ = std::max(file_size_, actual);
+        }
+        rejected_.fetch_add(1, std::memory_order_relaxed);
+        return {};
+    }
+
+    good_prefix_ = offset + record.size();
+    file_size_ = std::max(file_size_, good_prefix_);
+    index_[key].push_back(Located{.fp = key, .offset = offset});
+    publishes_.fetch_add(1, std::memory_order_relaxed);
+    return {};
+}
+
+auto FileMemo::stats() const -> MemoStats {
+    return MemoStats{.hits = hits_.load(std::memory_order_relaxed),
+                     .misses = misses_.load(std::memory_order_relaxed),
+                     .publishes = publishes_.load(std::memory_order_relaxed),
+                     .key_mismatches = mismatches_.load(std::memory_order_relaxed),
+                     .rejected = rejected_.load(std::memory_order_relaxed)};
+}
+
+auto FileMemo::size() const -> std::size_t {
+    const std::lock_guard<std::mutex> lock(m_);
+    std::size_t n = 0;
+    for (const auto& [fp, bucket] : index_) {
+        n += bucket.size();
+    }
+    return n;
+}
+
+auto FileMemo::log_was_damaged() const -> bool {
+    const std::lock_guard<std::mutex> lock(m_);
+    return damaged_;
+}
+
+auto FileMemo::good_prefix_bytes() const -> std::uintmax_t {
+    const std::lock_guard<std::mutex> lock(m_);
+    return good_prefix_;
 }
 
 }  // namespace nimblecas

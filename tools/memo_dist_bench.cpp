@@ -267,6 +267,9 @@ struct CliOptions {
     std::uint64_t seed{1337ULL};
     std::size_t num_workers{4};
     std::string csv_output_path{};
+    // Arm C against a DURABLE memo instead of the in-memory one, so the cost of durability is
+    // measured rather than assumed. Empty = InProcessMemo.
+    std::string file_memo_path{};
     bool show_help{false};
 };
 
@@ -311,6 +314,8 @@ struct CliOptions {
             opts.num_workers = static_cast<std::size_t>(std::stoul(argv[++i]));
         } else if (arg == "--csv" && i + 1 < argc) {
             opts.csv_output_path = argv[++i];
+        } else if (arg == "--file-memo" && i + 1 < argc) {
+            opts.file_memo_path = argv[++i];
         } else {
             std::cerr << "Unknown argument: " << arg << "\n";
             return make_error<CliOptions>(MathError::syntax_error);
@@ -329,6 +334,7 @@ auto print_help(const char* prog) -> void {
               << "  --seed <S>                PRNG seed for graph duplicate generation (default: 1337)\n"
               << "  --workers <N>             Number of workers for SgeeDistributedExecutor (default: 4)\n"
               << "  --csv <path>              Output path for raw per-repetition CSV\n"
+              << "  --file-memo <path>        Arm C uses a durable FileMemo (default: in-memory)\n"
               << "  --help, -h                Show this help message\n";
 }
 
@@ -424,8 +430,27 @@ auto main(int argc, char** argv) -> int {
             }
             const TaskGraph& g = *g_res;
 
-            // InProcessMemo for Arm C: pre-warmed once per cell
-            InProcessMemo memo(32, 100'000, 16u * 1024u * 1024u);
+            // Arm C's memo, pre-warmed once per cell. FileMemo when a path was given, so the
+            // cost of DURABILITY is measured against the in-memory table rather than assumed.
+            // A FRESH file per cell: a store carried across cells would make later cells look
+            // faster for a reason that has nothing to do with the cell.
+            InProcessMemo mem_memo(32, 100'000, 16u * 1024u * 1024u);
+            std::unique_ptr<FileMemo> file_memo;
+            if (!opts.file_memo_path.empty()) {
+                std::error_code fec;
+                const std::string cell_path =
+                    opts.file_memo_path + std::format(".{}_{}", task_ms, dup_ratio);
+                std::filesystem::remove(cell_path, fec);
+                auto created = FileMemo::create(cell_path);
+                if (!created.has_value()) {
+                    std::cerr << "FileMemo::create failed for " << cell_path << "\n";
+                    std::exit(4);
+                }
+                file_memo = std::move(*created);
+            }
+            DistributedMemo& memo = file_memo
+                                        ? static_cast<DistributedMemo&>(*file_memo)
+                                        : static_cast<DistributedMemo&>(mem_memo);
 
             // Pre-warm Arm C's memo with one run of the exact graph
             {
