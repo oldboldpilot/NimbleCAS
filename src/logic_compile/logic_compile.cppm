@@ -111,9 +111,18 @@ enum class Width : std::uint8_t { bits64, bits128, arbitrary };
 //   * C++ accepts all three. `arbitrary` emits a MODULE-importing translation unit (it imports
 //     `nimblecas.bigint`) rather than a standalone one, because BigInt has no header form —
 //     that is a real difference in how the output is built, and it is stated in the output.
+// How solutions are delivered.
+//
+// `deterministic` compiles a predicate to a function returning its FIRST solution — the right
+// shape for arithmetic, and the wrong one for anything that can succeed more than once.
+// `continuation` compiles it to a function taking a callback invoked once per solution, so a
+// nondeterministic predicate compiles honestly instead of being truncated to its first answer.
+enum class Style : std::uint8_t { deterministic, continuation };
+
 struct CompileOptions {
     Target target{Target::cpp};
     Width width{Width::bits64};
+    Style style{Style::deterministic};
     // Compile a self tail call to a loop. On by default; the flag exists so the two forms can
     // be compared, not because recursion is ever preferable.
     bool tail_call_optimise{true};
@@ -855,6 +864,261 @@ struct CompileCtx {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Continuation-passing emission.
+// ---------------------------------------------------------------------------
+//
+// The deterministic emitter above compiles a predicate to a function returning the FIRST
+// solution. That is the right shape for arithmetic, and the wrong shape for anything that can
+// succeed more than once — which is most of Prolog.
+//
+// CPS compiles a predicate to a function taking a CONTINUATION, called once per solution with
+// the output arguments as values:
+//
+//     template <class K> auto p_between_3(nc_int lo, nc_int hi, K&& k) -> bool;
+//
+// The return value says whether the enumeration RAN TO COMPLETION: `false` means the
+// continuation asked to stop, and that answer is propagated outward untouched. That single
+// convention gives `once/1`, `findall/3` and cut the same implementation — stop, or keep going.
+//
+// A call to another predicate becomes a NESTED CONTINUATION holding the rest of the clause, so
+// backtracking into that call is just its own loop resuming. That is the whole transform, and
+// it is why CPS needs no explicit choice-point stack: the C++ call stack is the choice-point
+// stack.
+
+// Emits the goals of one clause from `pos` onward, with the remainder of the clause nested
+// inside any call's continuation. `on_success` is the statement that reports a solution.
+[[nodiscard]] auto emit_cps_goals(const CompileCtx& ctx, const PredicateSignature& sig,
+                                  const Clause& clause, std::size_t pos,
+                                  std::set<std::string> bound, const std::string& indent,
+                                  std::uint32_t& temp, const std::string& on_success)
+    -> Result<std::string> {
+    if (pos >= clause.body.size()) {
+        // Indented HERE rather than at construction: the success statement lands at whatever
+        // depth the nested continuations have reached, which the caller cannot know.
+        return indent + on_success;
+    }
+    const Term& goal = clause.body[pos];
+    std::string body;
+    // Failing a goal abandons THIS branch, not the enumeration: returning true means "no stop
+    // was requested", so the caller keeps offering solutions.
+    const std::string fail = "return true;";
+
+    if (is_atom(goal)) {
+        const std::string& g = atom_of(goal).name;
+        if (g == "true") {
+            return emit_cps_goals(ctx, sig, clause, pos + 1, std::move(bound), indent, temp,
+                                  on_success);
+        }
+        if (g == "fail" || g == "false") {
+            return std::format("{}return true;\n", indent);
+        }
+        if (g == "!") {
+            // Cut: record it, then carry on. The clause loop reads the flag after this clause
+            // returns and stops offering later clauses — cut prunes alternatives, it does not
+            // stop the solution that reached it.
+            auto rest = emit_cps_goals(ctx, sig, clause, pos + 1, std::move(bound), indent, temp,
+                                       on_success);
+            if (!rest) {
+                return rest;
+            }
+            return std::format("{}nc_cut = true;\n{}", indent, *rest);
+        }
+        return make_error<std::string>(MathError::not_implemented);
+    }
+    if (!is_compound(goal)) {
+        return make_error<std::string>(MathError::not_implemented);
+    }
+    const CompoundNode& g = compound_of(goal);
+
+    const ExprEmitter emitter{.body = &body,
+                              .bound = &bound,
+                              .indent = indent,
+                              .fail_stmt = fail,
+                              .temp_counter = &temp,
+                              .device = ctx.device};
+
+    if (g.functor == "is" && g.args.size() == 2 && is_var(g.args[0])) {
+        auto value = emit_expr(emitter, g.args[1]);
+        if (!value) {
+            return make_error<std::string>(value.error());
+        }
+        const std::string v = mangle_var(
+            VarKey{.name = var_of(g.args[0]).name, .generation = var_of(g.args[0]).generation});
+        if (bound.contains(v)) {
+            body += std::format("{}if ({} != {}) {{ {} }}\n", indent, v, *value, fail);
+        } else {
+            body += std::format("{}const nc_int {} = {};\n", indent, v, *value);
+            bound.insert(v);
+        }
+        auto rest = emit_cps_goals(ctx, sig, clause, pos + 1, std::move(bound), indent, temp,
+                                   on_success);
+        if (!rest) {
+            return rest;
+        }
+        return body + *rest;
+    }
+
+    if (const auto cmp = comparison_op(g.functor); cmp && g.args.size() == 2) {
+        auto lhs = emit_expr(emitter, g.args[0]);
+        if (!lhs) {
+            return make_error<std::string>(lhs.error());
+        }
+        auto rhs = emit_expr(emitter, g.args[1]);
+        if (!rhs) {
+            return make_error<std::string>(rhs.error());
+        }
+        body += std::format("{}if (!({} {} {})) {{ {} }}\n", indent, *lhs, *cmp, *rhs, fail);
+        auto rest = emit_cps_goals(ctx, sig, clause, pos + 1, std::move(bound), indent, temp,
+                                   on_success);
+        if (!rest) {
+            return rest;
+        }
+        return body + *rest;
+    }
+
+    // --- a call: the rest of the clause becomes its continuation --------------------------
+    const PredicateSignature* callee = signature_of(ctx, g.functor, g.args.size());
+    if (callee == nullptr) {
+        return make_error<std::string>(MathError::not_implemented);
+    }
+    std::string call_args;
+    std::string lambda_params;
+    std::set<std::string> inner = bound;
+    for (std::size_t i = 0; i < g.args.size(); ++i) {
+        if (callee->modes[i] == ArgMode::input) {
+            auto a = emit_expr(emitter, g.args[i]);
+            if (!a) {
+                return make_error<std::string>(a.error());
+            }
+            call_args += call_args.empty() ? "" : ", ";
+            call_args += *a;
+            continue;
+        }
+        if (!is_var(g.args[i])) {
+            return make_error<std::string>(MathError::not_implemented);
+        }
+        const std::string v = mangle_var(
+            VarKey{.name = var_of(g.args[i]).name, .generation = var_of(g.args[i]).generation});
+        lambda_params += lambda_params.empty() ? "" : ", ";
+        lambda_params += std::format("nc_int {}", v);
+        inner.insert(v);
+    }
+    const std::string deeper = indent + "    ";
+    auto rest = emit_cps_goals(ctx, sig, clause, pos + 1, std::move(inner), deeper, temp,
+                               on_success);
+    if (!rest) {
+        return rest;
+    }
+    call_args += call_args.empty() ? "" : ", ";
+    body += std::format("{}return {}({}[&]({}) -> bool {{\n{}{}}});\n", indent,
+                        mangle(g.functor, g.args.size()), call_args, lambda_params, *rest,
+                        indent);
+    return body;
+}
+
+[[nodiscard]] auto emit_cps_predicate(const CompileCtx& ctx, const PredicateDef& def,
+                                      const PredicateSignature& sig) -> Result<std::string> {
+    if (def.clauses.empty()) {
+        return make_error<std::string>(MathError::domain_error);
+    }
+    const std::string fn = mangle(def.name, def.arity);
+
+    std::string params;
+    for (std::size_t i = 0; i < sig.arity(); ++i) {
+        if (sig.modes[i] == ArgMode::input) {
+            params += std::format("nc_int a{}, ", i);
+        }
+    }
+
+    std::string out;
+    out += std::format(
+        "// {}/{} in continuation-passing form. `k` is called once per solution with the output\n"
+        "// arguments; returning false from it stops the enumeration, and that answer travels\n"
+        "// back out unchanged. The function itself returns whether the enumeration COMPLETED.\n",
+        def.name, def.arity);
+    out += std::format("template <class K>\n[[nodiscard]] auto {}({}K&& k) -> bool {{\n", fn,
+                       params);
+    out += "    bool nc_cut = false;\n";
+
+    std::uint32_t temp = 0;
+    for (std::size_t ci = 0; ci < def.clauses.size(); ++ci) {
+        const Clause& clause = def.clauses[ci];
+        const std::vector<Term> head_args =
+            is_compound(clause.head) ? compound_of(clause.head).args : std::vector<Term>{};
+        if (head_args.size() != sig.arity()) {
+            return make_error<std::string>(MathError::domain_error);
+        }
+        const std::string indent = "        ";
+        std::string head;
+        std::set<std::string> bound;
+        const std::string fail = "return true;";
+
+        for (std::size_t i = 0; i < head_args.size(); ++i) {
+            const Term& h = head_args[i];
+            if (is_int(h)) {
+                if (sig.modes[i] == ArgMode::input) {
+                    head += std::format("{}if (a{} != nc_lit({})) {{ {} }}\n", indent, i,
+                                        int_of(h).value, fail);
+                }
+                continue;
+            }
+            if (!is_var(h)) {
+                return make_error<std::string>(MathError::not_implemented);
+            }
+            const std::string v =
+                mangle_var(VarKey{.name = var_of(h).name, .generation = var_of(h).generation});
+            if (v == "v__") {
+                continue;
+            }
+            if (sig.modes[i] == ArgMode::input) {
+                if (bound.contains(v)) {
+                    head += std::format("{}if (a{} != {}) {{ {} }}\n", indent, i, v, fail);
+                } else {
+                    head += std::format("{}const nc_int {} = a{};\n", indent, v, i);
+                    bound.insert(v);
+                }
+            }
+        }
+
+        // Reporting a solution: hand the continuation the outputs, in head order.
+        std::string k_args;
+        std::string prelude;
+        for (std::size_t i = 0; i < head_args.size(); ++i) {
+            if (sig.modes[i] != ArgMode::output) {
+                continue;
+            }
+            k_args += k_args.empty() ? "" : ", ";
+            if (is_int(head_args[i])) {
+                k_args += std::format("nc_lit({})", int_of(head_args[i]).value);
+                continue;
+            }
+            if (!is_var(head_args[i])) {
+                return make_error<std::string>(MathError::not_implemented);
+            }
+            k_args += mangle_var(VarKey{.name = var_of(head_args[i]).name,
+                                        .generation = var_of(head_args[i]).generation});
+        }
+
+        std::uint32_t clause_temp = temp;
+        auto goals = emit_cps_goals(ctx, sig, clause, 0, bound, indent, clause_temp,
+                                    std::format("return k({});\n", k_args));
+        if (!goals) {
+            return goals;
+        }
+        temp = clause_temp;
+
+        out += std::format("    // clause {}\n", ci);
+        out += "    if (![&]() -> bool {\n";
+        out += head;
+        out += *goals;
+        out += "    }()) { return false; }\n";
+        out += "    if (nc_cut) { return true; }\n";
+    }
+    out += "    return true;\n}\n";
+    return out;
+}
+
 // Walks the call graph from `entry`, checking every predicate reached is defined and deriving
 // each callee's modes. A callee's modes are taken from the CALL SITE: an argument that is an
 // already-bound variable or an expression is an input, an unbound variable is an output. That
@@ -1244,6 +1508,13 @@ auto compile(const Program& program, const PredicateSignature& entry,
         // BigInt allocates a std::vector per operation; device code cannot allocate.
         return make_error<std::string>(MathError::not_implemented);
     }
+    if (options.style == Style::continuation && target != Target::cpp) {
+        // A CPS predicate is a template taking an arbitrary callable, and its continuations
+        // nest to the depth of the conjunction. Neither a CUDA device function nor a Triton
+        // kernel can express that, so the request is refused rather than silently narrowed to
+        // the first solution — which would be a different program, not a slower one.
+        return make_error<std::string>(MathError::not_implemented);
+    }
 
     CompileCtx ctx{.program = &program,
                    .signatures = {},
@@ -1270,12 +1541,28 @@ auto compile(const Program& program, const PredicateSignature& entry,
     // except for a recursive predicate, which needs one for itself.
     std::string decls;
     std::string defs;
+    const bool cps = options.style == Style::continuation;
     for (auto it = ctx.order.rbegin(); it != ctx.order.rend(); ++it) {
         const PredicateSignature& sig = ctx.signatures.at(*it);
         const PredicateDef def = gather(program, sig.name, sig.arity());
-        auto body = emit_predicate(ctx, def, sig);
+        auto body = cps ? emit_cps_predicate(ctx, def, sig) : emit_predicate(ctx, def, sig);
         if (!body) {
             return body;
+        }
+        if (cps) {
+            // A CPS predicate is a TEMPLATE on its continuation, so its forward declaration is
+            // one too — which is what lets a recursive predicate name itself.
+            std::string params;
+            for (std::size_t i = 0; i < sig.arity(); ++i) {
+                if (sig.modes[i] == ArgMode::input) {
+                    params += std::format("nc_int a{}, ", i);
+                }
+            }
+            decls += std::format("template <class K>\n[[nodiscard]] auto {}({}K&& k) -> bool;\n",
+                                 mangle(sig.name, sig.arity()), params);
+            defs += *body;
+            defs += "\n";
+            continue;
         }
         std::string params;
         for (std::size_t i = 0; i < sig.arity(); ++i) {
