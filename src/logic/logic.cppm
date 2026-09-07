@@ -423,7 +423,7 @@ namespace {
         cur = c.args[1];
     }
     if (is_nil(cur)) {
-        out += "]";
+        out += ']';
     } else {
         out += " | " + to_string(cur) + "]";
     }
@@ -958,7 +958,7 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
         return solve(program, goals, max_solutions);
     }
 
-    const Term first = goals.front();
+    const Term& first = goals.front();
     const std::vector<Term> rest(goals.begin() + 1, goals.end());
 
     // Per-branch outcome. The error travels WITH the branch rather than through shared state:
@@ -974,7 +974,7 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
     // search on the resulting continuation. Branches share no mutable state and only READ the
     // (immutable) program and goal terms, so they are safe to run concurrently — the CowPtr
     // term representation guarantees no branch mutates a term another branch observes.
-    auto branch = [&](std::size_t ci) -> BranchResult {
+    const auto branch = [&](std::size_t ci) -> BranchResult {
         BranchResult local;
         SearchCtx ctx;
         const std::uint64_t g = ++ctx.gen;
