@@ -56,7 +56,6 @@ add_library(nimblecas_symbolic STATIC)
 target_sources(nimblecas_symbolic PUBLIC
   FILE_SET CXX_MODULES FILES src/symbolic/symbolic.cppm)
 target_link_libraries(nimblecas_symbolic PUBLIC nimblecas_parallel nimblecas_core std_module)
-
 # ---- nimblecas.cache : concurrent hash-consing / memoization ----
 add_library(nimblecas_cache STATIC)
 target_sources(nimblecas_cache PUBLIC
@@ -552,6 +551,20 @@ target_sources(nimblecas_logic PUBLIC
   FILE_SET CXX_MODULES FILES src/logic/logic.cppm)
 target_link_libraries(nimblecas_logic
   PUBLIC nimblecas_parallel nimblecas_core std_module)
+
+# ---- nimblecas.logic_parser : Prolog reader and writer (source text <-> terms) ----
+add_library(nimblecas_logic_parser STATIC)
+target_sources(nimblecas_logic_parser PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_parser/logic_parser.cppm)
+target_link_libraries(nimblecas_logic_parser
+  PUBLIC nimblecas_logic nimblecas_core std_module)
+
+# ---- nimblecas.logic_index : batched first-argument clause probe (CPU SIMD + TBB) ----
+add_library(nimblecas_logic_index STATIC)
+target_sources(nimblecas_logic_index PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_index/logic_index.cppm)
+target_link_libraries(nimblecas_logic_index
+  PUBLIC nimblecas_logic nimblecas_parallel nimblecas_core std_module)
 
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
@@ -1708,8 +1721,21 @@ add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
 
 add_executable(logic_tests tests/logic_tests.cpp)
 target_link_libraries(logic_tests
-  PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+  PRIVATE nimblecas_logic nimblecas_logic_parser nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
 add_test(NAME logic_tests COMMAND logic_tests)
+
+add_executable(logic_parser_tests tests/logic_parser_tests.cpp)
+target_link_libraries(logic_parser_tests
+  PRIVATE nimblecas_logic_parser nimblecas_logic nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME logic_parser_tests COMMAND logic_parser_tests)
+
+add_executable(logic_index_tests tests/logic_index_tests.cpp)
+target_link_libraries(logic_index_tests
+  PRIVATE nimblecas_logic_index nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_index_tests COMMAND logic_index_tests)
 
 add_executable(doubledouble_tests tests/doubledouble_tests.cpp)
 target_link_libraries(doubledouble_tests
@@ -2247,13 +2273,14 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   set(_gpu_wavelet_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_wavelet_kernels.cu")
   set(_gpu_qmc_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_qmc_kernels.cu")
   set(_gpu_lmfit_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_lmfit_kernels.cu")
+  set(_gpu_logic_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_logic_kernels.cu")
   set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
   add_custom_command(
     OUTPUT "${_gpu_lib}"
     COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
             -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib
-            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" -o "${_gpu_lib}"
-    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}"
+            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" "${_gpu_logic_src}" -o "${_gpu_lib}"
+    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" "${_gpu_logic_src}"
             "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
 
     VERBATIM

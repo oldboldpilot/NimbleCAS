@@ -16,6 +16,18 @@ extern "C" {
 // Number of CUDA-capable devices (0 if none or CUDA is unavailable).
 int nimblecas_gpu_device_count(void);
 
+// Batched first-argument clause probe: the GPU mirror of nimblecas.logic_index.
+//
+// For goal g and clause c, bit c of row g of out_words is set iff clause c is a CANDIDATE for
+// goal g -- that is, iff goal_keys[g] == 0 || clause_keys[c] == 0 || the two are equal, where
+// a key of 0 means "unknown, matches anything". Each row is (clause_count + 63) / 64 words and
+// out_words must hold goal_count of them. The CPU path in nimblecas.logic_index is
+// AUTHORITATIVE; this kernel must produce the same bits. Returns 0 on success, or a non-zero
+// CUDA error code on failure.
+int nimblecas_gpu_index_probe_batch(const unsigned long long* clause_keys, int clause_count,
+                                    const unsigned long long* goal_keys, int goal_count,
+                                    unsigned long long* out_words);
+
 // Evaluate the polynomial coeffs[0..n_coeffs-1] (low degree first) at each of the n
 // points x[0..n-1], writing p(x_i) to out[i]. Returns 0 on success, or a non-zero CUDA
 // error code on failure.
