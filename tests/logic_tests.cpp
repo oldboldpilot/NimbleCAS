@@ -492,5 +492,92 @@ auto main() -> int {
                   t.expect(se.has_value() && pe.has_value() && *se == *pe,
                            "and agrees");
               })
+
+        // Serial stops the moment the cap is met and NEVER TRIES the later clauses, so a
+        // clause serial would not have reached must not be able to fail the parallel query.
+        // Every branch is evaluated speculatively, but a speculative failure is not a result.
+        .test("a_capped_query_is_not_failed_by_a_clause_serial_never_reaches",
+              [](TestContext& t) {
+                  Program p;
+                  p.push_back(Clause{make_compound("p", {make_int(1)}), {}});  // p(1).
+                  // p(2) :- \+ q(X).  <-- flounders if it is ever reached
+                  p.push_back(Clause{make_compound("p", {make_int(2)}),
+                                     {make_not(make_compound("q", {make_var("X")}))}});
+                  const Term y = make_var("Y");
+                  const std::vector<Term> goal{make_compound("p", {y})};
+
+                  auto s1 = solve(p, goal, 1);
+                  auto p1 = solve_or_parallel(p, goal, 1);
+                  t.expect(s1.has_value() && s1->size() == 1,
+                           "serial meets the cap on clause 0 and stops");
+                  t.expect(p1.has_value(),
+                           "parallel must NOT surface an error from a clause serial never tried");
+                  t.expect(s1.has_value() && p1.has_value() && *s1 == *p1,
+                           "capped: the two solvers agree exactly");
+
+                  // Uncapped, BOTH reach the floundering clause, so both must fail — and with
+                  // the same error. The cap is the only thing that hides it.
+                  auto s0 = solve(p, goal, 0);
+                  auto p0 = solve_or_parallel(p, goal, 0);
+                  t.expect(!s0.has_value() && !p0.has_value(),
+                           "uncapped: both reach the bad clause and both fail");
+                  if (!s0.has_value() && !p0.has_value()) {
+                      t.expect(s0.error() == p0.error(), "with the same error");
+                  }
+              })
+
+        // The truncation flag must be judged per sub-search. Here a SIBLING derivation for the
+        // same goal truncates first; the negation that follows is decidable on its own and
+        // must still answer.
+        .test("a_siblings_truncation_is_not_charged_to_the_negation",
+              [](TestContext& t) {
+                  Program p;
+                  p.push_back(Clause{make_atom("loop"), {make_atom("loop")}});  // loop :- loop.
+                  p.push_back(Clause{make_atom("t"), {make_atom("loop")}});     // t :- loop.
+                  p.push_back(Clause{make_atom("t"), {}});                      // t.
+
+                  // Clause 2 for t diverges and is cut off; clause 3 proves t outright. The
+                  // following `\+ absent` is a scan of a predicate with no clauses at all and
+                  // cannot truncate on its own.
+                  auto r = solve(p, {make_atom("t"), make_not(make_atom("absent"))}, 0);
+                  t.expect(r.has_value(),
+                           "the negation is judged on ITS OWN sub-search, not a sibling's");
+                  t.expect(r.has_value() && r->size() == 1, "exactly one answer");
+
+                  // Control: asked alone the same negation plainly succeeds.
+                  auto alone = solve(p, {make_not(make_atom("absent"))}, 0);
+                  t.expect(alone.has_value() && alone->size() == 1,
+                           "and it succeeds when asked alone too");
+              })
+
+        // The reserved functor at the wrong arity is a domain_error when written literally;
+        // it must stay one when it arrives at the call through a VARIABLE. A `\+`/2 term is a
+        // compound, so an is_callable test alone would pass it through as an ordinary
+        // predicate, match no clause, and make the negation quietly succeed.
+        .test("reserved_functor_at_wrong_arity_is_caught_even_via_a_variable",
+              [](TestContext& t) {
+                  Program p;
+                  p.push_back(Clause{
+                      make_compound("v", {make_compound("\\+", {make_atom("a"), make_atom("b")})}),
+                      {}});
+                  const Term x = make_var("X");
+                  auto r = solve(p, {make_compound("v", {x}), make_not(x)}, 0);
+                  t.expect(!r.has_value(), "\\+ X where X resolves to \\+/2 does not succeed");
+                  t.expect(!r.has_value() && r.error() == MathError::domain_error,
+                           "it is a domain_error, exactly as the literal form is");
+              })
+
+        // Negation must not be able to defeat termination. `p :- \+ p.` has no fixed point;
+        // the shared depth budget is what stops it, so it must end in not_converged rather
+        // than recursing until the native stack dies.
+        .test("self_negating_clause_terminates_instead_of_recursing_forever",
+              [](TestContext& t) {
+                  Program p;
+                  p.push_back(Clause{make_atom("p"), {make_not(make_atom("p"))}});
+                  auto r = solve(p, {make_atom("p")}, 0);
+                  t.expect(!r.has_value(), "p :- \\+ p does not fabricate an answer");
+                  t.expect(!r.has_value() && r.error() == MathError::not_converged,
+                           "it terminates with not_converged");
+              })
         .run();
 }

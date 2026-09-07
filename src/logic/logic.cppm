@@ -793,8 +793,14 @@ auto sld_search(const Program& program, const std::vector<Term>& goals, const Su
         // the moment it is called, not of how it was written: `X = 2, \+ p(X)` calls `\+ p(2)`.
         const Term inner = apply_rec(sub, compound_of(first).args.front(), 0);
 
-        if (!is_callable(inner) && !is_negation(inner)) {
-            ctx.error = MathError::domain_error;  // `\+ X` where X resolved to a non-goal
+        // Re-validate the RESOLVED goal against the SAME rules validation applied statically.
+        // Static validation saw only `\+ X` and could not know what X would become, so the
+        // rules have to be re-applied here. Testing merely `is_callable` is not enough: a
+        // `\+`/2 term arriving through a variable IS a compound, so it would pass as an
+        // ordinary predicate, match no clause, and make the negation quietly SUCCEED — the
+        // exact form the docs promise is a domain_error when it is written literally.
+        if (!validate_goal(inner)) {
+            ctx.error = MathError::domain_error;
             return;
         }
         if (!is_ground(inner)) {
@@ -804,8 +810,22 @@ auto sld_search(const Program& program, const std::vector<Term>& goals, const Su
             return;
         }
 
-        // Sub-search for a single witness. `truncated` is saved and restored around it so the
-        // verdict reflects THIS sub-search rather than a budget that fired elsewhere.
+        // Sub-search for a single witness.
+        //
+        // The FLAG is saved and restored so a truncation recorded by a SIBLING derivation is
+        // not misread as this sub-search's own. The BUDGET is a different matter and is
+        // deliberately INHERITED: `ctx.steps` and `depth` carry whatever the outer proof has
+        // already spent, so a negation reached late in a long derivation can report
+        // not_converged where the very same negation asked first would have answered. That
+        // makes the conjunction non-commutative in its ERROR behaviour, and it is a real cost,
+        // stated here rather than hidden.
+        //
+        // It is the price of TERMINATION, and the price is worth paying. Give the sub-search a
+        // fresh depth allowance and `p :- \+ p.` never stops: every level would restart the
+        // count, so the recursion would run until the step budget expired a million frames
+        // deep and the native stack died first. A shared depth is exactly what bounds it.
+        // Note the direction of the failure — an inherited budget can only ever turn an answer
+        // into an ERROR, never into a wrong answer, which is the one trade this module makes.
         const bool outer_truncated = ctx.truncated;
         ctx.truncated = false;
         std::vector<Substitution> witness;
@@ -976,20 +996,28 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
     const std::vector<BranchResult> per_clause =
         parallel::transform_index(program.size(), branch, 1);
 
-    // An honest failure in ANY branch fails the query. Reported in CLAUSE order, not
-    // completion order, so the error a caller sees does not depend on which worker finished
-    // first — the same determinism the answer order already guarantees.
+    // Walk the branches in CLAUSE order, interleaving the answer cap with error reporting.
+    // BOTH orderings are load-bearing:
+    //
+    //  * Errors surface in clause order rather than completion order, so which failure a
+    //    caller sees never depends on which worker happened to finish first.
+    //
+    //  * The cap is consulted BEFORE a branch's error is. Serial solve stops the instant it
+    //    has enough answers and NEVER TRIES the later clauses, so a branch serial would not
+    //    have reached must not be able to fail the query here. Every branch is speculatively
+    //    evaluated — that is what makes it parallel — but a speculative failure is not a
+    //    result. Without this, `solve(p, g, 1)` returns an answer while
+    //    `solve_or_parallel(p, g, 1)` returns an error, and the two solvers disagree on
+    //    precisely the bounded queries that were meant to be the easy case.
+    std::vector<Substitution> out;
     for (const BranchResult& b : per_clause) {
+        if (max_solutions != 0 && out.size() >= max_solutions) {
+            return out;  // serial had already stopped; this clause was never reached
+        }
         if (b.error) {
             return make_error<std::vector<Substitution>>(*b.error);
         }
-    }
-
-    // Concatenate in clause order, restrict/canonicalise, and truncate to max_solutions — the
-    // same sequence serial solve would produce.
-    std::vector<Substitution> out;
-    for (const BranchResult& branch_out : per_clause) {
-        for (const Substitution& raw : branch_out.answers) {
+        for (const Substitution& raw : b.answers) {
             if (max_solutions != 0 && out.size() >= max_solutions) {
                 return out;
             }

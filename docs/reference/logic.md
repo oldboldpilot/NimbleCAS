@@ -197,8 +197,28 @@ solve(p, {make_not(make_atom("loop"))}, 0);   // MathError::not_converged
 ```
 
 Since `\+` never contributes an answer the solver cannot stand behind, an
-unsound negation fails the **whole query** rather than just its branch: answers
-found elsewhere were enumerated under the same closed-world reading.
+undecidable negation fails the **whole query** rather than just its branch. The
+reason is about the answer **set**, not about the other answers' derivations —
+those may be perfectly good proofs, and one of them may even be a plain fact. A
+caller asking for *all* solutions cannot be handed a list that silently omits
+whatever the undecided branch might have contributed; reporting that list as
+complete is the lie. Under a `max_solutions` cap the question does not arise for
+clauses the search never reaches (see [below](#interaction-with-the-or-parallel-solver)).
+
+### The budget is inherited, and that is deliberate
+
+A negation's sub-search continues on the step and depth budget the outer
+derivation has **already spent**. So a negation reached late in a long proof can
+return `not_converged` where the same negation asked first would have answered:
+the conjunction is non-commutative in its *error* behaviour.
+
+That is the price of termination, and it is worth paying. Give the sub-search a
+fresh depth allowance and `p :- \+ p.` never stops — every level restarts the
+count, so it recurses until the step budget expires a million frames deep and
+the native stack dies first. A shared depth is exactly what bounds it.
+
+Note the **direction** of the cost: an inherited budget can turn an answer into
+an *error*, never into a wrong answer. That is the only trade this module makes.
 
 ### Interaction with the OR-parallel solver
 
@@ -209,6 +229,15 @@ enumerate nothing). A negation *deeper* in the conjunction, including inside a
 clause body, is handled by the search itself and runs in parallel normally. An
 honest failure in any branch is reported in **clause order**, not completion
 order, so the error a caller sees does not depend on which worker finished first.
+
+One further ordering matters when `max_solutions != 0`. Serial `solve` stops the
+instant it has enough answers and **never tries the later clauses**, so a branch
+serial would not have reached must not be able to fail the query either. Every
+branch is evaluated speculatively — that is what makes it parallel — but a
+speculative failure is not a result, so the answer cap is consulted **before** a
+branch's error is. Without that, `solve(p, g, 1)` would return an answer while
+`solve_or_parallel(p, g, 1)` returned an error, and the two solvers would
+disagree on exactly the bounded queries meant to be the easy case.
 
 ## Error model
 
