@@ -16,6 +16,7 @@ import nimblecas.wavelets;
 import nimblecas.qmc;
 import nimblecas.krylov;
 import nimblecas.nlsolve;
+import nimblecas.logic_index;
 
 namespace gpu = nimblecas::gpu;
 namespace nlsolve = nimblecas::nlsolve;
@@ -2420,6 +2421,55 @@ auto main() -> int {
                 }
             }
         })
+        .test("gpu_index_probe_matches_the_cpu_kernel_bit_for_bit",
+              [](nimblecas::testing::TestContext& t) {
+                  // The whole justification for the GPU path is that it computes exactly what
+                  // the CPU path computes, only wider. Comparing it against the CPU result —
+                  // rather than against expectations written here — is the only way that claim
+                  // is worth anything. Sizes straddle the 4/8/32/64 lane boundaries so both
+                  // implementations have to handle their tails.
+                  namespace li = nimblecas::logic_index;
+                  constexpr std::size_t nc = 333;
+                  constexpr std::size_t ng = 64;
+                  std::vector<std::uint64_t> ck(nc);
+                  std::vector<std::uint64_t> gk(ng);
+                  for (std::size_t i = 0; i < nc; ++i) {
+                      ck[i] = i % 13 == 0 ? 0U : static_cast<std::uint64_t>((i % 9) + 1);
+                  }
+                  for (std::size_t i = 0; i < ng; ++i) {
+                      gk[i] = i % 7 == 0 ? 0U : static_cast<std::uint64_t>((i % 9) + 1);
+                  }
+
+                  std::vector<std::uint64_t> cpu(ng * li::probe_row_words(nc), 0U);
+                  const auto cpu_r = li::index_probe_batch(ck, gk, cpu);
+                  t.expect(cpu_r.has_value(), "the CPU probe succeeds");
+
+                  const auto gpu_r = gpu::index_probe_batch(ck, gk);
+                  t.expect(gpu_r.has_value(), "the GPU probe succeeds");
+                  if (!cpu_r || !gpu_r) {
+                      return;
+                  }
+                  t.expect(gpu_r->size() == cpu.size(), "both produce the same number of words");
+                  t.expect(*gpu_r == cpu, "the GPU result is bit-identical to the CPU result");
+              })
+        .test("gpu_index_probe_handles_wildcards_and_empty_batches",
+              [](nimblecas::testing::TestContext& t) {
+                  namespace li = nimblecas::logic_index;
+                  // A wildcard on either side admits everything, and the two paths must agree on
+                  // that as exactly as they agree on the ordinary case.
+                  const std::vector<std::uint64_t> ck = {0U, 5U, 0U, 7U};
+                  const std::vector<std::uint64_t> gk = {5U, 0U, 9U};
+                  std::vector<std::uint64_t> cpu(gk.size() * li::probe_row_words(ck.size()), 0U);
+                  const auto cpu_r = li::index_probe_batch(ck, gk, cpu);
+                  const auto gpu_r = gpu::index_probe_batch(ck, gk);
+                  t.expect(cpu_r.has_value() && gpu_r.has_value(), "both probes succeed");
+                  if (cpu_r && gpu_r) {
+                      t.expect(*gpu_r == cpu, "wildcard rows match the CPU exactly");
+                  }
+                  const auto empty = gpu::index_probe_batch({}, {});
+                  t.expect(empty.has_value() && empty->empty(),
+                           "an empty batch is a successful no-op, not an error");
+              })
         .run();
 }
 

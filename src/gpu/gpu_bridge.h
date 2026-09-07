@@ -9,6 +9,11 @@
 #ifndef NIMBLECAS_GPU_BRIDGE_H
 #define NIMBLECAS_GPU_BRIDGE_H
 
+// uint64_t rather than "unsigned long long": on LP64 the two are the same WIDTH but distinct
+// TYPES, and the module side speaks std::uint64_t. Naming the fixed-width type on both sides is
+// what makes the declaration and the definition actually match.
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,9 +29,9 @@ int nimblecas_gpu_device_count(void);
 // out_words must hold goal_count of them. The CPU path in nimblecas.logic_index is
 // AUTHORITATIVE; this kernel must produce the same bits. Returns 0 on success, or a non-zero
 // CUDA error code on failure.
-int nimblecas_gpu_index_probe_batch(const unsigned long long* clause_keys, int clause_count,
-                                    const unsigned long long* goal_keys, int goal_count,
-                                    unsigned long long* out_words);
+int nimblecas_gpu_index_probe_batch(const uint64_t* clause_keys, int clause_count,
+                                    const uint64_t* goal_keys, int goal_count,
+                                    uint64_t* out_words);
 
 // Evaluate the polynomial coeffs[0..n_coeffs-1] (low degree first) at each of the n
 // points x[0..n-1], writing p(x_i) to out[i]. Returns 0 on success, or a non-zero CUDA

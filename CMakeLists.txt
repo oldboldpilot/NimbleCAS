@@ -566,6 +566,13 @@ target_sources(nimblecas_logic_index PUBLIC
 target_link_libraries(nimblecas_logic_index
   PUBLIC nimblecas_logic nimblecas_parallel nimblecas_core std_module)
 
+# ---- nimblecas.logic_compile : Prolog to C++ / CUDA / Triton source ----
+add_library(nimblecas_logic_compile STATIC)
+target_sources(nimblecas_logic_compile PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_compile/logic_compile.cppm)
+target_link_libraries(nimblecas_logic_compile
+  PUBLIC nimblecas_logic nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -2258,6 +2265,14 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
       HINTS /usr/local/cuda/bin /usr/local/cuda-13.2/bin ENV CUDA_HOME ENV PATH REQUIRED)
     set(NIMBLECAS_NVCC "${NIMBLECAS_NVCC_EXE}")
   endif()
+  # The GPU architecture nvcc targets.
+  #
+  # `native` asks nvcc to detect it, which is convenient and is the default. It is NOT always
+  # right: under WSL it can leave the binary needing the PTX JIT at load time, and the WSL
+  # driver crashes inside libnvidia-ptxjitcompiler when it runs. Naming a REAL architecture
+  # (`sm_120` for Blackwell, `sm_90` for Hopper) emits SASS directly and skips the JIT entirely.
+  # Override with -DNIMBLECAS_CUDA_ARCH=sm_120.
+  set(NIMBLECAS_CUDA_ARCH "native" CACHE STRING "nvcc -arch value (native, or e.g. sm_120)")
   get_filename_component(_cuda_bin "${NIMBLECAS_NVCC}" DIRECTORY)
   find_library(NIMBLECAS_CUDART cudart
     HINTS "${_cuda_bin}/../lib64" /usr/local/cuda/lib64 /usr/local/cuda-13.2/lib64 REQUIRED)
@@ -2277,14 +2292,14 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
   add_custom_command(
     OUTPUT "${_gpu_lib}"
-    COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
+    COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=${NIMBLECAS_CUDA_ARCH} -Xcompiler -fPIC
             -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib
             "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" "${_gpu_logic_src}" -o "${_gpu_lib}"
     DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" "${_gpu_logic_src}"
             "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
 
     VERBATIM
-    COMMENT "nvcc: building CUDA GPU kernels (-arch=native)")
+    COMMENT "nvcc: building CUDA GPU kernels (-arch=${NIMBLECAS_CUDA_ARCH})")
   add_custom_target(nimblecas_gpu_kernels DEPENDS "${_gpu_lib}")
 
   add_library(nimblecas_gpu STATIC)
@@ -2299,7 +2314,7 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   add_executable(gpu_tests tests/gpu_tests.cpp)
   add_dependencies(gpu_tests nimblecas_gpu_kernels)
   target_link_libraries(gpu_tests
-    PRIVATE nimblecas_gpu nimblecas_krylov nimblecas_pricing nimblecas_optstrat nimblecas_futures
+    PRIVATE nimblecas_gpu nimblecas_krylov nimblecas_logic_index nimblecas_pricing nimblecas_optstrat nimblecas_futures
             nimblecas_control nimblecas_wavelets nimblecas_qmc nimblecas_nlsolve
             nimblecas_core nimblecas_testing std_module)
   set_target_properties(gpu_tests PROPERTIES BUILD_RPATH "${_cuda_libdir}")
@@ -2346,3 +2361,9 @@ if(NIMBLECAS_PYTHON)
   set_tests_properties(python_bindings PROPERTIES
     ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:nimblecas_ext>")
 endif()
+
+# Prolog compiler driver: Prolog source in, C++ / CUDA / Triton source out.
+add_executable(prolog_compile tools/prolog_compile.cpp)
+target_link_libraries(prolog_compile
+  PRIVATE nimblecas_logic_compile nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core std_module)

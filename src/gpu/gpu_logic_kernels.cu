@@ -82,10 +82,10 @@ __global__ void index_probe_kernel(const unsigned long long* __restrict__ clause
 
 }  // namespace
 
-extern "C" int nimblecas_gpu_index_probe_batch(const unsigned long long* clause_keys,
+extern "C" int nimblecas_gpu_index_probe_batch(const uint64_t* clause_keys,
                                                int clause_count,
-                                               const unsigned long long* goal_keys,
-                                               int goal_count, unsigned long long* out_words) {
+                                               const uint64_t* goal_keys,
+                                               int goal_count, uint64_t* out_words) {
     if (clause_count < 0 || goal_count < 0) {
         return -1;
     }
