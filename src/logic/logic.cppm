@@ -22,8 +22,41 @@
 //    runaway program can never overflow the C++ stack). A query with NO solutions is an
 //    EMPTY answer list, never an error; only a malformed program/query (a non-callable head
 //    or goal — a bare variable or integer where a predicate is required) is a domain_error.
-//  * Only definite Horn clauses are supported. Negation-as-failure, cut, arithmetic
-//    evaluation, and the other impure Prolog features are intentionally NOT implemented.
+//  * Clause bodies are definite Horn goals plus NEGATION AS FAILURE (`\+ G`, below). Cut,
+//    arithmetic evaluation, and the other impure Prolog features are intentionally NOT
+//    implemented.
+//
+// NEGATION AS FAILURE (`\+ G`) — AND THE TWO PLACES REAL PROLOG LIES
+//
+// `\+ G` succeeds iff G is NOT PROVABLE from the program. That is emphatically not "G is
+// false": under the closed-world assumption the two coincide, and outside it they do not.
+// The name is the honest one, and the two ways the rule breaks are handled rather than
+// papered over — each is a textbook instance of Rule 32 (never return a plausible-looking
+// wrong value).
+//
+//  1. FLOUNDERING (a non-ground negated goal). `\+ G` is only sound when G is GROUND at the
+//     moment it is called. With the single fact `p(1)`, standard Prolog answers the query
+//     `\+ p(X)` with FAILURE — yet `∃X ¬p(X)` is plainly TRUE (X = 2 witnesses it). Worse,
+//     the answer depends on goal order: `\+ p(X), X = 2` fails while `X = 2, \+ p(X)`
+//     succeeds, so conjunction stops being commutative. Prolog returns that answer with no
+//     indication anything went wrong. This solver instead REFUSES: a negated goal that is
+//     still non-ground after the current substitution is applied returns domain_error. A
+//     wrong answer that looks right is the one outcome worth failing loudly to avoid.
+//
+//  2. NEGATION AS *BUDGET EXHAUSTION*. The budgets above make the search always terminate,
+//     which means "found no solution" has two very different causes: the space was searched
+//     out, or the search was cut off. Only the first licenses concluding "not provable". If
+//     the sub-search for G is truncated by the step or depth budget without finding a
+//     solution, concluding `\+ G` would silently upgrade "I ran out of time" into "it is not
+//     provable" — and, because the budgets are a resource limit rather than a property of the
+//     program, the same query could then answer differently on a different day. That case
+//     returns not_converged instead. This is the negation-specific counterpart of the
+//     semi-decidability caveat above: a truncated POSITIVE search honestly under-reports
+//     answers, but a truncated NEGATIVE one would INVENT them.
+//
+// Both conditions are errors rather than silent failures, so `\+` never contributes an answer
+// the solver cannot stand behind. Negation binds nothing: on success the substitution is
+// unchanged (there is no witness to bind), which is why `\+` is a test, not a generator.
 //
 // OR-PARALLELISM: the natural parallel/distributed decomposition of SLD resolution is
 // OR-parallelism — the independent clause branches for a goal. `solve_or_parallel` maps the
@@ -120,6 +153,23 @@ struct TermNode {
 [[nodiscard]] auto make_nil() -> Term;
 // A proper list `[e0, e1, ...]` encoded as nested '.'/2 cons cells terminated by make_nil().
 [[nodiscard]] auto make_list(std::vector<Term> elements) -> Term;
+
+// The reserved functor of negation as failure. Deliberately `\+` — the ISO operator — because
+// it is not a name a user could define a predicate with by accident. `not` is NOT treated as a
+// synonym: silently reinterpreting a user's own `not/1` predicate as negation is exactly the
+// kind of quiet meaning change Rule 32 forbids.
+inline constexpr std::string_view naf_functor = "\\+";
+
+// The negated goal `\+ G`: succeeds iff G is not provable. See the header for the two
+// conditions (floundering, budget exhaustion) that make this an ERROR rather than a failure.
+[[nodiscard]] auto make_not(Term goal) -> Term;
+
+// Whether `t` is a well-formed negated goal `\+`/1.
+[[nodiscard]] auto is_negation(const Term& t) -> bool;
+
+// Whether `t` contains no variables. A negated goal must be ground when called for its answer
+// to be sound, so this is the predicate the solver gates `\+` on.
+[[nodiscard]] auto is_ground(const Term& t) -> bool;
 
 // Structural (syntactic) equality of terms: identical trees, with variables equal iff both
 // name and generation match.
@@ -298,6 +348,32 @@ auto make_list(std::vector<Term> elements) -> Term {
         acc = make_compound(".", {elements[i], std::move(acc)});
     }
     return acc;
+}
+
+auto make_not(Term goal) -> Term {
+    // Built directly rather than via make_compound so a 0-arg inner goal cannot collapse the
+    // negation itself into an atom (make_compound folds empty args to an atom).
+    return Term(TermNode{
+        .value = CompoundNode{.functor = std::string(naf_functor), .args = {std::move(goal)}}});
+}
+
+auto is_negation(const Term& t) -> bool {
+    if (!is_compound(t)) {
+        return false;
+    }
+    const CompoundNode& c = compound_of(t);
+    return c.functor == naf_functor && c.args.size() == 1;
+}
+
+auto is_ground(const Term& t) -> bool {
+    if (is_var(t)) {
+        return false;
+    }
+    if (is_compound(t)) {
+        return std::ranges::all_of(compound_of(t).args,
+                                   [](const Term& a) -> bool { return is_ground(a); });
+    }
+    return true;  // atoms and integers
 }
 
 auto operator==(const Term& a, const Term& b) -> bool {
@@ -568,13 +644,40 @@ auto collect_vars(const Term& t, std::vector<VarKey>& out) -> void {
     return out;
 }
 
+// A goal is well-formed if it is callable, or a well-formed negation. The checks that can be
+// made STATICALLY are made here; whether a negated goal is GROUND cannot be, because a variable
+// may be bound to a ground callable term by the time the goal is reached — that is a runtime
+// condition and is enforced in sld_search.
+[[nodiscard]] auto validate_goal(const Term& g) -> bool {
+    if (is_compound(g) && compound_of(g).functor == naf_functor) {
+        const CompoundNode& c = compound_of(g);
+        if (c.args.size() != 1) {
+            return false;  // `\+` is strictly arity 1; anything else is not negation
+        }
+        const Term& inner = c.args.front();
+        if (is_var(inner)) {
+            return true;  // may be bound to a callable term before it is called
+        }
+        if (!is_callable(inner) && !is_negation(inner)) {
+            return false;  // e.g. `\+ 3` — an integer can never become a goal
+        }
+        return validate_goal(inner);  // nested negation is fine
+    }
+    return is_callable(g);
+}
+
 [[nodiscard]] auto validate_program(const Program& program) -> bool {
     for (const Clause& c : program) {
         if (!is_callable(c.head)) {
             return false;
         }
+        // `\+` is solver-defined; letting a program supply clauses for it would mean two
+        // different meanings for the same goal depending on which was tried first.
+        if (is_compound(c.head) && compound_of(c.head).functor == naf_functor) {
+            return false;
+        }
         for (const Term& g : c.body) {
-            if (!is_callable(g)) {
+            if (!validate_goal(g)) {
                 return false;
             }
         }
@@ -584,7 +687,7 @@ auto collect_vars(const Term& t, std::vector<VarKey>& out) -> void {
 
 [[nodiscard]] auto validate_goals(const std::vector<Term>& goals) -> bool {
     for (const Term& g : goals) {
-        if (!is_callable(g)) {
+        if (!validate_goal(g)) {
             return false;
         }
     }
@@ -643,17 +746,37 @@ struct Canonicaliser {
     return out;
 }
 
-// Depth-first SLD search. `gen` (the rename counter) and `steps` (the global attempt budget)
-// are threaded by reference; `depth` bounds derivation length. Raw answer substitutions are
-// appended to `out`.
+// Mutable state threaded through one search: the standardise-apart rename counter, the shared
+// step budget, whether a budget CUT the search short, and the first honest failure seen.
+//
+// `truncated` exists for negation alone. A positive search that runs out of budget merely
+// under-reports answers — the header documents that. A NEGATIVE one that runs out would
+// conclude "not provable" from "not finished" and manufacture an answer that is a fact about
+// the budget rather than about the program. Recording whether a budget actually fired is what
+// lets `\+` tell "searched the space out" apart from "ran out of room".
+struct SearchCtx {
+    std::uint64_t gen = 0;
+    std::uint64_t steps = default_step_budget;
+    bool truncated = false;
+    std::optional<MathError> error;
+};
+
+// Depth-first SLD search with negation as failure. `ctx` threads the rename counter and the
+// budgets; `depth` bounds derivation length. Raw answer substitutions are appended to `out`.
+// If `ctx.error` is set the search unwinds immediately and the caller discards `out` — a query
+// containing an unsound negation has no partial answers worth reporting.
 auto sld_search(const Program& program, const std::vector<Term>& goals, const Substitution& sub,
-                std::uint64_t& gen, std::uint64_t& steps, std::uint64_t max_solutions,
-                std::uint64_t depth, std::vector<Substitution>& out) -> void {
+                SearchCtx& ctx, std::uint64_t max_solutions, std::uint64_t depth,
+                std::vector<Substitution>& out) -> void {
+    if (ctx.error) {
+        return;  // an honest failure already occurred; abandon the whole search
+    }
     if (max_solutions != 0 && out.size() >= max_solutions) {
         return;
     }
-    if (steps == 0 || depth > max_derivation_depth) {
-        return;  // budget exhausted or derivation too deep — return what was found
+    if (ctx.steps == 0 || depth > max_derivation_depth) {
+        ctx.truncated = true;  // a budget fired: this search did NOT exhaust the space
+        return;
     }
     if (goals.empty()) {
         out.push_back(sub);  // empty conjunction proved: an answer
@@ -661,12 +784,84 @@ auto sld_search(const Program& program, const std::vector<Term>& goals, const Su
     }
 
     const Term& first = goals.front();
-    for (std::size_t ci = 0; ci < program.size(); ++ci) {
-        if (steps == 0) {
+
+    // --- Negation as failure: `\+ G` ------------------------------------------------------
+    if (is_negation(first)) {
+        --ctx.steps;  // the negation is itself a resolution step, so progress stays bounded
+
+        // Resolve against the CURRENT substitution. Groundness is a property of the goal at
+        // the moment it is called, not of how it was written: `X = 2, \+ p(X)` calls `\+ p(2)`.
+        const Term inner = apply_rec(sub, compound_of(first).args.front(), 0);
+
+        // Re-validate the RESOLVED goal against the SAME rules validation applied statically.
+        // Static validation saw only `\+ X` and could not know what X would become, so the
+        // rules have to be re-applied here. Testing merely `is_callable` is not enough: a
+        // `\+`/2 term arriving through a variable IS a compound, so it would pass as an
+        // ordinary predicate, match no clause, and make the negation quietly SUCCEED — the
+        // exact form the docs promise is a domain_error when it is written literally.
+        if (!validate_goal(inner)) {
+            ctx.error = MathError::domain_error;
             return;
         }
-        --steps;
-        const std::uint64_t g = ++gen;  // fresh generation per clause activation
+        if (!is_ground(inner)) {
+            // FLOUNDERING. Prolog would answer anyway — unsoundly, and differently depending
+            // on goal order. Refusing is the only answer this solver can stand behind.
+            ctx.error = MathError::domain_error;
+            return;
+        }
+
+        // Sub-search for a single witness.
+        //
+        // The FLAG is saved and restored so a truncation recorded by a SIBLING derivation is
+        // not misread as this sub-search's own. The BUDGET is a different matter and is
+        // deliberately INHERITED: `ctx.steps` and `depth` carry whatever the outer proof has
+        // already spent, so a negation reached late in a long derivation can report
+        // not_converged where the very same negation asked first would have answered. That
+        // makes the conjunction non-commutative in its ERROR behaviour, and it is a real cost,
+        // stated here rather than hidden.
+        //
+        // It is the price of TERMINATION, and the price is worth paying. Give the sub-search a
+        // fresh depth allowance and `p :- \+ p.` never stops: every level would restart the
+        // count, so the recursion would run until the step budget expired a million frames
+        // deep and the native stack died first. A shared depth is exactly what bounds it.
+        // Note the direction of the failure — an inherited budget can only ever turn an answer
+        // into an ERROR, never into a wrong answer, which is the one trade this module makes.
+        const bool outer_truncated = ctx.truncated;
+        ctx.truncated = false;
+        std::vector<Substitution> witness;
+        sld_search(program, std::vector<Term>{inner}, sub, ctx, 1, depth + 1, witness);
+        const bool inner_truncated = ctx.truncated;
+        ctx.truncated = outer_truncated || inner_truncated;
+
+        if (ctx.error) {
+            return;  // a nested negation failed honestly
+        }
+        if (!witness.empty()) {
+            return;  // G is provable, so `\+ G` FAILS — ordinary backtracking, not an error
+        }
+        if (inner_truncated) {
+            // No witness, but the space was not searched out. Concluding "not provable" here
+            // is negation as BUDGET EXHAUSTION: the same query could answer differently on a
+            // machine with a different budget, which makes it not an answer at all.
+            ctx.error = MathError::not_converged;
+            return;
+        }
+
+        // `\+ G` succeeds and binds NOTHING — there is no witness to bind. Continue with the
+        // substitution untouched, which is precisely why `\+` is a test, not a generator.
+        const std::vector<Term> next(goals.begin() + 1, goals.end());
+        sld_search(program, next, sub, ctx, max_solutions, depth + 1, out);
+        return;
+    }
+
+    // --- Ordinary clause resolution -------------------------------------------------------
+    for (std::size_t ci = 0; ci < program.size(); ++ci) {
+        if (ctx.steps == 0) {
+            ctx.truncated = true;
+            return;
+        }
+        --ctx.steps;
+        const std::uint64_t g = ++ctx.gen;  // fresh generation per clause activation
         const Clause renamed = rename_clause(program[ci], g);
         auto unified = unify_terms(first, renamed.head, sub);
         if (!unified) {
@@ -681,7 +876,10 @@ auto sld_search(const Program& program, const std::vector<Term>& goals, const Su
         for (std::size_t i = 1; i < goals.size(); ++i) {
             next.push_back(goals[i]);
         }
-        sld_search(program, next, *unified, gen, steps, max_solutions, depth + 1, out);
+        sld_search(program, next, *unified, ctx, max_solutions, depth + 1, out);
+        if (ctx.error) {
+            return;
+        }
         if (max_solutions != 0 && out.size() >= max_solutions) {
             return;
         }
@@ -707,9 +905,13 @@ auto solve(const Program& program, const std::vector<Term>& goals, std::uint64_t
     }
 
     std::vector<Substitution> raw;
-    std::uint64_t gen = 0;
-    std::uint64_t steps = default_step_budget;
-    sld_search(program, goals, Substitution{}, gen, steps, max_solutions, 0, raw);
+    SearchCtx ctx;
+    sld_search(program, goals, Substitution{}, ctx, max_solutions, 0, raw);
+    if (ctx.error) {
+        // An unsound negation poisons the whole query, not just the branch it appeared in:
+        // answers found elsewhere were enumerated under the same closed-world reading.
+        return make_error<std::vector<Substitution>>(*ctx.error);
+    }
 
     const std::vector<VarKey> qvars = collect_query_vars(goals);
     std::vector<Substitution> out;
@@ -747,19 +949,35 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
         return out;
     }
 
+    // A LEADING negation has no clause alternatives to fan out over: this decomposition is
+    // over the first goal's candidate CLAUSES, and `\+` resolves against none of them. Running
+    // it through `branch` would unify `\+ G` against clause heads and silently enumerate
+    // nothing. Delegate to the serial solver, which is exactly what "identical to solve()"
+    // demands. (A negation DEEPER in the conjunction is handled inside sld_search as usual.)
+    if (is_negation(goals.front())) {
+        return solve(program, goals, max_solutions);
+    }
+
     const Term first = goals.front();
     const std::vector<Term> rest(goals.begin() + 1, goals.end());
+
+    // Per-branch outcome. The error travels WITH the branch rather than through shared state:
+    // branches run concurrently, so a single shared error slot would make which failure is
+    // reported depend on worker timing.
+    struct BranchResult {
+        std::vector<Substitution> answers;
+        std::optional<MathError> error;
+    };
 
     // OR-parallel branch for clause `ci`: a stateless continuation with its OWN rename counter
     // and step budget. It resolves the first goal against clause `ci` and runs the serial SLD
     // search on the resulting continuation. Branches share no mutable state and only READ the
     // (immutable) program and goal terms, so they are safe to run concurrently — the CowPtr
     // term representation guarantees no branch mutates a term another branch observes.
-    auto branch = [&](std::size_t ci) -> std::vector<Substitution> {
-        std::vector<Substitution> local;
-        std::uint64_t gen = 0;
-        std::uint64_t steps = default_step_budget;
-        const std::uint64_t g = ++gen;
+    auto branch = [&](std::size_t ci) -> BranchResult {
+        BranchResult local;
+        SearchCtx ctx;
+        const std::uint64_t g = ++ctx.gen;
         const Clause renamed = rename_clause(program[ci], g);
         auto unified = unify_terms(first, renamed.head, Substitution{});
         if (unified) {
@@ -767,21 +985,39 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
             next.insert(next.end(), rest.begin(), rest.end());
             // depth = 1 mirrors serial, where the continuation after the first resolution runs
             // one level deep, so the depth budget cuts at exactly the same point.
-            sld_search(program, next, *unified, gen, steps, max_solutions, 1, local);
+            sld_search(program, next, *unified, ctx, max_solutions, 1, local.answers);
         }
+        local.error = ctx.error;
         return local;
     };
 
     // grain = 1 so every clause becomes an independent task (the backend auto-chunks);
     // transform_index is order-preserving, so per-clause results come back in clause order.
-    const std::vector<std::vector<Substitution>> per_clause =
+    const std::vector<BranchResult> per_clause =
         parallel::transform_index(program.size(), branch, 1);
 
-    // Concatenate in clause order, restrict/canonicalise, and truncate to max_solutions — the
-    // same sequence serial solve would produce.
+    // Walk the branches in CLAUSE order, interleaving the answer cap with error reporting.
+    // BOTH orderings are load-bearing:
+    //
+    //  * Errors surface in clause order rather than completion order, so which failure a
+    //    caller sees never depends on which worker happened to finish first.
+    //
+    //  * The cap is consulted BEFORE a branch's error is. Serial solve stops the instant it
+    //    has enough answers and NEVER TRIES the later clauses, so a branch serial would not
+    //    have reached must not be able to fail the query here. Every branch is speculatively
+    //    evaluated — that is what makes it parallel — but a speculative failure is not a
+    //    result. Without this, `solve(p, g, 1)` returns an answer while
+    //    `solve_or_parallel(p, g, 1)` returns an error, and the two solvers disagree on
+    //    precisely the bounded queries that were meant to be the easy case.
     std::vector<Substitution> out;
-    for (const std::vector<Substitution>& branch_out : per_clause) {
-        for (const Substitution& raw : branch_out) {
+    for (const BranchResult& b : per_clause) {
+        if (max_solutions != 0 && out.size() >= max_solutions) {
+            return out;  // serial had already stopped; this clause was never reached
+        }
+        if (b.error) {
+            return make_error<std::vector<Substitution>>(*b.error);
+        }
+        for (const Substitution& raw : b.answers) {
             if (max_solutions != 0 && out.size() >= max_solutions) {
                 return out;
             }
