@@ -22,9 +22,9 @@ stack). These budgets are **not** a completeness claim: the solver returns the
 solutions found *within budget*. A query with **no** solutions is an empty answer
 list, never an error; only a **malformed** program or query (a non-callable head
 or goal — a bare variable or integer where a predicate is required) is a
-`MathError::domain_error`. Only definite Horn clauses are supported:
-negation-as-failure, cut, and arithmetic evaluation are intentionally **not**
-implemented.
+`MathError::domain_error`. Clause bodies are definite Horn goals plus
+[**negation as failure**](#negation-as-failure) (`\+ G`); cut and arithmetic
+evaluation are intentionally **not** implemented.
 
 Everything is **deterministic**: clauses are tried in program order, subgoals
 left-to-right, and variables are standardised-apart by a rename counter threaded
@@ -75,6 +75,15 @@ Constructing terms never fails — each returns a plain `Term`.
 | `make_compound` | `auto make_compound(std::string functor, std::vector<Term> args) -> Term` | A compound term. With **empty** `args` it collapses to `make_atom(functor)`, since a 0-arg compound is just an atom. |
 | `make_nil` | `auto make_nil() -> Term` | The empty list, i.e. the atom `[]`. |
 | `make_list` | `auto make_list(std::vector<Term> elements) -> Term` | A proper list `[e0, e1, …]` encoded as nested `'.'/2` cons cells terminated by `make_nil()`. |
+| `make_not` | `auto make_not(Term goal) -> Term` | The negated goal `\+ G`. See [negation as failure](#negation-as-failure). |
+
+Two predicates support negation and are exported for callers who build goals
+programmatically:
+
+| Predicate | Signature | Behavior |
+| :--- | :--- | :--- |
+| `is_negation` | `auto is_negation(const Term& t) -> bool` | Whether `t` is a well-formed `\+`/1 goal. |
+| `is_ground` | `auto is_ground(const Term& t) -> bool` | Whether `t` contains no variables — the condition a negated goal must meet **at the moment it is called**. |
 
 ### Term equality and rendering
 
@@ -133,6 +142,74 @@ SLD's *AND*-side backtracking, by contrast, is irregular and data-dependent — 
 poor fit for SIMT/GPU execution — so this solver targets CPU/distributed
 parallelism only and deliberately ships **no CUDA path**.
 
+## Negation as failure
+
+`\+ G` succeeds iff `G` is **not provable** from the program. That is not the
+same as "`G` is false" — under the closed-world assumption the two coincide, and
+outside it they do not. The name is the honest one.
+
+```cpp
+// bachelor(X) :- man(X), \+ married(X).
+p.push_back(Clause{make_compound("bachelor", {x}),
+                   {make_compound("man", {x}),
+                    make_not(make_compound("married", {x}))}});
+```
+
+The reserved functor is `\+` — deliberately the ISO operator, because it is not
+a name a user could define a predicate with by accident. **`not` is not a
+synonym**: silently reinterpreting a user's own `not/1` predicate as negation is
+exactly the kind of quiet meaning change the honesty invariant forbids. For the
+same reason, a program supplying its own clauses for `\+` is a `domain_error`
+rather than a shadowing that depends on which was tried first.
+
+Negation **binds nothing**. On success the substitution is unchanged, because
+there is no witness to bind — `\+` is a test, not a generator.
+
+### The two places real Prolog lies
+
+Both of the classic unsoundnesses are **errors** here rather than silent
+answers. This is the module's sharpest application of Rule 32: a wrong answer
+that looks right is the one outcome worth failing loudly to avoid.
+
+**1. Floundering — a non-ground negated goal.** `\+ G` is sound only when `G` is
+ground when called. With the single fact `p(1)`, standard Prolog answers `\+ p(X)`
+with *failure* — yet `∃X ¬p(X)` is plainly **true** (`X = 2` witnesses it).
+Worse, the answer depends on goal order, so conjunction stops being commutative:
+
+| Query | Standard Prolog | `nimblecas.logic` |
+| :--- | :--- | :--- |
+| `num(X), \+ p(X)` | `X = 2` | `X = 2` — sound; `num(X)` grounds `X` first |
+| `\+ p(X), num(X)` | **fails** (unsound, and disagrees with the row above) | `MathError::domain_error` |
+
+**2. Negation as *budget exhaustion*.** Because the budgets make the search
+always terminate, "found no solution" has two very different causes: the space
+was searched out, or the search was cut off. Only the first licenses concluding
+"not provable". A truncated **positive** search honestly under-reports answers;
+a truncated **negative** one would *invent* them, and would answer differently
+on a machine with a different budget:
+
+```cpp
+Program p;                                    // loop :- loop.
+p.push_back(Clause{make_atom("loop"), {make_atom("loop")}});
+
+solve(p, {make_atom("loop")}, 0);             // value branch, empty — no error
+solve(p, {make_not(make_atom("loop"))}, 0);   // MathError::not_converged
+```
+
+Since `\+` never contributes an answer the solver cannot stand behind, an
+unsound negation fails the **whole query** rather than just its branch: answers
+found elsewhere were enumerated under the same closed-world reading.
+
+### Interaction with the OR-parallel solver
+
+`solve_or_parallel` fans out over the first goal's candidate **clauses**, and a
+leading `\+` has none — so a query whose first goal is a negation is delegated to
+the serial solver rather than unified against clause heads (which would silently
+enumerate nothing). A negation *deeper* in the conjunction, including inside a
+clause body, is handled by the search itself and runs in parallel normally. An
+honest failure in any branch is reported in **clause order**, not completion
+order, so the error a caller sees does not depend on which worker finished first.
+
 ## Error model
 
 | Condition | Result |
@@ -141,6 +218,10 @@ parallelism only and deliberately ships **no CUDA path**.
 | A query with **no solutions** | Value branch: an **empty** `std::vector<Substitution>` (`solve` / `solve_or_parallel`) or `std::nullopt` (`solve_first`) — **not** an error |
 | Occurs-check failure in `unify` (e.g. `X = f(X)`) | Value branch holding `std::nullopt` — **not** an error |
 | Budget exhausted mid-search (`default_step_budget` or `max_derivation_depth`) | Value branch: the solutions found so far (**no** error; not a completeness guarantee) |
+| A **negated goal is provable** (`\+ G` where `G` succeeds) | Ordinary **failure**: that branch contributes no answer — **not** an error |
+| A **non-ground** negated goal (floundering), e.g. `\+ p(X)` with `X` unbound | `MathError::domain_error` — see [negation as failure](#negation-as-failure) |
+| `\+ G` where `G` resolves to a **non-goal** (an integer), or `\+` used at an arity other than 1, or a program supplying **clauses for `\+`** | `MathError::domain_error` |
+| The sub-search for a negated goal is **truncated by a budget** without finding a witness | `MathError::not_converged` — "not finished" is never reported as "not provable" |
 
 There is no `overflow` path: integer terms are compared, never computed on.
 `unify`'s `Result` is presently always the value branch; the wrapper is reserved

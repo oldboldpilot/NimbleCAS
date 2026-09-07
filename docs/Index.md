@@ -127,7 +127,7 @@ Reasoning & algorithmics (search / logic / constraints on the `parallel` runtime
 | `nimblecas.search` | [search.md](reference/search.md) | Graph/tree search (BFS, DFS, IDDFS, Dijkstra, A*, tabu) + dynamic programming (edit-distance/LCS/knapsack) in recursive, iterative, and parallel forms. |
 | `nimblecas.sat` | [sat.md](reference/sat.md) | Boolean SAT: DPLL, CDCL (1-UIP learning), WalkSAT, GSAT, `solve_portfolio`, and distributed `solve_shard`. Complete solvers are worst-case exponential. |
 | `nimblecas.csp` | [csp.md](reference/csp.md) | Constraint satisfaction: AC-3 arc consistency, backtracking, forward checking, parallel. |
-| `nimblecas.logic` | [logic.md](reference/logic.md) | Logic programming: unification + SLD resolution + OR-parallel search under a depth/step budget (semi-decidable). |
+| `nimblecas.logic` | [logic.md](reference/logic.md) | Logic programming: unification + SLD resolution + OR-parallel search under a depth/step budget (semi-decidable), plus negation as failure (`\+`) that reports floundering and budget-truncated negation as errors rather than answering unsoundly. |
 | `nimblecas.bitset` | [bitset.md](reference/bitset.md) | Word-parallel branchless fixed-capacity bitset — the CPU substrate for branchless/GPU-style regular workloads. |
 | `nimblecas.bitcsp` | [bitcsp.md](reference/bitcsp.md) | Branchless bitset-domain AC-3 + three-bitmask N-queens (parallel result == serial). |
 
