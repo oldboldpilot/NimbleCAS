@@ -418,6 +418,25 @@ private:
 // and a side effect performed by a branch serial resolution would never have reached cannot be
 // un-performed by the merge. Delegating keeps the contract callers rely on — the same answers
 // as `solve` — rather than trading it for parallelism.
+// Solves `goals` committed to ONE clause of the first goal's predicate.
+//
+// This is the unit of work OR-parallelism fans out over, and — because it is a pure function of
+// its arguments with no shared state — it is also the unit a DISTRIBUTED shard can carry to
+// another process. `solve_or_parallel` and `nimblecas.logic_dist` both call it, so the local and
+// distributed decompositions cannot drift apart.
+//
+// Answers are restricted to the query's variables exactly as `solve` does, so concatenating
+// every clause's answers IN CLAUSE ORDER yields precisely what `solve` returns. A `clause_index`
+// out of range, or naming a clause for a different predicate, gives an EMPTY answer list rather
+// than an error: not being an alternative is not a failure.
+//
+// The budget is PER BRANCH here, not a share of one global quota — the same honest caveat
+// `solve_or_parallel` documents, and for the same reason: a branch cannot know what the others
+// have spent without talking to them, and talking to them is what the decomposition avoids.
+[[nodiscard]] auto solve_clause_branch(const Program& program, const std::vector<Term>& goals,
+                                       std::size_t clause_index, std::uint64_t max_solutions)
+    -> Result<std::vector<Substitution>>;
+
 [[nodiscard]] auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
                                      std::uint64_t max_solutions)
     -> Result<std::vector<Substitution>>;
@@ -3634,6 +3653,65 @@ auto solve_first(const Program& program, const std::vector<Term>& goals)
     return std::optional<Substitution>(r->front());
 }
 
+auto solve_clause_branch(const Program& program, const std::vector<Term>& goals,
+                         std::size_t clause_index, std::uint64_t max_solutions)
+    -> Result<std::vector<Substitution>> {
+    if (!validate_program(program) || !validate_goals(goals) || goals.empty()) {
+        return make_error<std::vector<Substitution>>(MathError::domain_error);
+    }
+    const auto first_ind = indicator_of(goals.front());
+    if (!first_ind) {
+        return make_error<std::vector<Substitution>>(MathError::domain_error);
+    }
+
+    Database db = Database::from(program);
+    const std::vector<DatabaseAccess::Entry>& entries = DatabaseAccess::entries(db);
+    // A clause index past the end, or naming a different predicate, is NOT AN ALTERNATIVE —
+    // and not being an alternative is not a failure. Reporting an error here would make a
+    // caller that fans out over every clause of a mixed program fail on the first clause
+    // belonging to some other predicate.
+    if (clause_index >= entries.size()) {
+        return std::vector<Substitution>{};
+    }
+
+    SearchCtx ctx;
+    const std::uint64_t g = ++ctx.gen;
+    const Clause renamed = rename_clause(entries[clause_index].clause, g);
+    const auto head_ind = indicator_of(renamed.head);
+    if (!head_ind || *head_ind != *first_ind) {
+        return std::vector<Substitution>{};
+    }
+
+    std::vector<Substitution> raw;
+    auto unified = unify_terms(goals.front(), renamed.head, Substitution{});
+    if (unified) {
+        const std::uint64_t my_call = ++ctx.calls;
+        GoalList next;
+        // Folded from the back so the clause body reads left to right ahead of the remaining
+        // query goals. The query's own goals carry barrier 0; the body carries this call's.
+        for (std::size_t i = goals.size(); i-- > 1;) {
+            next = cons_goal(goals[i], 0, std::move(next));
+        }
+        for (std::size_t i = renamed.body.size(); i-- > 0;) {
+            next = cons_goal(renamed.body[i], my_call, std::move(next));
+        }
+        // depth = 1 mirrors serial, where the continuation after the first resolution runs one
+        // level deep, so the depth budget cuts at exactly the same point.
+        sld_search(db, next, *unified, ctx, max_solutions, 1, raw);
+    }
+    if (ctx.error) {
+        return make_error<std::vector<Substitution>>(*ctx.error);
+    }
+
+    const std::vector<VarKey> qvars = collect_query_vars(goals);
+    std::vector<Substitution> out;
+    out.reserve(raw.size());
+    for (const Substitution& s : raw) {
+        out.push_back(restrict_answer(s, qvars));
+    }
+    return out;
+}
+
 auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
                        std::uint64_t max_solutions) -> Result<std::vector<Substitution>> {
     if (!validate_program(program) || !validate_goals(goals)) {
@@ -3662,53 +3740,22 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
     const Term& first = goals.front();
     const std::vector<Term> rest_goals(goals.begin() + 1, goals.end());
 
-    // Per-branch outcome. The error travels WITH the branch rather than through shared state:
-    // branches run concurrently, so a single shared error slot would make which failure is
-    // reported depend on worker timing.
-    struct BranchResult {
-        std::vector<Substitution> answers;
-        std::optional<MathError> error;
-    };
-
-    // OR-parallel branch for clause `ci`: a stateless continuation with its OWN rename counter,
-    // step budget and DATABASE COPY. Branches share no mutable state and only READ the
-    // (immutable) goal terms, so they are safe to run concurrently — the CowPtr term
-    // representation guarantees no branch mutates a term another branch observes.
-    const auto branch = [&](std::size_t ci) -> BranchResult {
-        BranchResult local;
-        SearchCtx ctx;
-        Database db = Database::from(program);
-        const std::vector<DatabaseAccess::Entry>& entries = DatabaseAccess::entries(db);
-        if (ci >= entries.size()) {
-            return local;
-        }
-        const std::uint64_t g = ++ctx.gen;
-        const Clause renamed = rename_clause(entries[ci].clause, g);
-        const auto head_ind = indicator_of(renamed.head);
-        if (!head_ind || *head_ind != *first_ind) {
-            return local;  // a clause for a different predicate is not an alternative at all
-        }
-        auto unified = unify_terms(first, renamed.head, Substitution{});
-        if (unified) {
-            const std::uint64_t my_call = ++ctx.calls;
-            GoalList next;
-            for (std::size_t i = rest_goals.size(); i-- > 0;) {
-                next = cons_goal(rest_goals[i], 0, std::move(next));
-            }
-            for (std::size_t i = renamed.body.size(); i-- > 0;) {
-                next = cons_goal(renamed.body[i], my_call, std::move(next));
-            }
-            // depth = 1 mirrors serial, where the continuation after the first resolution runs
-            // one level deep, so the depth budget cuts at exactly the same point.
-            sld_search(db, next, *unified, ctx, max_solutions, 1, local.answers);
-        }
-        local.error = ctx.error;
-        return local;
+    // OR-parallel branch for clause `ci`. The whole branch is `solve_clause_branch`, which is a
+    // pure function of its arguments — no shared state, its own rename counter, step budget and
+    // database copy — so branches are safe to run concurrently, and the SAME function is what a
+    // distributed shard carries to another process. Sharing it is what stops the local and
+    // distributed decompositions from drifting apart.
+    //
+    // The error travels WITH the branch in its Result rather than through a shared slot: branches
+    // run concurrently, so one shared error slot would make WHICH failure is reported depend on
+    // worker timing.
+    const auto branch = [&](std::size_t ci) -> Result<std::vector<Substitution>> {
+        return solve_clause_branch(program, goals, ci, max_solutions);
     };
 
     // grain = 1 so every clause becomes an independent task (the backend auto-chunks);
     // transform_index is order-preserving, so per-clause results come back in clause order.
-    const std::vector<BranchResult> per_clause =
+    const std::vector<Result<std::vector<Substitution>>> per_clause =
         parallel::transform_index(program.size(), branch, 1);
 
     // Walk the branches in CLAUSE order, interleaving the answer cap with error reporting.
@@ -3722,18 +3769,18 @@ auto solve_or_parallel(const Program& program, const std::vector<Term>& goals,
     //    reached must not be able to fail the query here. Every branch is speculatively
     //    evaluated — that is what makes it parallel — but a speculative failure is not a result.
     std::vector<Substitution> out;
-    for (const BranchResult& b : per_clause) {
+    for (const Result<std::vector<Substitution>>& b : per_clause) {
         if (max_solutions != 0 && out.size() >= max_solutions) {
             return out;  // serial had already stopped; this clause was never reached
         }
-        if (b.error) {
-            return make_error<std::vector<Substitution>>(*b.error);
+        if (!b) {
+            return make_error<std::vector<Substitution>>(b.error());
         }
-        for (const Substitution& raw : b.answers) {
+        for (const Substitution& answer : *b) {
             if (max_solutions != 0 && out.size() >= max_solutions) {
                 return out;
             }
-            out.push_back(restrict_answer(raw, qvars));
+            out.push_back(answer);  // already restricted by solve_clause_branch
         }
     }
     return out;

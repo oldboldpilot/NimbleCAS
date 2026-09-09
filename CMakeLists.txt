@@ -573,6 +573,13 @@ target_sources(nimblecas_logic_compile PUBLIC
 target_link_libraries(nimblecas_logic_compile
   PUBLIC nimblecas_logic nimblecas_core std_module)
 
+# ---- nimblecas.logic_dist : SLD resolution as a task graph (serial / parallel / SGEE) ----
+add_library(nimblecas_logic_dist STATIC)
+target_sources(nimblecas_logic_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_dist/logic_dist.cppm)
+target_link_libraries(nimblecas_logic_dist
+  PUBLIC nimblecas_logic nimblecas_logic_parser nimblecas_taskdag nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC

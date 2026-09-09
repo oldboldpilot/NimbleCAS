@@ -109,7 +109,7 @@ auto main(int argc, char** argv) -> int {
     if (args.size() < 4) {
         std::println(std::cerr,
                      "usage: prolog_compile <file.pl> <entry-name> <modes:i|o...> "
-                     "[cpp|cuda|triton] [64|128|big] [det|cps]");
+                     "[cpp|cuda|triton] [64|128|big] [det|cps] [batch]");
         return 2;
     }
     const std::string path = args[1];
@@ -143,6 +143,7 @@ auto main(int argc, char** argv) -> int {
     }
 
     const lc::PredicateSignature sig{.name = entry_name, .modes = *modes};
+    const bool want_batch = args.size() > 7 && (args[7] == "batch" || args[7] == "simd");
     const auto style = parse_style(args.size() > 6 ? args[6] : "det");
     if (!style) {
         std::println(std::cerr, "error: style must be det or cps");
@@ -152,7 +153,8 @@ auto main(int argc, char** argv) -> int {
     const lc::CompileOptions opts{.target = *target,
                                   .width = *width,
                                   .style = *style,
-                                  .tail_call_optimise = true};
+                                  .tail_call_optimise = true,
+                                  .emit_batch = want_batch};
     const auto src = lc::compile(*program, sig, opts);
     if (!src) {
         std::println(std::cerr, "error: cannot compile {}/{} for target {} — {}", entry_name,

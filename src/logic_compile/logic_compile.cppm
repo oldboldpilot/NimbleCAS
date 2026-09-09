@@ -126,6 +126,17 @@ struct CompileOptions {
     // Compile a self tail call to a loop. On by default; the flag exists so the two forms can
     // be compared, not because recursion is ever preferable.
     bool tail_call_optimise{true};
+    // Emit a BATCH entry point applying the predicate across many inputs, plus the SIMD
+    // checked-arithmetic kernels it rests on.
+    //
+    // Lanes are INDEPENDENT — one call of the predicate per input, sharing nothing — so the
+    // batch is a pure map and its result cannot depend on how the work was split. That is what
+    // makes it safe to run across threads and what makes the parallel form testable against the
+    // serial one.
+    //
+    // Only meaningful for `Target::cpp`: CUDA already emits a batch kernel of its own, and a
+    // Triton kernel IS a batch by construction.
+    bool emit_batch{false};
 };
 
 // Compiles `entry` (and every predicate it calls) out of `program` into source text for
@@ -1607,12 +1618,95 @@ auto compile(const Program& program, const PredicateSignature& entry,
         out += "import std;\nimport nimblecas.core;\nimport nimblecas.bigint;\n\n";
     } else {
         out += "#include <cstdint>\n#include <limits>\n\n";
+        if (options.emit_batch && target == Target::cpp) {
+            // The batch driver needs threads and spans; the SIMD kernels need the CPUID and
+            // intrinsic headers. They are emitted here rather than being assumed present,
+            // because the generated file is compiled on its own by somebody who did not write it.
+            out += "#include <array>\n#include <cstddef>\n#include <span>\n#include <thread>\n";
+            out += "#include <vector>\n";
+            out += "#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || "
+                   "defined(_M_IX86)\n";
+            out += "#include <immintrin.h>\n";
+            out += "#if defined(_WIN32)\n#include <intrin.h>\n#else\n#include <cpuid.h>\n#endif\n";
+            out += "#endif\n\n";
+            out += "// The SIMD checked-arithmetic kernels. This header ships with NimbleCAS at\n";
+            out += "// src/logic_compile/runtime/simd_batch.inc — put it beside this file, or\n";
+            out += "// point the compiler at that directory with -I. It is self-contained: it\n";
+            out += "// reads CPUID directly rather than through __builtin_cpu_supports, so it\n";
+            out += "// imposes no link dependency on clang's builtins archive.\n";
+            out += "#include \"simd_batch.inc\"\n\n";
+        }
     }
     out += checked_preamble(ctx.device, options.width);
     out += "\n";
     out += decls;
     out += "\n";
     out += defs;
+
+    if (options.emit_batch && target == Target::cpp) {
+        // The CPU batch entry points: one predicate call per lane, lanes independent.
+        std::string params;
+        std::string call_args;
+        for (std::size_t i = 0; i < esig.arity(); ++i) {
+            params += std::format("{}nc_int* arg{}, ",
+                                  esig.modes[i] == ArgMode::input ? "const " : "", i);
+            call_args += call_args.empty() ? "" : ", ";
+            call_args += std::format("arg{}[i]", i);
+        }
+        out += "\n";
+        out += "// Applies the predicate to `n` independent inputs.\n";
+        out += "//\n";
+        out += "// `ok[i]` records whether lane i SUCCEEDED — the predicate proved its goal and\n";
+        out += "// its arithmetic was representable. A lane whose ok is 0 leaves its output\n";
+        out += "// arguments unspecified and the caller must not read them; writing a plausible\n";
+        out += "// value there is exactly the failure the checked arithmetic exists to prevent.\n";
+        out += std::format("inline auto {}_batch({}unsigned char* ok, std::size_t n) -> void {{\n",
+                           efn, params);
+        out += "    for (std::size_t i = 0; i < n; ++i) {\n";
+        out += std::format("        ok[i] = {}({}) ? 1 : 0;\n", efn, call_args);
+        out += "    }\n}\n\n";
+
+        out += "// The same map, across threads.\n";
+        out += "//\n";
+        out += "// Lanes share nothing, so this is a pure map: the result is IDENTICAL to\n";
+        out += std::format("// `{}_batch` on any thread count, which is what makes the parallel\n",
+                           efn);
+        out += "// form testable against the serial one rather than merely plausible. The range\n";
+        out += "// is split into contiguous chunks, one per thread, so each lane is written by\n";
+        out += "// exactly one thread and no synchronisation is needed on the outputs.\n";
+        out += "//\n";
+        out += "// Below a few thousand lanes the threads cost more than they save, so the work\n";
+        out += "// stays on the calling thread; `threads == 0` asks for hardware_concurrency.\n";
+        out += std::format(
+            "inline auto {}_batch_parallel({}unsigned char* ok, std::size_t n,\n", efn, params);
+        out += "                              unsigned threads = 0) -> void {\n";
+        out += "    constexpr std::size_t serial_below = 4096;\n";
+        out += "    unsigned want = threads;\n";
+        out += "    if (want == 0) {\n";
+        out += "        want = std::thread::hardware_concurrency();\n";
+        out += "    }\n";
+        out += "    if (want <= 1 || n < serial_below) {\n";
+        out += std::format("        {}_batch({}ok, n);\n", efn, [&] {
+            std::string a;
+            for (std::size_t i = 0; i < esig.arity(); ++i) {
+                a += std::format("arg{}, ", i);
+            }
+            return a;
+        }());
+        out += "        return;\n    }\n";
+        out += "    const std::size_t chunk = (n + want - 1) / want;\n";
+        out += "    std::vector<std::jthread> pool;\n";
+        out += "    pool.reserve(want);\n";
+        out += "    for (std::size_t begin = 0; begin < n; begin += chunk) {\n";
+        out += "        const std::size_t end = begin + chunk < n ? begin + chunk : n;\n";
+        out += "        pool.emplace_back([=] {\n";
+        out += "            for (std::size_t i = begin; i < end; ++i) {\n";
+        out += std::format("                ok[i] = {}({}) ? 1 : 0;\n", efn, call_args);
+        out += "            }\n        });\n    }\n";
+        out += "    // jthread joins on destruction, so the pool going out of scope is the\n";
+        out += "    // barrier; there is no path that returns with a thread still writing.\n";
+        out += "}\n";
+    }
 
     if (target == Target::cuda) {
         // The batch kernel: one thread per input row. This is where the GPU target earns its
