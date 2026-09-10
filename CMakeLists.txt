@@ -587,6 +587,20 @@ target_sources(nimblecas_search_dist PUBLIC
 target_link_libraries(nimblecas_search_dist
   PUBLIC nimblecas_search nimblecas_taskdag nimblecas_core std_module)
 
+# ---- nimblecas.sat_compile : a CNF formula emitted as parallel C++, CUDA and Triton ----
+add_library(nimblecas_sat_compile STATIC)
+target_sources(nimblecas_sat_compile PUBLIC
+  FILE_SET CXX_MODULES FILES src/sat_compile/sat_compile.cppm)
+target_link_libraries(nimblecas_sat_compile
+  PUBLIC nimblecas_sat nimblecas_core std_module)
+
+# ---- nimblecas.sat_dist : distributed SAT (portfolio and cube-and-conquer) ----
+add_library(nimblecas_sat_dist STATIC)
+target_sources(nimblecas_sat_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/sat_dist/sat_dist.cppm)
+target_link_libraries(nimblecas_sat_dist
+  PUBLIC nimblecas_sat nimblecas_taskdag nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -1899,6 +1913,18 @@ target_link_libraries(search_dist_tests
           nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME search_dist_tests COMMAND search_dist_tests)
 
+add_executable(sat_compile_tests tests/sat_compile_tests.cpp)
+target_link_libraries(sat_compile_tests
+  PRIVATE nimblecas_sat_compile nimblecas_sat nimblecas_rng nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME sat_compile_tests COMMAND sat_compile_tests)
+
+add_executable(sat_dist_tests tests/sat_dist_tests.cpp)
+target_link_libraries(sat_dist_tests
+  PRIVATE nimblecas_sat_dist nimblecas_sat nimblecas_taskdag nimblecas_parallel
+          nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME sat_dist_tests COMMAND sat_dist_tests)
+
 add_executable(logic_dist_tests tests/logic_dist_tests.cpp)
 target_link_libraries(logic_dist_tests
   PRIVATE nimblecas_logic_dist nimblecas_logic_parser nimblecas_logic
@@ -2392,4 +2418,9 @@ endif()
 add_executable(prolog_compile tools/prolog_compile.cpp)
 target_link_libraries(prolog_compile
   PRIVATE nimblecas_logic_compile nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core std_module)
+
+add_executable(sat_compile tools/sat_compile.cpp)
+target_link_libraries(sat_compile
+  PRIVATE nimblecas_sat_compile nimblecas_sat nimblecas_rng nimblecas_parallel
           nimblecas_core std_module)
