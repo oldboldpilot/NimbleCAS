@@ -124,10 +124,15 @@ Reasoning & algorithmics (search / logic / constraints on the `parallel` runtime
 
 | Module | Reference | Summary |
 | :--- | :--- | :--- |
-| `nimblecas.search` | [search.md](reference/search.md) | Graph/tree search (BFS, DFS, IDDFS, Dijkstra, A*, tabu) + dynamic programming (edit-distance/LCS/knapsack) in recursive, iterative, and parallel forms. |
+| `nimblecas.search` | [search.md](reference/search.md) | Graph/tree search (BFS, DFS, IDDFS, Dijkstra, A*, IDA*, weighted A*, greedy, beam, bidirectional, tabu) + dynamic programming (edit-distance/LCS/knapsack) in recursive, iterative, and parallel forms. |
+| `nimblecas.search_dist` | [search_dist.md](reference/search_dist.md) | Distributed graph algorithmics over `taskdag`: round-based frontier relaxation over `WireGraph` data under `min_plus` (shortest paths) and `max_min` (widest bottleneck) semirings; exact costs, SSSP/A*/BFS/Floyd-Warshall/MST/K-core/triangle counting, and quadratic SCC. |
 | `nimblecas.sat` | [sat.md](reference/sat.md) | Boolean SAT: DPLL, CDCL (1-UIP learning), WalkSAT, GSAT, `solve_portfolio`, and distributed `solve_shard`. Complete solvers are worst-case exponential. |
 | `nimblecas.csp` | [csp.md](reference/csp.md) | Constraint satisfaction: AC-3 arc consistency, backtracking, forward checking, parallel. |
 | `nimblecas.logic` | [logic.md](reference/logic.md) | Logic programming: unification + SLD resolution + OR-parallel search under a depth/step budget (semi-decidable), plus negation as failure (`\+`) that reports floundering and budget-truncated negation as errors rather than answering unsoundly. |
+| `nimblecas.logic_parser` | [logic_parser.md](reference/logic_parser.md) | ISO Prolog reader/writer: tokenizer (comments, quoted atoms, integer bases), extensible operator table (`op/3`), Pratt operator-precedence parser, and writer with an exact AST round-trip guarantee (`to_source`); float literals refused honestly as `not_implemented`. |
+| `nimblecas.logic_index` | [logic_index.md](reference/logic_index.md) | First-argument clause indexing kernel for SLD resolution: batched FNV-1a functor probe across goals producing candidate bitmasks (key 0 wildcard); runtime CPU SIMD dispatch (AVX-512 → AVX2 → scalar) and CUDA GPU mirror, verified bit-identical. |
+| `nimblecas.logic_compile` | [logic_compile.md](reference/logic_compile.md) | Prolog-to-source compiler: lowers deterministic, moded integer clauses to C++23, CUDA C++, or Triton Python source text with overflow-checked arithmetic, tail-call optimisation, and SIMD batching; refuses non-compilable subsets and unrepresentable widths. |
+| `nimblecas.logic_dist` | [logic_dist.md](reference/logic_dist.md) | Distributed SLD resolution over `taskdag`: decomposes OR-branches into a task graph with a one-level fan-out limit, serialised as Prolog text with explicit `v(Name, Gen)` variable encodings; cuts/updates honestly delegated to serial solver, answers identical across executors. |
 | `nimblecas.bitset` | [bitset.md](reference/bitset.md) | Word-parallel branchless fixed-capacity bitset — the CPU substrate for branchless/GPU-style regular workloads. |
 | `nimblecas.bitcsp` | [bitcsp.md](reference/bitcsp.md) | Branchless bitset-domain AC-3 + three-bitmask N-queens (parallel result == serial). |
 
@@ -326,9 +331,10 @@ subsystems layer on top of it along these roots:
   `perturbation` build on `ode`/`powerseries`/`ratpoly`; `sde`/`mcmc`/`montecarlo`
   build on the counter-based `rng`.
 - **Reasoning & algorithmics** — `search`/`sat`/`csp`/`logic` and the branchless
-  `bitset`/`bitcsp` build on `core` + the `parallel` fork–join runtime; each unit of
-  work is a stateless pure function of `(problem, shard, seed)` for SGE/Ray/NCCL
-  distribution.
+  `bitset`/`bitcsp` build on `core` + the `parallel` fork–join runtime; `search_dist`
+  and `logic_dist` decompose searches into `taskdag` task graphs for cluster execution
+  over SGEE; `logic_parser`, `logic_index`, and `logic_compile` provide the reader/writer,
+  batched SIMD clause indexing, and ahead-of-time code generation for the logic engine.
 - **Symbolic constants** — `symconst` bridges the `symbolic` `Expr` layer to the
   numeric `constants`.
 - **Financial mathematics** — `bigdecimal` builds on `bigrational` as the exact
