@@ -91,7 +91,7 @@ if [[ -z "${SANITIZER}" ]]; then
     if [[ -n "${NIMBLECAS_CUDA_ARCH:-}" ]]; then
       CMAKE_ARGS+=(-DNIMBLECAS_CUDA_ARCH="${NIMBLECAS_CUDA_ARCH}")
     fi
-    echo "CUDA: ${NVCC_BIN} ($("${NVCC_BIN}" --version | sed -n 's/.*release \([0-9.]*\).*//p' | tail -1))"
+    echo "CUDA: ${NVCC_BIN} (release $("${NVCC_BIN}" --version | sed -n 's/.*release \([0-9.]*\).*/\1/p' | tail -1))"
   elif ((${#NVCC_CANDIDATES[@]})); then
     echo "CUDA: found nvcc but none could target this GPU -- building without the GPU kernels" >&2
   fi
