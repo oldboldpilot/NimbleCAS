@@ -296,6 +296,69 @@ auto main() -> int {
                   t.expect(g.has_value() && g->plan.steps.empty(),
                            "and the satisficing search agrees");
               })
+        .test("a_goal_already_in_hand_is_returned_even_at_a_budget_of_zero",
+              [](TestContext& t) {
+                  // Found by adversarial review. The budget was checked BEFORE the goal test,
+                  // so a task whose goal is already satisfied came back not_converged at
+                  // max_expansions = 0 while the serial planner returned the empty plan --
+                  // a divergence at every budget boundary, and precisely the equivalence this
+                  // module exists to provide.
+                  Task done;
+                  done.domain_size = {2, 2};
+                  done.initial = {1, 1};
+                  done.goal = {FactPair{.var = 0, .value = 1}};
+                  done.operators.push_back(Operator{.name = "irrelevant",
+                                                    .preconditions = {FactPair{.var = 0, .value = 0}},
+                                                    .effects = {FactPair{.var = 0, .value = 1}},
+                                                    .cost = 1});
+                  auto exec = local_parallel_executor();
+                  auto want = astar_plan(done, 0);
+                  auto got = distributed_astar_plan(done, 0, 4, *exec);
+                  t.expect(want.has_value(),
+                           "the serial planner returns the empty plan at a budget of zero");
+                  t.expect(got.has_value(),
+                           "and so does the distributed one -- not not_converged");
+                  t.expect(got.has_value() && want.has_value() &&
+                               got->plan.cost == want->plan.cost,
+                           "at the identical cost");
+                  auto g = distributed_gbfs_plan(done, 0, 4, 4, *exec);
+                  t.expect(g.has_value() && g->plan.steps.empty(),
+                           "the satisficing search behaves the same way");
+              })
+        .test("costs_near_the_top_of_the_range_saturate_instead_of_overflowing",
+              [](TestContext& t) {
+                  // Also found by review. `g + step_cost` was a plain signed addition on
+                  // caller-supplied operator costs, so a path of two enormous steps overflowed
+                  // to a NEGATIVE g, which sorts to the front of the f-order and makes the
+                  // search return a nonsense "optimum". The serial planner saturates at exactly
+                  // these sums; anything else here is a silent divergence.
+                  constexpr std::int64_t huge = std::numeric_limits<std::int64_t>::max() / 2;
+                  Task t2;
+                  t2.domain_size = {3};
+                  t2.initial = {0};
+                  t2.goal = {FactPair{.var = 0, .value = 2}};
+                  t2.operators.push_back(Operator{.name = "big1",
+                                                  .preconditions = {FactPair{.var = 0, .value = 0}},
+                                                  .effects = {FactPair{.var = 0, .value = 1}},
+                                                  .cost = huge});
+                  t2.operators.push_back(Operator{.name = "big2",
+                                                  .preconditions = {FactPair{.var = 0, .value = 1}},
+                                                  .effects = {FactPair{.var = 0, .value = 2}},
+                                                  .cost = huge});
+                  auto exec = local_parallel_executor();
+                  auto want = astar_plan(t2, 100000);
+                  auto got = distributed_astar_plan(t2, 100000, 2, *exec);
+                  t.expect(want.has_value() && got.has_value(),
+                           "both planners solve a task with enormous operator costs");
+                  if (want && got) {
+                      t.expect(got->plan.cost == want->plan.cost,
+                               "and agree on the cost rather than diverging through an overflow");
+                      t.expect(got->plan.cost > 0,
+                               "which is positive -- an overflowed sum would have gone negative");
+                      t.expect(validate_plan(t2, got->plan).has_value(),
+                               "and the plan still replays to the goal");
+                  }
+              })
         .test("an_unsolvable_task_is_proved_unsolvable_not_merely_unfinished",
               [](TestContext& t) {
                   // undefined_value means the reachable state space was exhausted -- a proof.

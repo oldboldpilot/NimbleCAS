@@ -203,6 +203,15 @@ class ResultGuard {
     PGresult* r_{nullptr};
 };
 
+// libpq takes every parameter length as a plain `int`, so a span longer than INT_MAX cannot be
+// described to it at all: the cast would truncate, and a truncation that lands negative makes
+// PQexecParams read a wrong count of bytes out of the buffer. `max_value_bytes_` bounds the
+// value, but the caller chooses that bound and may set it above INT_MAX, and the FULL KEY is
+// bounded by nothing whatsoever. So the limit is checked rather than assumed.
+[[nodiscard]] auto fits_in_param(std::span<const std::byte> bytes) noexcept -> bool {
+    return bytes.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max());
+}
+
 // The two halves of a ContentKey as BIGINTs. Postgres has no unsigned 64-bit type, so each half
 // travels as its two's-complement bit pattern reinterpreted as a signed value -- a total,
 // reversible mapping, and the only one that does not lose a bit. The column is an index, never
@@ -245,6 +254,17 @@ auto PostgresMemo::acquire() -> Lease {
     available_.wait(lock, [this] { return !free_.empty(); });
     PGconn* c = free_.back();
     free_.pop_back();
+    lock.unlock();
+    // A connection can die between leases -- the server restarts, an idle timeout fires, a
+    // network blip drops the socket -- and libpq does not reconnect on its own. Without this,
+    // the Lease destructor would hand the dead connection straight back to the pool and that
+    // slot would return `distributed_error` for every future lease, turning a transient blip
+    // into permanent loss of 1/pool_size of the capacity. PQreset reuses the stored parameters,
+    // so a failure here simply leaves the connection bad and the caller gets an honest
+    // transport error from the query it was about to run.
+    if (PQstatus(c) != CONNECTION_OK) {
+        PQreset(c);
+    }
     return Lease{this, c};
 }
 
@@ -285,10 +305,16 @@ auto PostgresMemo::create(std::string conninfo, std::string table, std::size_t p
         memo->free_.push_back(c);
     }
 
-    // The schema. `IF NOT EXISTS` throughout, so several coordinators starting at once all
-    // succeed rather than racing. The unique index is what makes `publish` idempotent: it is on
-    // the fingerprint plus a DIGEST of the full key rather than the full key itself, because a
-    // btree entry has a size limit and a full key is arbitrarily long.
+    // The schema. The unique index is what makes `publish` idempotent: it is on the fingerprint
+    // plus a DIGEST of the full key rather than the full key itself, because a btree entry has a
+    // size limit and a full key is arbitrarily long.
+    //
+    // `IF NOT EXISTS` is NOT atomic against concurrent DDL -- the existence check and the
+    // catalogue insert are separate, so two coordinators starting simultaneously can still
+    // collide on pg_class and one of them gets a duplicate-object error. That is a real race and
+    // not a hypothetical, so it is retried once: by the time the retry runs the other party has
+    // finished and `IF NOT EXISTS` finds the objects present. If it fails twice the error is
+    // reported honestly rather than papered over.
     const std::string ddl = std::format(
         "CREATE TABLE IF NOT EXISTS {} ("
         "  key_hi BIGINT NOT NULL,"
@@ -301,8 +327,14 @@ auto PostgresMemo::create(std::string conninfo, std::string table, std::size_t p
         "CREATE UNIQUE INDEX IF NOT EXISTS {}_uniq_idx ON {} (key_hi, key_lo, md5(full_key));",
         memo->table_, memo->table_, memo->table_, memo->table_, memo->table_);
 
-    const ResultGuard res(PQexec(memo->owned_.front(), ddl.c_str()));
-    if (res.get() == nullptr || PQresultStatus(res.get()) != PGRES_COMMAND_OK) {
+    {
+        const ResultGuard res(PQexec(memo->owned_.front(), ddl.c_str()));
+        if (res.get() != nullptr && PQresultStatus(res.get()) == PGRES_COMMAND_OK) {
+            return memo;
+        }
+    }
+    const ResultGuard retry(PQexec(memo->owned_.front(), ddl.c_str()));
+    if (retry.get() == nullptr || PQresultStatus(retry.get()) != PGRES_COMMAND_OK) {
         return make_error<Ret>(MathError::distributed_error);
     }
     return memo;
@@ -313,6 +345,9 @@ auto PostgresMemo::name() const -> std::string_view { return "postgres_memo"; }
 auto PostgresMemo::lookup(const ContentKey& key, std::span<const std::byte> full_key)
     -> Result<std::optional<Payload>> {
     using Ret = std::optional<Payload>;
+    if (!fits_in_param(full_key)) {
+        return make_error<Ret>(MathError::domain_error);
+    }
     const auto lease = acquire();
 
     const std::string hi = std::to_string(as_signed(key.hi));
@@ -377,7 +412,7 @@ auto PostgresMemo::lookup(const ContentKey& key, std::span<const std::byte> full
 
 auto PostgresMemo::publish(const ContentKey& key, std::span<const std::byte> full_key,
                            std::span<const std::byte> value) -> Result<void> {
-    if (value.size() > max_value_bytes_) {
+    if (value.size() > max_value_bytes_ || !fits_in_param(value) || !fits_in_param(full_key)) {
         rejected_.fetch_add(1, std::memory_order_relaxed);
         return make_error<void>(MathError::domain_error);
     }

@@ -184,6 +184,28 @@ constexpr std::uint64_t task_magic = 0x4e43535f5054534bULL;  // "NCS_PTSK"
 constexpr std::uint64_t batch_magic = 0x4e43535f50424348ULL;  // "NCS_PBCH"
 constexpr std::uint64_t succ_magic = 0x4e43535f50535543ULL;   // "NCS_PSUC"
 
+// Addition that saturates instead of overflowing, matching `nimblecas.planning`'s own
+// `add_capped` exactly -- including its convention that INT64_MAX means "unreachable" and is
+// absorbing.
+//
+// This is not defensiveness for its own sake. `g + step_cost` and `g + h` are plain signed
+// additions on caller-supplied operator costs, so a task with costs near the top of the range
+// overflows: undefined behaviour, and in practice a negative g that sorts to the FRONT of the
+// f-order and makes the search return a nonsense "optimum". The serial planner saturates at
+// exactly these three sums, so anything else here would also be a silent divergence from the
+// answer this module promises to reproduce.
+[[nodiscard]] auto add_capped(std::int64_t a, std::int64_t b) noexcept -> std::int64_t {
+    constexpr std::int64_t unreachable = std::numeric_limits<std::int64_t>::max();
+    if (a == unreachable || b == unreachable) {
+        return unreachable;
+    }
+    std::int64_t out = 0;
+    if (__builtin_add_overflow(a, b, &out)) {
+        return unreachable;
+    }
+    return out;
+}
+
 auto put_u64(std::vector<std::byte>& out, std::uint64_t v) -> void {
     for (const unsigned int i : std::views::iota(0U, 8U)) {
         out.push_back(static_cast<std::byte>((v >> (8U * i)) & 0xffULL));
@@ -770,9 +792,6 @@ auto distributed_astar_plan(const Task& task, std::uint64_t max_expansions, std:
     std::vector<std::int64_t> open_f{*root_h};
 
     while (!open.empty()) {
-        if (stats.expanded >= max_expansions) {
-            return make_error<PlanResult>(MathError::not_converged);
-        }
         // The whole f-layer: A* may expand the states of one layer in any order.
         const std::int64_t f_min = *std::ranges::min_element(open_f);
         std::vector<std::size_t> layer;
@@ -802,6 +821,13 @@ auto distributed_astar_plan(const Task& task, std::uint64_t max_expansions, std:
             }
         }
 
+        // The budget is checked HERE, after the goal test and before any expansion, because
+        // that is the order the serial planner uses: it goal-tests a popped node before
+        // checking its budget, so a task whose goal is already in hand is solved even at a
+        // budget of zero. Checking first would make the two disagree at every budget boundary.
+        if (stats.expanded >= max_expansions) {
+            return make_error<PlanResult>(MathError::not_converged);
+        }
         std::vector<State> batch;
         batch.reserve(layer.size());
         for (const std::size_t ni : layer) {
@@ -830,7 +856,7 @@ auto distributed_astar_plan(const Task& task, std::uint64_t max_expansions, std:
                     continue;  // unreachable under the relaxation: no plan runs through here
                 }
                 const std::size_t parent_node = layer[s.parent];
-                const std::int64_t g = nodes[parent_node].g + s.step_cost;
+                const std::int64_t g = add_capped(nodes[parent_node].g, s.step_cost);
                 const auto it = best.find(s.state);
                 if (it != best.end() && nodes[it->second].g <= g) {
                     continue;  // already reached at least as cheaply
@@ -847,7 +873,7 @@ auto distributed_astar_plan(const Task& task, std::uint64_t max_expansions, std:
                     best.emplace(s.state, idx);
                 }
                 open.push_back(idx);
-                open_f.push_back(g + s.heuristic);
+                open_f.push_back(add_capped(g, s.heuristic));
             }
         }
     }
@@ -888,9 +914,6 @@ auto distributed_gbfs_plan(const Task& task, std::uint64_t max_expansions, std::
     std::vector<OpenEntry> open{OpenEntry{.h = *root.value, .not_preferred = 0, .node = 0}};
 
     while (!open.empty()) {
-        if (stats.expanded >= max_expansions) {
-            return make_error<PlanResult>(MathError::not_converged);
-        }
         std::ranges::sort(open);
         const std::size_t take = std::min(beam, open.size());
         std::vector<std::size_t> layer;
@@ -911,6 +934,11 @@ auto distributed_gbfs_plan(const Task& task, std::uint64_t max_expansions, std::
             }
         }
 
+        // After the goal test, as above: a goal already in hand is returned even at a budget
+        // of zero, which is what the serial search does.
+        if (stats.expanded >= max_expansions) {
+            return make_error<PlanResult>(MathError::not_converged);
+        }
         std::vector<State> batch;
         batch.reserve(layer.size());
         for (const std::size_t ni : layer) {
@@ -935,7 +963,7 @@ auto distributed_gbfs_plan(const Task& task, std::uint64_t max_expansions, std::
                 seen.insert(s.state);
                 const std::size_t parent_node = layer[s.parent];
                 nodes.push_back(Node{.state = s.state,
-                                     .g = nodes[parent_node].g + s.step_cost,
+                                     .g = add_capped(nodes[parent_node].g, s.step_cost),
                                      .parent = parent_node,
                                      .op_index = s.op_index,
                                      .is_root = false});
