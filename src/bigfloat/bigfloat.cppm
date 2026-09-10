@@ -350,7 +350,7 @@ auto BigFloat::ratio(const BigInt& num, const BigInt& den, std::int64_t e_bias,
     // remainder then supplies the sticky bit, giving a correctly-rounded single rounding.
     const std::int64_t shift = bit_length(d) + prec + guard_bits;
     auto dm = shift_left(a, shift).divmod(d);
-    BigInt q = dm ? dm->first : bi_zero();
+    const BigInt q = dm ? dm->first : bi_zero();
     const bool sticky = dm && !dm->second.is_zero();
     std::int64_t e = 0;
     if (sub_ov(e_bias, shift, e)) {  // value = (a/d) * 2^e_bias = q * 2^(e_bias - shift) + ...
