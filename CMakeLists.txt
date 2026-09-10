@@ -1793,6 +1793,12 @@ target_link_libraries(logic_index_tests
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_index_tests COMMAND logic_index_tests)
 
+add_executable(logic_compile_tests tests/logic_compile_tests.cpp)
+target_link_libraries(logic_compile_tests
+  PRIVATE nimblecas_logic_compile nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_compile_tests COMMAND logic_compile_tests)
+
 add_executable(doubledouble_tests tests/doubledouble_tests.cpp)
 target_link_libraries(doubledouble_tests
   PRIVATE nimblecas_doubledouble nimblecas_simd nimblecas_core nimblecas_testing std_module)
