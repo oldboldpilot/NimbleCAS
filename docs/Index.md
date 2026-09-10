@@ -130,7 +130,9 @@ Reasoning & algorithmics (search / logic / constraints on the `parallel` runtime
 | `nimblecas.sat` | [sat.md](reference/sat.md) | Boolean SAT: DPLL, CDCL (1-UIP learning), WalkSAT, GSAT, `solve_portfolio`, and distributed `solve_shard`. Complete solvers are worst-case exponential. |
 | `nimblecas.sat_compile` | [sat_compile.md](reference/sat_compile.md) | CNF-to-source compiler: lowers formulas to C++23, CUDA C++, or Triton Python source text; complete bit-parallel exhaustive enumeration ($2^n$, $\le 63$ vars) vs incomplete WalkSAT stochastic local search (SKC, probSAT, Novelty+, AdaptNovelty+). |
 | `nimblecas.sat_dist` | [sat_dist.md](reference/sat_dist.md) | Distributed SAT solving over `taskdag`: portfolio search and exact cube-and-conquer space partitioning; complete cluster-wide UNSAT proofs, verified over SGEE with models checked against original formulas. |
-| `nimblecas.csp` | [csp.md](reference/csp.md) | Constraint satisfaction: AC-3 arc consistency, backtracking, forward checking, parallel. |
+| `nimblecas.csp` | [csp.md](reference/csp.md) | Finite-domain constraint satisfaction: AC-3 arc consistency, backtracking, forward checking, parallel search, plus the declarative `WireCsp` form (eight constraint kinds) that can be serialised and compiled; `as_csp` converts back so the same problem runs through every solver. Linear constraints whose weighted sum could overflow are refused at validation rather than evaluated. |
+| `nimblecas.csp_compile` | [csp_compile.md](reference/csp_compile.md) | CSP-to-source compiler: lowers a `WireCsp` to C++23, CUDA or Triton source text. Complete exhaustive enumeration of the mixed-radix assignment space (capped by `max_search_space`) vs incomplete `min_conflicts` local search, which reports UNKNOWN and never unsatisfiability. Backtracking is deliberately not emitted: pruning is a sequential dependency chain. Triton gets a batch conflict SCORER, not the walk. |
+| `nimblecas.csp_dist` | [csp_dist.md](reference/csp_dist.md) | Distributed CSP over `taskdag`: fixing the first k variables partitions the assignment space EXACTLY, giving both a complete cluster-wide UNSAT proof and distributed model counting (the per-prefix counts sum to the total). Deterministic -- lowest-index prefix wins, so the answer equals `backtracking_search`'s for any executor; assignments verified against the original problem. |
 | `nimblecas.logic` | [logic.md](reference/logic.md) | Logic programming: unification + SLD resolution + OR-parallel search under a depth/step budget (semi-decidable), plus negation as failure (`\+`) that reports floundering and budget-truncated negation as errors rather than answering unsoundly. |
 | `nimblecas.logic_parser` | [logic_parser.md](reference/logic_parser.md) | ISO Prolog reader/writer: tokenizer (comments, quoted atoms, integer bases), extensible operator table (`op/3`), Pratt operator-precedence parser, and writer with an exact AST round-trip guarantee (`to_source`); float literals refused honestly as `not_implemented`. |
 | `nimblecas.logic_index` | [logic_index.md](reference/logic_index.md) | First-argument clause indexing kernel for SLD resolution: batched FNV-1a functor probe across goals producing candidate bitmasks (key 0 wildcard); runtime CPU SIMD dispatch (AVX-512 → AVX2 → scalar) and CUDA GPU mirror, verified bit-identical. |
@@ -335,9 +337,13 @@ subsystems layer on top of it along these roots:
   build on the counter-based `rng`.
 - **Reasoning & algorithmics** — `search`/`sat`/`csp`/`logic`/`planning` and the branchless
   `bitset`/`bitcsp` build on `core` + the `parallel` fork–join runtime; `search_dist`,
-  `logic_dist`, and `sat_dist` decompose searches into `taskdag` task graphs for cluster execution
-  over SGEE; `logic_parser`, `logic_index`, `logic_compile`, and `sat_compile` provide the reader/writer,
-  batched SIMD clause indexing, and ahead-of-time code generation for the logic and SAT engines.
+  `logic_dist`, `sat_dist`, and `csp_dist` decompose searches into `taskdag` task graphs for
+  cluster execution over SGEE; `logic_parser`, `logic_index`, `logic_compile`, `sat_compile`, and
+  `csp_compile` provide the reader/writer, batched SIMD clause indexing, and ahead-of-time code
+  generation for the logic, SAT and constraint engines. The two constraint modules rest on `csp`'s
+  declarative `WireCsp`: a CSP carrying `std::function` constraints can be solved in process but
+  can be neither shipped to a worker nor read by a code generator, so the data-only form is what
+  makes distribution and emission possible at all.
 - **Symbolic constants** — `symconst` bridges the `symbolic` `Expr` layer to the
   numeric `constants`.
 - **Financial mathematics** — `bigdecimal` builds on `bigrational` as the exact

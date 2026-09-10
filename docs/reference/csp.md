@@ -244,7 +244,128 @@ ac3(oob).error();                                // MathError::domain_error
 solution_count(Csp{}, 0).error();                // MathError::domain_error (empty CSP)
 ```
 
+## The declarative layer — `WireCsp`
+
+Everything above carries its constraints as `std::function`. That is the right
+representation for an in-process solver, because any predicate the caller can write is
+expressible, but it has a hard consequence: a `std::function` is a closure over this
+process's address space. It cannot be sent to a worker, and it cannot be read by a code
+generator. Distribution and ahead-of-time emission therefore need constraints as *data*,
+and `WireCsp` is that form.
+
+The trade is deliberate and worth stating plainly rather than discovering later: the
+declarative form is strictly **less expressive** than the functional one. It covers the
+eight constraint kinds below and nothing else. A problem outside that set is still
+perfectly solvable in process through `Csp`; it simply cannot be shipped or compiled, and
+`WireCsp` will not pretend otherwise.
+
+```cpp
+enum class ConstraintKind : std::uint8_t {
+    not_equal,      // x != y
+    equal,          // x == y
+    less_equal,     // x + k <= y
+    abs_diff_ne,    // |x - y| != k  -- the diagonal constraint of the n-queens family
+    all_different,  // pairwise distinct
+    linear_eq,      // sum(coef[i] * x[scope[i]]) == rhs
+    linear_le,      // sum(coef[i] * x[scope[i]]) <= rhs
+    table_allowed,  // an extensional relation: a flat row-major array of allowed tuples
+};
+
+struct WireConstraint {
+    ConstraintKind kind{ConstraintKind::not_equal};
+    std::vector<std::size_t> scope;
+    std::vector<std::int64_t> params;
+};
+
+struct WireCsp {
+    std::vector<std::vector<std::int64_t>> domains;
+    std::vector<WireConstraint> constraints;
+
+    [[nodiscard]] auto num_vars() const noexcept -> std::size_t;
+};
+
+[[nodiscard]] auto fixed_arity(ConstraintKind kind) noexcept -> std::optional<std::size_t>;
+[[nodiscard]] auto validate(const WireCsp& w) -> Result<void>;
+[[nodiscard]] auto holds(const WireConstraint& c, std::span<const std::int64_t> values) -> bool;
+[[nodiscard]] auto as_csp(const WireCsp& w) -> Result<Csp>;
+```
+
+`as_csp` converts back, so the *same* problem runs through every solver above unchanged.
+That is what makes a distributed or emitted answer checkable against a known-good one
+rather than merely self-consistent.
+
+Two details in that conversion are load-bearing. `all_different` is expanded into its
+pairwise not-equals — which is exactly what it means — because AC-3 propagates over
+**binary** constraints only; leaving it in `general` would be identical in meaning and
+strictly weaker in pruning. And any constraint of arity two becomes a `BinaryConstraint`
+for the same reason.
+
+### Overflow is refused once, not checked forever
+
+`linear_eq` and `linear_le` accumulate a weighted sum, and a sum that overflows
+`std::int64_t` would be undefined behaviour in the evaluator and a wrong answer in emitted
+code. Rather than test on every evaluation — in the inner loop of a search, and in
+generated CUDA where there is nowhere to report it — `validate` computes the worst-case
+magnitude **once**, from the coefficients and the domain extremes, and refuses a
+constraint that could overflow with `MathError::overflow`. Every constraint that passes
+validation can then be evaluated with plain `int64` arithmetic that cannot overflow.
+
+`validate` also refuses a variable repeated within one scope. That is not pedantry: a
+repeated variable would make the constraint's reading depend on which occurrence a solver
+bound first, and refusing is better than silently picking one of two meanings.
+
+## Partitioning the assignment space
+
+```cpp
+[[nodiscard]] auto prefix_count(const WireCsp& w, std::size_t fixed_vars) -> Result<std::uint64_t>;
+[[nodiscard]] auto prefix_assignment(const WireCsp& w, std::size_t fixed_vars,
+                                     std::uint64_t index) -> Result<std::vector<std::int64_t>>;
+[[nodiscard]] auto restrict_prefix(const WireCsp& w, std::span<const std::int64_t> assignment)
+    -> Result<WireCsp>;
+```
+
+Fixing the first *k* variables to one combination of values from their domains yields an
+independent sub-problem. Over the ascending product of those *k* domains the sub-problems
+**partition** the assignment space exactly: every complete assignment lies in exactly one
+of them, none in two. That is the property [`nimblecas.csp_dist`](csp_dist.md) rests on,
+and it is what makes a distributed *unsatisfiability* verdict meaningful rather than
+merely an absence of results.
+
+`prefix_assignment` enumerates in ascending lexicographic order — the last fixed variable
+varying fastest — which is the same order the serial search visits, and is why "the
+lowest-indexed shard wins" reproduces `backtracking_search`'s answer exactly.
+
+```cpp
+// The declarative 8-queens: rows pairwise distinct, and no shared diagonal.
+WireCsp w;
+for (std::size_t i = 0; i < 8; ++i) {
+    w.domains.push_back({0, 1, 2, 3, 4, 5, 6, 7});
+}
+w.constraints.push_back(WireConstraint{
+    .kind = ConstraintKind::all_different, .scope = {0, 1, 2, 3, 4, 5, 6, 7}, .params = {}});
+for (std::size_t i = 0; i < 8; ++i) {
+    for (std::size_t j = i + 1; j < 8; ++j) {
+        w.constraints.push_back(WireConstraint{
+            .kind = ConstraintKind::abs_diff_ne,
+            .scope = {i, j},
+            .params = {static_cast<std::int64_t>(j - i)}});
+    }
+}
+
+const Csp same_problem = as_csp(w).value();
+solution_count(same_problem, 0).value();   // 92 — the same 92 the functional encoding gives
+
+// The partition, checked by counting: the sub-counts sum to the whole count.
+const std::uint64_t prefixes = prefix_count(w, 2).value();          // 64
+for (std::uint64_t i = 0; i < prefixes; ++i) {
+    const auto prefix = prefix_assignment(w, 2, i).value();
+    const WireCsp sub = restrict_prefix(w, prefix).value();
+    // solution_count(as_csp(sub).value(), 0) summed over i == 92
+}
+```
+
 ## See also
+
 
 - [`nimblecas.parallel`](parallel.md) — the `transform_index` branch-parallel map
   `parallel_search` fans the first-variable split across.
@@ -252,4 +373,8 @@ solution_count(Csp{}, 0).error();                // MathError::domain_error (emp
   layer (linear programming over exact arithmetic).
 - [`nimblecas.core`](core.md) — the `Result<T>` / `MathError` railway every entry
   point returns through.
+- [`nimblecas.csp_dist`](csp_dist.md) — the same problem distributed over `taskdag`, on the
+  exact prefix partition described above.
+- [`nimblecas.csp_compile`](csp_compile.md) — the same problem emitted as C++23, CUDA or
+  Triton source.
 - [Documentation hub](../Index.md)
