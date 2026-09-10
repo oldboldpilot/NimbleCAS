@@ -1909,7 +1909,7 @@ add_test(NAME search_tests COMMAND search_tests)
 
 add_executable(search_dist_tests tests/search_dist_tests.cpp)
 target_link_libraries(search_dist_tests
-  PRIVATE nimblecas_search_dist nimblecas_search nimblecas_taskdag
+  PRIVATE nimblecas_search_dist nimblecas_search nimblecas_taskdag nimblecas_taskdag_sgee
           nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME search_dist_tests COMMAND search_dist_tests)
 
@@ -1921,14 +1921,14 @@ add_test(NAME sat_compile_tests COMMAND sat_compile_tests)
 
 add_executable(sat_dist_tests tests/sat_dist_tests.cpp)
 target_link_libraries(sat_dist_tests
-  PRIVATE nimblecas_sat_dist nimblecas_sat nimblecas_taskdag nimblecas_parallel
+  PRIVATE nimblecas_sat_dist nimblecas_sat nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel
           nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME sat_dist_tests COMMAND sat_dist_tests)
 
 add_executable(logic_dist_tests tests/logic_dist_tests.cpp)
 target_link_libraries(logic_dist_tests
   PRIVATE nimblecas_logic_dist nimblecas_logic_parser nimblecas_logic
-          nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+          nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_dist_tests COMMAND logic_dist_tests)
 
 add_executable(csp_tests tests/csp_tests.cpp)

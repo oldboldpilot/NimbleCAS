@@ -15,6 +15,7 @@ import nimblecas.core;
 import nimblecas.search;
 import nimblecas.search_dist;
 import nimblecas.taskdag;
+import nimblecas.taskdag_sgee;
 import nimblecas.testing;
 
 using nimblecas::a_star;
@@ -29,6 +30,10 @@ using nimblecas::Payload;
 using nimblecas::serial_executor;
 using nimblecas::TabuState;
 using nimblecas::TaskRegistry;
+using nimblecas::FakeBrokerPort;
+using nimblecas::InMemoryResultChannel;
+using nimblecas::SgeeDistributedExecutor;
+using nimblecas::SgeeExecutorConfig;
 using nimblecas::search_dist::decode_proposals;
 using nimblecas::search_dist::distributed_a_star;
 using nimblecas::search_dist::distributed_bfs;
@@ -2307,6 +2312,153 @@ auto main() -> int {
                       const std::vector<std::int64_t> expected_path{0, 3, 5};
                       t.expect(r->first == expected_path, "widest path selects Route 2 with maximum bottleneck width");
                       t.expect(r->second == 4, "bottleneck width is exactly 4");
+                  }
+              })
+        .test("every_algorithm_gives_the_same_answer_over_the_sgee_distributed_executor",
+              [](TestContext& t) {
+                  // THE CLAIM THIS MODULE IS BUILT ON. Everything above runs over the serial and
+                  // local-parallel executors, which share this process's memory; SGEE does not.
+                  // It ships an op id and bytes to a worker, which looks the op up in ITS OWN
+                  // registry and runs it with no access to anything the coordinator holds.
+                  //
+                  // That is why `register_ops` is exported: the caller fills the registry the
+                  // executor was configured with, and the coordinator's graph and the worker's
+                  // lookup then agree by construction. Until this test existed, "any Executor,
+                  // including a distributed one" was a design intention rather than a fact.
+                  TaskRegistry reg;
+                  t.expect(nimblecas::search_dist::register_ops(reg).has_value(),
+                           "the module's operations register into the executor's registry");
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.registry = &reg;
+                  cfg.num_workers = 4;
+                  cfg.poll_interval_ms = 1;
+                  SgeeDistributedExecutor sgee(cfg, port, results);
+                  t.expect(sgee.name() == "sgee_distributed",
+                           "the executor under test really is the distributed one");
+
+                  auto ser = serial_executor();
+                  const WireGraph grid = grid_graph(4, 4, 3);
+                  const WireGraph dia = diamond_graph();
+
+                  auto a_ser = distributed_sssp(grid, 0, 3, *ser);
+                  auto a_sgee = distributed_sssp(grid, 0, 3, sgee);
+                  t.expect(a_ser.has_value() && a_sgee.has_value(),
+                           "the shortest-path rounds run over SGEE");
+                  if (a_ser.has_value() && a_sgee.has_value()) {
+                      t.expect(*a_ser == *a_sgee,
+                               "every distance is identical to the serial executor's");
+                  }
+
+                  auto p_ser = distributed_shortest_path(grid, 0, 15, 3, *ser);
+                  auto p_sgee = distributed_shortest_path(grid, 0, 15, 3, sgee);
+                  t.expect(p_ser.has_value() && p_sgee.has_value(), "the path search runs");
+                  if (p_ser.has_value() && p_sgee.has_value()) {
+                      t.expect(p_ser->first == p_sgee->first && p_ser->second == p_sgee->second,
+                               "the path and the cost are both identical");
+                  }
+
+                  auto f_ser = distributed_floyd_warshall(dia, 3, *ser);
+                  auto f_sgee = distributed_floyd_warshall(dia, 3, sgee);
+                  t.expect(f_ser.has_value() && f_sgee.has_value(), "all-pairs runs over SGEE");
+                  if (f_ser.has_value() && f_sgee.has_value()) {
+                      t.expect(*f_ser == *f_sgee, "the whole matrix is identical");
+                  }
+              })
+        .test("the_operations_needing_their_own_task_kinds_also_run_over_sgee",
+              [](TestContext& t) {
+                  // The round-based algorithms all ship the SAME op. These four ship different
+                  // ones -- a depth-limited probe, a Floyd row block, a triangle count and a
+                  // Boruvka step -- so this checks that every registered op survives the trip,
+                  // not merely the one that happens to be exercised most.
+                  TaskRegistry reg;
+                  if (!nimblecas::search_dist::register_ops(reg)) {
+                      t.expect(false, "operations register");
+                      return;
+                  }
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.registry = &reg;
+                  cfg.num_workers = 3;
+                  cfg.poll_interval_ms = 1;
+                  SgeeDistributedExecutor sgee(cfg, port, results);
+                  auto ser = serial_executor();
+
+                  WireGraph g;
+                  g.adjacency = {
+                      {Edge{.target = 1, .cost = 4}, Edge{.target = 2, .cost = 1}},
+                      {Edge{.target = 2, .cost = 2}, Edge{.target = 3, .cost = 5}},
+                      {Edge{.target = 3, .cost = 8}},
+                      {Edge{.target = 0, .cost = 3}},
+                  };
+                  g.landscape = {7, 3, 9, 1};
+
+                  auto tri_ser = distributed_triangle_counts(g, 2, *ser);
+                  auto tri_sgee = distributed_triangle_counts(g, 2, sgee);
+                  t.expect(tri_ser.has_value() && tri_sgee.has_value(), "triangle counting runs");
+                  if (tri_ser.has_value() && tri_sgee.has_value()) {
+                      t.expect(*tri_ser == *tri_sgee, "the per-node counts are identical");
+                  }
+
+                  auto mst_ser = distributed_minimum_spanning_forest(g, 2, *ser);
+                  auto mst_sgee = distributed_minimum_spanning_forest(g, 2, sgee);
+                  t.expect(mst_ser.has_value() && mst_sgee.has_value(),
+                           "the spanning forest runs");
+                  if (mst_ser.has_value() && mst_sgee.has_value()) {
+                      t.expect(mst_ser->first == mst_sgee->first &&
+                                   mst_ser->second == mst_sgee->second,
+                               "the same edges and the same total weight");
+                  }
+
+                  const std::vector<std::int64_t> goals{3};
+                  auto idd_ser = distributed_iterative_deepening(g, 0, goals, 6, 2, *ser);
+                  auto idd_sgee = distributed_iterative_deepening(g, 0, goals, 6, 2, sgee);
+                  t.expect(idd_ser.has_value() && idd_sgee.has_value(),
+                           "iterative deepening runs over SGEE");
+                  if (idd_ser.has_value() && idd_sgee.has_value()) {
+                      t.expect(*idd_ser == *idd_sgee, "the same path comes back");
+                  }
+
+                  const std::vector<std::int64_t> starts{0, 2};
+                  auto tabu_ser = distributed_multistart_tabu(g, starts, 1, 12, *ser);
+                  auto tabu_sgee = distributed_multistart_tabu(g, starts, 1, 12, sgee);
+                  t.expect(tabu_ser.has_value() && tabu_sgee.has_value(), "tabu runs over SGEE");
+                  if (tabu_ser.has_value() && tabu_sgee.has_value()) {
+                      t.expect(tabu_ser->first == tabu_sgee->first &&
+                                   tabu_ser->second == tabu_sgee->second,
+                               "the same best state and value");
+                  }
+              })
+        .test("sgee_results_do_not_change_with_the_worker_count",
+              [](TestContext& t) {
+                  // A distributed run whose answer moved with the worker count would be far
+                  // harder to trust than a slow one, so the count is varied deliberately.
+                  const WireGraph g = grid_graph(5, 4, 2);
+                  auto ser = serial_executor();
+                  auto baseline = distributed_sssp(g, 0, 4, *ser);
+                  t.expect(baseline.has_value(), "the serial baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  for (const std::size_t workers : {std::size_t{1}, std::size_t{2},
+                                                    std::size_t{5}, std::size_t{8}}) {
+                      TaskRegistry reg;
+                      if (!nimblecas::search_dist::register_ops(reg)) {
+                          t.expect(false, "operations register");
+                          return;
+                      }
+                      FakeBrokerPort port;
+                      InMemoryResultChannel results;
+                      SgeeExecutorConfig cfg;
+                      cfg.registry = &reg;
+                      cfg.num_workers = workers;
+                      cfg.poll_interval_ms = 1;
+                      SgeeDistributedExecutor sgee(cfg, port, results);
+                      auto r = distributed_sssp(g, 0, 4, sgee);
+                      t.expect(r.has_value() && *r == *baseline,
+                               "the answer is identical however many workers ran it");
                   }
               })
         .run();

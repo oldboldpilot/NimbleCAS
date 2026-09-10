@@ -12,6 +12,7 @@ import nimblecas.core;
 import nimblecas.sat;
 import nimblecas.sat_dist;
 import nimblecas.taskdag;
+import nimblecas.taskdag_sgee;
 import nimblecas.testing;
 
 using nimblecas::Cnf;
@@ -26,6 +27,10 @@ using nimblecas::SatVerdict;
 using nimblecas::serial_executor;
 using nimblecas::solve_portfolio;
 using nimblecas::TaskRegistry;
+using nimblecas::FakeBrokerPort;
+using nimblecas::InMemoryResultChannel;
+using nimblecas::SgeeDistributedExecutor;
+using nimblecas::SgeeExecutorConfig;
 using nimblecas::verify_assignment;
 using nimblecas::sat_dist::build_cube_graph;
 using nimblecas::sat_dist::build_portfolio_graph;
@@ -510,6 +515,106 @@ auto main() -> int {
                   auto b = solve_portfolio_distributed(malformed, 1, 2, *exec);
                   t.expect(!b.has_value(),
                            "a malformed formula is refused rather than solved");
+              })
+        .test("cube_and_conquer_reaches_the_same_verdict_over_the_sgee_distributed_executor",
+              [](TestContext& t) {
+                  // Cube-and-conquer is the decomposition that most wants a cluster: 2^k
+                  // independent formulas, and an UNSAT verdict that needs EVERY one of them to
+                  // come back. Running it over SGEE is the case the design was for, and this
+                  // checks it rather than assuming the Executor seam is enough.
+                  TaskRegistry reg;
+                  t.expect(nimblecas::sat_dist::register_ops(reg).has_value(),
+                           "both operations register into the executor's registry");
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.registry = &reg;
+                  cfg.num_workers = 4;
+                  cfg.poll_interval_ms = 1;
+                  SgeeDistributedExecutor sgee(cfg, port, results);
+                  t.expect(sgee.name() == "sgee_distributed",
+                           "the executor under test really is the distributed one");
+                  auto ser = serial_executor();
+
+                  const Cnf sat = simple_sat();
+                  auto s_ser = solve_cubes_distributed(sat, 2, 0, *ser);
+                  auto s_sgee = solve_cubes_distributed(sat, 2, 0, sgee);
+                  t.expect(s_ser.has_value() && s_sgee.has_value(), "both runs succeed");
+                  if (s_ser.has_value() && s_sgee.has_value()) {
+                      t.expect(s_ser->verdict == s_sgee->verdict,
+                               "the same verdict comes back from the cluster");
+                      t.expect(s_sgee->verdict == SatVerdict::satisfiable &&
+                                   verify_assignment(sat, s_sgee->model),
+                               "and the model it carries really satisfies the formula");
+                  }
+
+                  const Cnf hard = pigeonhole_3_2();
+                  auto u_ser = solve_cubes_distributed(hard, 3, 0, *ser);
+                  auto u_sgee = solve_cubes_distributed(hard, 3, 0, sgee);
+                  t.expect(u_ser.has_value() && u_sgee.has_value(), "both runs succeed");
+                  if (u_ser.has_value() && u_sgee.has_value()) {
+                      t.expect(u_sgee->verdict == SatVerdict::unsatisfiable,
+                               "eight cubes all coming back unsatisfiable proves the formula is "
+                               "-- the case that needs every worker to report");
+                      t.expect(u_ser->verdict == u_sgee->verdict,
+                               "and the serial executor agrees");
+                  }
+              })
+        .test("the_portfolio_reaches_the_same_verdict_and_model_over_sgee",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  if (!nimblecas::sat_dist::register_ops(reg)) {
+                      t.expect(false, "operations register");
+                      return;
+                  }
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.registry = &reg;
+                  cfg.num_workers = 3;
+                  cfg.poll_interval_ms = 1;
+                  SgeeDistributedExecutor sgee(cfg, port, results);
+                  auto ser = serial_executor();
+
+                  const Cnf cnf = simple_sat();
+                  auto a = solve_portfolio_distributed(cnf, 4242, 6, *ser);
+                  auto b = solve_portfolio_distributed(cnf, 4242, 6, sgee);
+                  t.expect(a.has_value() && b.has_value(), "both portfolios succeed");
+                  if (!a.has_value() || !b.has_value()) {
+                      return;
+                  }
+                  t.expect(a->verdict == b->verdict, "the same verdict");
+                  t.expect(a->model == b->model,
+                           "and the same model, because both take the lowest shard index rather "
+                           "than whichever worker answered first");
+              })
+        .test("sgee_sat_verdicts_do_not_change_with_the_worker_count",
+              [](TestContext& t) {
+                  const Cnf cnf = pigeonhole_3_2();
+                  auto ser = serial_executor();
+                  auto baseline = solve_cubes_distributed(cnf, 2, 0, *ser);
+                  t.expect(baseline.has_value(), "the serial baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  for (const std::size_t workers : {std::size_t{1}, std::size_t{2},
+                                                    std::size_t{5}}) {
+                      TaskRegistry reg;
+                      if (!nimblecas::sat_dist::register_ops(reg)) {
+                          t.expect(false, "operations register");
+                          return;
+                      }
+                      FakeBrokerPort port;
+                      InMemoryResultChannel results;
+                      SgeeExecutorConfig cfg;
+                      cfg.registry = &reg;
+                      cfg.num_workers = workers;
+                      cfg.poll_interval_ms = 1;
+                      SgeeDistributedExecutor sgee(cfg, port, results);
+                      auto r = solve_cubes_distributed(cnf, 2, 0, sgee);
+                      t.expect(r.has_value() && r->verdict == baseline->verdict,
+                               "the verdict is identical however many workers ran it");
+                  }
               })
         .run();
 }

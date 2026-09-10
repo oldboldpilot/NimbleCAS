@@ -14,6 +14,7 @@ import nimblecas.logic;
 import nimblecas.logic_dist;
 import nimblecas.logic_parser;
 import nimblecas.taskdag;
+import nimblecas.taskdag_sgee;
 import nimblecas.testing;
 
 using nimblecas::apply_substitution;
@@ -35,6 +36,10 @@ using nimblecas::solve_or_parallel;
 using nimblecas::Substitution;
 using nimblecas::TaskGraph;
 using nimblecas::TaskRegistry;
+using nimblecas::FakeBrokerPort;
+using nimblecas::InMemoryResultChannel;
+using nimblecas::SgeeDistributedExecutor;
+using nimblecas::SgeeExecutorConfig;
 using nimblecas::Term;
 using nimblecas::to_string;
 using nimblecas::testing::TestContext;
@@ -1031,6 +1036,113 @@ auto main() -> int {
 
                       t.expect(*r_ser == *r_solve, "serial member/2 matches solve");
                       t.expect(*r_par == *r_solve, "parallel member/2 matches solve");
+                  }
+              })
+        .test("solve_distributed_gives_the_same_answers_over_the_sgee_distributed_executor",
+              [](TestContext& t) {
+                  // Everything above runs over executors that share this process's memory. SGEE
+                  // does not: it ships an op id and bytes to a worker, which looks the op up in
+                  // ITS OWN registry and runs it with no access to anything the coordinator
+                  // holds. That is why `register_ops` is exported, and until this test existed
+                  // "any Executor, including a distributed one" was an intention rather than a
+                  // fact.
+                  TaskRegistry reg;
+                  t.expect(nimblecas::logic_dist::register_ops(reg).has_value(),
+                           "the shard operation registers into the executor's registry");
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.registry = &reg;
+                  cfg.num_workers = 4;
+                  cfg.poll_interval_ms = 1;
+                  SgeeDistributedExecutor sgee(cfg, port, results);
+                  t.expect(sgee.name() == "sgee_distributed",
+                           "the executor under test really is the distributed one");
+
+                  const Program facts = prog("p(1). p(2). p(3).");
+                  const std::vector<Term> q = query("p(X).");
+                  auto expected = solve(facts, q, 0);
+                  auto over_sgee = nimblecas::logic_dist::solve_distributed(facts, q, 0, sgee);
+                  t.expect(expected.has_value() && over_sgee.has_value(),
+                           "both solves succeed");
+                  if (!expected.has_value() || !over_sgee.has_value()) {
+                      return;
+                  }
+                  t.expect(over_sgee->size() == expected->size(),
+                           "the same number of answers comes back from the cluster");
+                  if (over_sgee->size() != expected->size()) {
+                      return;
+                  }
+                  for (std::size_t i = 0; i < expected->size(); ++i) {
+                      t.expect(bound((*over_sgee)[i], "X") == bound((*expected)[i], "X"),
+                               "each answer is identical, in the same order");
+                  }
+              })
+        .test("a_recursive_program_solves_identically_over_sgee",
+              [](TestContext& t) {
+                  TaskRegistry reg;
+                  if (!nimblecas::logic_dist::register_ops(reg)) {
+                      t.expect(false, "the shard operation registers");
+                      return;
+                  }
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.registry = &reg;
+                  cfg.num_workers = 3;
+                  cfg.poll_interval_ms = 1;
+                  SgeeDistributedExecutor sgee(cfg, port, results);
+
+                  const Program family = prog(
+                      "parent(tom, bob). parent(bob, ann). parent(bob, pat). "
+                      "grandparent(X, Z) :- parent(X, Y), parent(Y, Z).");
+                  const std::vector<Term> q = query("grandparent(tom, W).");
+                  auto expected = solve(family, q, 0);
+                  auto over_sgee = nimblecas::logic_dist::solve_distributed(family, q, 0, sgee);
+                  t.expect(expected.has_value() && over_sgee.has_value(), "both solves succeed");
+                  if (!expected.has_value() || !over_sgee.has_value()) {
+                      return;
+                  }
+                  t.expect(over_sgee->size() == expected->size(),
+                           "a recursive program gives the same answer count over the cluster");
+                  if (over_sgee->size() != expected->size() || expected->empty()) {
+                      return;
+                  }
+                  for (std::size_t i = 0; i < expected->size(); ++i) {
+                      t.expect(bound((*over_sgee)[i], "W") == bound((*expected)[i], "W"),
+                               "and each binding is identical, in order");
+                  }
+              })
+        .test("sgee_answers_do_not_change_with_the_worker_count",
+              [](TestContext& t) {
+                  const Program facts = prog("q(a). q(b). q(c). q(d). q(e).");
+                  const std::vector<Term> qy = query("q(X).");
+                  auto expected = solve(facts, qy, 0);
+                  t.expect(expected.has_value(), "the serial baseline succeeds");
+                  if (!expected.has_value()) {
+                      return;
+                  }
+                  for (const std::size_t workers : {std::size_t{1}, std::size_t{2},
+                                                    std::size_t{6}}) {
+                      TaskRegistry reg;
+                      if (!nimblecas::logic_dist::register_ops(reg)) {
+                          t.expect(false, "the shard operation registers");
+                          return;
+                      }
+                      FakeBrokerPort port;
+                      InMemoryResultChannel results;
+                      SgeeExecutorConfig cfg;
+                      cfg.registry = &reg;
+                      cfg.num_workers = workers;
+                      cfg.poll_interval_ms = 1;
+                      SgeeDistributedExecutor sgee(cfg, port, results);
+                      auto r = nimblecas::logic_dist::solve_distributed(facts, qy, 0, sgee);
+                      bool same = r.has_value() && r->size() == expected->size();
+                      for (std::size_t i = 0; same && i < expected->size(); ++i) {
+                          same = bound((*r)[i], "X") == bound((*expected)[i], "X");
+                      }
+                      t.expect(same,
+                               "the answers are identical however many workers ran them");
                   }
               })
         .run();
