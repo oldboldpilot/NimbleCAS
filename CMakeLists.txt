@@ -601,6 +601,13 @@ target_sources(nimblecas_sat_dist PUBLIC
 target_link_libraries(nimblecas_sat_dist
   PUBLIC nimblecas_sat nimblecas_taskdag nimblecas_core std_module)
 
+# ---- nimblecas.planning_dist : distributed SAS+ planning (parallel f-layer expansion) ----
+add_library(nimblecas_planning_dist STATIC)
+target_sources(nimblecas_planning_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/planning_dist/planning_dist.cppm)
+target_link_libraries(nimblecas_planning_dist
+  PUBLIC nimblecas_planning nimblecas_taskdag nimblecas_core std_module)
+
 # ---- nimblecas.csp_compile : a finite-domain CSP emitted as C++23, CUDA or Triton source ----
 add_library(nimblecas_csp_compile STATIC)
 target_sources(nimblecas_csp_compile PUBLIC
@@ -1951,6 +1958,12 @@ target_link_libraries(sat_dist_tests
   PRIVATE nimblecas_sat_dist nimblecas_sat nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel
           nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME sat_dist_tests COMMAND sat_dist_tests)
+
+add_executable(planning_dist_tests tests/planning_dist_tests.cpp)
+target_link_libraries(planning_dist_tests
+  PRIVATE nimblecas_planning_dist nimblecas_planning nimblecas_taskdag nimblecas_taskdag_sgee
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME planning_dist_tests COMMAND planning_dist_tests)
 
 add_executable(csp_compile_tests tests/csp_compile_tests.cpp)
 target_link_libraries(csp_compile_tests
