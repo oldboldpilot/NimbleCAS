@@ -126,7 +126,10 @@ Reasoning & algorithmics (search / logic / constraints on the `parallel` runtime
 | :--- | :--- | :--- |
 | `nimblecas.search` | [search.md](reference/search.md) | Graph/tree search (BFS, DFS, IDDFS, Dijkstra, A*, IDA*, weighted A*, greedy, beam, bidirectional, tabu) + dynamic programming (edit-distance/LCS/knapsack) in recursive, iterative, and parallel forms. |
 | `nimblecas.search_dist` | [search_dist.md](reference/search_dist.md) | Distributed graph algorithmics over `taskdag`: round-based frontier relaxation over `WireGraph` data under `min_plus` (shortest paths) and `max_min` (widest bottleneck) semirings; exact costs, SSSP/A*/BFS/Floyd-Warshall/MST/K-core/triangle counting, and quadratic SCC. |
+| `nimblecas.planning` | [planning.md](reference/planning.md) | Classical SAS+ planning: delete-relaxation heuristics (`h_max` admissible, `h_add` sum, `h_ff` relaxed plan with preferred operators), optimal A* search, and satisficing greedy search with mandatory plan validation. |
 | `nimblecas.sat` | [sat.md](reference/sat.md) | Boolean SAT: DPLL, CDCL (1-UIP learning), WalkSAT, GSAT, `solve_portfolio`, and distributed `solve_shard`. Complete solvers are worst-case exponential. |
+| `nimblecas.sat_compile` | [sat_compile.md](reference/sat_compile.md) | CNF-to-source compiler: lowers formulas to C++23, CUDA C++, or Triton Python source text; complete bit-parallel exhaustive enumeration ($2^n$, $\le 63$ vars) vs incomplete WalkSAT stochastic local search (SKC, probSAT, Novelty+, AdaptNovelty+). |
+| `nimblecas.sat_dist` | [sat_dist.md](reference/sat_dist.md) | Distributed SAT solving over `taskdag`: portfolio search and exact cube-and-conquer space partitioning; complete cluster-wide UNSAT proofs, verified over SGEE with models checked against original formulas. |
 | `nimblecas.csp` | [csp.md](reference/csp.md) | Constraint satisfaction: AC-3 arc consistency, backtracking, forward checking, parallel. |
 | `nimblecas.logic` | [logic.md](reference/logic.md) | Logic programming: unification + SLD resolution + OR-parallel search under a depth/step budget (semi-decidable), plus negation as failure (`\+`) that reports floundering and budget-truncated negation as errors rather than answering unsoundly. |
 | `nimblecas.logic_parser` | [logic_parser.md](reference/logic_parser.md) | ISO Prolog reader/writer: tokenizer (comments, quoted atoms, integer bases), extensible operator table (`op/3`), Pratt operator-precedence parser, and writer with an exact AST round-trip guarantee (`to_source`); float literals refused honestly as `not_implemented`. |
@@ -330,11 +333,11 @@ subsystems layer on top of it along these roots:
 - **Differential equations** — `ode` builds on `powerseries`; `dde`/`dae`/`pde`/
   `perturbation` build on `ode`/`powerseries`/`ratpoly`; `sde`/`mcmc`/`montecarlo`
   build on the counter-based `rng`.
-- **Reasoning & algorithmics** — `search`/`sat`/`csp`/`logic` and the branchless
-  `bitset`/`bitcsp` build on `core` + the `parallel` fork–join runtime; `search_dist`
-  and `logic_dist` decompose searches into `taskdag` task graphs for cluster execution
-  over SGEE; `logic_parser`, `logic_index`, and `logic_compile` provide the reader/writer,
-  batched SIMD clause indexing, and ahead-of-time code generation for the logic engine.
+- **Reasoning & algorithmics** — `search`/`sat`/`csp`/`logic`/`planning` and the branchless
+  `bitset`/`bitcsp` build on `core` + the `parallel` fork–join runtime; `search_dist`,
+  `logic_dist`, and `sat_dist` decompose searches into `taskdag` task graphs for cluster execution
+  over SGEE; `logic_parser`, `logic_index`, `logic_compile`, and `sat_compile` provide the reader/writer,
+  batched SIMD clause indexing, and ahead-of-time code generation for the logic and SAT engines.
 - **Symbolic constants** — `symconst` bridges the `symbolic` `Expr` layer to the
   numeric `constants`.
 - **Financial mathematics** — `bigdecimal` builds on `bigrational` as the exact
