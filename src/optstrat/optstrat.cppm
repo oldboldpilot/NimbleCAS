@@ -244,7 +244,7 @@ auto OptionStrategy::analytics() const -> StrategyAnalytics {
     std::vector<double> xs;
     xs.reserve(knots.size() + 1);
     xs.push_back(0.0);
-    for (double const k : knots) {
+    for (const double k : knots) {
         if (k > 0.0) { xs.push_back(k); }
     }
     std::ranges::sort(xs);
@@ -257,7 +257,7 @@ auto OptionStrategy::analytics() const -> StrategyAnalytics {
     // P&L at each abscissa.
     std::vector<double> ys;
     ys.reserve(xs.size());
-    for (double const x : xs) { ys.push_back(pnl_at(x)); }
+    for (const double x : xs) { ys.push_back(pnl_at(x)); }
 
     constexpr double kEps = 1e-12;
     // Extrema: attained at abscissae, plus ±infinity along the right ray by its slope sign.
@@ -268,7 +268,7 @@ auto OptionStrategy::analytics() const -> StrategyAnalytics {
     // (No unbounded LEFT side: s is floored at 0, and ys[0] == pnl_at(0) captures it.)
 
     // Breakevens: exact roots of the piecewise-linear P&L.
-    auto const push_be = [&](double s) {
+    const auto push_be = [&](double s) {
         if (std::ranges::none_of(a.breakevens, [&](double e) { return std::abs(e - s) < 1e-9; })) {
             a.breakevens.push_back(s);
         }

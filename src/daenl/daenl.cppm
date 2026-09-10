@@ -246,7 +246,7 @@ inline constexpr bool always_false = false;
                 }
                 return make_error<PowerSeries>(MathError::not_implemented);
             } else if constexpr (std::is_same_v<T, SymbolNode>) {
-                auto const it = b.find(n.name);
+                const auto it = b.find(n.name);
                 if (it == b.end()) {
                     return make_error<PowerSeries>(MathError::domain_error);
                 }
@@ -452,8 +452,8 @@ auto consistent_initial_values(const DaeSystem& sys, std::span<const double> x_g
         }
         return b;
     };
-    nlsolve::ResidualFn const F = [&](std::span<const double> z) -> std::vector<double> {
-        auto const b = make_bindings(z);
+    const nlsolve::ResidualFn F = [&](std::span<const double> z) -> std::vector<double> {
+        const auto b = make_bindings(z);
         std::vector<double> out;
         out.reserve(m);
         for (const Expr& e : eqs) {
@@ -462,8 +462,8 @@ auto consistent_initial_values(const DaeSystem& sys, std::span<const double> x_g
         }
         return out;
     };
-    nlsolve::JacobianFn const J = [&](std::span<const double> z) -> std::vector<double> {
-        auto const b = make_bindings(z);
+    const nlsolve::JacobianFn J = [&](std::span<const double> z) -> std::vector<double> {
+        const auto b = make_bindings(z);
         std::vector<double> out(m * m);
         for (std::size_t i = 0; i < m; ++i) {
             for (std::size_t c = 0; c < m; ++c) {
@@ -560,8 +560,8 @@ auto solve_nonlinear_dae(const DaeSystem& sys, std::span<const double> x0_guess,
             }
             return b;
         };
-        nlsolve::ResidualFn const F = [&](std::span<const double> z) -> std::vector<double> {
-            auto const b = make_bindings(z);
+        const nlsolve::ResidualFn F = [&](std::span<const double> z) -> std::vector<double> {
+            const auto b = make_bindings(z);
             std::vector<double> res_out;
             res_out.reserve(n);
             for (const Expr& e : sys.residuals) {
@@ -570,8 +570,8 @@ auto solve_nonlinear_dae(const DaeSystem& sys, std::span<const double> x0_guess,
             }
             return res_out;
         };
-        nlsolve::JacobianFn const J = [&](std::span<const double> z) -> std::vector<double> {
-            auto const b = make_bindings(z);
+        const nlsolve::JacobianFn J = [&](std::span<const double> z) -> std::vector<double> {
+            const auto b = make_bindings(z);
             std::vector<double> jac_out(n * n);
             for (std::size_t i = 0; i < n; ++i) {
                 for (std::size_t j = 0; j < n; ++j) {

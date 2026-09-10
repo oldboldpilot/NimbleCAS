@@ -114,13 +114,13 @@ public:
 
     [[nodiscard]] auto put(std::uint64_t qid, Payload result_envelope)
         -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         storage_[qid] = std::move(result_envelope);
         return {};
     }
 
     [[nodiscard]] auto get(std::uint64_t qid) const -> Result<Payload> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         const auto it = storage_.find(qid);
         if (it == storage_.end()) {
             return make_error<Payload>(MathError::distributed_error);
@@ -129,7 +129,7 @@ public:
     }
 
     [[nodiscard]] auto try_get(std::uint64_t qid) const -> Result<std::optional<Payload>> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         const auto it = storage_.find(qid);
         if (it == storage_.end()) {
             return std::optional<Payload>{std::nullopt};
@@ -219,27 +219,27 @@ public:
     // consumed under mutex_, so concurrent callers observe exactly `count`
     // failures in total. Additive: all counters default 0 => today's behavior.
     void inject_fault(FaultOp op, std::size_t count = 1) {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         fault_counters_[static_cast<std::size_t>(op)] += count;
     }
 
     // Total tasks ever enqueued on this port. next_qid_ pre-increments below, so
     // qids are 1-based/sequential and next_qid_ IS the enqueue count.
     [[nodiscard]] auto enqueue_count() const -> std::uint64_t {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         return next_qid_;
     }
 
     // Lease attempts consumed by qid so far (0 for an unknown qid).
     [[nodiscard]] auto attempts(std::uint64_t qid) const -> std::uint32_t {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         const auto it = tasks_.find(qid);
         return it == tasks_.end() ? 0u : it->second.attempt;
     }
 
     // Number of successful heartbeat() calls for qid (0 if unknown/none).
     [[nodiscard]] auto heartbeat_count(std::uint64_t qid) const -> std::uint64_t {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         const auto it = tasks_.find(qid);
         return it == tasks_.end() ? 0u : it->second.heartbeat_count;
     }
@@ -248,7 +248,7 @@ public:
     // / never leased). Lets the heartbeat test assert extension without racing
     // the sweep.
     [[nodiscard]] auto visibility_deadline_ms(std::uint64_t qid) const -> std::uint64_t {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         const auto it = tasks_.find(qid);
         return it == tasks_.end() ? 0u : it->second.visibility_deadline_ms;
     }
@@ -256,7 +256,7 @@ public:
     [[nodiscard]] auto enqueue(std::span<const std::byte> payload,
                                SgeePlacement placement, std::uint32_t max_attempts)
         -> Result<std::uint64_t> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (take_fault(FaultOp::enqueue)) {
             return make_error<std::uint64_t>(MathError::distributed_error);
         }
@@ -276,13 +276,13 @@ public:
 
     [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
         -> Result<std::optional<Lease>> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         // A lease fault is the ERROR branch, not nullopt: queue-empty is not a fault.
         if (take_fault(FaultOp::lease)) {
             return make_error<std::optional<Lease>>(MathError::distributed_error);
         }
         for (const std::uint64_t qid : fifo_order_) {
-            auto const it = tasks_.find(qid);
+            const auto it = tasks_.find(qid);
             if (it != tasks_.end() && it->second.state == QState::pending) {
                 TaskEntry& entry = it->second;
                 entry.attempt++;
@@ -304,11 +304,11 @@ public:
 
     [[nodiscard]] auto complete(std::uint64_t qid, std::uint64_t token)
         -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (take_fault(FaultOp::complete)) {
             return make_error<void>(MathError::distributed_error);
         }
-        auto const it = tasks_.find(qid);
+        const auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<void>(MathError::distributed_error);
         }
@@ -321,11 +321,11 @@ public:
 
     [[nodiscard]] auto fail(std::uint64_t qid, std::uint64_t token)
         -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (take_fault(FaultOp::fail)) {
             return make_error<void>(MathError::distributed_error);
         }
-        auto const it = tasks_.find(qid);
+        const auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<void>(MathError::distributed_error);
         }
@@ -342,11 +342,11 @@ public:
 
     [[nodiscard]] auto heartbeat(std::uint64_t qid, std::uint64_t token,
                                  std::uint64_t extend_by_ms) -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (take_fault(FaultOp::heartbeat)) {
             return make_error<void>(MathError::distributed_error);
         }
-        auto const it = tasks_.find(qid);
+        const auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<void>(MathError::distributed_error);
         }
@@ -361,7 +361,7 @@ public:
 
     [[nodiscard]] auto sweep_expired(std::uint64_t now_ms)
         -> Result<std::size_t> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (take_fault(FaultOp::sweep)) {
             return make_error<std::size_t>(MathError::distributed_error);
         }
@@ -380,11 +380,11 @@ public:
     }
 
     [[nodiscard]] auto state(std::uint64_t qid) -> Result<QState> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (take_fault(FaultOp::state)) {
             return make_error<QState>(MathError::distributed_error);
         }
-        auto const it = tasks_.find(qid);
+        const auto it = tasks_.find(qid);
         if (it == tasks_.end()) {
             return make_error<QState>(MathError::distributed_error);
         }
@@ -393,8 +393,8 @@ public:
 
     // Testing hook: forces a task's state directly
     void force_state(std::uint64_t qid, QState new_state) {
-        std::lock_guard const lock(mutex_);
-        auto const it = tasks_.find(qid);
+        const std::lock_guard lock(mutex_);
+        const auto it = tasks_.find(qid);
         if (it != tasks_.end()) {
             it->second.state = new_state;
         }
@@ -1233,7 +1233,7 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
 
             ~HeartbeatGuard() {
                 {
-                    std::lock_guard const lock(mtx);
+                    const std::lock_guard lock(mtx);
                     active = false;
                 }
                 cv.notify_all();
@@ -1243,11 +1243,11 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
             }
         };
 
-        HeartbeatGuard const hb(port, lease.qid, lease.token, hb_ms);
+        const HeartbeatGuard hb(port, lease.qid, lease.token, hb_ms);
 
         auto task_env_res = sgee_bridge::decode_task(lease.payload);
         if (!task_env_res.has_value()) {
-            sgee_bridge::ResultEnvelope const err_env{
+            const sgee_bridge::ResultEnvelope err_env{
                 .status = sgee_bridge::ResultEnvelope::Status::bridge_error,
                 .math_err = MathError::division_by_zero,
                 .seconds = 0.0,
@@ -1264,7 +1264,7 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
         const auto& env = *task_env_res;
 
         if (env.registry_fp != reg.fingerprint()) {
-            sgee_bridge::ResultEnvelope const err_env{
+            const sgee_bridge::ResultEnvelope err_env{
                 .status = sgee_bridge::ResultEnvelope::Status::bridge_error,
                 .math_err = MathError::division_by_zero,
                 .seconds = 0.0,
@@ -1280,7 +1280,7 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
 
         const TaskFn* fn = reg.find(env.op_id);
         if (fn == nullptr) {
-            sgee_bridge::ResultEnvelope const err_env{
+            const sgee_bridge::ResultEnvelope err_env{
                 .status = sgee_bridge::ResultEnvelope::Status::bridge_error,
                 .math_err = MathError::division_by_zero,
                 .seconds = 0.0,
@@ -1316,7 +1316,7 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
             continue;
         }
 
-        auto const put_res = results.put(lease.qid, std::move(*enc_res));
+        const auto put_res = results.put(lease.qid, std::move(*enc_res));
         if (!put_res.has_value()) {
             (void)port.fail(lease.qid, lease.token);
             continue;
@@ -1402,7 +1402,7 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
     if (cfg_.num_workers > 0) {
         pumps.threads.reserve(cfg_.num_workers);
         for (std::size_t w = 0; w < cfg_.num_workers; ++w) {
-            WorkerPumpConfig const pump_cfg{
+            const WorkerPumpConfig pump_cfg{
                 .worker_id = w + 1,
                 .lease_timeout_ms = cfg_.visibility_timeout_ms,
                 .idle_backoff_ms = cfg_.poll_interval_ms,
@@ -1519,7 +1519,7 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                 args.push_back(outputs[d.value].value());
             }
 
-            sgee_bridge::TaskEnvelope const env{
+            const sgee_bridge::TaskEnvelope env{
                 .registry_fp = cfg_.registry->fingerprint(),
                 .op_id = std::string(g.op_id(id)),
                 .args = std::move(args)

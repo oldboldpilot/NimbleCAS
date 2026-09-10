@@ -80,21 +80,21 @@ auto main() -> int {
                   const auto a = f.generator().value();                            // sqrt2
                   const auto one = f.one();
                   // sqrt2 * sqrt2 = 2.
-                  auto const a2 = a.multiply(a).value();
+                  const auto a2 = a.multiply(a).value();
                   t.expect(a2.is_equal(f.from_rational(ri(2))), "sqrt2 * sqrt2 = 2");
                   // (1 + sqrt2)(1 - sqrt2) = 1 - 2 = -1.
                   const auto onePlus = one.add(a).value();       // 1 + sqrt2
                   const auto oneMinus = one.subtract(a).value();  // 1 - sqrt2
-                  auto const prod = onePlus.multiply(oneMinus).value();
+                  const auto prod = onePlus.multiply(oneMinus).value();
                   t.expect(prod.is_equal(f.from_rational(ri(-1))), "(1+sqrt2)(1-sqrt2) = -1");
                   // (sqrt2)^{-1} = (1/2) sqrt2.
-                  auto const ainv = a.inverse().value();
+                  const auto ainv = a.inverse().value();
                   t.expect(ainv.is_equal(elem(f, {ri(0), rat(1, 2)})),
                            "sqrt2^{-1} = (1/2) alpha");
                   // Cross-check: sqrt2 * sqrt2^{-1} = 1.
                   t.expect(a.multiply(ainv).value().is_one(), "sqrt2 * sqrt2^{-1} = 1");
                   // (1 + sqrt2)^{-1} = sqrt2 - 1.
-                  auto const invPlus = onePlus.inverse().value();
+                  const auto invPlus = onePlus.inverse().value();
                   t.expect(invPlus.is_equal(elem(f, {ri(-1), ri(1)})),
                            "(1+sqrt2)^{-1} = alpha - 1");
                   t.expect(onePlus.multiply(invPlus).value().is_one(),
@@ -127,11 +127,11 @@ auto main() -> int {
                   t.expect(i.multiply(i).value().is_equal(f.from_rational(ri(-1))),
                            "i * i = -1");
                   // i^{-1} = -i.
-                  auto const iinv = i.inverse().value();
+                  const auto iinv = i.inverse().value();
                   t.expect(iinv.is_equal(elem(f, {ri(0), ri(-1)})), "i^{-1} = -i");
                   // (1 + i)^{-1} = (1 - i)/2 = 1/2 - (1/2) i.
                   const auto onePlusI = f.one().add(i).value();
-                  auto const inv = onePlusI.inverse().value();
+                  const auto inv = onePlusI.inverse().value();
                   t.expect(inv.is_equal(elem(f, {rat(1, 2), rat(-1, 2)})),
                            "(1+i)^{-1} = 1/2 - (1/2) i");
                   t.expect(onePlusI.multiply(inv).value().is_one(), "(1+i)(1+i)^{-1} = 1");
@@ -147,7 +147,7 @@ auto main() -> int {
                   // alpha^3 = 2.
                   t.expect(a.pow(3).value().is_equal(f.from_rational(ri(2))), "alpha^3 = 2");
                   // alpha^{-1} = (1/2) alpha^2.
-                  auto const ainv = a.inverse().value();
+                  const auto ainv = a.inverse().value();
                   t.expect(ainv.is_equal(elem(f, {ri(0), ri(0), rat(1, 2)})),
                            "alpha^{-1} = (1/2) alpha^2");
                   t.expect(a.multiply(ainv).value().is_one(), "alpha * alpha^{-1} = 1");

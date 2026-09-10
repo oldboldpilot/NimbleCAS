@@ -260,7 +260,7 @@ auto log_returns(std::span<const double> prices) -> Result<std::vector<double>> 
 auto mean(std::span<const double> x) -> Result<double> {
     if (x.empty()) { return make_error<double>(MathError::domain_error); }
     double s = 0.0;
-    for (double const v : x) { s += v; }
+    for (const double v : x) { s += v; }
     return s / static_cast<double>(x.size());
 }
 
@@ -270,7 +270,7 @@ auto variance(std::span<const double> x, bool sample) -> Result<double> {
     auto m = mean(x);
     if (!m) { return m; }
     double s = 0.0;
-    for (double const v : x) { const double d = v - *m; s += d * d; }
+    for (const double v : x) { const double d = v - *m; s += d * d; }
     return s / static_cast<double>(sample ? n - 1 : n);
 }
 
@@ -340,7 +340,7 @@ auto sortino_ratio(std::span<const double> returns, double mar, Annualisation an
     auto m = mean(returns);
     if (!m || returns.empty()) { return make_error<double>(MathError::domain_error); }
     double downside = 0.0;
-    for (double const r : returns) { const double d = std::min(r - mar, 0.0); downside += d * d; }
+    for (const double r : returns) { const double d = std::min(r - mar, 0.0); downside += d * d; }
     downside = std::sqrt(downside / static_cast<double>(returns.size()));
     if (downside == 0.0) { return make_error<double>(MathError::division_by_zero); }
     return (*m - mar) / downside * std::sqrt(ann.periods_per_year);
@@ -393,7 +393,7 @@ auto max_drawdown(std::span<const double> equity_curve) -> Result<double> {
     if (equity_curve.empty()) { return make_error<double>(MathError::domain_error); }
     double peak = equity_curve[0];
     double worst = 0.0;
-    for (double const v : equity_curve) {
+    for (const double v : equity_curve) {
         peak = std::max(peak, v);
         if (peak > 0.0) { worst = std::max(worst, (peak - v) / peak); }
     }
@@ -483,7 +483,7 @@ auto min_variance_weights(std::span<const std::vector<double>> cov) -> Result<st
     const std::vector<double> ones(n, 1.0);
     const std::vector<double> z = chol_solve(*L, ones);  // Sigma^{-1} 1
     double denom = 0.0;
-    for (double const v : z) { denom += v; }                   // 1' Sigma^{-1} 1
+    for (const double v : z) { denom += v; }                   // 1' Sigma^{-1} 1
     if (denom == 0.0) { return make_error<std::vector<double>>(MathError::division_by_zero); }
     std::vector<double> w(n);
     for (std::size_t i = 0; i < n; ++i) { w[i] = z[i] / denom; }
@@ -503,7 +503,7 @@ auto tangency_weights(std::span<const std::vector<double>> cov, std::span<const 
     for (std::size_t i = 0; i < n; ++i) { excess[i] = mean_returns[i] - risk_free; }
     const std::vector<double> z = chol_solve(*L, excess);  // Sigma^{-1}(mu - rf)
     double denom = 0.0;
-    for (double const v : z) { denom += v; }
+    for (const double v : z) { denom += v; }
     if (denom == 0.0) { return make_error<std::vector<double>>(MathError::division_by_zero); }
     std::vector<double> w(n);
     for (std::size_t i = 0; i < n; ++i) { w[i] = z[i] / denom; }

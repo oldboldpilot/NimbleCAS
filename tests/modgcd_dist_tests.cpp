@@ -74,7 +74,7 @@ public:
     explicit SwallowingResultChannel(std::size_t swallow_first_n) : remaining_(swallow_first_n) {}
 
     [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (remaining_ > 0) {
             --remaining_;
             return {};
@@ -101,7 +101,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("D1_bit_identity_ladder", [](TestContext& t) {
             TaskRegistry reg;
-            auto const reg_res = register_modgcd_ops(reg);
+            const auto reg_res = register_modgcd_ops(reg);
             t.expect(reg_res.has_value(), "register_modgcd_ops succeeds");
 
             // Test inputs corresponding to T1..T5
@@ -120,7 +120,7 @@ auto main() -> int {
 
             // Seeded sweep cases (T8 inputs)
             std::uint64_t state = 0xABCDEF0123456789ULL;
-            auto const next_rand = [&] -> std::int64_t {
+            const auto next_rand = [&] -> std::int64_t {
                 state = state * 6364136223846793005ULL + 1442695040888963407ULL;
                 return static_cast<std::int64_t>((state >> 60) & 0xF) - 7;
             };
@@ -279,7 +279,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("D3_math_error_is_data", [](TestContext& t) {
             TaskRegistry reg;
-            auto const reg_res = register_modgcd_ops(reg);
+            const auto reg_res = register_modgcd_ops(reg);
             t.expect(reg_res.has_value(), "register_modgcd_ops succeeds");
 
             // Hand-built graph with one corrupted ImageRequest literal

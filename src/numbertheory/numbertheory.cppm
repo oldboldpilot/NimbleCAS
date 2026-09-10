@@ -465,7 +465,7 @@ auto rsa_generate(std::uint64_t bits, std::uint64_t seed) -> Result<RsaKey> {
     if (bits < 16) {
         return make_error<RsaKey>(MathError::domain_error);  // too small for two distinct primes
     }
-    Rng const rng = Rng::seeded(seed);
+    const Rng rng = Rng::seeded(seed);
     const std::uint64_t pbits = bits / 2;
     const std::uint64_t qbits = bits - pbits;
 

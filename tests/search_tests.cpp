@@ -125,13 +125,13 @@ auto main() -> int {
         .test("bfs_shortest_edges",
               [](TestContext& t) {
                   // Fewest edges 0 -> 6 is via node 2: [0, 2, 6].
-                  auto const p = bfs(0, is(6), successors);
+                  const auto p = bfs(0, is(6), successors);
                   t.expect(p.has_value(), "bfs finds a path");
                   t.expect(p.value_or(Path{}) == Path{0, 2, 6}, "bfs path is [0, 2, 6]");
               })
         .test("bfs_start_is_goal",
               [](TestContext& t) {
-                  auto const p = bfs(0, is(0), successors);
+                  const auto p = bfs(0, is(0), successors);
                   t.expect(p.has_value() && p.value_or(Path{}) == Path{0},
                            "start already a goal => [0]");
               })
@@ -145,15 +145,15 @@ auto main() -> int {
         .test("dfs_recursive_deep_path",
               [](TestContext& t) {
                   // DFS descends the first branch fully: 0->1->3->4->6.
-                  auto const p = dfs_recursive(0, is(6), successors, 10);
+                  const auto p = dfs_recursive(0, is(6), successors, 10);
                   t.expect(p.has_value(), "dfs_recursive finds a path");
                   t.expect(p.value_or(Path{}) == Path{0, 1, 3, 4, 6},
                            "dfs path is [0, 1, 3, 4, 6]");
               })
         .test("dfs_iterative_matches_recursive",
               [](TestContext& t) {
-                  auto const pr = dfs_recursive(0, is(6), successors, 10);
-                  auto const pi = dfs_iterative(0, is(6), successors, 10);
+                  const auto pr = dfs_recursive(0, is(6), successors, 10);
+                  const auto pi = dfs_iterative(0, is(6), successors, 10);
                   t.expect(pr.has_value() && pi.has_value(), "both dfs forms find a path");
                   t.expect(pr.value_or(Path{}) == pi.value_or(seq({1})),
                            "iterative dfs == recursive dfs (same first-goal path)");
@@ -180,7 +180,7 @@ auto main() -> int {
         .test("iddfs_finds_shallowest",
               [](TestContext& t) {
                   // IDDFS returns the shallowest goal: [0, 2, 6] (2 edges), like BFS.
-                  auto const p = iterative_deepening_dfs(0, is(6), successors, 10);
+                  const auto p = iterative_deepening_dfs(0, is(6), successors, 10);
                   t.expect(p.has_value(), "iddfs finds a path");
                   t.expect(p.value_or(Path{}) == Path{0, 2, 6}, "iddfs path is [0, 2, 6]");
               })
@@ -220,7 +220,7 @@ auto main() -> int {
               })
         .test("parallel_bfs_levels_matches_serial",
               [](TestContext& t) {
-                  auto const p = parallel_bfs_levels(0, successors, 10);
+                  const auto p = parallel_bfs_levels(0, successors, 10);
                   t.expect(p.has_value(), "parallel_bfs_levels succeeds");
                   const Levels expected{{0}, {1, 2}, {3, 6}, {4}};
                   t.expect(p.value_or(Levels{}) == expected,
@@ -230,10 +230,10 @@ auto main() -> int {
               })
         .test("parallel_bfs_levels_truncates_and_guards",
               [](TestContext& t) {
-                  auto const two = parallel_bfs_levels(0, successors, 2);
+                  const auto two = parallel_bfs_levels(0, successors, 2);
                   const Levels expected2{{0}, {1, 2}};
                   t.expect(two.value_or(Levels{}) == expected2, "max_levels=2 => first 2 levels");
-                  auto const zero = parallel_bfs_levels(0, successors, 0);
+                  const auto zero = parallel_bfs_levels(0, successors, 0);
                   t.expect(zero.has_value() && zero.value_or(Levels{{9}}).empty(),
                            "max_levels=0 => empty");
                   auto neg = parallel_bfs_levels(0, successors, -1);
@@ -244,12 +244,12 @@ auto main() -> int {
               [](TestContext& t) {
                   // Minimise (x-3)^2 + (y+2)^2 over the integer grid [-10,10]^2 with unit
                   // steps in one coordinate. Unique minimum {3,-2} with value 0.
-                  auto const objective = [](const TabuState& s) -> std::int64_t {
+                  const auto objective = [](const TabuState& s) -> std::int64_t {
                       const std::int64_t dx = s[0] - 3;
                       const std::int64_t dy = s[1] + 2;
                       return dx * dx + dy * dy;
                   };
-                  auto const neighbors = [](const TabuState& s) -> std::vector<TabuState> {
+                  const auto neighbors = [](const TabuState& s) -> std::vector<TabuState> {
                       std::vector<TabuState> out;
                       const std::array<std::pair<int, int>, 4> steps{
                           {{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
@@ -271,17 +271,17 @@ auto main() -> int {
               })
         .test("tabu_search_negative_params_error",
               [](TestContext& t) {
-                  auto const objective = [](const TabuState& s) -> std::int64_t { return s[0]; };
-                  auto const neighbors = [](const TabuState&) -> std::vector<TabuState> { return {}; };
+                  const auto objective = [](const TabuState& s) -> std::int64_t { return s[0]; };
+                  const auto neighbors = [](const TabuState&) -> std::vector<TabuState> { return {}; };
                   auto r = tabu_search(TabuState{0}, neighbors, objective, -1, 10);
                   t.expect(!r.has_value() && r.error() == MathError::domain_error,
                            "negative tenure => domain_error");
               })
         .test("edit_distance_textbook",
               [](TestContext& t) {
-                  auto const tab = edit_distance("kitten", "sitting");
-                  auto const memo = edit_distance_memo("kitten", "sitting");
-                  auto const par = edit_distance_parallel("kitten", "sitting");
+                  const auto tab = edit_distance("kitten", "sitting");
+                  const auto memo = edit_distance_memo("kitten", "sitting");
+                  const auto par = edit_distance_parallel("kitten", "sitting");
                   t.expect(tab.value_or(-1) == 3, "edit_distance(kitten, sitting) == 3");
                   t.expect(memo.value_or(-1) == 3, "memo edit distance == 3");
                   t.expect(par.value_or(-1) == 3, "parallel edit distance == 3");
@@ -306,8 +306,8 @@ auto main() -> int {
                   // LCS of [1,2,3,4,5] and [2,4,5] is [2,4,5], length 3.
                   const std::vector<std::int64_t> a{1, 2, 3, 4, 5};
                   const std::vector<std::int64_t> b{2, 4, 5};
-                  auto const tab = longest_common_subsequence(a, b);
-                  auto const memo = longest_common_subsequence_memo(a, b);
+                  const auto tab = longest_common_subsequence(a, b);
+                  const auto memo = longest_common_subsequence_memo(a, b);
                   t.expect(tab.value_or(-1) == 3, "LCS length is 3");
                   t.expect(memo.value_or(-1) == 3, "memo LCS length is 3");
                   t.expect(tab.value_or(-1) == memo.value_or(-2), "tabulated == memo");
@@ -326,7 +326,7 @@ auto main() -> int {
                   // Items (w,v): (1,1),(3,4),(4,5),(5,7); capacity 7. Optimum = 3+4 => 9.
                   const std::vector<std::int64_t> w{1, 3, 4, 5};
                   const std::vector<std::int64_t> v{1, 4, 5, 7};
-                  auto const r = knapsack_01(w, v, 7);
+                  const auto r = knapsack_01(w, v, 7);
                   t.expect(r.value_or(-1) == 9, "knapsack optimum is 9");
               })
         .test("knapsack_errors",
@@ -346,7 +346,7 @@ auto main() -> int {
         .test("ida_star_cost_equals_a_star_cost_on_weighted_grid",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       std::vector<std::int64_t> succs;
@@ -358,7 +358,7 @@ auto main() -> int {
                       }
                       return succs;
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 2;
                       if (u == 1 && v == 2) return 5;
                       if (u == 0 && v == 3) return 3;
@@ -373,12 +373,12 @@ auto main() -> int {
                       if (u == 5 && v == 8) return 4;
                       return 1;
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       return (2 - r) + (2 - c);
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 8; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 8; };
 
                   auto r_ida = ida_star(0, goal, successors, cost, heuristic, 100);
                   auto r_astar = a_star(0, goal, successors, cost, heuristic);
@@ -396,7 +396,7 @@ auto main() -> int {
         .test("ida_star_cost_equals_a_star_cost_on_dag_with_multiple_paths",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1, 2};
                           case 1: return {3, 4};
@@ -406,7 +406,7 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 3;
                       if (u == 0 && v == 2) return 1;
                       if (u == 1 && v == 3) return 2;
@@ -417,8 +417,8 @@ auto main() -> int {
                       if (u == 4 && v == 5) return 6;
                       return 1;
                   };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 5; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 5; };
 
                   auto r_ida = ida_star(0, goal, successors, cost, heuristic, 50);
                   auto r_astar = a_star(0, goal, successors, cost, heuristic);
@@ -433,7 +433,7 @@ auto main() -> int {
         .test("parallel_a_star_matches_a_star_cost_and_path_identically",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       std::vector<std::int64_t> succs;
@@ -441,7 +441,7 @@ auto main() -> int {
                       if (r + 1 < 3) succs.push_back((r + 1) * 3 + c);
                       return succs;
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 2;
                       if (u == 1 && v == 2) return 5;
                       if (u == 0 && v == 3) return 3;
@@ -456,12 +456,12 @@ auto main() -> int {
                       if (u == 5 && v == 8) return 4;
                       return 1;
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       return (2 - r) + (2 - c);
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 8; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 8; };
 
                   auto serial_ref = a_star(0, goal, successors, cost, heuristic);
                   t.expect(serial_ref.has_value(), "serial a_star succeeds as reference oracle");
@@ -481,7 +481,7 @@ auto main() -> int {
         .test("parallel_dijkstra_matches_dijkstra_cost_and_path_identically",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       std::vector<std::int64_t> succs;
@@ -489,7 +489,7 @@ auto main() -> int {
                       if (r + 1 < 3) succs.push_back((r + 1) * 3 + c);
                       return succs;
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 2;
                       if (u == 1 && v == 2) return 5;
                       if (u == 0 && v == 3) return 3;
@@ -504,7 +504,7 @@ auto main() -> int {
                       if (u == 5 && v == 8) return 4;
                       return 1;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 8; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 8; };
 
                   auto serial_ref = dijkstra(0, goal, successors, cost);
                   t.expect(serial_ref.has_value(), "serial dijkstra succeeds as reference oracle");
@@ -524,7 +524,7 @@ auto main() -> int {
         .test("bidirectional_dijkstra_finds_optimal_path_when_first_meeting_is_suboptimal",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1, 3};
                           case 1: return {2};
@@ -534,7 +534,7 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
+                  const auto predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
                       switch (v) {
                           case 1: return {0};
                           case 2: return {1};
@@ -544,7 +544,7 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 3) return 10;
                       if (u == 3 && v == 5) return 10;
                       if (u == 0 && v == 1) return 2;
@@ -553,7 +553,7 @@ auto main() -> int {
                       if (u == 4 && v == 5) return 2;
                       return 1;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 5; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 5; };
 
                   auto r_dijk = dijkstra(0, goal, successors, cost);
                   auto r_bidi = bidirectional_dijkstra(0, 5, successors, predecessors, cost);
@@ -570,26 +570,26 @@ auto main() -> int {
         .test("bidirectional_dijkstra_cost_matches_dijkstra_on_line_graph",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u >= 0 && u < 4) {
                           return {u + 1};
                       }
                       return {};
                   };
-                  auto const predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
+                  const auto predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
                       if (v > 0 && v <= 4) {
                           return {v - 1};
                       }
                       return {};
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 3;
                       if (u == 1 && v == 2) return 5;
                       if (u == 2 && v == 3) return 2;
                       if (u == 3 && v == 4) return 4;
                       return 1;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 4; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 4; };
 
                   auto r_dijk = dijkstra(0, goal, successors, cost);
                   auto r_bidi = bidirectional_dijkstra(0, 4, successors, predecessors, cost);
@@ -605,7 +605,7 @@ auto main() -> int {
         .test("weighted_a_star_with_weight_one_matches_a_star_exactly",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       std::vector<std::int64_t> succs;
@@ -613,7 +613,7 @@ auto main() -> int {
                       if (r + 1 < 3) succs.push_back((r + 1) * 3 + c);
                       return succs;
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 2;
                       if (u == 1 && v == 2) return 5;
                       if (u == 0 && v == 3) return 3;
@@ -628,12 +628,12 @@ auto main() -> int {
                       if (u == 5 && v == 8) return 4;
                       return 1;
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       return (2 - r) + (2 - c);
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 8; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 8; };
 
                   auto r_astar = a_star(0, goal, successors, cost, heuristic);
                   auto r_wastar = weighted_a_star(0, goal, successors, cost, heuristic, 1, 1);
@@ -649,7 +649,7 @@ auto main() -> int {
         .test("weighted_a_star_with_weight_greater_than_one_respects_suboptimality_bound",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       std::vector<std::int64_t> succs;
@@ -657,7 +657,7 @@ auto main() -> int {
                       if (r + 1 < 3) succs.push_back((r + 1) * 3 + c);
                       return succs;
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 2;
                       if (u == 1 && v == 2) return 5;
                       if (u == 0 && v == 3) return 3;
@@ -672,12 +672,12 @@ auto main() -> int {
                       if (u == 5 && v == 8) return 4;
                       return 1;
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       return (2 - r) + (2 - c);
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 8; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 8; };
 
                   auto opt = a_star(0, goal, successors, cost, heuristic);
                   auto r_w = weighted_a_star(0, goal, successors, cost, heuristic, 3, 2);
@@ -691,13 +691,13 @@ auto main() -> int {
         .test("parallel_multistart_tabu_with_single_start_matches_serial_tabu_search",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const objective = [](const TabuState& s) -> std::int64_t {
+                  const auto objective = [](const TabuState& s) -> std::int64_t {
                       if (s.size() < 2) return 0;
                       const std::int64_t dx = s[0] - 3;
                       const std::int64_t dy = s[1] + 2;
                       return dx * dx + dy * dy;
                   };
-                  auto const neighbors = [](const TabuState& s) -> std::vector<TabuState> {
+                  const auto neighbors = [](const TabuState& s) -> std::vector<TabuState> {
                       if (s.size() < 2) return {};
                       std::vector<TabuState> out;
                       const std::array<std::pair<int, int>, 4> steps{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
@@ -727,13 +727,13 @@ auto main() -> int {
         .test("parallel_multistart_tabu_with_multiple_starts_picks_the_best_run",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const objective = [](const TabuState& s) -> std::int64_t {
+                  const auto objective = [](const TabuState& s) -> std::int64_t {
                       if (s.size() < 2) return 0;
                       const std::int64_t dx = s[0] - 2;
                       const std::int64_t dy = s[1] - 4;
                       return dx * dx + dy * dy;
                   };
-                  auto const neighbors = [](const TabuState& s) -> std::vector<TabuState> {
+                  const auto neighbors = [](const TabuState& s) -> std::vector<TabuState> {
                       if (s.size() < 2) return {};
                       std::vector<TabuState> out;
                       const std::array<std::pair<int, int>, 4> steps{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
@@ -762,7 +762,7 @@ auto main() -> int {
         .test("zero_heuristic_makes_all_a_star_variants_agree_with_dijkstra",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 3;
                       const std::int64_t c = u % 3;
                       std::vector<std::int64_t> succs;
@@ -770,7 +770,7 @@ auto main() -> int {
                       if (r + 1 < 3) succs.push_back((r + 1) * 3 + c);
                       return succs;
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 0 && v == 1) return 2;
                       if (u == 1 && v == 2) return 5;
                       if (u == 0 && v == 3) return 3;
@@ -785,8 +785,8 @@ auto main() -> int {
                       if (u == 5 && v == 8) return 4;
                       return 1;
                   };
-                  auto const zero_h = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 8; };
+                  const auto zero_h = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 8; };
 
                   auto r_dijk = dijkstra(0, goal, successors, cost);
                   auto r_astar = a_star(0, goal, successors, cost, zero_h);
@@ -805,11 +805,11 @@ auto main() -> int {
         .test("start_satisfying_goal_returns_single_node_path_with_cost_zero",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t) -> std::vector<std::int64_t> { return {}; };
-                  auto const predecessors = [](std::int64_t) -> std::vector<std::int64_t> { return {}; };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal_at_start = [](std::int64_t u) -> bool { return u == 42; };
+                  const auto successors = [](std::int64_t) -> std::vector<std::int64_t> { return {}; };
+                  const auto predecessors = [](std::int64_t) -> std::vector<std::int64_t> { return {}; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal_at_start = [](std::int64_t u) -> bool { return u == 42; };
 
                   const std::vector<std::int64_t> expected_path{42};
 
@@ -844,14 +844,14 @@ auto main() -> int {
         .test("ida_star_returns_undefined_value_when_goal_is_unreachable",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       if (u == 1) return {2};
                       return {};
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const unreachable_goal = [](std::int64_t u) -> bool { return u == 99; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto unreachable_goal = [](std::int64_t u) -> bool { return u == 99; };
 
                   auto r = ida_star(0, unreachable_goal, successors, cost, heuristic, 50);
                   t.expect(!r.has_value() && r.error() == MathError::undefined_value,
@@ -860,15 +860,15 @@ auto main() -> int {
         .test("bidirectional_dijkstra_returns_undefined_value_when_goal_is_unreachable",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       return {};
                   };
-                  auto const predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
+                  const auto predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
                       if (v == 1) return {0};
                       return {};
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
 
                   auto r = bidirectional_dijkstra(0, 99, successors, predecessors, cost);
                   t.expect(!r.has_value() && r.error() == MathError::undefined_value,
@@ -877,17 +877,17 @@ auto main() -> int {
         .test("negative_edge_cost_returns_domain_error_for_all_cost_algorithms",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       return {};
                   };
-                  auto const predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
+                  const auto predecessors = [](std::int64_t v) -> std::vector<std::int64_t> {
                       if (v == 1) return {0};
                       return {};
                   };
-                  auto const negative_cost = [](std::int64_t, std::int64_t) -> std::int64_t { return -5; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 1; };
+                  const auto negative_cost = [](std::int64_t, std::int64_t) -> std::int64_t { return -5; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 1; };
 
                   auto r_ida = ida_star(0, goal, successors, negative_cost, heuristic, 10);
                   t.expect(!r_ida.has_value() && r_ida.error() == MathError::domain_error,
@@ -912,13 +912,13 @@ auto main() -> int {
         .test("negative_heuristic_returns_domain_error_for_all_heuristic_algorithms",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       return {};
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
-                  auto const neg_heuristic = [](std::int64_t) -> std::int64_t { return -1; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 1; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto neg_heuristic = [](std::int64_t) -> std::int64_t { return -1; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 1; };
 
                   auto r_ida = ida_star(0, goal, successors, cost, neg_heuristic, 10);
                   t.expect(!r_ida.has_value() && r_ida.error() == MathError::domain_error,
@@ -939,13 +939,13 @@ auto main() -> int {
         .test("ida_star_exhausting_max_iterations_returns_not_converged",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u >= 0 && u < 3) return {u + 1};
                       return {};
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 10; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 3; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 10; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 3; };
 
                   auto r0 = ida_star(0, goal, successors, cost, heuristic, 0);
                   t.expect(!r0.has_value() && r0.error() == MathError::not_converged,
@@ -958,12 +958,12 @@ auto main() -> int {
         .test("greedy_best_first_exhausting_max_expansions_returns_not_converged",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u >= 0 && u < 4) return {u + 1};
                       return {};
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t { return 10 - u; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 4; };
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t { return 10 - u; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 4; };
 
                   auto r0 = greedy_best_first(0, goal, successors, heuristic, 0);
                   t.expect(!r0.has_value() && r0.error() == MathError::not_converged,
@@ -976,7 +976,7 @@ auto main() -> int {
         .test("greedy_best_first_finds_path_guided_by_heuristic",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1, 2};
                           case 1: return {3};
@@ -984,12 +984,12 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       if (u == 1) return 1;
                       if (u == 2) return 50;
                       return 0;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 3; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 3; };
 
                   auto r = greedy_best_first(0, goal, successors, heuristic, 10);
                   t.expect(r.has_value(), "greedy_best_first finds a path");
@@ -1001,12 +1001,12 @@ auto main() -> int {
         .test("greedy_best_first_returns_undefined_value_when_frontier_exhausted",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       return {};
                   };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const unreachable_goal = [](std::int64_t u) -> bool { return u == 99; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto unreachable_goal = [](std::int64_t u) -> bool { return u == 99; };
 
                   auto r = greedy_best_first(0, unreachable_goal, successors, heuristic, 10);
                   t.expect(!r.has_value() && r.error() == MathError::undefined_value,
@@ -1015,9 +1015,9 @@ auto main() -> int {
         .test("beam_search_invalid_arguments_return_domain_error",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t) -> std::vector<std::int64_t> { return {}; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 5; };
+                  const auto successors = [](std::int64_t) -> std::vector<std::int64_t> { return {}; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 5; };
 
                   auto r_w0 = beam_search(0, goal, successors, heuristic, 0, 10);
                   t.expect(!r_w0.has_value() && r_w0.error() == MathError::domain_error,
@@ -1034,7 +1034,7 @@ auto main() -> int {
         .test("beam_search_with_width_one_acts_as_greedy_chain",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1, 2};
                           case 2: return {3, 4};
@@ -1042,7 +1042,7 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       switch (u) {
                           case 1: return 10;
                           case 2: return 2;
@@ -1052,7 +1052,7 @@ auto main() -> int {
                           default: return 0;
                       }
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 5; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 5; };
 
                   auto r = beam_search(0, goal, successors, heuristic, 1, 10);
                   t.expect(r.has_value(), "beam_search with width 1 finds path");
@@ -1064,19 +1064,19 @@ auto main() -> int {
         .test("beam_search_narrow_beam_misses_goal_and_returns_undefined_value",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1, 2};
                           case 2: return {3};
                           default: return {};
                       }
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       if (u == 1) return 1;
                       if (u == 2) return 50;
                       return 0;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 3; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 3; };
 
                   auto r = beam_search(0, goal, successors, heuristic, 1, 5);
                   t.expect(!r.has_value() && r.error() == MathError::undefined_value,
@@ -1085,12 +1085,12 @@ auto main() -> int {
         .test("beam_search_exhausting_max_levels_returns_not_converged",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u >= 0 && u < 4) return {u + 1};
                       return {};
                   };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t { return 10 - u; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 4; };
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t { return 10 - u; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 4; };
 
                   auto r0 = beam_search(0, goal, successors, heuristic, 5, 0);
                   t.expect(!r0.has_value() && r0.error() == MathError::not_converged,
@@ -1104,10 +1104,10 @@ auto main() -> int {
               [](TestContext& t) -> void {
                   using namespace nimblecas;
                   const TabuState state{5, 10};
-                  auto const neighbors = [](const TabuState&) -> std::vector<TabuState> {
+                  const auto neighbors = [](const TabuState&) -> std::vector<TabuState> {
                       return {TabuState{4, 10}, TabuState{6, 10}, TabuState{5, 9}, TabuState{5, 11}};
                   };
-                  auto const objective = [](const TabuState& s) -> std::int64_t {
+                  const auto objective = [](const TabuState& s) -> std::int64_t {
                       if (s.size() < 2) return 0;
                       return s[0] * 100 + s[1];
                   };
@@ -1132,8 +1132,8 @@ auto main() -> int {
               [](TestContext& t) -> void {
                   using namespace nimblecas;
                   const TabuState state{0};
-                  auto const empty_neighbors = [](const TabuState&) -> std::vector<TabuState> { return {}; };
-                  auto const objective = [](const TabuState&) -> std::int64_t { return 42; };
+                  const auto empty_neighbors = [](const TabuState&) -> std::vector<TabuState> { return {}; };
+                  const auto objective = [](const TabuState&) -> std::int64_t { return 42; };
 
                   auto r = parallel_neighbourhood_scan(state, empty_neighbors, objective);
                   t.expect(r.has_value(), "parallel_neighbourhood_scan succeeds with empty neighbours");
@@ -1144,8 +1144,8 @@ auto main() -> int {
         .test("parallel_multistart_tabu_guards_domain_errors",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const neighbors = [](const TabuState&) -> std::vector<TabuState> { return {}; };
-                  auto const objective = [](const TabuState&) -> std::int64_t { return 0; };
+                  const auto neighbors = [](const TabuState&) -> std::vector<TabuState> { return {}; };
+                  const auto objective = [](const TabuState&) -> std::int64_t { return 0; };
 
                   auto r_empty = parallel_multistart_tabu({}, neighbors, objective, 3, 10);
                   t.expect(!r_empty.has_value() && r_empty.error() == MathError::domain_error,
@@ -1162,13 +1162,13 @@ auto main() -> int {
         .test("weighted_a_star_invalid_weights_return_domain_error",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       return {};
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 1; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 1; };
 
                   auto r_zero_den = weighted_a_star(0, goal, successors, cost, heuristic, 1, 0);
                   t.expect(!r_zero_den.has_value() && r_zero_den.error() == MathError::domain_error,
@@ -1185,7 +1185,7 @@ auto main() -> int {
         .test("ida_star_matches_a_star_on_grid_with_obstacles",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       const std::int64_t r = u / 4;
                       const std::int64_t c = u % 4;
                       std::vector<std::int64_t> succs;
@@ -1199,13 +1199,13 @@ auto main() -> int {
                       }
                       return succs;
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
-                  auto const heuristic = [](std::int64_t u) -> std::int64_t {
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto heuristic = [](std::int64_t u) -> std::int64_t {
                       const std::int64_t r = u / 4;
                       const std::int64_t c = u % 4;
                       return (3 - r) + (3 - c);
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 15; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 15; };
 
                   auto r_ida = ida_star(0, goal, successors, cost, heuristic, 100);
                   auto r_astar = a_star(0, goal, successors, cost, heuristic);
@@ -1220,13 +1220,13 @@ auto main() -> int {
         .test("parallel_a_star_and_parallel_dijkstra_on_unreachable_goal_return_undefined_value",
               [](TestContext& t) -> void {
                   using namespace nimblecas;
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       if (u == 0) return {1};
                       return {};
                   };
-                  auto const cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
-                  auto const heuristic = [](std::int64_t) -> std::int64_t { return 0; };
-                  auto const unreachable_goal = [](std::int64_t u) -> bool { return u == 99; };
+                  const auto cost = [](std::int64_t, std::int64_t) -> std::int64_t { return 1; };
+                  const auto heuristic = [](std::int64_t) -> std::int64_t { return 0; };
+                  const auto unreachable_goal = [](std::int64_t u) -> bool { return u == 99; };
 
                   auto r_a = parallel_a_star(0, unreachable_goal, successors, cost, heuristic);
                   t.expect(!r_a.has_value() && r_a.error() == MathError::undefined_value,
@@ -1242,7 +1242,7 @@ auto main() -> int {
                   // zero-cost edge, so relaxing a self-loop at node 2 could set pred[2] = 2. Path
                   // reconstruction then walked 2 -> 2 -> 2 forever and the call never returned.
                   // A hang is the one failure a test cannot report, so this pins it directly.
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1};
                           case 1: return {2};
@@ -1250,13 +1250,13 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if (u == 2 && v == 2) {
                           return 0;
                       }
                       return 1;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 3; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 3; };
                   auto r = dijkstra(0, goal, successors, cost);
                   t.expect(r.has_value(), "dijkstra returns rather than spinning on the self-loop");
                   if (!r.has_value()) {
@@ -1270,7 +1270,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // The same hazard without a self-loop: nodes 1 and 2 sit at equal distance via
                   // a zero-cost cycle, so the tie-break could set pred[1] = 2 and pred[2] = 1.
-                  auto const successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                  const auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
                       switch (u) {
                           case 0: return {1};
                           case 1: return {2};
@@ -1278,13 +1278,13 @@ auto main() -> int {
                           default: return {};
                       }
                   };
-                  auto const cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                  const auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
                       if ((u == 1 && v == 2) || (u == 2 && v == 1)) {
                           return 0;
                       }
                       return 2;
                   };
-                  auto const goal = [](std::int64_t u) -> bool { return u == 3; };
+                  const auto goal = [](std::int64_t u) -> bool { return u == 3; };
                   auto r = dijkstra(0, goal, successors, cost);
                   t.expect(r.has_value(), "dijkstra returns on a zero-cost two-cycle");
                   if (!r.has_value()) {

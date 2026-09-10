@@ -71,9 +71,9 @@ auto main() -> int {
                   auto a = ipoly({1, 0, 1});  // x^2 + 1
                   auto b = ipoly({-1, 1});    // x - 1
                   auto c = ipoly({-2, 1});    // x - 2
-                  auto const bc = b.multiply(c).value();
-                  auto const lhs = resultant(a, bc).value();
-                  auto const rhs = resultant(a, b).value().multiply(resultant(a, c).value()).value();
+                  const auto bc = b.multiply(c).value();
+                  const auto lhs = resultant(a, bc).value();
+                  const auto rhs = resultant(a, b).value().multiply(resultant(a, c).value()).value();
                   t.expect(lhs == rhs, "res(A, B*C) = res(A,B) * res(A,C)");
                   t.expect(lhs == Rational::from_int(10), "the product is 10");
               })

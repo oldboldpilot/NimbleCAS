@@ -157,8 +157,8 @@ auto ComplexMatrix::from_rows(std::vector<std::vector<Complex>> rows) -> Result<
     }
     std::vector<Complex> data;
     data.reserve(nrows * ncols);  // nrows*ncols already realised by the caller's rows
-    for (auto const& row : rows) {
-        for (auto const& e : row) {
+    for (const auto& row : rows) {
+        for (const auto& e : row) {
             data.push_back(e);
         }
     }

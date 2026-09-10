@@ -69,7 +69,7 @@ auto approx_set_real(std::span<const double> got, std::span<const double> expect
         return false;
     }
     std::vector<bool> used(got.size(), false);
-    for (double const e : expected) {
+    for (const double e : expected) {
         bool matched = false;
         for (std::size_t i = 0; i < got.size(); ++i) {
             if (!used[i] && std::fabs(got[i] - e) <= tol) {

@@ -332,7 +332,7 @@ using RVec = std::vector<Rational>;
                 bool zeroed = false;
                 std::size_t i = m;
                 for (i = m; i-- > l;) {  // i = m-1, m-2, ..., l
-                    double const f = s * e[i];
+                    const double f = s * e[i];
                     const double bb = c * e[i];
                     r = std::hypot(f, g);
                     e[i + 1] = r;

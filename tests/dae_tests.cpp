@@ -96,8 +96,8 @@ auto main() -> int {
                   // y = -D^{-1}(C x) = x1 + x2. With x0 = [0,1], x1 = sin(x), x2 = cos(x) and
                   // y = sin(x) + cos(x). Hand-verified to order 8.
                   const std::size_t order = 8;
-                  auto const zero_p = std::vector<PowerSeries>{ser({ri(0)}, order), ser({ri(0)}, order)};
-                  auto const zero_q = std::vector<PowerSeries>{ser({ri(0)}, order)};
+                  const auto zero_p = std::vector<PowerSeries>{ser({ri(0)}, order), ser({ri(0)}, order)};
+                  const auto zero_q = std::vector<PowerSeries>{ser({ri(0)}, order)};
                   auto sol = solve_linear_index1_dae(
                       mat({{ri(0), ri(1)}, {ri(-1), ri(0)}}),  // A
                       mat({{ri(0)}, {ri(0)}}),                 // B (2 x 1, zero)
@@ -223,7 +223,7 @@ auto main() -> int {
                   const std::size_t order = 6;
                   auto E = mat({{ri(0), ri(1)}, {ri(0), ri(0)}});
                   auto A = mat({{ri(1), ri(0)}, {ri(0), ri(1)}});
-                  auto const f = std::vector<PowerSeries>{ser({ri(0)}, order),
+                  const auto f = std::vector<PowerSeries>{ser({ri(0)}, order),
                                                     ser({ri(0), ri(1)}, order)};  // [0, t]
 
                   auto idx = linear_dae_index(E, A);
@@ -286,7 +286,7 @@ auto main() -> int {
                   auto A = mat({{ri(1), ri(0), ri(0)},
                                 {ri(0), ri(1), ri(0)},
                                 {ri(0), ri(0), ri(1)}});
-                  auto const f = std::vector<PowerSeries>{ser({ri(0)}, order), ser({ri(0)}, order),
+                  const auto f = std::vector<PowerSeries>{ser({ri(0)}, order), ser({ri(0)}, order),
                                                     ser({ri(0), ri(0), rat(1, 2)}, order)};
 
                   auto idx = linear_dae_index(E, A);

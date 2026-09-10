@@ -209,7 +209,7 @@ auto main() -> int {
 
                   // EXACT: the equal-weight average of the first coordinate over the exact
                   // Halton points is an exact Rational — verify it against a hand-rolled sum.
-                  nimblecas::RationalField const fid =
+                  const nimblecas::RationalField fid =
                       [](std::span<const Rational> p) -> Result<Rational> { return p[0]; };
                   auto exact = nimblecas::qmc_integrate_exact(fid, dim, Nq);
                   t.expect(exact.has_value(), "qmc_integrate_exact succeeds");
@@ -236,7 +236,7 @@ auto main() -> int {
                   }
 
                   // NUMERICAL: the QMC average of a smooth integrand converges to ∫ = 1/3.
-                  nimblecas::ScalarField const fsq = [](std::span<const double> p) {
+                  const nimblecas::ScalarField fsq = [](std::span<const double> p) {
                       return p[0] * p[0];
                   };
                   auto coarse = nimblecas::qmc_integrate(fsq, dim, 64);
@@ -257,7 +257,7 @@ auto main() -> int {
         .test("extrapolation_romberg_exact_and_richardson",
               [](TestContext& t) {
                   // EXACT: ∫_0^1 x^2 dx == 1/3 over Q.
-                  nimblecas::ExactFunction const fq =
+                  const nimblecas::ExactFunction fq =
                       [](const Rational& x) -> Result<Rational> { return x.multiply(x); };
                   auto rex = nimblecas::romberg_exact(fq, ri(0), ri(1), 3);
                   t.expect(rex.has_value(), "romberg_exact succeeds");
@@ -268,7 +268,7 @@ auto main() -> int {
 
                   // NUMERICAL: Richardson accelerates the composite trapezoid on a smooth
                   // integrand — the extrapolated corner beats the finest raw trapezoid.
-                  nimblecas::RealFunction const fexp = [](double x) { return std::exp(x); };
+                  const nimblecas::RealFunction fexp = [](double x) { return std::exp(x); };
                   auto rd = nimblecas::romberg(fexp, 0.0, 1.0, 5);
                   t.expect(rd.has_value(), "romberg (numeric) succeeds");
                   if (rd && !rd->table.empty()) {
@@ -295,18 +295,18 @@ auto main() -> int {
                   constexpr double b0 = 1.0, b1 = 1.0;
                   constexpr double xs0 = 0.2, xs1 = 0.4;
 
-                  opt::Objective const f = [=](std::span<const double> x) -> double {
+                  const opt::Objective f = [=](std::span<const double> x) -> double {
                       const double u = x[0];
                       const double v = x[1];
                       return 0.5 * (a00 * u * u + (a01 + a10) * u * v + a11 * v * v) - b0 * u -
                              b1 * v;
                   };
-                  opt::Gradient const g = [=](std::span<const double> x) -> std::vector<double> {
+                  const opt::Gradient g = [=](std::span<const double> x) -> std::vector<double> {
                       const double u = x[0];
                       const double v = x[1];
                       return {a00 * u + a01 * v - b0, a10 * u + a11 * v - b1};
                   };
-                  nls::ResidualFn const grad_root =
+                  const nls::ResidualFn grad_root =
                       [=](std::span<const double> x) -> std::vector<double> {
                       const double u = x[0];
                       const double v = x[1];

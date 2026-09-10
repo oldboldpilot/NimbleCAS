@@ -530,7 +530,7 @@ auto main() -> int {
                   t.expect(a->found == b->found, "the same seed reaches the same verdict");
                   t.expect(a->walker == b->walker, "and the same winning walker");
                   t.expect(a->model == b->model, "and the same model, bit for bit");
-                  auto const c = reference_walksat(cnf, 32, 5000, 50, 0x123456);
+                  const auto c = reference_walksat(cnf, 32, 5000, 50, 0x123456);
                   t.expect(c.has_value(), "a different seed also succeeds");
               })
         .test("reference_walksat_stops_at_the_first_successful_walker",
@@ -713,7 +713,7 @@ auto main() -> int {
                   auto ex = is_compilable_for(big, Strategy::exhaustive);
                   t.expect(!ex.has_value() && ex.error() == MathError::domain_error,
                            "the enumerator refuses more variables than it can number");
-                  auto const wk = is_compilable_for(big, Strategy::walksat);
+                  const auto wk = is_compilable_for(big, Strategy::walksat);
                   t.expect(wk.has_value(),
                            "the walker accepts them, because it never numbers an assignment");
               })

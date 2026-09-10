@@ -55,7 +55,7 @@ namespace {
 
 [[nodiscard]] auto frob_norm(std::span<const double> a) -> double {
     double acc = 0.0;
-    for (double const v : a) {
+    for (const double v : a) {
         acc += v * v;
     }
     return std::sqrt(acc);

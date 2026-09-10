@@ -614,7 +614,7 @@ struct Ratio {
     if (!r2) {
         return make_error<Expr>(r2.error());
     }
-    auto const eval_c = [&](const Rational& r) -> Result<Rational> {
+    const auto eval_c = [&](const Rational& r) -> Result<Rational> {
         auto m = c1.multiply(r);
         if (!m) {
             return m;
@@ -645,7 +645,7 @@ struct Ratio {
     if (!coeff_b) {
         return make_error<Expr>(coeff_b.error());
     }
-    auto const build = [&](const Rational& coeff, const Rational& pole) -> Result<Expr> {
+    const auto build = [&](const Rational& coeff, const Rational& pole) -> Result<Expr> {
         auto ce = rational_to_expr(coeff);
         if (!ce) {
             return make_error<Expr>(ce.error());

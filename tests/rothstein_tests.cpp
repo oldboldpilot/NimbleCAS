@@ -87,7 +87,7 @@ auto main() -> int {
                   // int 1/(x^2 - 1) dx = (1/2) log(x - 1) - (1/2) log(x + 1).
                   auto a = ipoly({1});
                   auto d = ipoly({-1, 0, 1});  // x^2 - 1
-                  auto const lp = log_part(a, d).value();
+                  const auto lp = log_part(a, d).value();
                   t.expect(lp.terms.size() == 2, "two logarithmic terms");
                   t.expect(has_term(lp, rat(1, 2), ipoly({-1, 1})), "(1/2) log(x - 1)");
                   t.expect(has_term(lp, rat(-1, 2), ipoly({1, 1})), "(-1/2) log(x + 1)");
@@ -98,7 +98,7 @@ auto main() -> int {
                   // int 1/(x^2 - x) dx = -log(x) + log(x - 1).
                   auto a = ipoly({1});
                   auto d = ipoly({0, -1, 1});  // x^2 - x = x(x - 1)
-                  auto const lp = log_part(a, d).value();
+                  const auto lp = log_part(a, d).value();
                   t.expect(has_term(lp, Rational::from_int(-1), ipoly({0, 1})), "-log(x)");
                   t.expect(has_term(lp, Rational::from_int(1), ipoly({-1, 1})), "log(x - 1)");
                   t.expect(integrates_to(a, d, lp), "d/dx(sum c log V) == A/D");
@@ -109,7 +109,7 @@ auto main() -> int {
                   // (a repeated root of the Rothstein-Trager resultant, residue 1).
                   auto a = ipoly({0, 2});
                   auto d = ipoly({-1, 0, 1});
-                  auto const lp = log_part(a, d).value();
+                  const auto lp = log_part(a, d).value();
                   t.expect(lp.terms.size() == 1, "one logarithmic term");
                   t.expect(has_term(lp, Rational::from_int(1), ipoly({-1, 0, 1})),
                            "log(x^2 - 1)");
@@ -119,10 +119,10 @@ auto main() -> int {
               [](TestContext& t) {
                   // int 1/(x(x-1)(x-4)) dx: three DISTINCT rational residues.
                   // D'(0)=4, D'(1)=-3, D'(4)=12 -> residues 1/4, -1/3, 1/12.
-                  auto const d = ipoly({0, 1}).multiply(ipoly({-1, 1})).value()
+                  const auto d = ipoly({0, 1}).multiply(ipoly({-1, 1})).value()
                                .multiply(ipoly({-4, 1})).value();  // x^3 - 5x^2 + 4x
                   auto a = ipoly({1});
-                  auto const lp = log_part(a, d).value();
+                  const auto lp = log_part(a, d).value();
                   t.expect(lp.terms.size() == 3, "three logarithmic terms");
                   t.expect(has_term(lp, rat(1, 4), ipoly({0, 1})), "(1/4) log(x)");
                   t.expect(has_term(lp, rat(-1, 3), ipoly({-1, 1})), "(-1/3) log(x - 1)");
@@ -134,10 +134,10 @@ auto main() -> int {
                   // int 1/((x-1)(x-2)(x-3)) dx: residues 1/D'(1)=1/2, 1/D'(2)=-1,
                   // 1/D'(3)=1/2. The shared residue 1/2 MERGES into a single log of the
                   // combined factor -- Rothstein-Trager emits the minimal set of logs.
-                  auto const d = ipoly({-1, 1}).multiply(ipoly({-2, 1})).value()
+                  const auto d = ipoly({-1, 1}).multiply(ipoly({-2, 1})).value()
                                .multiply(ipoly({-3, 1})).value();  // x^3 - 6x^2 + 11x - 6
                   auto a = ipoly({1});
-                  auto const lp = log_part(a, d).value();
+                  const auto lp = log_part(a, d).value();
                   t.expect(lp.terms.size() == 2, "two terms: the residue 1/2 is shared");
                   // (1/2) log((x-1)(x-3)) = (1/2) log(x^2 - 4x + 3).
                   t.expect(has_term(lp, rat(1, 2), ipoly({3, -4, 1})),
@@ -150,7 +150,7 @@ auto main() -> int {
                   // A shared factor cancels: int (x)/(x(x-1)) = int 1/(x-1) = log(x - 1).
                   auto a = ipoly({0, 1});                        // x
                   auto d = ipoly({0, -1, 1});                    // x^2 - x = x(x-1)
-                  auto const lp = log_part(a, d).value();
+                  const auto lp = log_part(a, d).value();
                   t.expect(lp.terms.size() == 1, "the cancelled pole drops out");
                   t.expect(has_term(lp, Rational::from_int(1), ipoly({-1, 1})), "log(x - 1)");
                   t.expect(integrates_to(a, d, lp), "d/dx(log(x-1)) == x/(x^2-x)");
@@ -190,10 +190,10 @@ auto main() -> int {
                       {rat(1, 4), Rational::from_int(0), Rational::from_int(1)});
                   t.expect(term.field.modulus().is_equal(expected_modulus),
                            "field is Q[t]/(t^2 + 1/4)");
-                  auto const alpha = term.field.generator().value();
+                  const auto alpha = term.field.generator().value();
                   t.expect(term.residue.is_equal(alpha), "residue is the field generator");
                   t.expect(term.argument.degree() == 1, "argument has degree 1");
-                  auto const two_alpha =
+                  const auto two_alpha =
                       alpha.multiply(term.field.from_rational(Rational::from_int(2))).value();
                   t.expect(term.argument.coefficient(0).is_equal(two_alpha),
                            "coefficient(0) == 2*alpha");
@@ -216,10 +216,10 @@ auto main() -> int {
                       {rat(-1, 8), Rational::from_int(0), Rational::from_int(1)});
                   t.expect(term.field.modulus().is_equal(expected_modulus),
                            "field is Q[t]/(t^2 - 1/8)");
-                  auto const alpha = term.field.generator().value();
+                  const auto alpha = term.field.generator().value();
                   t.expect(term.residue.is_equal(alpha), "residue is the field generator");
                   t.expect(term.argument.degree() == 1, "argument has degree 1");
-                  auto const neg_four_alpha =
+                  const auto neg_four_alpha =
                       alpha.multiply(term.field.from_rational(Rational::from_int(-4))).value();
                   t.expect(term.argument.coefficient(0).is_equal(neg_four_alpha),
                            "coefficient(0) == -4*alpha");
@@ -233,8 +233,8 @@ auto main() -> int {
                   // guards against log_part_extended spuriously manufacturing extension
                   // fields when none are needed.
                   auto a = ipoly({1});
-                  auto const d = ipoly({0, 1}).multiply(ipoly({1, 0, 1})).value();  // x(x^2+1)
-                  auto const elp = log_part_extended(a, d).value();
+                  const auto d = ipoly({0, 1}).multiply(ipoly({1, 0, 1})).value();  // x(x^2+1)
+                  const auto elp = log_part_extended(a, d).value();
                   t.expect(elp.algebraic_terms.empty(), "no algebraic terms manufactured");
                   t.expect(elp.rational_terms.size() == 2, "two rational terms");
                   t.expect(has_ext_term(elp, Rational::from_int(1), ipoly({0, 1})), "1 * log(x)");

@@ -24,7 +24,7 @@ export namespace nimblecas::numeric {
 // An empty coefficient span denotes the zero polynomial, whose value is 0.
 [[nodiscard]] auto eval(std::span<const double> c, double x) noexcept -> double {
     double acc = 0.0;
-    for (double const coeff : std::ranges::reverse_view(c)) {
+    for (const double coeff : std::ranges::reverse_view(c)) {
         acc = std::fma(acc, x, coeff);
     }
     return acc;

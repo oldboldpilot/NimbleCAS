@@ -112,7 +112,7 @@ auto main() -> int {
                   const Int128 e18 = i128("1000000000000000000");
                   auto a = r128(e18, 1);
                   auto b = r128(1, e18);
-                  auto const sum = a.add(b).value();
+                  const auto sum = a.add(b).value();
                   t.expect_eq(int128_to_string(sum.numerator()),
                               std::string("1000000000000000000000000000000000001"),
                               "numerator is 10^36 + 1");
@@ -168,7 +168,7 @@ auto main() -> int {
                   t.expect(!d_min.has_value() && d_min.error() == MathError::overflow,
                            "make(1, INT128_MIN) rejected as overflow (no UB)");
                   // A value one above the minimum is fine, and INT128_MAX as a numerator works.
-                  auto const ok = Rational128::make(i128("-170141183460469231731687303715884105727"), 1);
+                  const auto ok = Rational128::make(i128("-170141183460469231731687303715884105727"), 1);
                   t.expect(ok.has_value(), "make(-(2^127 - 1), 1) is representable");
                   t.expect(r128(i128(kMax), 1).numerator() == i128(kMax),
                            "INT128_MAX numerator is preserved");
@@ -177,7 +177,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // For values both tiers can represent, Rational128 must agree with the
                   // int64 Rational field operations coefficient-for-coefficient.
-                  auto const check = [&t](const char* what, Rational128 got, Rational want) {
+                  const auto check = [&t](const char* what, Rational128 got, Rational want) {
                       const bool eq = got.numerator() == static_cast<Int128>(want.numerator()) &&
                                       got.denominator() == static_cast<Int128>(want.denominator());
                       t.expect(eq, what);

@@ -113,10 +113,10 @@ auto main() -> int {
                   auto grid = Grid2D::make(ri(0), ri(1), ri(0), ri(1), 3, 3);
                   t.expect(grid.has_value(), "2-D grid builds");
                   if (grid) {
-                      auto const f = [](const Rational&, const Rational&) -> nimblecas::Result<Rational> {
+                      const auto f = [](const Rational&, const Rational&) -> nimblecas::Result<Rational> {
                           return ri(0);
                       };
-                      auto const bc = [](const Rational& x,
+                      const auto bc = [](const Rational& x,
                                    const Rational& y) -> nimblecas::Result<Rational> {
                           return x.add(y);
                       };
@@ -291,7 +291,7 @@ auto main() -> int {
                           }
                           u = *next;
                           double peak = 0.0;
-                          for (double const v : u) {
+                          for (const double v : u) {
                               peak = std::max(peak, std::abs(v));
                           }
                           ok = ok && peak < prev_peak && peak > 0.0;  // strictly decaying, nonzero

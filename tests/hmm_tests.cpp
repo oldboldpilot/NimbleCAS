@@ -76,10 +76,10 @@ auto main() -> int {
                   const auto model = build_model();
                   const std::vector<std::size_t> obs{0, 1, 0};
                   const std::span<const std::size_t> o{obs};
-                  auto const fwd = nimblecas::forward(model, o).value();
+                  const auto fwd = nimblecas::forward(model, o).value();
                   t.expect(fwd.alpha.size() == 3, "alpha has T = 3 rows");
                   t.expect(fwd.likelihood == rat(159, 1600), "P(O) == 159/1600 exactly");
-                  auto const lik = nimblecas::observation_likelihood(model, o).value();
+                  const auto lik = nimblecas::observation_likelihood(model, o).value();
                   t.expect(lik == rat(159, 1600), "observation_likelihood == 159/1600");
               })
         .test("forward_backward_agree",
@@ -117,13 +117,13 @@ auto main() -> int {
                   t.expect(vit.states == expected, "Viterbi path == [0, 1, 0]");
                   t.expect(vit.probability == rat(243, 6250), "path probability == 243/6250 exact");
                   // The reported probability matches the direct joint P(path, O).
-                  auto const direct = nimblecas::path_probability(
+                  const auto direct = nimblecas::path_probability(
                                     model, std::span<const std::size_t>{vit.states}, o)
                                     .value();
                   t.expect(direct == vit.probability, "path_probability matches Viterbi prob");
                   // It strictly beats the all-zeros alternative path.
                   const std::vector<std::size_t> alt{0, 0, 0};
-                  auto const altp = nimblecas::path_probability(
+                  const auto altp = nimblecas::path_probability(
                                   model, std::span<const std::size_t>{alt}, o)
                                   .value();
                   t.expect(!rat_geq(altp, vit.probability),
@@ -133,7 +133,7 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto model = build_model();
                   const std::vector<std::size_t> obs{0, 1, 0};
-                  auto const post = nimblecas::posteriors(model, std::span<const std::size_t>{obs}).value();
+                  const auto post = nimblecas::posteriors(model, std::span<const std::size_t>{obs}).value();
                   bool all_one = true;
                   for (const std::vector<Rational>& g_t : post.gamma) {
                       all_one = all_one && (sum_rat(g_t) == Rational::from_int(1));
@@ -162,7 +162,7 @@ auto main() -> int {
                       return;
                   }
                   t.expect(res->likelihoods.size() == 2, "one iteration records 2 likelihoods");
-                  auto const l0 = nimblecas::observation_likelihood(
+                  const auto l0 = nimblecas::observation_likelihood(
                                 model, std::span<const std::size_t>{seq0})
                                 .value();
                   t.expect(res->likelihoods[0] == l0, "initial likelihood matches forward P(O)");
@@ -180,7 +180,7 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto model = build_model();
                   const std::vector<std::size_t> obs{0, 1, 0};
-                  auto const ll = nimblecas::log_likelihood(model, std::span<const std::size_t>{obs}).value();
+                  const auto ll = nimblecas::log_likelihood(model, std::span<const std::size_t>{obs}).value();
                   const double expected = std::log(159.0 / 1600.0);
                   t.expect(std::abs(ll - expected) < 1e-9,
                            "log P(O) matches log(159/1600) numerically");
@@ -188,7 +188,7 @@ auto main() -> int {
         .test("domain_errors",
               [](TestContext& t) {
                   // Non-stochastic transition matrix -> make domain_error.
-                  std::vector<Rational> const pi{rat(1, 2), rat(1, 2)};
+                  const std::vector<Rational> pi{rat(1, 2), rat(1, 2)};
                   const auto bad_a = mat({{rat(1, 2), rat(1, 4)}, {rat(1, 2), rat(1, 2)}});
                   const auto good_b = mat({{rat(9, 10), rat(1, 10)}, {rat(1, 5), rat(4, 5)}});
                   t.expect(HiddenMarkovModel::make(pi, bad_a, good_b).error() ==
@@ -205,7 +205,7 @@ auto main() -> int {
                   const auto a2 = mat({{rat(1, 2), rat(1, 2)}, {rat(1, 2), rat(1, 2)}});
                   const auto b_deg = mat({{Rational::from_int(1), Rational{}},
                                           {Rational::from_int(1), Rational{}}});
-                  auto const imposs = HiddenMarkovModel::make(pi, a2, b_deg).value();
+                  const auto imposs = HiddenMarkovModel::make(pi, a2, b_deg).value();
                   const std::vector<std::size_t> o1{1};
                   t.expect(nimblecas::posteriors(imposs, std::span<const std::size_t>{o1}).error() ==
                                MathError::domain_error,

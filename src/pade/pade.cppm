@@ -66,7 +66,7 @@ auto pade(const PowerSeries& s, std::size_t m, std::size_t n)
 
     // Coefficient c_i of the series, with the convention c_i = 0 for i < 0 (signed
     // index so the Toeplitz assembly below can reach below the constant term).
-    auto const coeff = [&](std::int64_t i) -> Rational {
+    const auto coeff = [&](std::int64_t i) -> Rational {
         if (i < 0) {
             return Rational{};  // 0
         }

@@ -574,7 +574,7 @@ auto DoubleDouble::to_string(int precision) const -> std::string {
         precision = 1;
     }
     const bool neg = (hi < 0.0) || (hi == 0.0 && lo < 0.0);
-    DoubleDouble const a = neg ? negate() : *this;  // work with |value|
+    const DoubleDouble a = neg ? negate() : *this;  // work with |value|
 
     // Bring |value| into [1, 10): mantissa = a * 10^(-e), e = floor(log10 a).
     int e = static_cast<int>(std::floor(std::log10(a.hi)));

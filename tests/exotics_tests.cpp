@@ -91,7 +91,7 @@ auto main() -> int {
                   // Down-barrier at 90 (< spot), up-barrier at 110 (> spot).
                   const double dn = 90.0;
                   const double up = 110.0;
-                  auto const parity = [&](const OptionSpec& s, double h, Barrier side, double vanilla,
+                  const auto parity = [&](const OptionSpec& s, double h, Barrier side, double vanilla,
                                     std::string_view label) {
                       const double in = barrier_analytic(s, h, side, true).value();
                       const double out = barrier_analytic(s, h, side, false).value();
@@ -264,17 +264,17 @@ auto main() -> int {
               [](TestContext& t) {
                   // Extreme-parameter overflow must surface as an error, not a NaN price that
                   // slips through std::max (NaN < 0 is false). Regression for the honesty audit.
-                  auto const tiny_vol_up = atm().with_volatility(0.001);
+                  const auto tiny_vol_up = atm().with_volatility(0.001);
                   const auto ba = barrier_analytic(tiny_vol_up, 150.0, Barrier::up, false);
                   t.expect(!ba.has_value() || std::isfinite(ba.value()),
                            "barrier_analytic: extreme params -> error or finite, never NaN");
 
-                  auto const lb_spec = atm().with_volatility(0.01).with_rate(0.0).with_dividend(0.05);
+                  const auto lb_spec = atm().with_volatility(0.01).with_rate(0.0).with_dividend(0.05);
                   const auto lb = lookback_price(lb_spec, 50.0);
                   t.expect(!lb.has_value() || std::isfinite(lb.value()),
                            "lookback_price: small vol/adverse carry -> error or finite");
 
-                  auto const huge_vol = atm().with_volatility(1000.0);
+                  const auto huge_vol = atm().with_volatility(1000.0);
                   const auto cr = crr_binomial(huge_vol, 1, Exercise::european);
                   t.expect(!cr.has_value() || std::isfinite(cr.value()),
                            "crr_binomial: overflowing up-factor -> error, never NaN");

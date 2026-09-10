@@ -75,7 +75,7 @@ enum class MatrixKind { diagonal, triangular, symmetric, skew_symmetric, general
 // never correctness, and the symmetric/skew tests below never fire on a non-symmetric input.
 [[nodiscard]] auto classify(std::span<const double> a, std::size_t n, double tol) -> MatrixKind {
     double scale = 0.0;
-    for (double const v : a) {
+    for (const double v : a) {
         scale = std::max(scale, std::fabs(v));
     }
     if (scale == 0.0) {
@@ -127,7 +127,7 @@ enum class MatrixKind { diagonal, triangular, symmetric, skew_symmetric, general
 // i,j in 1..N) to upper Hessenberg form in place by Gaussian elimination with partial
 // pivoting (EISPACK elmhes). A no-op for N < 3.
 void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
-    auto const A = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& { return H[i * S + j]; };
+    const auto A = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& { return H[i * S + j]; };
     for (std::ptrdiff_t m = 2; m < N; ++m) {
         double x = 0.0;
         std::ptrdiff_t piv = m;
@@ -171,8 +171,8 @@ void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
 [[nodiscard]] auto hqr(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S,
                        std::vector<double>& wr, std::vector<double>& wi, double tol,
                        std::size_t max_iter) -> std::optional<MathError> {
-    auto const A = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& { return H[i * S + j]; };
-    auto const sgn = [](double a, double b) { return b >= 0.0 ? std::fabs(a) : -std::fabs(a); };
+    const auto A = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& { return H[i * S + j]; };
+    const auto sgn = [](double a, double b) { return b >= 0.0 ? std::fabs(a) : -std::fabs(a); };
 
     double anorm = 0.0;
     for (std::ptrdiff_t i = 1; i <= N; ++i) {
@@ -209,8 +209,8 @@ void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
                 double w = A(nn, nn - 1) * A(nn - 1, nn);
                 if (l == nn - 1) {
                     // Two eigenvalues of the trailing 2x2 block by the quadratic formula.
-                    double const p = 0.5 * (y - x);
-                    double const q = p * p + w;
+                    const double p = 0.5 * (y - x);
+                    const double q = p * p + w;
                     double z = std::sqrt(std::fabs(q));
                     x += t;
                     if (q >= 0.0) {  // real pair
@@ -237,7 +237,7 @@ void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
                         for (std::ptrdiff_t i = 1; i <= nn; ++i) {
                             A(i, i) -= x;
                         }
-                        double const s = std::fabs(A(nn, nn - 1)) + std::fabs(A(nn - 1, nn - 2));
+                        const double s = std::fabs(A(nn, nn - 1)) + std::fabs(A(nn - 1, nn - 2));
                         y = x = 0.75 * s;
                         w = -0.4375 * s * s;
                     }
@@ -251,20 +251,20 @@ void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
                     double z = 0.0;
                     for (m = nn - 2; m >= l; --m) {
                         z = A(m, m);
-                        double const rr = x - z;
-                        double const ss = y - z;
+                        const double rr = x - z;
+                        const double ss = y - z;
                         p = (rr * ss - w) / A(m + 1, m) + A(m, m + 1);
                         q = A(m + 1, m + 1) - z - rr - ss;
                         r = A(m + 2, m + 1);
-                        double const s = std::fabs(p) + std::fabs(q) + std::fabs(r);
+                        const double s = std::fabs(p) + std::fabs(q) + std::fabs(r);
                         p /= s;
                         q /= s;
                         r /= s;
                         if (m == l) {
                             break;
                         }
-                        double const u = std::fabs(A(m, m - 1)) * (std::fabs(q) + std::fabs(r));
-                        double const v = std::fabs(p) * (std::fabs(A(m - 1, m - 1)) + std::fabs(z) +
+                        const double u = std::fabs(A(m, m - 1)) * (std::fabs(q) + std::fabs(r));
+                        const double v = std::fabs(p) * (std::fabs(A(m - 1, m - 1)) + std::fabs(z) +
                                                    std::fabs(A(m + 1, m + 1)));
                         if (u <= tol * v) {
                             break;
@@ -292,7 +292,7 @@ void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
                                 r /= x;
                             }
                         }
-                        double const s = sgn(std::sqrt(p * p + q * q + r * r), p);
+                        const double s = sgn(std::sqrt(p * p + q * q + r * r), p);
                         if (s != 0.0) {
                             if (k == m) {
                                 if (l != m) {
@@ -344,9 +344,9 @@ void elmhes(std::vector<double>& H, std::ptrdiff_t N, std::ptrdiff_t S) {
 [[nodiscard]] auto jacobi_symmetric(std::vector<double> M, std::ptrdiff_t n,
                                     std::vector<double>& eig, double tol, std::size_t max_iter)
     -> std::optional<MathError> {
-    auto const A = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& { return M[i * n + j]; };
+    const auto A = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& { return M[i * n + j]; };
     double scale = 0.0;
-    for (double const v : M) {
+    for (const double v : M) {
         scale = std::max(scale, std::fabs(v));
     }
     if (scale == 0.0) {

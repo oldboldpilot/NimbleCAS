@@ -69,8 +69,8 @@ struct Frac {
 // x + y = (x.num*y.den + y.num*x.den) / (x.den*y.den) — no reduction needed for
 // the exact cross-multiplication identities below.
 [[nodiscard]] auto frac_add(const Frac& x, const Frac& y) -> Frac {
-    auto const ad = x.num.multiply(y.den).value();
-    auto const cb = y.num.multiply(x.den).value();
+    const auto ad = x.num.multiply(y.den).value();
+    const auto cb = y.num.multiply(x.den).value();
     auto num = ad.add(cb).value();
     auto den = x.den.multiply(y.den).value();
     return Frac{.num = std::move(num), .den = std::move(den)};

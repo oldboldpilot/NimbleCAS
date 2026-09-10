@@ -98,15 +98,15 @@ auto main() -> int {
         .test("charpoly_2x2_hand_check",
               [](TestContext& t) {
                   // [[1,2],[3,4]]: trace 5, det 1*4-2*3 = -2 -> x^2 - 5x - 2.
-                  auto const p = nimblecas::characteristic_polynomial(bmat({{1, 2}, {3, 4}})).value();
+                  const auto p = nimblecas::characteristic_polynomial(bmat({{1, 2}, {3, 4}})).value();
                   t.expect(poly_eq(p, {bi(-2), bi(-5), bi(1)}), "charpoly = x^2 -5x -2");
 
                   // 1x1: [[7]] -> x - 7.
-                  auto const p1 = nimblecas::characteristic_polynomial(bmat({{7}})).value();
+                  const auto p1 = nimblecas::characteristic_polynomial(bmat({{7}})).value();
                   t.expect(poly_eq(p1, {bi(-7), bi(1)}), "charpoly [[7]] = x - 7");
 
                   // 0x0: the empty-product characteristic polynomial is the constant 1.
-                  auto const p0 = nimblecas::characteristic_polynomial(BigMatrix::identity(0)).value();
+                  const auto p0 = nimblecas::characteristic_polynomial(BigMatrix::identity(0)).value();
                   t.expect(poly_eq(p0, {bi(1)}), "charpoly of 0x0 = 1");
               })
         .test("charpoly_companion_matrix",
@@ -114,11 +114,11 @@ auto main() -> int {
                   // Companion matrix of (x-1)(x-2)(x-3) = x^3 - 6x^2 + 11x - 6.
                   // Bottom-companion form has that polynomial as its characteristic polynomial.
                   auto c = bmat({{0, 0, 6}, {1, 0, -11}, {0, 1, 6}});
-                  auto const p = nimblecas::characteristic_polynomial(c).value();
+                  const auto p = nimblecas::characteristic_polynomial(c).value();
                   t.expect(poly_eq(p, {bi(-6), bi(11), bi(-6), bi(1)}),
                            "companion charpoly = x^3 -6x^2 +11x -6");
                   // ... and its rational eigenvalues are exactly {1, 2, 3}.
-                  auto const eig = nimblecas::rational_eigenvalues(c).value();
+                  const auto eig = nimblecas::rational_eigenvalues(c).value();
                   t.expect(eig.size() == 3 && total_mult(eig) == 3, "3 simple rational eigenvalues");
                   t.expect(mult_of(eig, bi(1)) == 1 && mult_of(eig, bi(2)) == 1 &&
                                mult_of(eig, bi(3)) == 1,
@@ -127,12 +127,12 @@ auto main() -> int {
         .test("charpoly_rational_entries",
               [](TestContext& t) {
                   // [[1/2, 0],[0, 1/3]]: (x - 1/2)(x - 1/3) = x^2 - 5/6 x + 1/6.
-                  auto const m = BigMatrix::from_rows({{brat(1, 2), bi(0)}, {bi(0), brat(1, 3)}}).value();
-                  auto const p = nimblecas::characteristic_polynomial(m).value();
+                  const auto m = BigMatrix::from_rows({{brat(1, 2), bi(0)}, {bi(0), brat(1, 3)}}).value();
+                  const auto p = nimblecas::characteristic_polynomial(m).value();
                   t.expect(poly_eq(p, {brat(1, 6), brat(-5, 6), bi(1)}),
                            "charpoly = x^2 -5/6 x +1/6 (exact fractions)");
                   // Rational eigenvalues 1/2 and 1/3 (denominators divide the cleared leading coeff).
-                  auto const eig = nimblecas::rational_eigenvalues(m).value();
+                  const auto eig = nimblecas::rational_eigenvalues(m).value();
                   t.expect(mult_of(eig, brat(1, 2)) == 1 && mult_of(eig, brat(1, 3)) == 1,
                            "eigenvalues {1/2, 1/3}");
                   t.expect(total_mult(eig) == 2, "fully rational spectrum");
@@ -154,13 +154,13 @@ auto main() -> int {
         .test("rational_eigenvalues_repeated_root",
               [](TestContext& t) {
                   // Jordan block [[2,1],[0,2]] -> (x-2)^2: a single eigenvalue 2 of multiplicity 2.
-                  auto const eig = nimblecas::rational_eigenvalues(bmat({{2, 1}, {0, 2}})).value();
+                  const auto eig = nimblecas::rational_eigenvalues(bmat({{2, 1}, {0, 2}})).value();
                   t.expect(eig.size() == 1, "one distinct eigenvalue");
                   t.expect(mult_of(eig, bi(2)) == 2, "eigenvalue 2 with multiplicity 2");
                   t.expect(total_mult(eig) == 2, "multiplicities sum to n = 2");
 
                   // A 3x3 with a triple root: (x-4)^3 via an upper-triangular block.
-                  auto const eig3 =
+                  const auto eig3 =
                       nimblecas::rational_eigenvalues(bmat({{4, 1, 5}, {0, 4, 1}, {0, 0, 4}}))
                           .value();
                   t.expect(eig3.size() == 1 && mult_of(eig3, bi(4)) == 3,
@@ -171,9 +171,9 @@ auto main() -> int {
                   // Rotation [[0,1],[-1,0]] has eigenvalues +/- i: charpoly x^2 + 1, NO rational
                   // roots. rational_eigenvalues must (honestly) return an empty list.
                   auto rot = bmat({{0, 1}, {-1, 0}});
-                  auto const p = nimblecas::characteristic_polynomial(rot).value();
+                  const auto p = nimblecas::characteristic_polynomial(rot).value();
                   t.expect(poly_eq(p, {bi(1), bi(0), bi(1)}), "charpoly = x^2 + 1");
-                  auto const eig = nimblecas::rational_eigenvalues(rot).value();
+                  const auto eig = nimblecas::rational_eigenvalues(rot).value();
                   t.expect(eig.empty(), "no rational eigenvalues (spectrum is complex)");
                   t.expect(total_mult(eig) == 0, "0 < n = 2: spectrum NOT fully rational");
               })
@@ -181,13 +181,13 @@ auto main() -> int {
               [](TestContext& t) {
                   // [[0,1],[2,0]] has eigenvalues +/- sqrt(2): charpoly x^2 - 2, no rational roots.
                   auto m = bmat({{0, 1}, {2, 0}});
-                  auto const p = nimblecas::characteristic_polynomial(m).value();
+                  const auto p = nimblecas::characteristic_polynomial(m).value();
                   t.expect(poly_eq(p, {bi(-2), bi(0), bi(1)}), "charpoly = x^2 - 2");
-                  auto const eig = nimblecas::rational_eigenvalues(m).value();
+                  const auto eig = nimblecas::rational_eigenvalues(m).value();
                   t.expect(eig.empty(), "no rational eigenvalues (surds omitted)");
 
                   // Mixed: [[1,2],[3,4]] has the irrational (5 +/- sqrt(33))/2 -> also empty.
-                  auto const eig2 = nimblecas::rational_eigenvalues(bmat({{1, 2}, {3, 4}})).value();
+                  const auto eig2 = nimblecas::rational_eigenvalues(bmat({{1, 2}, {3, 4}})).value();
                   t.expect(eig2.empty(), "irrational eigenvalues omitted");
               })
         .test("rational_eigenvalues_symmetric_pm_one",
@@ -202,7 +202,7 @@ auto main() -> int {
         .test("rational_eigenvalue_zero",
               [](TestContext& t) {
                   // A singular matrix with a zero eigenvalue: [[0,0],[0,5]] -> {0, 5}.
-                  auto const eig = nimblecas::rational_eigenvalues(bmat({{0, 0}, {0, 5}})).value();
+                  const auto eig = nimblecas::rational_eigenvalues(bmat({{0, 0}, {0, 5}})).value();
                   t.expect(mult_of(eig, bi(0)) == 1 && mult_of(eig, bi(5)) == 1,
                            "zero is found as an eigenvalue");
               })
@@ -213,15 +213,15 @@ auto main() -> int {
                   // intermediate products (e.g. 10^10 * (10^10 - 8) ~ 10^20) blow past the
                   // int64 ceiling, yet BigRational keeps everything exact.
                   //   a = 10^10, d = 8 - 10^10, c = 1, b = a*d - 15 = -99999999920000000015.
-                  auto const big = BigMatrix::from_rows(
+                  const auto big = BigMatrix::from_rows(
                                  {{brs("10000000000"), brs("-99999999920000000015")},
                                   {bi(1), brs("-9999999992")}})
                                  .value();
-                  auto const p = nimblecas::characteristic_polynomial(big).value();
+                  const auto p = nimblecas::characteristic_polynomial(big).value();
                   // charpoly = x^2 - 8x + 15 = (x-3)(x-5).
                   t.expect(poly_eq(p, {bi(15), bi(-8), bi(1)}),
                            "large-entry charpoly = x^2 -8x +15 (exact)");
-                  auto const eig = nimblecas::rational_eigenvalues(big).value();
+                  const auto eig = nimblecas::rational_eigenvalues(big).value();
                   t.expect(mult_of(eig, bi(3)) == 1 && mult_of(eig, bi(5)) == 1,
                            "exact rational eigenvalues {3,5} despite int64-overflowing entries");
                   t.expect(total_mult(eig) == 2, "fully rational spectrum recovered");
@@ -248,7 +248,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // A * A^{-1} == I for an invertible matrix.
                   auto a = bmat({{1, 2}, {3, 4}});  // det -2, invertible
-                  auto const inv = nimblecas::inverse(a).value();
+                  const auto inv = nimblecas::inverse(a).value();
                   t.expect(a.multiply(inv).value() == BigMatrix::identity(2),
                            "A * inverse(A) == I");
                   // Exact fractional inverse entries: [[-2, 1],[3/2, -1/2]].
@@ -258,7 +258,7 @@ auto main() -> int {
 
                   // diag(2,3,5) inverts to diag(1/2,1/3,1/5).
                   auto d = bmat({{2, 0, 0}, {0, 3, 0}, {0, 0, 5}});
-                  auto const dinv = nimblecas::inverse(d).value();
+                  const auto dinv = nimblecas::inverse(d).value();
                   t.expect(dinv.at(0, 0) == brat(1, 2) && dinv.at(1, 1) == brat(1, 3) &&
                                dinv.at(2, 2) == brat(1, 5),
                            "diagonal inverse = diag(1/2,1/3,1/5)");
@@ -289,11 +289,11 @@ auto main() -> int {
                   // 0 < total_mult < n -- the rational part is found, the surds omitted, and
                   // the caller can tell the spectrum is only PARTLY rational.
                   auto m = bmat({{1, 0, 0}, {0, 0, 1}, {0, 2, 0}});
-                  auto const p = nimblecas::characteristic_polynomial(m).value();
+                  const auto p = nimblecas::characteristic_polynomial(m).value();
                   // (x-1)(x^2-2) = x^3 - x^2 - 2x + 2.
                   t.expect(poly_eq(p, {bi(2), bi(-2), bi(-1), bi(1)}),
                            "charpoly = x^3 -x^2 -2x +2");
-                  auto const eig = nimblecas::rational_eigenvalues(m).value();
+                  const auto eig = nimblecas::rational_eigenvalues(m).value();
                   t.expect(mult_of(eig, bi(1)) == 1, "the one rational eigenvalue 1 is found");
                   t.expect(total_mult(eig) == 1,
                            "total rational multiplicity is 1, short of n(3): only partly rational");
@@ -302,8 +302,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // diag(-3/2, 1/2): a NEGATIVE fractional eigenvalue exercises the
                   // pos.negate() branch on a non-integer candidate p/q.
-                  auto const m = BigMatrix::from_rows({{brat(-3, 2), bi(0)}, {bi(0), brat(1, 2)}}).value();
-                  auto const p = nimblecas::characteristic_polynomial(m).value();
+                  const auto m = BigMatrix::from_rows({{brat(-3, 2), bi(0)}, {bi(0), brat(1, 2)}}).value();
+                  const auto p = nimblecas::characteristic_polynomial(m).value();
                   // (x+3/2)(x-1/2) = x^2 + x - 3/4.
                   t.expect(poly_eq(p, {brat(-3, 4), bi(1), bi(1)}), "charpoly = x^2 + x - 3/4");
                   auto eig = nimblecas::rational_eigenvalues(m).value();

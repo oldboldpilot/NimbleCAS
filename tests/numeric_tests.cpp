@@ -21,7 +21,7 @@ auto close(double got, double expected) -> bool {
 // verify Durand-Kerner roots by residual |p(root)|.
 auto ceval(std::span<const double> c, std::complex<double> z) -> std::complex<double> {
     std::complex<double> acc{0.0, 0.0};
-    for (double const coeff : std::ranges::reverse_view(c)) {
+    for (const double coeff : std::ranges::reverse_view(c)) {
         acc = acc * z + coeff;
     }
     return acc;
@@ -113,7 +113,7 @@ auto main() -> int {
               })
         .test("empty_coeffs_domain_error",
               [&](TestContext& t) {
-                  std::span<const double> const empty{};
+                  const std::span<const double> empty{};
                   auto r = num::newton(empty, 1.0, 1e-9, 100);
                   t.expect(!r.has_value() && r.error() == MathError::domain_error,
                            "newton on empty coeffs -> domain_error");
@@ -178,7 +178,7 @@ auto main() -> int {
               })
         .test("durand_kerner_empty_coeffs_domain_error",
               [&](TestContext& t) {
-                  std::span<const double> const empty{};
+                  const std::span<const double> empty{};
                   auto r = num::durand_kerner(empty, 1e-12, 100);
                   t.expect(!r.has_value() && r.error() == MathError::domain_error,
                            "durand_kerner on empty coeffs -> domain_error");

@@ -82,7 +82,7 @@ auto main() -> int {
                   auto b = col({1, 2});
                   auto x = nimblecas::conjugate_gradient(a, b);
                   t.expect(x.has_value(), "CG succeeds on an SPD system");
-                  auto const expected = Matrix::from_rows(
+                  const auto expected = Matrix::from_rows(
                                       {{rat(1, 11)}, {rat(7, 11)}})
                                       .value();
                   t.expect(x.has_value() && *x == expected, "CG gives the exact rational solution");
@@ -157,7 +157,7 @@ auto main() -> int {
                   t.expect(nimblecas::lanczos_rational(nonsym, rvec({1, 0}), 2).error() ==
                                MathError::domain_error,
                            "Lanczos rejects a non-symmetric matrix");
-                  auto const arn = nimblecas::arnoldi_rational(nonsym, rvec({1, 0}), 2);
+                  const auto arn = nimblecas::arnoldi_rational(nonsym, rvec({1, 0}), 2);
                   t.expect(arn.has_value(), "Arnoldi accepts a non-symmetric matrix");
               })
         .test("numerical_gmres_and_bicgstab_solve_nonsymmetric",
@@ -167,7 +167,7 @@ auto main() -> int {
                                                     0.0, 4.0, 1.0,
                                                     1.0, 0.0, 5.0};
                   const std::array<double, 3> b{1.0, 2.0, 3.0};
-                  auto const A = nimblecas::dense_matvec(adata, 3);
+                  const auto A = nimblecas::dense_matvec(adata, 3);
 
                   auto g = nimblecas::gmres(A, b, 1e-12, 100, 3);
                   t.expect(g.has_value(), "GMRES returns a result");
@@ -195,7 +195,7 @@ auto main() -> int {
                                                     0.0, 4.0, 1.0,
                                                     1.0, 0.0, 5.0};
                   const std::array<double, 3> b{1.0, 2.0, 3.0};
-                  auto const A = nimblecas::dense_matvec(adata, 3);
+                  const auto A = nimblecas::dense_matvec(adata, 3);
 
                   // A single BiCGSTAB step at a tight tolerance cannot converge.
                   auto bc = nimblecas::bicgstab(A, b, 1e-14, 1);
@@ -225,8 +225,8 @@ auto main() -> int {
                   const std::array<int, 6> col_indices{0, 1, 1, 2, 0, 2};
                   const std::array<double, 6> values{1, 2, 3, 4, 5, 6};
 
-                  auto const dense_op = nimblecas::dense_matvec(dense, 3);
-                  auto const csr_op = nimblecas::csr_matvec(row_offsets, col_indices, values, 3);
+                  const auto dense_op = nimblecas::dense_matvec(dense, 3);
+                  const auto csr_op = nimblecas::csr_matvec(row_offsets, col_indices, values, 3);
 
                   const std::array<double, 3> x{1.0, 2.0, 3.0};
                   std::array<double, 3> y_dense{};
@@ -249,7 +249,7 @@ auto main() -> int {
                   const std::array<int, 5> row_offsets{0, 2, 5, 8, 10};
                   const std::array<int, 10> col_indices{0, 1, 0, 1, 2, 1, 2, 3, 2, 3};
                   const std::array<double, 10> values{4, 1, 1, 4, 1, 1, 4, 1, 1, 4};
-                  auto const A = nimblecas::csr_matvec(row_offsets, col_indices, values, 4);
+                  const auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, 4);
 
                   const std::array<double, 4> b{6.0, 12.0, 18.0, 19.0};
                   auto r = nimblecas::cg(A, b, 1e-12, 100);
@@ -306,7 +306,7 @@ auto main() -> int {
                           row_offsets.push_back(static_cast<int>(col_indices.size()));
                       }
                   }
-                  auto const A = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
+                  const auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
                   const std::vector<double> b(n, 1.0);
                   auto r = nimblecas::cg(A, b, 1e-10, 500);
                   t.expect(r.has_value(), "cg returns a result on the 2D Laplacian");
@@ -324,7 +324,7 @@ auto main() -> int {
                   // "converged" answer.
                   const std::array<double, 4> dense{0, 1,
                                                     1, 0};
-                  auto const A = nimblecas::dense_matvec(dense, 2);
+                  const auto A = nimblecas::dense_matvec(dense, 2);
                   const std::array<double, 2> b{0.0, 1.0};
                   auto r = nimblecas::cg(A, b, 1e-10, 100);
                   t.expect(r.has_value(), "cg does NOT error on an indefinite matrix");
@@ -342,7 +342,7 @@ auto main() -> int {
         .test("numerical_cg_empty_system_is_domain_error",
               [](TestContext& t) {
                   const std::array<double, 4> dense{4, 1, 1, 4};
-                  auto const A = nimblecas::dense_matvec(dense, 2);
+                  const auto A = nimblecas::dense_matvec(dense, 2);
                   const std::array<double, 0> empty{};
                   t.expect(nimblecas::cg(A, empty, 1e-10, 10).error() == MathError::domain_error,
                            "empty system -> domain_error");

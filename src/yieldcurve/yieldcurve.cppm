@@ -700,7 +700,7 @@ auto zbtprice(std::span<const CouponBond> bonds, std::span<const double> prices,
 
     // Discount factor at time t on the curve built so far (log-linear in ln DF; no
     // extrapolation below the first pillar -> underdetermined -> domain_error).
-    auto const df_at = [&](double t) -> Result<double> {
+    const auto df_at = [&](double t) -> Result<double> {
         if (ptimes.empty() || t < ptimes.front() - 1e-9 || t > ptimes.back() + 1e-9) {
             return make_error<double>(MathError::domain_error);
         }
@@ -865,17 +865,17 @@ auto fit_nelson_siegel(std::span<const double> times, std::span<const double> ze
         return make_error<NelsonSiegel>(MathError::domain_error);
     }
     double t_max = 0.0;
-    for (double const t : times) {
+    for (const double t : times) {
         if (!std::isfinite(t) || t <= 0.0) { return make_error<NelsonSiegel>(MathError::domain_error); }
         t_max = std::max(t_max, t);
     }
     // SSE(tau): inner linear LSQ for the three betas, then residual sum of squares. A
     // singular/non-finite system reports the sentinel max() so the search skips it.
-    auto const sse = [&](double tau) -> double {
+    const auto sse = [&](double tau) -> double {
         if (tau <= 0.0) { return std::numeric_limits<double>::max(); }
         std::vector<std::vector<double>> X;
         X.reserve(times.size());
-        for (double const t : times) {
+        for (const double t : times) {
             const auto b = ns_basis(t, tau);
             X.push_back({b[0], b[1], b[2]});
         }
@@ -912,7 +912,7 @@ auto fit_nelson_siegel(std::span<const double> times, std::span<const double> ze
     best_tau = golden_min(sse, rlo, rhi, 80);
     std::vector<std::vector<double>> X;
     X.reserve(times.size());
-    for (double const t : times) {
+    for (const double t : times) {
         const auto b = ns_basis(t, best_tau);
         X.push_back({b[0], b[1], b[2]});
     }
@@ -931,14 +931,14 @@ auto fit_svensson(std::span<const double> times, std::span<const double> zeros)
         return make_error<Svensson>(MathError::domain_error);
     }
     double t_max = 0.0;
-    for (double const t : times) {
+    for (const double t : times) {
         if (!std::isfinite(t) || t <= 0.0) { return make_error<Svensson>(MathError::domain_error); }
         t_max = std::max(t_max, t);
     }
     auto solve_beta = [&](double tau1, double tau2) -> Result<std::array<double, 4>> {
         std::vector<std::vector<double>> X;
         X.reserve(times.size());
-        for (double const t : times) {
+        for (const double t : times) {
             const auto b = ns_basis(t, tau1);
             X.push_back({b[0], b[1], b[2], sv_curv(t, tau2)});
         }
@@ -988,7 +988,7 @@ auto fit_svensson(std::span<const double> times, std::span<const double> zeros)
     auto beta = solve_beta(best1, best2);
     if (!beta) { return make_error<Svensson>(MathError::not_converged); }
     Svensson sv{(*beta)[0], (*beta)[1], (*beta)[2], (*beta)[3], best1, best2};
-    for (double const v : {sv.beta0, sv.beta1, sv.beta2, sv.beta3}) {
+    for (const double v : {sv.beta0, sv.beta1, sv.beta2, sv.beta3}) {
         if (!std::isfinite(v)) { return make_error<Svensson>(MathError::not_converged); }
     }
     return sv;

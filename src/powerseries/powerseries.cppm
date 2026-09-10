@@ -320,7 +320,7 @@ auto PowerSeries::derivative() const -> Result<PowerSeries> {
     const std::size_t n = coeffs_.size();
     std::vector<Rational> d(n);  // all zero; d_{n-1} stays 0 by convention
     for (std::size_t k = 0; k + 1 < n; ++k) {
-        auto const factor = Rational::from_int(static_cast<std::int64_t>(k + 1));
+        const auto factor = Rational::from_int(static_cast<std::int64_t>(k + 1));
         auto prod = coeffs_[k + 1].multiply(factor);
         if (!prod) {
             return make_error<PowerSeries>(prod.error());
@@ -334,7 +334,7 @@ auto PowerSeries::integrate() const -> Result<PowerSeries> {
     const std::size_t n = coeffs_.size();
     std::vector<Rational> g(n);  // g_0 = 0
     for (std::size_t k = 1; k < n; ++k) {
-        auto const denom = Rational::from_int(static_cast<std::int64_t>(k));
+        const auto denom = Rational::from_int(static_cast<std::int64_t>(k));
         auto q = coeffs_[k - 1].divide(denom);
         if (!q) {
             return make_error<PowerSeries>(q.error());

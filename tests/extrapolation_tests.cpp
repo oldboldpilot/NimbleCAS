@@ -65,7 +65,7 @@ auto main() -> int {
                   t.expect(!bad_r && bad_r.error() == MathError::domain_error, "r < 2 -> domain_error");
                   auto bad_p = nx::richardson_step(ri(8), rat(23, 4), 2, 0);  // p < 1
                   t.expect(!bad_p && bad_p.error() == MathError::domain_error, "p < 1 -> domain_error");
-                  std::span<const Rational> const empty{};
+                  const std::span<const Rational> empty{};
                   auto e = nx::richardson_tableau(empty, 2, 2);
                   t.expect(!e && e.error() == MathError::domain_error, "empty seq -> domain_error");
               })
@@ -73,7 +73,7 @@ auto main() -> int {
         // ---- Romberg: EXACT over Q on rational integrand ∫_0^1 x^2 dx = 1/3 ----
         .test("romberg_exact_x_squared",
               [&](TestContext& t) {
-                  auto const sq = [](const Rational& x) -> Result<Rational> { return x.multiply(x); };
+                  const auto sq = [](const Rational& x) -> Result<Rational> { return x.multiply(x); };
                   auto tab = nx::romberg_exact(sq, ri(0), ri(1), 3);
                   t.expect(tab.has_value(), "romberg_exact builds");
                   t.expect(tab.has_value() && tab->best == rat(1, 3),
@@ -82,7 +82,7 @@ auto main() -> int {
         .test("romberg_double_transcendental",
               [&](TestContext& t) {
                   // ∫_0^1 e^x dx = e - 1, a smooth integrand: Romberg converges fast.
-                  auto const f = [](double x) -> double { return std::exp(x); };
+                  const auto f = [](double x) -> double { return std::exp(x); };
                   auto tab = nx::romberg(f, 0.0, 1.0, 6);
                   t.expect(tab.has_value(), "romberg builds");
                   t.expect(tab.has_value() && close(tab->best, std::numbers::e - 1.0),
@@ -90,7 +90,7 @@ auto main() -> int {
               })
         .test("romberg_reversed_bounds_domain_error",
               [&](TestContext& t) {
-                  auto const f = [](double x) -> double { return x; };
+                  const auto f = [](double x) -> double { return x; };
                   auto tab = nx::romberg(f, 1.0, 0.0, 3);  // b < a
                   t.expect(!tab && tab.error() == MathError::domain_error, "b < a -> domain_error");
               })
@@ -150,7 +150,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // p(x) = x^3, p'(1) = 3. Central diff has a pure h^2 error; one Richardson
                   // level (2 rows) recovers 3 EXACTLY over Q.
-                  auto const cube = [](const Rational& x) -> Result<Rational> {
+                  const auto cube = [](const Rational& x) -> Result<Rational> {
                       auto x2 = x.multiply(x);
                       if (!x2) {
                           return make_error<Rational>(x2.error());
@@ -164,7 +164,7 @@ auto main() -> int {
         .test("richardson_derivative_numeric_sin",
               [&](TestContext& t) {
                   // d/dx sin at 0 is cos(0) = 1.
-                  auto const f = [](double x) -> double { return std::sin(x); };
+                  const auto f = [](double x) -> double { return std::sin(x); };
                   auto tab = nx::richardson_derivative(f, 0.0, 0.5, 5);
                   t.expect(tab.has_value(), "numeric derivative tableau builds");
                   t.expect(tab.has_value() && close(tab->best, 1.0), "sin'(0) ~ 1");
@@ -175,7 +175,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // Partial sums of Σ (1/2)^k: 1, 3/2, 7/4 -> limit 2.
                   const std::array<Rational, 3> s{ri(1), rat(3, 2), rat(7, 4)};
-                  std::span<const Rational> const sp{s};
+                  const std::span<const Rational> sp{s};
                   auto lt = nx::levin_t(sp);
                   auto lu = nx::levin_u(sp);
                   auto lv = nx::levin_v(sp);
@@ -186,7 +186,7 @@ auto main() -> int {
         .test("levin_double_geometric",
               [&](TestContext& t) {
                   const std::array<double, 3> s{1.0, 1.5, 1.75};
-                  std::span<const double> const sp{s};
+                  const std::span<const double> sp{s};
                   auto lt = nx::levin_t(sp);
                   auto lu = nx::levin_u(sp);
                   t.expect(lt.has_value() && close(*lt, 2.0), "numerical Levin t ~ 2");
@@ -221,7 +221,7 @@ auto main() -> int {
               })
         .test("euler_transform_empty_domain_error",
               [&](TestContext& t) {
-                  std::span<const Rational> const empty{};
+                  const std::span<const Rational> empty{};
                   auto e = nx::euler_transform(empty);
                   t.expect(!e && e.error() == MathError::domain_error, "empty -> domain_error");
               })
@@ -287,13 +287,13 @@ auto main() -> int {
                   auto b = nx::van_wijngaarden(std::span<const Rational>{a});
                   t.expect(b.has_value(), "van Wijngaarden builds");
                   if (b.has_value()) {
-                      auto const e = nx::euler_transform(std::span<const Rational>{*b});
+                      const auto e = nx::euler_transform(std::span<const Rational>{*b});
                       t.expect(e.has_value(), "Euler accepts the condensed alternating series");
                   }
               })
         .test("van_wijngaarden_empty_domain_error",
               [&](TestContext& t) {
-                  std::span<const Rational> const empty{};
+                  const std::span<const Rational> empty{};
                   auto b = nx::van_wijngaarden(empty);
                   t.expect(!b && b.error() == MathError::domain_error, "empty -> domain_error");
               })

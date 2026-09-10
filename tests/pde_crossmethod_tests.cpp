@@ -192,8 +192,8 @@ auto main() -> int {
                                                                       phi, 0);
                   t.expect(!zero_order.has_value() && zero_order.error() == MathError::domain_error,
                            "order == 0 is domain_error");
-                  nimblecas::TimeSeriesOperator const empty_n;
-                  auto const no_n = solve_nonlinear_evolution_pde_hpm(heat_operator(R(1)), empty_n, phi, 2);
+                  const nimblecas::TimeSeriesOperator empty_n;
+                  const auto no_n = solve_nonlinear_evolution_pde_hpm(heat_operator(R(1)), empty_n, phi, 2);
                   t.expect(!no_n.has_value(), "empty nonlinear operator fails");
               })
         .run();

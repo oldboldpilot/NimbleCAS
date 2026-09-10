@@ -92,7 +92,7 @@ auto register_modgcd_ops(TaskRegistry& reg) -> Result<void> {
 auto modular_gcd_with(const Polynomial& a, const Polynomial& b,
                       Executor& exec, const TaskRegistry& reg,
                       std::size_t max_primes) -> Result<Polynomial> {
-    auto const normalized = [](const Polynomial& p) -> Result<Polynomial> {
+    const auto normalized = [](const Polynomial& p) -> Result<Polynomial> {
         return p.leading_coefficient() < 0 ? p.scale(-1) : Result<Polynomial>{p};
     };
     if (a.is_zero()) {
@@ -202,7 +202,7 @@ auto modular_gcd_with(const Polynomial& a, const Polynomial& b,
         TaskGraph g;
         for (std::size_t i = 0; i < m_request; ++i) {
             const std::uint64_t p = round_primes[i];
-            ImageRequest const req{
+            const ImageRequest req{
                 .p = p,
                 .gamma = gamma,
                 .a = A,
@@ -212,7 +212,7 @@ auto modular_gcd_with(const Polynomial& a, const Polynomial& b,
             if (!enc_res) {
                 return make_error<Polynomial>(enc_res.error());
             }
-            CostHint const hint{
+            const CostHint hint{
                 .mean_seconds = 1e-6 * static_cast<double>(A.degree() + B.degree()),
                 .variance = 0.0,
             };
@@ -259,8 +259,8 @@ auto modular_gcd_with(const Polynomial& a, const Polynomial& b,
 
         if (const auto* cand = std::get_if<Candidate>(&*merge_res)) {
             // Trial division verification (§3.8)
-            auto const div_a = A.divide_exact(cand->polynomial);
-            auto const div_b = B.divide_exact(cand->polynomial);
+            const auto div_a = A.divide_exact(cand->polynomial);
+            const auto div_b = B.divide_exact(cand->polynomial);
             if (div_a.has_value() && div_b.has_value()) {
                 // Exact candidate verified! Scale by content gcd d
                 auto scaled = cand->polynomial.scale(d);

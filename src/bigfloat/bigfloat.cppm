@@ -201,7 +201,7 @@ namespace {
 
 // Number of significant bits of |x| (0 for x == 0). Doubling scan: O(bits) big multiplies.
 [[nodiscard]] auto bit_length(const BigInt& x) -> std::int64_t {
-    BigInt const v = x.abs();
+    const BigInt v = x.abs();
     if (v.is_zero()) {
         return 0;
     }
@@ -268,7 +268,7 @@ namespace {
     BigInt x = pow2(static_cast<std::uint64_t>((b + 1) / 2));
     for (;;) {
         auto dm = n.divmod(x);  // x > 0
-        BigInt const q = dm ? dm->first : bi_zero();
+        const BigInt q = dm ? dm->first : bi_zero();
         BigInt y = bi_half(x.add(q));  // floor((x + n/x) / 2)
         if (bi_cmp(y, x) != std::strong_ordering::less) {
             break;  // converged: y >= x  =>  x == floor(sqrt(n))

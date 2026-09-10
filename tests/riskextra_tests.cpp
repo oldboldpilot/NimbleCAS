@@ -147,17 +147,17 @@ auto main() -> int {
                   const std::array<double, 2> c2{1.0, 1.0};
                   const std::vector<std::vector<double>> A_eq{{1.0, 1.0}};
                   const std::array<double, 1> b_eq{3.0};
-                  auto const r2 = linprog(c2, {}, {}, A_eq, b_eq).value();
+                  const auto r2 = linprog(c2, {}, {}, A_eq, b_eq).value();
                   t.expect(r2.status == LinProgStatus::optimal && close(r2.objective, 3.0),
                            "equality-constrained optimum == 3");
                   // Infeasible: x0 + x1 == 3 and x0 + x1 <= 1.
                   const std::vector<std::vector<double>> A_le3{{1.0, 1.0}};
                   const std::array<double, 1> b_le3{1.0};
-                  auto const r3 = linprog(c2, A_le3, b_le3, A_eq, b_eq).value();
+                  const auto r3 = linprog(c2, A_le3, b_le3, A_eq, b_eq).value();
                   t.expect(r3.status == LinProgStatus::infeasible, "conflicting constraints -> infeasible");
                   // Unbounded: min -x0 with no constraints.
                   const std::array<double, 1> c4{-1.0};
-                  auto const r4 = linprog(c4, {}, {}, {}, {}).value();
+                  const auto r4 = linprog(c4, {}, {}, {}, {}).value();
                   t.expect(r4.status == LinProgStatus::unbounded, "descent with no bound -> unbounded");
               })
         .test("box-constrained mean-variance QP",
@@ -262,7 +262,7 @@ auto main() -> int {
                            "first period interest 100, principal payment-100");
                   t.expect(close(sch.balance.back(), 0.0, 1e-9), "amortisation closes to zero balance");
                   double principal_sum = 0.0;
-                  for (double const p : sch.principal) { principal_sum += p; }
+                  for (const double p : sch.principal) { principal_sum += p; }
                   t.expect(close(principal_sum, 1000.0, 1e-9), "principal repayments sum to the loan");
                   // Odd-period interest: full period, simple -> pv*rate.
                   t.expect(close(pay_odd(0.1, 1.0, 1000.0).value(), 100.0), "pay_odd full period == pv*rate");
@@ -310,7 +310,7 @@ auto main() -> int {
                            "1024-scenario x 8-asset CVaR fits the tableau (not over-rejected)");
                   if (r.has_value()) {
                       double wsum = 0.0;
-                      for (double const w : r.value().weights) { wsum += w; }
+                      for (const double w : r.value().weights) { wsum += w; }
                       t.expect(std::abs(wsum - 1.0) < 1e-6, "CVaR weights sum to 1");
                   }
               })

@@ -114,8 +114,8 @@ auto main() -> int {
         .test("diff_simplify_product_rule",
               [&](TestContext& t) {
                   // d/dx [x*(x+1)] = (x+1) + x = 2x + 1.
-                  auto const u = Expr::product({x, Expr::sum({x, one})});
-                  auto const expected = Expr::sum({two.mul(x), one});
+                  const auto u = Expr::product({x, Expr::sum({x, one})});
+                  const auto expected = Expr::sum({two.mul(x), one});
                   equiv_result(t, differentiate(u, "x"), expected, "d/dx x(x+1) = 2x+1");
               })
         .test("diff_simplify_quotient_rule",
@@ -123,13 +123,13 @@ auto main() -> int {
                   // d/dx [x/(x+1)] = 1/(x+1)^2. simplify will not combine the
                   // derivative over a common denominator, so verify functionally at
                   // several points instead of structurally.
-                  auto const quotient = Expr::product({x, Expr::power(Expr::sum({x, one}), neg_one)});
+                  const auto quotient = Expr::product({x, Expr::power(Expr::sum({x, one}), neg_one)});
                   auto d = differentiate(quotient, "x");
                   t.expect(d.has_value(), "d/dx x/(x+1) succeeds");
                   if (!d) {
                       return;
                   }
-                  auto const expected = Expr::power(Expr::sum({x, one}), Expr::integer(-2));
+                  const auto expected = Expr::power(Expr::sum({x, one}), Expr::integer(-2));
                   for (std::int64_t v : {0, 1, 2, 4}) {
                       auto got = eval_at(t, *d, "x", v, std::format("d at x={}", v));
                       auto want = eval_at(t, expected, "x", v, std::format("1/(x+1)^2 at x={}", v));
@@ -142,12 +142,12 @@ auto main() -> int {
               [&](TestContext& t) {
                   // d/dx exp(x^3) = 3x^2 exp(x^3).
                   auto u = fn("exp", x.pow(three));
-                  auto const expected = Expr::product({three, x.pow(two), fn("exp", x.pow(three))});
+                  const auto expected = Expr::product({three, x.pow(two), fn("exp", x.pow(three))});
                   equiv_result(t, differentiate(u, "x"), expected,
                                "d/dx exp(x^3) = 3x^2 exp(x^3)");
                   // d/dx sin(x^2) = 2x cos(x^2).
                   auto v = fn("sin", x.pow(two));
-                  auto const expected2 = Expr::product({two, x, fn("cos", x.pow(two))});
+                  const auto expected2 = Expr::product({two, x, fn("cos", x.pow(two))});
                   equiv_result(t, differentiate(v, "x"), expected2, "d/dx sin(x^2) = 2x cos(x^2)");
               })
         // -------------------------------------------------------------------
@@ -165,7 +165,7 @@ auto main() -> int {
         .test("simplify_idempotent_and_nested_folding",
               [&](TestContext& t) {
                   // Idempotence: simplify(simplify(e)) == simplify(e) on a mixed tree.
-                  auto const e = Expr::sum({two.mul(x), three.mul(x), x.pow(two), one, two});
+                  const auto e = Expr::sum({two.mul(x), three.mul(x), x.pow(two), one, two});
                   auto s1 = simplify(e);
                   t.expect(s1.has_value(), "first simplify succeeds");
                   if (s1) {
@@ -187,7 +187,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // f = x^3 + 2x^2 + x about 0: coefficients are the monomial coeffs
                   // [0, 1, 2, 1].
-                  auto const f = Expr::sum({x.pow(three), two.mul(x.pow(two)), x});
+                  const auto f = Expr::sum({x.pow(three), two.mul(x.pow(two)), x});
                   auto coeffs = taylor_coefficients(f, "x", zero, 3);
                   t.expect(coeffs.has_value(), "taylor_coefficients succeeds");
                   if (coeffs) {
@@ -205,7 +205,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // For f, the series of f' has coefficient d_k = (k+1) c_{k+1}: the
                   // series and the diff engine must agree. f = x^3 + 2x^2 + x.
-                  auto const f = Expr::sum({x.pow(three), two.mul(x.pow(two)), x});
+                  const auto f = Expr::sum({x.pow(three), two.mul(x.pow(two)), x});
                   auto fprime = differentiate(f, "x");  // = 3x^2 + 4x + 1
                   t.expect(fprime.has_value(), "differentiate f succeeds");
                   if (!fprime) {
@@ -223,7 +223,7 @@ auto main() -> int {
                   t.expect((*cfp)[2].is_equivalent_to(three), "d_2 = 3");
                   // Relationship d_k = (k+1) c_{k+1}.
                   for (std::int64_t k = 0; k <= 2; ++k) {
-                      auto const rhs = Expr::integer(k + 1).mul((*cf)[static_cast<std::size_t>(k + 1)]);
+                      const auto rhs = Expr::integer(k + 1).mul((*cf)[static_cast<std::size_t>(k + 1)]);
                       equiv(t, (*cfp)[static_cast<std::size_t>(k)], rhs,
                             std::format("d_{} = {} * c_{}", k, k + 1, k + 1));
                   }
@@ -244,14 +244,14 @@ auto main() -> int {
                                two.mul(Expr::power(s, Expr::integer(-3))), "L{t^2} = 2/s^3");
                   // L{e^{a t}} = 1/(s - a).
                   auto exp_at = fn("exp", Expr::product({a, t_var}));
-                  auto const expected = Expr::power(Expr::sum({s, Expr::product({neg_one, a})}), neg_one);
+                  const auto expected = Expr::power(Expr::sum({s, Expr::product({neg_one, a})}), neg_one);
                   equiv_result(t, laplace_transform(exp_at, "t", "s"), expected,
                                "L{e^{a t}} = 1/(s-a)");
               })
         .test("laplace_linearity",
               [&](TestContext& t) {
                   // L{3 t^2 + 5 t} == 3 L{t^2} + 5 L{t}.
-                  auto const combined = Expr::sum({three.mul(t_var.pow(two)), Expr::integer(5).mul(t_var)});
+                  const auto combined = Expr::sum({three.mul(t_var.pow(two)), Expr::integer(5).mul(t_var)});
                   auto lhs = laplace_transform(combined, "t", "s");
                   auto lf = laplace_transform(t_var.pow(two), "t", "s");
                   auto lg = laplace_transform(t_var, "t", "s");
@@ -260,7 +260,7 @@ auto main() -> int {
                   if (!lhs || !lf || !lg) {
                       return;
                   }
-                  auto const rhs = Expr::sum(
+                  const auto rhs = Expr::sum(
                       {three.mul(*lf), Expr::integer(5).mul(*lg)});
                   equiv(t, *lhs, rhs, "L{3t^2 + 5t} = 3 L{t^2} + 5 L{t}");
               })
@@ -271,7 +271,7 @@ auto main() -> int {
         .test("vectorcalc_curl_of_grad_is_zero",
               [&](TestContext& t) {
                   // f = x^2 y + y^2 z + z^2 x. curl(grad f) = 0 componentwise.
-                  auto const f = Expr::sum({Expr::product({x.pow(two), y}),
+                  const auto f = Expr::sum({Expr::product({x.pow(two), y}),
                                       Expr::product({y.pow(two), z}),
                                       Expr::product({z.pow(two), x})});
                   auto grad = nimblecas::gradient(f, xyz);
@@ -291,7 +291,7 @@ auto main() -> int {
         .test("vectorcalc_div_of_curl_is_zero",
               [&](TestContext& t) {
                   // F = (x^2 y, y^2 z, z^2 x). div(curl F) = 0.
-                  std::vector<Expr> const field{Expr::product({x.pow(two), y}),
+                  const std::vector<Expr> field{Expr::product({x.pow(two), y}),
                                           Expr::product({y.pow(two), z}),
                                           Expr::product({z.pow(two), x})};
                   auto c = nimblecas::curl(field, xyz);
@@ -307,7 +307,7 @@ auto main() -> int {
         .test("vectorcalc_laplacian_equals_div_grad",
               [&](TestContext& t) {
                   // laplacian(f) == div(grad f) == 2x + 2y + 2z for f = x^2y + y^2z + z^2x.
-                  auto const f = Expr::sum({Expr::product({x.pow(two), y}),
+                  const auto f = Expr::sum({Expr::product({x.pow(two), y}),
                                       Expr::product({y.pow(two), z}),
                                       Expr::product({z.pow(two), x})});
                   auto lap = nimblecas::laplacian(f, xyz);
@@ -321,13 +321,13 @@ auto main() -> int {
                   if (div_grad) {
                       equiv(t, *lap, *div_grad, "laplacian(f) == div(grad f)");
                   }
-                  auto const expected = Expr::sum({two.mul(x), two.mul(y), two.mul(z)});
+                  const auto expected = Expr::sum({two.mul(x), two.mul(y), two.mul(z)});
                   equiv(t, *lap, expected, "laplacian(f) == 2x + 2y + 2z");
               })
         .test("vectorcalc_gradient_hessian_jacobian_values",
               [&](TestContext& t) {
                   // grad(x^2 y + y^3) = (2xy, x^2 + 3y^2).
-                  auto const g = Expr::sum({Expr::product({x.pow(two), y}), y.pow(three)});
+                  const auto g = Expr::sum({Expr::product({x.pow(two), y}), y.pow(three)});
                   auto grad = nimblecas::gradient(g, xy);
                   t.expect(grad.has_value() && grad->size() == 2, "gradient has 2 components");
                   if (grad) {
@@ -346,7 +346,7 @@ auto main() -> int {
                       t.expect((*h)[0][1].is_equivalent_to((*h)[1][0]), "Hessian is symmetric");
                   }
                   // Jacobian of (x y, x + y) = [[y, x], [1, 1]].
-                  std::vector<Expr> const field{Expr::product({x, y}), Expr::sum({x, y})};
+                  const std::vector<Expr> field{Expr::product({x, y}), Expr::sum({x, y})};
                   auto j = nimblecas::jacobian(field, xy);
                   t.expect(j.has_value(), "jacobian succeeds");
                   if (j) {
@@ -388,7 +388,7 @@ auto main() -> int {
                            "Polynomial -> Expr -> Polynomial round-trips");
 
                   // Expr -> Polynomial reads the monomial coefficients of x^2 + 2x + 1.
-                  auto const u = Expr::sum({x.pow(two), two.mul(x), one});
+                  const auto u = Expr::sum({x.pow(two), two.mul(x), one});
                   auto pu = to_polynomial(u, "x");
                   t.expect(pu.has_value(), "to_polynomial(x^2+2x+1) succeeds");
                   if (pu) {

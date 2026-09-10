@@ -12,12 +12,12 @@ auto main() -> int {
 
     // --- Scalar ---
     {
-        auto const t0 = std::chrono::steady_clock::now();
+        const auto t0 = std::chrono::steady_clock::now();
         std::uint64_t acc = 0;
         for (std::size_t i = 0; i < N; ++i) {
             acc ^= counter_u64(key, i);
         }
-        auto const t1 = std::chrono::steady_clock::now();
+        const auto t1 = std::chrono::steady_clock::now();
         const double s = std::chrono::duration<double>(t1 - t0).count();
         std::println("scalar : {:.3f} s  {:.1f} M draws/s  (acc={:#x})",
                      s, N / s / 1e6, acc);
@@ -26,7 +26,7 @@ auto main() -> int {
     // --- Batched (AVX-512 when available) ---
     {
         std::vector<std::uint64_t> buf(1 << 16);
-        auto const t0 = std::chrono::steady_clock::now();
+        const auto t0 = std::chrono::steady_clock::now();
         std::uint64_t acc = 0;
         std::size_t done = 0;
         while (done < N) {
@@ -37,7 +37,7 @@ auto main() -> int {
             }
             done += m;
         }
-        auto const t1 = std::chrono::steady_clock::now();
+        const auto t1 = std::chrono::steady_clock::now();
         const double s = std::chrono::duration<double>(t1 - t0).count();
         std::println("batched: {:.3f} s  {:.1f} M draws/s  (acc={:#x})",
                      s, N / s / 1e6, acc);

@@ -79,13 +79,13 @@ auto main() -> int {
                   // = (13/9) x, order-3 is (40/27) x, converging to (3/2) x.
                   const auto k = kernel1(ipoly({0, 1}), ipoly({0, 1}));
                   const auto f = ipoly({0, 1});
-                  auto const n2 = fredholm2_neumann(f, k, R(1), R(0), R(1), 2).value();
-                  auto const n3 = fredholm2_neumann(f, k, R(1), R(0), R(1), 3).value();
+                  const auto n2 = fredholm2_neumann(f, k, R(1), R(0), R(1), 2).value();
+                  const auto n3 = fredholm2_neumann(f, k, R(1), R(0), R(1), 3).value();
                   t.expect(n2.is_equal(rp({R(0), R(13, 9)})), "order-2 == (13/9) x");
                   t.expect(n3.is_equal(rp({R(0), R(40, 27)})), "order-3 == (40/27) x");
                   // ADM with the identity nonlinearity reproduces the Neumann series exactly.
-                  auto const op = IntegralOperator::fredholm(k, R(1), R(0), R(1)).value();
-                  auto const adm = adm_solve(op, f, Nonlinearity::identity(), 2).value();
+                  const auto op = IntegralOperator::fredholm(k, R(1), R(0), R(1)).value();
+                  const auto adm = adm_solve(op, f, Nonlinearity::identity(), 2).value();
                   t.expect(adm.is_equal(n2), "ADM(identity) == Neumann order 2");
               })
         .test("fredholm1_separable_illposed",
@@ -103,15 +103,15 @@ auto main() -> int {
               [](TestContext& t) {
                   // Kernel 1, f = 1, lambda = 1, a = 0: phi_n = Σ_{k<=n} x^k/k! (e^x series).
                   const auto k = kernel1(ipoly({1}), ipoly({1}));
-                  auto const phi = volterra2_picard(ipoly({1}), k, R(1), R(0), 4).value();
+                  const auto phi = volterra2_picard(ipoly({1}), k, R(1), R(0), 4).value();
                   t.expect(phi.coefficient(0) == R(1), "1");
                   t.expect(phi.coefficient(1) == R(1), "x");
                   t.expect(phi.coefficient(2) == R(1, 2), "x^2/2");
                   t.expect(phi.coefficient(3) == R(1, 6), "x^3/6");
                   t.expect(phi.coefficient(4) == R(1, 24), "x^4/24");
                   // ADM(identity) on the Volterra operator reproduces the same partial sum.
-                  auto const op = IntegralOperator::volterra(k, R(1), R(0)).value();
-                  auto const adm = adm_solve(op, ipoly({1}), Nonlinearity::identity(), 4).value();
+                  const auto op = IntegralOperator::volterra(k, R(1), R(0)).value();
+                  const auto adm = adm_solve(op, ipoly({1}), Nonlinearity::identity(), 4).value();
                   t.expect(adm.is_equal(phi), "ADM(identity) == Volterra Picard sum");
               })
         .test("volterra_convolution_laplace",
@@ -119,7 +119,7 @@ auto main() -> int {
                   // K(x,t) = 1 (k = 1), f = 1, lambda = 2. Φ(s) = F/(1 - 2 k̂) with
                   // F = k̂ = 1/s, i.e. Φ = (1/s)/(1 - 2/s) = 1/(s - 2) (inverts to e^{2x}).
                   const Expr one = Expr::integer(1);
-                  auto const phi = volterra_convolution_laplace(one, one, R(2), "x", "s").value();
+                  const auto phi = volterra_convolution_laplace(one, one, R(2), "x", "s").value();
                   // Verify the transform-domain identity Φ·(1 - 2 k̂) == F exactly.
                   const Expr F = laplace_transform(one, "x", "s").value();
                   const Expr K = laplace_transform(one, "x", "s").value();
@@ -142,7 +142,7 @@ auto main() -> int {
                   const auto k = kernel1(ipoly({1}), ipoly({1}));
                   const auto f = ipoly({0, 1});
                   const auto sq = Nonlinearity::power(2);
-                  auto const psi1 = volterra_nonlinear_picard(f, k, R(1), R(0), sq, 1).value();
+                  const auto psi1 = volterra_nonlinear_picard(f, k, R(1), R(0), sq, 1).value();
                   t.expect(psi1.is_equal(rp({R(0), R(1), R(0), R(1, 3)})), "psi_1 == x + x^3/3");
               })
         .test("adomian_polynomials_and_adm",
@@ -159,9 +159,9 @@ auto main() -> int {
                   // ADM order 2 for the nonlinear Volterra equation (f = x, N = phi^2):
                   //   x + x^3/3 + (2/15) x^5.
                   const auto k = kernel1(ipoly({1}), ipoly({1}));
-                  auto const op = IntegralOperator::volterra(k, R(1), R(0)).value();
+                  const auto op = IntegralOperator::volterra(k, R(1), R(0)).value();
                   const auto f = ipoly({0, 1});
-                  auto const adm = adm_solve(op, f, sq, 2).value();
+                  const auto adm = adm_solve(op, f, sq, 2).value();
                   t.expect(adm.is_equal(rp({R(0), R(1), R(0), R(1, 3), R(0), R(2, 15)})),
                            "ADM order 2 == x + x^3/3 + (2/15) x^5");
               })
@@ -169,16 +169,16 @@ auto main() -> int {
               [](TestContext& t) {
                   // On the same nonlinear Volterra equation: ADM == HPM, and HAM(ħ=-1) == ADM.
                   const auto k = kernel1(ipoly({1}), ipoly({1}));
-                  auto const op = IntegralOperator::volterra(k, R(1), R(0)).value();
+                  const auto op = IntegralOperator::volterra(k, R(1), R(0)).value();
                   const auto f = ipoly({0, 1});
                   const auto sq = Nonlinearity::power(2);
-                  auto const adm = adm_solve(op, f, sq, 3).value();
-                  auto const hpm = hpm_solve(op, f, sq, 3).value();
-                  auto const ham = ham_solve(op, f, sq, R(-1), 3).value();
+                  const auto adm = adm_solve(op, f, sq, 3).value();
+                  const auto hpm = hpm_solve(op, f, sq, 3).value();
+                  const auto ham = ham_solve(op, f, sq, R(-1), 3).value();
                   t.expect(adm.is_equal(hpm), "ADM == HPM");
                   t.expect(ham.is_equal(adm), "HAM(hbar=-1) == ADM");
                   // A different hbar yields a different (still exactly rational) member.
-                  auto const ham2 = ham_solve(op, f, sq, R(-1, 2), 3).value();
+                  const auto ham2 = ham_solve(op, f, sq, R(-1, 2), 3).value();
                   t.expect(!ham2.is_equal(adm), "HAM(hbar=-1/2) differs from ADM");
               })
         .test("hammerstein_picard_exact",
@@ -188,10 +188,10 @@ auto main() -> int {
                   // Use f = 1 instead: psi_1 = 1 + ∫_0^1 1 dt = 2 (constant iterate).
                   const auto k = kernel1(ipoly({1}), ipoly({1}));
                   const auto sq = Nonlinearity::power(2);
-                  auto const psi1 = hammerstein_picard(ipoly({1}), k, R(1), R(0), R(1), sq, 1).value();
+                  const auto psi1 = hammerstein_picard(ipoly({1}), k, R(1), R(0), R(1), sq, 1).value();
                   t.expect(psi1.is_equal(ipoly({2})), "psi_1 == 2");
                   // psi_2 = 1 + ∫_0^1 (2)^2 dt = 1 + 4 = 5.
-                  auto const psi2 = hammerstein_picard(ipoly({1}), k, R(1), R(0), R(1), sq, 2).value();
+                  const auto psi2 = hammerstein_picard(ipoly({1}), k, R(1), R(0), R(1), sq, 2).value();
                   t.expect(psi2.is_equal(ipoly({5})), "psi_2 == 5");
               })
         .test("error_paths",

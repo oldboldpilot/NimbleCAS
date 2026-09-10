@@ -170,8 +170,8 @@ namespace {
 [[nodiscard]] auto one_sided_jacobi(std::vector<double>& B, std::vector<double>& V,
                                     std::size_t m, std::size_t n, double tol,
                                     std::size_t max_sweeps) -> std::optional<MathError> {
-    auto const Bx = [&](std::size_t i, std::size_t j) -> double& { return B[i * n + j]; };
-    auto const Vx = [&](std::size_t i, std::size_t j) -> double& { return V[i * n + j]; };
+    const auto Bx = [&](std::size_t i, std::size_t j) -> double& { return B[i * n + j]; };
+    const auto Vx = [&](std::size_t i, std::size_t j) -> double& { return V[i * n + j]; };
 
     for (std::size_t sweep = 0; sweep < max_sweeps; ++sweep) {
         bool rotated = false;
@@ -241,7 +241,7 @@ auto fill_sigma_and_u(const std::vector<double>& B, std::size_t m, std::size_t n
         sigma[j] = std::sqrt(acc);
     }
     double sigma_max = 0.0;
-    for (double const s : sigma) {
+    for (const double s : sigma) {
         sigma_max = std::max(sigma_max, s);
     }
     const double cutoff = sigma_max * std::numeric_limits<double>::epsilon() *
@@ -294,7 +294,7 @@ auto fill_sigma_and_u(const std::vector<double>& B, std::size_t m, std::size_t n
                 }
             }
             double norm2 = 0.0;
-            for (double const v : e) {
+            for (const double v : e) {
                 norm2 += v * v;
             }
             const double norm = std::sqrt(norm2);

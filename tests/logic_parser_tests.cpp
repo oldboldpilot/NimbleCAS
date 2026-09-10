@@ -271,7 +271,7 @@ auto main() -> int {
     auto r = parse_term("a :- b, c");
     t.expect(r.has_value(), "a :- b, c parses successfully");
     if (r) {
-        auto const expected = make_compound(":-", {make_atom("a"), make_compound(",", {make_atom("b"), make_atom("c")})});
+        const auto expected = make_compound(":-", {make_atom("a"), make_compound(",", {make_atom("b"), make_atom("c")})});
         t.expect(*r == expected, "a :- b, c structurally matches :-(a, ','(b, c))");
         auto s = to_string(*r);
         t.expect(s == ":-(a, ,(b, c))" || s == ":-(a, ','(b, c))", "to_string matches canonical rule representation");
@@ -281,7 +281,7 @@ auto main() -> int {
     auto r1 = parse_term("X is 1+2");
     t.expect(r1.has_value(), "X is 1+2 parses successfully");
     if (r1) {
-        auto const expected1 = make_compound("is", {make_var("X"), make_compound("+", {make_int(1), make_int(2)})});
+        const auto expected1 = make_compound("is", {make_var("X"), make_compound("+", {make_int(1), make_int(2)})});
         t.expect(*r1 == expected1, "X is 1+2 matches is(X, +(1, 2))");
         t.expect(to_string(*r1) == "is(X, +(1, 2))", "canonical string for is(X, +(1, 2))");
     }
@@ -289,7 +289,7 @@ auto main() -> int {
     auto r2 = parse_term("\\+ a");
     t.expect(r2.has_value(), "\\+ a parses successfully");
     if (r2) {
-        auto const expected2 = make_compound("\\+", {make_atom("a")});
+        const auto expected2 = make_compound("\\+", {make_atom("a")});
         t.expect(*r2 == expected2, "\\+ a matches \\+(a)");
         t.expect(to_string(*r2) == "\\+(a)", "canonical string for \\+(a)");
     }
@@ -369,7 +369,7 @@ auto main() -> int {
     t.expect(r2.has_value(), "[a,b|T] parses successfully");
     if (r2) {
         t.expect(to_string(*r2) == "[a, b | T]", "canonical string of [a,b|T] is [a, b | T]");
-        auto const expected2 = make_compound(".", {make_atom("a"), make_compound(".", {make_atom("b"), make_var("T")})});
+        const auto expected2 = make_compound(".", {make_atom("a"), make_compound(".", {make_atom("b"), make_var("T")})});
         t.expect(*r2 == expected2, "structural equality for [a,b|T]");
     }
 
@@ -517,7 +517,7 @@ auto main() -> int {
     }
 })
 .test("empty_operator_table_forces_canonical_compound_form", [](TestContext& t) {
-    auto const empty_ops = OperatorTable::empty();
+    const auto empty_ops = OperatorTable::empty();
     auto r_canon = parse_term("+(1, 2)", empty_ops);
     t.expect(r_canon.has_value(), "canonical form +(1, 2) parses with empty OperatorTable");
     if (r_canon) {
@@ -525,7 +525,7 @@ auto main() -> int {
         t.expect(*r_canon == make_compound("+", {make_int(1), make_int(2)}), "+(1, 2) structural match");
     }
 
-    auto const r_infix = parse_term("1 + 2", empty_ops);
+    const auto r_infix = parse_term("1 + 2", empty_ops);
     t.expect(!r_infix.has_value(), "infix expression 1 + 2 fails to parse as operator with empty OperatorTable");
 })
 .test("roundtrip_preserves_operator_precedence_and_associativity_parentheses", [](TestContext& t) {
@@ -682,7 +682,7 @@ auto main() -> int {
         if (sol1) {
             t.expect(sol1->size() == 1, "forward append query produces exactly 1 solution");
             if (sol1->size() == 1) {
-                auto const x_bind = apply_substitution((*sol1)[0], make_var("X"));
+                const auto x_bind = apply_substitution((*sol1)[0], make_var("X"));
                 t.expect(to_string(x_bind) == "[1, 2, 3, 4]", "forward append binds X to [1, 2, 3, 4]");
             }
         }
@@ -696,18 +696,18 @@ auto main() -> int {
         if (sol2) {
             t.expect(sol2->size() == 3, "append(A,B,[1,2]) produces exactly 3 solutions");
             if (sol2->size() == 3) {
-                auto const a0 = apply_substitution((*sol2)[0], make_var("A"));
-                auto const b0 = apply_substitution((*sol2)[0], make_var("B"));
+                const auto a0 = apply_substitution((*sol2)[0], make_var("A"));
+                const auto b0 = apply_substitution((*sol2)[0], make_var("B"));
                 t.expect(to_string(a0) == "[]", "solution 0 binds A to []");
                 t.expect(to_string(b0) == "[1, 2]", "solution 0 binds B to [1, 2]");
 
-                auto const a1 = apply_substitution((*sol2)[1], make_var("A"));
-                auto const b1 = apply_substitution((*sol2)[1], make_var("B"));
+                const auto a1 = apply_substitution((*sol2)[1], make_var("A"));
+                const auto b1 = apply_substitution((*sol2)[1], make_var("B"));
                 t.expect(to_string(a1) == "[1]", "solution 1 binds A to [1]");
                 t.expect(to_string(b1) == "[2]", "solution 1 binds B to [2]");
 
-                auto const a2 = apply_substitution((*sol2)[2], make_var("A"));
-                auto const b2 = apply_substitution((*sol2)[2], make_var("B"));
+                const auto a2 = apply_substitution((*sol2)[2], make_var("A"));
+                const auto b2 = apply_substitution((*sol2)[2], make_var("B"));
                 t.expect(to_string(a2) == "[1, 2]", "solution 2 binds A to [1, 2]");
                 t.expect(to_string(b2) == "[]", "solution 2 binds B to []");
             }
@@ -758,8 +758,8 @@ auto main() -> int {
         if (sol_all) {
             t.expect(sol_all->size() == 2, "bob has exactly 2 descendants: ann and pat");
             if (sol_all->size() == 2) {
-                auto const x0 = apply_substitution((*sol_all)[0], make_var("X"));
-                auto const x1 = apply_substitution((*sol_all)[1], make_var("X"));
+                const auto x0 = apply_substitution((*sol_all)[0], make_var("X"));
+                const auto x1 = apply_substitution((*sol_all)[1], make_var("X"));
                 t.expect(to_string(x0) == "ann", "first descendant of bob is ann");
                 t.expect(to_string(x1) == "pat", "second descendant of bob is pat");
             }

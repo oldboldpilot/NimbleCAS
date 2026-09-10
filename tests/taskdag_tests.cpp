@@ -61,7 +61,7 @@ namespace {
     for (std::size_t i = 0; i < 500; ++i) {
         leaves.push_back(g.add_task(const_task(static_cast<std::int64_t>(i))).value());
     }
-    auto const sum = g.add_task(
+    const auto sum = g.add_task(
                     [](std::span<const Payload> ps) -> Result<Payload> {
                         std::int64_t total = 0;
                         for (const Payload& p : ps) {
@@ -71,7 +71,7 @@ namespace {
                     },
                     leaves)
                    .value();
-    auto const doubled = g.add_task(
+    const auto doubled = g.add_task(
                         [](std::span<const Payload> ps) -> Result<Payload> {
                             return encode_i64(decode_i64(ps[0]) * 2);
                         },

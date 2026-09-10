@@ -56,7 +56,7 @@ auto main() -> int {
                   // data = 1,2,3,4 ; mu0 = 2. xbar = 5/2, sample var s^2 = 5/3.
                   // t^2 = n (xbar - mu0)^2 / s^2 = 4 * (1/2)^2 / (5/3) = 3/5.  df = n - 1 = 3.
                   const auto x = ints({1, 2, 3, 4});
-                  auto const ts = nimblecas::one_sample_t_squared(sp(x), ri(2)).value();
+                  const auto ts = nimblecas::one_sample_t_squared(sp(x), ri(2)).value();
                   t.expect(ts.value == rat(3, 5), "t^2 = 3/5 exactly");
                   t.expect(ts.df1 == 3, "df = n - 1 = 3");
                   t.expect(!ts.df2.has_value(), "one-sample t^2 has a single df");
@@ -73,7 +73,7 @@ auto main() -> int {
                   // t^2 = (2 - 4)^2 / (2/3) = 4 * 3/2 = 6. df = 4.
                   const auto x = ints({1, 2, 3});
                   const auto y = ints({3, 4, 5});
-                  auto const ts = nimblecas::two_sample_t_squared(sp(x), sp(y)).value();
+                  const auto ts = nimblecas::two_sample_t_squared(sp(x), sp(y)).value();
                   t.expect(ts.value == ri(6), "pooled t^2 = 6 exactly");
                   t.expect(ts.df1 == 4, "df = n1 + n2 - 2 = 4");
               })
@@ -83,7 +83,7 @@ auto main() -> int {
                   // dbar = 2, sample var = 1. t^2 = 3 * 2^2 / 1 = 12. df = 2.
                   const auto x = ints({2, 4, 6});
                   const auto y = ints({1, 2, 3});
-                  auto const ts = nimblecas::paired_t_squared(sp(x), sp(y)).value();
+                  const auto ts = nimblecas::paired_t_squared(sp(x), sp(y)).value();
                   t.expect(ts.value == ri(12), "paired t^2 = 12 exactly");
                   t.expect(ts.df1 == 2, "df = n - 1 = 2");
               })
@@ -92,7 +92,7 @@ auto main() -> int {
                   // data = 1,2,3,4 ; mu0 = 2 ; sigma^2 = 1. z^2 = n (xbar-mu0)^2/sigma^2
                   // = 4 * (1/2)^2 / 1 = 1. z^2 ~ chi^2(1) so df = 1.
                   const auto x = ints({1, 2, 3, 4});
-                  auto const ts = nimblecas::z_squared(sp(x), ri(2), ri(1)).value();
+                  const auto ts = nimblecas::z_squared(sp(x), ri(2), ri(1)).value();
                   t.expect(ts.value == ri(1), "z^2 = 1 exactly");
                   t.expect(ts.df1 == 1, "z^2 has 1 degree of freedom");
                   t.expect(nimblecas::z_squared(sp(x), ri(2), ri(0)).error() ==
@@ -105,7 +105,7 @@ auto main() -> int {
                   // df = k - 1 = 2.
                   const auto obs = ints({10, 20, 30});
                   const auto exp = ints({15, 15, 30});
-                  auto const ts = nimblecas::chi_squared_goodness_of_fit(sp(obs), sp(exp)).value();
+                  const auto ts = nimblecas::chi_squared_goodness_of_fit(sp(obs), sp(exp)).value();
                   t.expect(ts.value == rat(10, 3), "chi^2 = 10/3 exactly");
                   t.expect(ts.df1 == 2, "df = k - 1 = 2");
                   // A non-positive expected count is a domain error.
@@ -120,7 +120,7 @@ auto main() -> int {
                   // E = [[12,18],[28,42]]. sum (O-E)^2/E = 4/12+4/18+4/28+4/42 = 50/63.
                   // df = (2-1)(2-1) = 1.
                   const auto table = mat({{ri(10), ri(20)}, {ri(30), ri(40)}});
-                  auto const ts = nimblecas::chi_squared_independence(table).value();
+                  const auto ts = nimblecas::chi_squared_independence(table).value();
                   t.expect(ts.value == rat(50, 63), "chi^2 independence = 50/63 exactly");
                   t.expect(ts.df1 == 1, "df = (r-1)(c-1) = 1");
               })
@@ -142,7 +142,7 @@ auto main() -> int {
                   const auto g1 = ints({1, 2, 3});
                   const auto g2 = ints({4, 5, 6});
                   const auto g3 = ints({7, 8, 9});
-                  std::vector<std::span<const Rational>> const groups{sp(g1), sp(g2), sp(g3)};
+                  const std::vector<std::span<const Rational>> groups{sp(g1), sp(g2), sp(g3)};
                   auto ts = nimblecas::one_way_anova_f(groups).value();
                   t.expect(ts.value == ri(27), "ANOVA F = 27 exactly");
                   t.expect(ts.df1 == 2, "between df = k - 1 = 2");
@@ -187,37 +187,37 @@ auto main() -> int {
         // ----- MLE symbolic models: score vanishes at the MLE -----
         .test("poisson_score_vanishes_at_mle",
               [](TestContext& t) {
-                  auto const model = nimblecas::poisson_mle_model().value();
+                  const auto model = nimblecas::poisson_mle_model().value();
                   // U(lambda) with lambda := lambda-hat = m must simplify to 0.
-                  auto const at_mle = nimblecas::substitute(
+                  const auto at_mle = nimblecas::substitute(
                       model.score, Expr::symbol(model.parameter), model.mle);
-                  auto const zero = nimblecas::simplify(at_mle).value();
+                  const auto zero = nimblecas::simplify(at_mle).value();
                   t.expect(zero == Expr::integer(0), "Poisson score U(m) = 0");
               })
         .test("exponential_score_vanishes_at_mle",
               [](TestContext& t) {
-                  auto const model = nimblecas::exponential_mle_model().value();
+                  const auto model = nimblecas::exponential_mle_model().value();
                   // lambda-hat = m^(-1); U(m^(-1)) must simplify to 0.
-                  auto const at_mle = nimblecas::substitute(
+                  const auto at_mle = nimblecas::substitute(
                       model.score, Expr::symbol(model.parameter), model.mle);
-                  auto const zero = nimblecas::simplify(at_mle).value();
+                  const auto zero = nimblecas::simplify(at_mle).value();
                   t.expect(zero == Expr::integer(0), "Exponential score U(1/m) = 0");
               })
         .test("normal_mean_score_vanishes_at_mle",
               [](TestContext& t) {
-                  auto const model = nimblecas::normal_mean_mle_model().value();
-                  auto const at_mle = nimblecas::substitute(
+                  const auto model = nimblecas::normal_mean_mle_model().value();
+                  const auto at_mle = nimblecas::substitute(
                       model.score, Expr::symbol(model.parameter), model.mle);
-                  auto const zero = nimblecas::simplify(at_mle).value();
+                  const auto zero = nimblecas::simplify(at_mle).value();
                   t.expect(zero == Expr::integer(0), "Normal-mean score U(m) = 0");
               })
         .test("bernoulli_score_vanishes_at_mle",
               [](TestContext& t) {
-                  auto const model = nimblecas::bernoulli_mle_model().value();
+                  const auto model = nimblecas::bernoulli_mle_model().value();
                   // p-hat = m; U(m) folds via (1-m)^1 (1-m)^(-1) -> 1 and m^1 m^(-1) -> 1.
-                  auto const at_mle = nimblecas::substitute(
+                  const auto at_mle = nimblecas::substitute(
                       model.score, Expr::symbol(model.parameter), model.mle);
-                  auto const zero = nimblecas::simplify(at_mle).value();
+                  const auto zero = nimblecas::simplify(at_mle).value();
                   t.expect(zero == Expr::integer(0), "Bernoulli score U(m) = 0");
               })
         // ----- Fisher information -----
@@ -225,21 +225,21 @@ auto main() -> int {
               [](TestContext& t) {
                   // i(p) = 1/(p(1-p)) is verified by the identity i(p) * p * (1-p) = 1,
                   // which folds by like-base cancellation in a single simplify pass.
-                  auto const model = nimblecas::bernoulli_mle_model().value();
+                  const auto model = nimblecas::bernoulli_mle_model().value();
                   const Expr p = Expr::symbol("p");
                   const Expr one_minus_p = Expr::sum({Expr::integer(1),
                                                       Expr::product({Expr::integer(-1), p})});
-                  auto const identity = Expr::product({model.fisher_information, p, one_minus_p});
-                  auto const folded = nimblecas::simplify(identity).value();
+                  const auto identity = Expr::product({model.fisher_information, p, one_minus_p});
+                  const auto folded = nimblecas::simplify(identity).value();
                   t.expect(folded == Expr::integer(1), "i(p) * p * (1-p) = 1");
               })
         .test("poisson_fisher_information_identity",
               [](TestContext& t) {
                   // i(lambda) = 1/lambda, verified by i(lambda) * lambda = 1.
-                  auto const model = nimblecas::poisson_mle_model().value();
+                  const auto model = nimblecas::poisson_mle_model().value();
                   const Expr lambda = Expr::symbol("lambda");
-                  auto const identity = Expr::product({model.fisher_information, lambda});
-                  auto const folded = nimblecas::simplify(identity).value();
+                  const auto identity = Expr::product({model.fisher_information, lambda});
+                  const auto folded = nimblecas::simplify(identity).value();
                   t.expect(folded == Expr::integer(1), "i(lambda) * lambda = 1");
               })
         // ----- Wald / score statistics: exact rational -----
@@ -274,8 +274,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // G^2 = 2(ell(theta-hat) - ell(theta0)) is transcendental (contains ln):
                   // the honest deliverable is an exact Expr, not a fabricated rational.
-                  auto const model = nimblecas::poisson_mle_model().value();
-                  auto const g = nimblecas::log_likelihood_ratio(model, model.mle, Expr::integer(1));
+                  const auto model = nimblecas::poisson_mle_model().value();
+                  const auto g = nimblecas::log_likelihood_ratio(model, model.mle, Expr::integer(1));
                   t.expect(g.has_value(), "log_likelihood_ratio returns an exact symbolic Expr");
               })
         .run();

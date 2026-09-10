@@ -87,7 +87,7 @@ auto main() -> int {
                   const std::vector<std::vector<Rational>> A{{ri(1), ri(-1)}};
                   const std::vector<Rational> b{ri(1)};
                   const std::vector<Rational> c{ri(1), ri(0)};
-                  auto const sol = maximize(A, b, c).value();
+                  const auto sol = maximize(A, b, c).value();
                   t.expect(sol.status == LpStatus::unbounded, "status is unbounded");
                   t.expect(sol.solution.empty(), "no solution vector when unbounded");
               })

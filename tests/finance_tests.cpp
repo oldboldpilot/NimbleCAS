@@ -139,7 +139,7 @@ auto main() -> int {
                   t.expect(std::abs(interest_rate_swap_value(1.0, par, ac, df, fw).value()) < 1e-12,
                            "swap value at par == 0");
                   // T-bill: 90-day bill at 5% discount prices at 98.75 (actual/360).
-                  auto const s0 = Date::of(2020, 1, 1).value();
+                  const auto s0 = Date::of(2020, 1, 1).value();
                   const Date m90{s0.serial + 90};
                   t.expect(std::abs(tbill_price(s0, m90, 0.05).value() - 98.75) < 1e-9,
                            "T-bill price == 98.75");
@@ -166,7 +166,7 @@ auto main() -> int {
               })
         .test("fluent TvmProblem quantizes money at the boundary",
               [](TestContext& t) {
-                  auto const prob = TvmProblem::create().rate(q("1/20")).nper(12).pmt(qi(-100))
+                  const auto prob = TvmProblem::create().rate(q("1/20")).nper(12).pmt(qi(-100))
                                   .present_value(qi(1000));
                   auto money = prob.solve_fv_money(2, nimblecas::Rounding::half_even);
                   t.expect(money.has_value(), "solve_fv_money succeeds");

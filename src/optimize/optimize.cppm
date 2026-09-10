@@ -612,7 +612,7 @@ struct LineSearch {
     };
 
     // zoom() narrows a bracket [lo, hi] known to contain an acceptable point.
-    auto const zoom = [&](double a_lo, double phi_lo, double a_hi) -> LineSearch {
+    const auto zoom = [&](double a_lo, double phi_lo, double a_hi) -> LineSearch {
         for (std::size_t j = 0; j < max_it; ++j) {
             const double alpha = 0.5 * (a_lo + a_hi);  // bisection (robust, no NaNs).
             std::vector<double> xt = axpy(x, alpha, p);
@@ -1099,7 +1099,7 @@ auto nelder_mead(Objective f, std::span<const double> x0, Options opts)
     const std::size_t n = x_start.size();
 
     // Objective wrapper: non-finite values become +inf so they sort as "worst".
-    auto const eval = [&](std::span<const double> v) -> double {
+    const auto eval = [&](std::span<const double> v) -> double {
         const double val = f(v);
         return std::isfinite(val) ? val : std::numeric_limits<double>::infinity();
     };
@@ -1119,7 +1119,7 @@ auto nelder_mead(Objective f, std::span<const double> x0, Options opts)
         verts.push_back(std::move(v));
     }
 
-    auto const order = [&] -> std::vector<std::size_t> {
+    const auto order = [&] -> std::vector<std::size_t> {
         std::vector<std::size_t> idx(n + 1);
         std::iota(idx.begin(), idx.end(), std::size_t{0});
         std::ranges::sort(idx, [&](std::size_t a, std::size_t b) { return fval[a] < fval[b]; });
@@ -1256,7 +1256,7 @@ auto implicit_filtering(Objective f, std::span<const double> x0, std::span<const
 
     // Inverse-Hessian approximation, reset to identity at each scale change.
     std::vector<double> hinv(n * n, 0.0);
-    auto const reset_hinv = [&] {
+    const auto reset_hinv = [&] {
         std::ranges::fill(hinv, 0.0);
         for (std::size_t i = 0; i < n; ++i) {
             hinv[i * n + i] = 1.0;
@@ -1446,7 +1446,7 @@ auto brent_minimize(ScalarObjective f, double a, double b, double tol, std::size
         bool use_golden = true;
         if (std::abs(e) > tol1) {
             // Fit a parabola through (x, fx), (w, fw), (v, fv).
-            double const r = (x - w) * (fx - fv);
+            const double r = (x - w) * (fx - fv);
             double q = (x - v) * (fx - fw);
             double p = (x - v) * q - (x - w) * r;
             q = 2.0 * (q - r);
@@ -1600,7 +1600,7 @@ auto parallel_multistart(const LocalOptimizer& local,
 auto multistart(Method method, Objective f, std::span<const std::vector<double>> starts,
                 Gradient grad, HessianFn hess, CGVariant cg_variant, Options opts, bool parallel)
     -> Result<MultistartResult> {
-    LocalOptimizer const local = make_local_optimizer(method, std::move(f), std::move(grad),
+    const LocalOptimizer local = make_local_optimizer(method, std::move(f), std::move(grad),
                                                 std::move(hess), cg_variant, opts);
     return parallel_multistart(local, starts, parallel);
 }

@@ -346,7 +346,7 @@ inline constexpr int kMaxCoupons = 4000;
 [[nodiscard]] auto days_thirty_360(const Date& a, const Date& b, bool european) -> std::int64_t {
     const auto [y1, m1, d1raw] = a.ymd();
     const auto [y2, m2, d2raw] = b.ymd();
-    int const d1 = std::min(d1raw, 30);
+    const int d1 = std::min(d1raw, 30);
     int d2 = d2raw;
     if (european) {
         d2 = std::min(d2, 30);
@@ -725,7 +725,7 @@ auto odd_first_price(const Date& settlement, const Date& maturity, const Date& i
 auto odd_first_yield(const Date& settlement, const Date& maturity, const Date& issue,
                      const Date& first_coupon, double coupon_rate, double clean_price,
                      double redemption, int frequency, DayCount basis) -> Result<double> {
-    auto const f = [&](double y) -> double {
+    const auto f = [&](double y) -> double {
         auto p = odd_first_price(settlement, maturity, issue, first_coupon, coupon_rate, y,
                                  redemption, frequency, basis);
         return p ? (*p - clean_price) : std::numeric_limits<double>::quiet_NaN();
@@ -779,7 +779,7 @@ auto odd_last_price(const Date& settlement, const Date& maturity, const Date& la
 auto odd_last_yield(const Date& settlement, const Date& maturity, const Date& last_interest,
                     double coupon_rate, double clean_price, double redemption, int frequency,
                     DayCount basis) -> Result<double> {
-    auto const f = [&](double y) -> double {
+    const auto f = [&](double y) -> double {
         auto p = odd_last_price(settlement, maturity, last_interest, coupon_rate, y, redemption,
                                 frequency, basis);
         return p ? (*p - clean_price) : std::numeric_limits<double>::quiet_NaN();
@@ -849,7 +849,7 @@ auto z_spread(std::span<const double> times, std::span<const double> amounts,
         if (!std::isfinite(d)) { return make_error<double>(MathError::domain_error); }
         pv0[i] = amounts[i] * d;
     }
-    auto const f = [&](double s) -> double {
+    const auto f = [&](double s) -> double {
         double acc = 0.0;
         for (std::size_t i = 0; i < times.size(); ++i) { acc += pv0[i] * std::exp(-s * times[i]); }
         return acc - target_price;
@@ -935,7 +935,7 @@ auto amortizing_schedule(double principal, double rate_per_period, std::int64_t 
         const double interest = balance * rate_per_period;
         // Final period pays off the exact remaining balance so the schedule closes (sum of
         // principal == loan, closing balance == 0) despite floating round-off in the level payment.
-        double const prin = (i + 1 == n) ? balance : payment - interest;
+        const double prin = (i + 1 == n) ? balance : payment - interest;
         balance -= prin;
         if (i + 1 == n) { balance = 0.0; }
         out.interest.push_back(interest);

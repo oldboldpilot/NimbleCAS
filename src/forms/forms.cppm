@@ -231,7 +231,7 @@ auto DifferentialForm::from_components(
             continue;  // repeated index -> this term is identically zero
         }
         Expr signed_coeff = (canon.sign == 1) ? coeff : negate(coeff);
-        auto const it = accumulated.find(canon.indices);
+        const auto it = accumulated.find(canon.indices);
         if (it == accumulated.end()) {
             accumulated.emplace(canon.indices, std::move(signed_coeff));
         } else {
@@ -287,7 +287,7 @@ auto DifferentialForm::component(const std::vector<std::size_t>& indices) const 
     if (canon.vanishes) {
         return Expr::integer(0);
     }
-    auto const it = components_.find(canon.indices);
+    const auto it = components_.find(canon.indices);
     if (it == components_.end()) {
         return Expr::integer(0);
     }

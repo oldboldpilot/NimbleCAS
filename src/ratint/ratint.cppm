@@ -206,7 +206,7 @@ auto hermite_reduce(const RationalPoly& numerator, const RationalPoly& denominat
     Frac g{.num = std::move(*poly_int), .den = one_poly()};
     Frac h{.num = RationalPoly{}, .den = one_poly()};  // the square-free integrand
 
-    for (auto const& tower : sf->towers) {
+    for (const auto& tower : sf->towers) {
         const RationalPoly& v = tower.base;
         auto vprime = v.derivative();
         if (!vprime) {

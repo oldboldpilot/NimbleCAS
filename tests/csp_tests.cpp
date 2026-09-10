@@ -125,20 +125,20 @@ auto main() -> int {
     return TestSuite("nimblecas.csp")
         .test("four_queens_solution_count",
               [](TestContext& t) {
-                  auto const n = solution_count(queens(4), 0);
+                  const auto n = solution_count(queens(4), 0);
                   t.expect(n.has_value(), "count succeeds");
                   t.expect(n.value_or(0) == 2, "4-queens has exactly 2 solutions");
               })
         .test("eight_queens_solution_count",
               [](TestContext& t) {
-                  auto const n = solution_count(queens(8), 0);
+                  const auto n = solution_count(queens(8), 0);
                   t.expect(n.has_value(), "count succeeds");
                   t.expect(n.value_or(0) == 92, "8-queens has exactly 92 solutions");
               })
         .test("solution_count_limit_caps",
               [](TestContext& t) {
                   // With a cap of 10 the count stops early at exactly the limit.
-                  auto const n = solution_count(queens(8), 10);
+                  const auto n = solution_count(queens(8), 10);
                   t.expect(n.has_value(), "capped count succeeds");
                   t.expect(n.value_or(0) == 10, "limit caps the count at 10");
               })
@@ -166,14 +166,14 @@ auto main() -> int {
         .test("forward_checking_matches_plain_backtracking",
               [](TestContext& t) {
                   // The FC variant must return the SAME lexicographically-first solution.
-                  auto const plain = backtracking_search(australia());
-                  auto const fc = backtracking_search_fc(australia());
+                  const auto plain = backtracking_search(australia());
+                  const auto fc = backtracking_search_fc(australia());
                   t.expect(plain.has_value() && fc.has_value(), "both searches succeed");
                   t.expect(plain.value_or(std::nullopt) == fc.value_or(std::nullopt),
                            "forward checking returns the identical first solution");
                   // And on queens too.
-                  auto const pq = backtracking_search(queens(6));
-                  auto const fq = backtracking_search_fc(queens(6));
+                  const auto pq = backtracking_search(queens(6));
+                  const auto fq = backtracking_search_fc(queens(6));
                   t.expect(pq.value_or(std::nullopt) == fq.value_or(std::nullopt),
                            "FC matches plain backtracking on 6-queens");
               })
@@ -199,7 +199,7 @@ auto main() -> int {
                   Csp csp;
                   csp.domains = {{0}, {0}};
                   csp.binary.push_back(ne(0, 1));
-                  auto const r = ac3(csp);
+                  const auto r = ac3(csp);
                   t.expect(r.has_value(), "ac3 returns a value (empty domain is not an error)");
                   t.expect(!r.value_or(std::nullopt).has_value(),
                            "arc-inconsistent CSP yields nullopt");
@@ -240,13 +240,13 @@ auto main() -> int {
                   csp.binary.push_back(ne(0, 1));
                   csp.binary.push_back(ne(0, 2));
                   csp.binary.push_back(ne(1, 2));
-                  auto const s = backtracking_search(csp);
+                  const auto s = backtracking_search(csp);
                   t.expect(s.has_value(), "search succeeds (unsatisfiable is not an error)");
                   t.expect(!s.value_or(std::nullopt).has_value(), "no assignment exists -> nullopt");
-                  auto const n = solution_count(csp, 0);
+                  const auto n = solution_count(csp, 0);
                   t.expect(n.value_or(1) == 0, "solution_count is 0 for the unsatisfiable CSP");
                   // AC-3 alone cannot detect this: != stays arc consistent over a size-2 domain.
-                  auto const r = ac3(csp);
+                  const auto r = ac3(csp);
                   t.expect(r.value_or(std::nullopt).has_value(),
                            "AC-3 keeps the (still unsatisfiable) CSP arc consistent");
               })
@@ -260,7 +260,7 @@ auto main() -> int {
                       {0, 1, 2}, [](std::span<const std::int64_t> v) {
                           return v[0] != v[1] && v[0] != v[2] && v[1] != v[2];
                       }});
-                  auto const s = backtracking_search(csp);
+                  const auto s = backtracking_search(csp);
                   t.expect(s.has_value(), "search succeeds");
                   t.expect(!s.value_or(std::nullopt).has_value(),
                            "all-different over {0,1}^3 is unsatisfiable");
@@ -269,7 +269,7 @@ auto main() -> int {
                   // FC must agree, both returning the valid lexicographic-first [0,1,2].
                   csp.domains = {{0, 1, 2}, {0, 1, 2}, {0, 1, 2}};
                   auto s2 = backtracking_search(csp);
-                  auto const f2 = backtracking_search_fc(csp);
+                  const auto f2 = backtracking_search_fc(csp);
                   t.expect(s2.value_or(std::nullopt).has_value(), "widened CSP is satisfiable");
                   if (s2 && *s2) {
                       t.expect(**s2 == std::vector<std::int64_t>({0, 1, 2}),
@@ -281,14 +281,14 @@ auto main() -> int {
         .test("parallel_search_agrees_with_backtracking",
               [](TestContext& t) {
                   // Same result regardless of the (thread-count-independent) branch split.
-                  auto const seq = backtracking_search(australia());
-                  auto const par = parallel_search(australia());
+                  const auto seq = backtracking_search(australia());
+                  const auto par = parallel_search(australia());
                   t.expect(seq.has_value() && par.has_value(), "both searches succeed");
                   t.expect(seq.value_or(std::nullopt) == par.value_or(std::nullopt),
                            "parallel_search matches backtracking_search on Australia");
 
-                  auto const sq = backtracking_search(queens(6));
-                  auto const pq = parallel_search(queens(6));
+                  const auto sq = backtracking_search(queens(6));
+                  const auto pq = parallel_search(queens(6));
                   t.expect(sq.value_or(std::nullopt) == pq.value_or(std::nullopt),
                            "parallel_search matches backtracking_search on 6-queens");
 
@@ -298,7 +298,7 @@ auto main() -> int {
                   bad.binary.push_back(ne(0, 1));
                   bad.binary.push_back(ne(0, 2));
                   bad.binary.push_back(ne(1, 2));
-                  auto const pbad = parallel_search(bad);
+                  const auto pbad = parallel_search(bad);
                   t.expect(pbad.has_value() && !pbad.value_or(std::nullopt).has_value(),
                            "parallel_search returns nullopt for the unsatisfiable CSP");
               })
@@ -352,14 +352,14 @@ auto main() -> int {
                   if (!c) {
                       return;
                   }
-                  auto const n = solution_count(*c, 0);
+                  const auto n = solution_count(*c, 0);
                   t.expect(n.has_value(), "count succeeds");
                   t.expect(n.value_or(0) == 92,
                            "the declarative 8-queens has the same 92 solutions");
                   // And the first solution agrees with the functional encoding exactly, not
                   // merely in count -- both contracts promise the lexicographically-first one.
-                  auto const a = backtracking_search(*c);
-                  auto const b = backtracking_search(queens(8));
+                  const auto a = backtracking_search(*c);
+                  const auto b = backtracking_search(queens(8));
                   t.expect(a.has_value() && b.has_value(), "both searches succeed");
                   t.expect(a.value_or(std::nullopt) == b.value_or(std::nullopt),
                            "and return the identical first assignment");
@@ -553,7 +553,7 @@ auto main() -> int {
                   if (!whole) {
                       return;
                   }
-                  auto const total = solution_count(*whole, 0);
+                  const auto total = solution_count(*whole, 0);
                   t.expect(total.has_value() && total.value_or(0) == 4,
                            "6-queens has exactly 4 solutions");
 
@@ -600,7 +600,7 @@ auto main() -> int {
                   // "the lowest-indexed shard wins" the same answer the serial search gives.
                   WireCsp w;
                   w.domains = {{10, 20}, {5, 6, 7}, range_domain(4)};
-                  auto const count = prefix_count(w, 2);
+                  const auto count = prefix_count(w, 2);
                   t.expect(count.value_or(0) == 6, "2 x 3 = 6 prefixes");
                   std::vector<std::vector<std::int64_t>> seen;
                   for (std::uint64_t i = 0; i < count.value_or(0); ++i) {

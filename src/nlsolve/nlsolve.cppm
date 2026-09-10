@@ -97,7 +97,7 @@ using Vec = std::vector<double>;
 using LinOp = std::function<Result<Vec>(std::span<const double>)>;
 
 [[nodiscard]] auto all_finite(std::span<const double> v) noexcept -> bool {
-    for (double const e : v) {
+    for (const double e : v) {
         if (!std::isfinite(e)) {
             return false;
         }
@@ -407,7 +407,7 @@ struct LineSearch {
             }
             r = sub(b, *Ax);
         }
-        double const beta = norm2(r);
+        const double beta = norm2(r);
         if (beta <= target) {
             return x;
         }
@@ -587,7 +587,7 @@ export namespace nimblecas::nlsolve {
 // near a simple root; globalised by the Armijo line search (opts.line_search).
 [[nodiscard]] auto newton(const ResidualFn& F, std::span<const double> x0,
                           const Options& opts = {}) -> Result<SolveResult> {
-    detail::JacProvider const jac = [&](std::span<const double> x,
+    const detail::JacProvider jac = [&](std::span<const double> x,
                                   std::span<const double> Fx) -> Result<detail::Vec> {
         std::size_t local = 0;
         return detail::fd_jacobian(F, x, Fx, opts.fd_step, opts.central_diff, local);
@@ -602,7 +602,7 @@ export namespace nimblecas::nlsolve {
                           std::span<const double> x0, const Options& opts = {})
     -> Result<SolveResult> {
     const std::size_t n = x0.size();
-    detail::JacProvider const jac = [&, n](std::span<const double> x,
+    const detail::JacProvider jac = [&, n](std::span<const double> x,
                                      std::span<const double>) -> Result<detail::Vec> {
         std::vector<double> j = J(x);
         if (j.size() != n * n || !detail::all_finite(j)) {
@@ -619,7 +619,7 @@ export namespace nimblecas::nlsolve {
 // per iteration but only linearly convergent.
 [[nodiscard]] auto chord(const ResidualFn& F, std::span<const double> x0,
                          const Options& opts = {}) -> Result<SolveResult> {
-    detail::JacProvider const jac = [&](std::span<const double> x,
+    const detail::JacProvider jac = [&](std::span<const double> x,
                                   std::span<const double> Fx) -> Result<detail::Vec> {
         std::size_t local = 0;
         return detail::fd_jacobian(F, x, Fx, opts.fd_step, opts.central_diff, local);
@@ -631,7 +631,7 @@ export namespace nimblecas::nlsolve {
                          std::span<const double> x0, const Options& opts = {})
     -> Result<SolveResult> {
     const std::size_t n = x0.size();
-    detail::JacProvider const jac = [&, n](std::span<const double> x,
+    const detail::JacProvider jac = [&, n](std::span<const double> x,
                                      std::span<const double>) -> Result<detail::Vec> {
         std::vector<double> j = J(x);
         if (j.size() != n * n || !detail::all_finite(j)) {
@@ -650,7 +650,7 @@ export namespace nimblecas::nlsolve {
                               std::size_t m, const Options& opts = {})
     -> Result<SolveResult> {
     const std::size_t refresh = m == 0 ? 1 : m;
-    detail::JacProvider const jac = [&](std::span<const double> x,
+    const detail::JacProvider jac = [&](std::span<const double> x,
                                   std::span<const double> Fx) -> Result<detail::Vec> {
         std::size_t local = 0;
         return detail::fd_jacobian(F, x, Fx, opts.fd_step, opts.central_diff, local);
@@ -663,7 +663,7 @@ export namespace nimblecas::nlsolve {
                               const Options& opts = {}) -> Result<SolveResult> {
     const std::size_t n = x0.size();
     const std::size_t refresh = m == 0 ? 1 : m;
-    detail::JacProvider const jac = [&, n](std::span<const double> x,
+    const detail::JacProvider jac = [&, n](std::span<const double> x,
                                      std::span<const double>) -> Result<detail::Vec> {
         std::vector<double> j = J(x);
         if (j.size() != n * n || !detail::all_finite(j)) {
@@ -803,7 +803,7 @@ export namespace nimblecas::nlsolve {
             return SolveResult{std::move(x), fnorm, it, true, fevals};
         }
         // Matrix-free operator v |-> J(x) v via a finite-difference directional derivative.
-        detail::LinOp const A = [&](std::span<const double> v) -> Result<Vec> {
+        const detail::LinOp A = [&](std::span<const double> v) -> Result<Vec> {
             return detail::jv_product(F, x, Fx, v, fevals);
         };
         const Vec b = detail::scale(Fx, -1.0);  // solve J s = -F
@@ -858,7 +858,7 @@ export namespace nimblecas::nlsolve {
     std::deque<Vec> gh;
     std::deque<Vec> fh;
 
-    auto const residual = [&](const Vec& xv) -> Result<std::pair<Vec, Vec>> {
+    const auto residual = [&](const Vec& xv) -> Result<std::pair<Vec, Vec>> {
         auto gv = detail::eval_checked(g, xv, n, fevals);
         if (!gv) {
             return make_error<std::pair<Vec, Vec>>(gv.error());
@@ -996,7 +996,7 @@ using detail::Vec;
         }
         // Stationarity test on the gradient of ||F||^2 (== 2 J^T F).
         double gmax = 0.0;
-        for (double const gv : grad) {
+        for (const double gv : grad) {
             gmax = std::max(gmax, std::abs(gv));
         }
         if (fnorm <= opts.tol || gmax <= opts.tol) {
@@ -1065,7 +1065,7 @@ using detail::Vec;
 [[nodiscard]] auto levenberg_marquardt(const ResidualFn& F, std::span<const double> x0,
                                        const Options& opts = {}, double lambda0 = 1e-3)
     -> Result<SolveResult> {
-    auto const jac = [&](std::span<const double> x, std::size_t m) -> Result<detail::Vec> {
+    const auto jac = [&](std::span<const double> x, std::size_t m) -> Result<detail::Vec> {
         std::size_t local = 0;
         std::vector<double> Fx = F(x);
         ++local;
@@ -1082,7 +1082,7 @@ using detail::Vec;
 [[nodiscard]] auto levenberg_marquardt(const ResidualFn& F, const JacobianFn& J,
                                        std::span<const double> x0, const Options& opts = {},
                                        double lambda0 = 1e-3) -> Result<SolveResult> {
-    auto const jac = [&](std::span<const double> x, std::size_t m) -> Result<detail::Vec> {
+    const auto jac = [&](std::span<const double> x, std::size_t m) -> Result<detail::Vec> {
         std::vector<double> j = J(x);
         if (j.size() != m * x.size() || !detail::all_finite(j)) {
             return make_error<detail::Vec>(MathError::domain_error);

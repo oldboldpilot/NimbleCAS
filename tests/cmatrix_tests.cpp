@@ -93,9 +93,9 @@ auto main() -> int {
         .test("pauli_x_hermitian_unitary_normal",
               [](TestContext& t) {
                   const auto x = pauli_x();
-                  auto const herm = x.is_hermitian();
-                  auto const uni = x.is_unitary();
-                  auto const norm = x.is_normal();
+                  const auto herm = x.is_hermitian();
+                  const auto uni = x.is_unitary();
+                  const auto norm = x.is_normal();
                   t.expect(herm.has_value() && herm.value_or(false), "X is Hermitian");
                   t.expect(uni.has_value() && uni.value_or(false), "X is unitary (XᴴX = I)");
                   t.expect(norm.has_value() && norm.value_or(false), "X is normal");
@@ -105,11 +105,11 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto y = pauli_y();
                   // Yᴴ = [[0,-i],[i,0]] = Y, so Hermitian despite the imaginary entries.
-                  auto const adj = y.adjoint();
+                  const auto adj = y.adjoint();
                   t.expect(adj.has_value() && adj.value_or(pauli_x()) == y, "Yᴴ == Y");
-                  auto const herm = y.is_hermitian();
-                  auto const uni = y.is_unitary();
-                  auto const norm = y.is_normal();
+                  const auto herm = y.is_hermitian();
+                  const auto uni = y.is_unitary();
+                  const auto norm = y.is_normal();
                   t.expect(herm.has_value() && herm.value_or(false), "Y is Hermitian");
                   t.expect(uni.has_value() && uni.value_or(false), "Y is unitary");
                   t.expect(norm.has_value() && norm.value_or(false), "Y is normal");
@@ -118,8 +118,8 @@ auto main() -> int {
         .test("pauli_z_hermitian_unitary",
               [](TestContext& t) {
                   const auto z = pauli_z();
-                  auto const herm = z.is_hermitian();
-                  auto const uni = z.is_unitary();
+                  const auto herm = z.is_hermitian();
+                  const auto uni = z.is_unitary();
                   t.expect(herm.has_value() && herm.value_or(false), "Z is Hermitian");
                   t.expect(uni.has_value() && uni.value_or(false), "Z is unitary");
               })
@@ -129,8 +129,8 @@ auto main() -> int {
                   // iX has adjoint [[0,-i],[-i,0]] = -(iX), so it is skew-Hermitian and
                   // not Hermitian.
                   const auto ix = cm({{c(0, 0), c(0, 1)}, {c(0, 1), c(0, 0)}});
-                  auto const skew = ix.is_skew_hermitian();
-                  auto const herm = ix.is_hermitian();
+                  const auto skew = ix.is_skew_hermitian();
+                  const auto herm = ix.is_hermitian();
                   t.expect(skew.has_value() && skew.value_or(false), "iX is skew-Hermitian");
                   t.expect(herm.has_value() && !herm.value_or(true), "iX is not Hermitian");
               })
@@ -138,8 +138,8 @@ auto main() -> int {
         .test("shear_not_unitary_not_hermitian",
               [](TestContext& t) {
                   const auto s = cm({{c(1, 0), c(1, 0)}, {c(0, 0), c(1, 0)}});
-                  auto const uni = s.is_unitary();
-                  auto const herm = s.is_hermitian();
+                  const auto uni = s.is_unitary();
+                  const auto herm = s.is_hermitian();
                   t.expect(uni.has_value() && !uni.value_or(true), "[[1,1],[0,1]] is not unitary");
                   t.expect(herm.has_value() && !herm.value_or(true),
                            "[[1,1],[0,1]] is not Hermitian");

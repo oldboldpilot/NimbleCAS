@@ -77,7 +77,7 @@ namespace {
                            const std::vector<std::uint64_t>& gk)
     -> std::optional<std::vector<std::uint64_t>> {
     std::vector<std::uint64_t> out(gk.size() * probe_row_words(ck.size()), 0U);
-    auto const r = index_probe_batch_with(isa, ck, gk, out);
+    const auto r = index_probe_batch_with(isa, ck, gk, out);
     if (!r) {
         return std::nullopt;
     }

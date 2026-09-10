@@ -313,7 +313,7 @@ auto epoch_seconds_from_iso(std::string_view s) -> Result<std::int64_t> {
     if (s.size() < 10 || s[4] != '-' || s[7] != '-') {
         return make_error<std::int64_t>(MathError::domain_error);
     }
-    auto const digits = [](std::string_view d, std::int64_t& out) -> bool {
+    const auto digits = [](std::string_view d, std::int64_t& out) -> bool {
         const auto* last = d.data() + d.size();
         const auto [p, ec] = std::from_chars(d.data(), last, out);
         return ec == std::errc{} && p == last;
@@ -468,7 +468,7 @@ auto yahoo::parse_option_chain(std::string_view json) -> Result<OptionChain> {
     if (!opts0) { return make_error<OptionChain>(opts0.error()); }
     const json_value& o0 = **opts0;
     if (auto e = child(o0, "expirationDate"); e && (*e)->is_number()) { chain.expiration = (*e)->as_int64(); }
-    auto const decode_leg = [&](std::string_view key, OptionRight right, std::vector<OptionQuote>& into) -> Result<void> {
+    const auto decode_leg = [&](std::string_view key, OptionRight right, std::vector<OptionQuote>& into) -> Result<void> {
         auto arr = child(o0, key);
         if (!arr) { return {}; }  // a side may legitimately be absent
         if (!(*arr)->is_array()) { return make_error<void>(MathError::domain_error); }

@@ -45,8 +45,8 @@ auto main() -> int {
                   // many seeded Euler-Maruyama paths and check the sample mean is close.
                   const double mu = 0.1;
                   const double sigma = 0.2;
-                  auto const a = [mu](double x) { return mu * x; };
-                  auto const b = [sigma](double x) { return sigma * x; };
+                  const auto a = [mu](double x) { return mu * x; };
+                  const auto b = [sigma](double x) { return sigma * x; };
 
                   auto mom = terminal_moments(a, b, /*b_prime=*/{}, 1.0, 1.0, 200, 40000, 20260703,
                                               /*use_milstein=*/false);
@@ -65,9 +65,9 @@ auto main() -> int {
                   // Milstein only reduces path-wise discretisation error, not the true mean.
                   const double mu = 0.1;
                   const double sigma = 0.2;
-                  auto const a = [mu](double x) { return mu * x; };
-                  auto const b = [sigma](double x) { return sigma * x; };
-                  auto const bp = [sigma](double) { return sigma; };
+                  const auto a = [mu](double x) { return mu * x; };
+                  const auto b = [sigma](double x) { return sigma * x; };
+                  const auto bp = [sigma](double) { return sigma; };
 
                   auto mom = terminal_moments(a, b, bp, 1.0, 1.0, 200, 40000, 777,
                                               /*use_milstein=*/true);
@@ -84,8 +84,8 @@ auto main() -> int {
                   // T=1 the exact solution is X_T = e ≈ 2.71828; explicit Euler with a finite
                   // step undershoots, so use a loose tolerance reflecting the discretisation
                   // error rather than sampling noise (there is none once b = 0).
-                  auto const a = [](double x) { return x; };
-                  auto const zero = [](double) { return 0.0; };
+                  const auto a = [](double x) { return x; };
+                  const auto zero = [](double) { return 0.0; };
 
                   auto r = euler_maruyama(a, zero, 1.0, 1.0, 2000, 123);
                   t.expect(r.has_value(), "euler_maruyama (b=0, a=x) succeeds");
@@ -105,9 +105,9 @@ auto main() -> int {
                   // When b ≡ 0 the Milstein correction ½ b b' (dW²−dt) vanishes identically, so
                   // the two schemes must produce BIT-IDENTICAL paths from the same seed (the
                   // Brownian increments are drawn the same way and are multiplied by b = 0).
-                  auto const a = [](double x) { return 0.5 * x + 1.0; };
-                  auto const zero = [](double) { return 0.0; };
-                  auto const zero_prime = [](double) { return 0.0; };
+                  const auto a = [](double x) { return 0.5 * x + 1.0; };
+                  const auto zero = [](double) { return 0.0; };
+                  const auto zero_prime = [](double) { return 0.0; };
 
                   auto e = euler_maruyama(a, zero, 2.0, 1.0, 500, 555);
                   auto m = milstein(a, zero, zero_prime, 2.0, 1.0, 500, 555);
@@ -124,9 +124,9 @@ auto main() -> int {
               [](TestContext& t) {
                   // Determinism: identical arguments (including seed) must reproduce a
                   // bit-identical path — the integrator has no hidden state.
-                  auto const a = [](double x) { return 0.1 * x; };
-                  auto const b = [](double x) { return 0.2 * x; };
-                  auto const bp = [](double) { return 0.2; };
+                  const auto a = [](double x) { return 0.1 * x; };
+                  const auto b = [](double x) { return 0.2 * x; };
+                  const auto bp = [](double) { return 0.2; };
 
                   auto p1 = milstein(a, b, bp, 1.0, 1.0, 300, 2024);
                   auto p2 = milstein(a, b, bp, 1.0, 1.0, 300, 2024);
@@ -151,8 +151,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // The whole ensemble is a pure function of (seed): rerunning gives a
                   // bit-identical vector, while distinct path indices give distinct terminals.
-                  auto const a = [](double x) { return 0.1 * x; };
-                  auto const b = [](double x) { return 0.2 * x; };
+                  const auto a = [](double x) { return 0.1 * x; };
+                  const auto b = [](double x) { return 0.2 * x; };
 
                   auto r1 = simulate_terminal(a, b, {}, 1.0, 1.0, 100, 64, 909, false);
                   auto r2 = simulate_terminal(a, b, {}, 1.0, 1.0, 100, 64, 909, false);
@@ -174,9 +174,9 @@ auto main() -> int {
               })
         .test("domain_errors",
               [](TestContext& t) {
-                  auto const a = [](double x) { return x; };
-                  auto const b = [](double x) { return x; };
-                  auto const bp = [](double) { return 1.0; };
+                  const auto a = [](double x) { return x; };
+                  const auto b = [](double x) { return x; };
+                  const auto bp = [](double) { return 1.0; };
 
                   auto s0 = euler_maruyama(a, b, 1.0, 1.0, 0, 1);
                   t.expect(!s0.has_value() && s0.error() == nimblecas::MathError::domain_error,
@@ -238,8 +238,8 @@ auto main() -> int {
                   // deliberate, documented convention difference, not a bug.
                   const double mu = 0.1;
                   const double sigma = 0.2;
-                  auto const a = [mu](double x) { return mu * x; };
-                  auto const b = [sigma](double x) { return sigma * x; };
+                  const auto a = [mu](double x) { return mu * x; };
+                  const auto b = [sigma](double x) { return sigma * x; };
 
                   auto mom = terminal_moments_scheme(a, b, /*b_prime=*/{}, 1.0, 1.0, 200, 40000,
                                                      20260703, Scheme::stochastic_heun);
@@ -261,8 +261,8 @@ auto main() -> int {
                   // matches Euler/Milstein at x0·exp(μT) = exp(0.1) ≈ 1.10517.
                   const double mu = 0.1;
                   const double sigma = 0.2;
-                  auto const a = [mu](double x) { return mu * x; };
-                  auto const b = [sigma](double x) { return sigma * x; };
+                  const auto a = [mu](double x) { return mu * x; };
+                  const auto b = [sigma](double x) { return sigma * x; };
 
                   auto mom = terminal_moments_scheme(a, b, /*b_prime=*/{}, 1.0, 1.0, 200, 40000, 4242,
                                                      Scheme::srk);
@@ -283,8 +283,8 @@ auto main() -> int {
                   // taming perturbation is tiny for small dt, so the mean still matches exp(μT).
                   const double mu = 0.1;
                   const double sigma = 0.2;
-                  auto const a = [mu](double x) { return mu * x; };
-                  auto const b = [sigma](double x) { return sigma * x; };
+                  const auto a = [mu](double x) { return mu * x; };
+                  const auto b = [sigma](double x) { return sigma * x; };
 
                   auto mom = terminal_moments_scheme(a, b, /*b_prime=*/{}, 1.0, 1.0, 400, 40000, 909091,
                                                      Scheme::tamed_euler);
@@ -301,8 +301,8 @@ auto main() -> int {
                   // With b ≡ 0 the SRK finite-difference correction (b(Ŷ)−b) is identically 0 and
                   // the diffusion term vanishes, so SRK must equal Euler-Maruyama BIT-FOR-BIT from
                   // the same seed (both consume the same one-normal-per-step Brownian stream).
-                  auto const a = [](double x) { return 0.5 * x + 1.0; };
-                  auto const zero = [](double) { return 0.0; };
+                  const auto a = [](double x) { return 0.5 * x + 1.0; };
+                  const auto zero = [](double) { return 0.0; };
 
                   auto e = euler_maruyama(a, zero, 2.0, 1.0, 500, 555);
                   auto s = srk(a, zero, 2.0, 1.0, 500, 555);
@@ -349,8 +349,8 @@ auto main() -> int {
                   // monotonically to 0, yet explicit Euler with a coarse step overshoots, cubes the
                   // overshoot, and diverges to a non-finite value within a handful of steps. Tamed
                   // Euler caps each drift increment below 1 in magnitude and stays finite/bounded.
-                  auto const drift = [](double x) { return -x * x * x; };
-                  auto const zero = [](double) { return 0.0; };
+                  const auto drift = [](double x) { return -x * x * x; };
+                  const auto zero = [](double) { return 0.0; };
 
                   auto e = euler_maruyama(drift, zero, 5.0, 1.0, 10, 31337);
                   auto tm = tamed_euler(drift, zero, 5.0, 1.0, 10, 31337);
@@ -370,8 +370,8 @@ auto main() -> int {
                   // every element reconstructs independently, then any split of 0..paths-1 across
                   // any number of workers, reassembled in index order, reproduces the vector
                   // bit-for-bit — i.e. the result is thread-count / partition independent.
-                  auto const a = [](double x) { return 0.15 * x; };
-                  auto const b = [](double x) { return 0.25 * x; };
+                  const auto a = [](double x) { return 0.15 * x; };
+                  const auto b = [](double x) { return 0.25 * x; };
                   const std::uint64_t seed = 20260703;
                   const std::uint64_t paths = 48;
 
@@ -400,8 +400,8 @@ auto main() -> int {
               })
         .test("scheme_driver_domain_errors",
               [](TestContext& t) {
-                  auto const a = [](double x) { return x; };
-                  auto const b = [](double x) { return x; };
+                  const auto a = [](double x) { return x; };
+                  const auto b = [](double x) { return x; };
 
                   // Milstein via the generic driver still requires a non-empty b'(x).
                   auto no_bp = simulate_terminal_scheme(a, b, {}, 1.0, 1.0, 10, 5, 1, Scheme::milstein);
@@ -410,7 +410,7 @@ auto main() -> int {
                            "Milstein driver without b_prime yields domain_error");
 
                   // Derivative-free schemes never need b'; an empty b_prime is fine for them.
-                  auto const ok = simulate_terminal_scheme(a, b, {}, 1.0, 1.0, 10, 5, 1, Scheme::srk);
+                  const auto ok = simulate_terminal_scheme(a, b, {}, 1.0, 1.0, 10, 5, 1, Scheme::srk);
                   t.expect(ok.has_value(), "SRK driver succeeds with empty b_prime");
 
                   auto p0 = simulate_terminal_scheme(a, b, {}, 1.0, 1.0, 10, 0, 1, Scheme::tamed_euler);
@@ -436,9 +436,9 @@ auto main() -> int {
                   // driver BIT-FOR-BIT for euler_maruyama and milstein, locking the
                   // byte-identical guarantee against future refactors. Nonlinear a/b so the
                   // trajectories are non-trivial (not a degenerate constant).
-                  auto const a = [](double x) { return 0.3 * x - 0.05 * x * x; };
-                  auto const b = [](double x) { return 0.2 * x + 0.1; };
-                  auto const bp = [](double) { return 0.2; };
+                  const auto a = [](double x) { return 0.3 * x - 0.05 * x * x; };
+                  const auto b = [](double x) { return 0.2 * x + 0.1; };
+                  const auto bp = [](double) { return 0.2; };
 
                   auto legacy_e = simulate_terminal(a, b, {}, 1.0, 1.5, 64, 500, 424242, false);
                   auto scheme_e = simulate_terminal_scheme(a, b, {}, 1.0, 1.5, 64, 500, 424242,
@@ -478,8 +478,8 @@ auto main() -> int {
                   const std::uint64_t paths = 40000;
                   const std::uint64_t seed = 20260812;
 
-                  auto const a = [mu](double x) { return mu * x; };
-                  auto const b = [sigma](double x) { return sigma * x; };
+                  const auto a = [mu](double x) { return mu * x; };
+                  const auto b = [sigma](double x) { return sigma * x; };
                   auto jumps = merton_jumps(lambda, mu_j, sigma_j);
                   t.expect(jumps.has_value(), "merton_jumps() succeeds");
                   if (!jumps) { return; }
@@ -508,9 +508,9 @@ auto main() -> int {
                   const double kappa = 2.0;
                   const double m = 0.5;
                   const double sigma = 0.3;
-                  auto const a = [kappa, m](double x) { return -kappa * (x - m); };
-                  auto const a_prime = [kappa](double) { return -kappa; };
-                  auto const b = [sigma](double) { return sigma; };
+                  const auto a = [kappa, m](double x) { return -kappa * (x - m); };
+                  const auto a_prime = [kappa](double) { return -kappa; };
+                  const auto b = [sigma](double) { return sigma; };
                   auto jumps = merton_jumps(/*lambda=*/0.8, /*mu_j=*/0.0, /*sigma_j=*/0.2);
                   t.expect(jumps.has_value(), "merton_jumps() succeeds");
                   if (!jumps) { return; }
@@ -550,9 +550,9 @@ auto main() -> int {
                   // Domain separation: lambda == 0 keeps the jump-domain stream untouched, and
                   // theta == 0 is special-cased to the identical Euler expression, so both
                   // reproduce euler_maruyama BIT-FOR-BIT, not merely "close".
-                  auto const a = [](double x) { return 0.2 * x + 0.05; };
-                  auto const a_prime = [](double) { return 0.2; };
-                  auto const b = [](double x) { return 0.15 * x + 0.02; };
+                  const auto a = [](double x) { return 0.2 * x + 0.05; };
+                  const auto a_prime = [](double) { return 0.2; };
+                  const auto b = [](double x) { return 0.15 * x + 0.02; };
                   const double x0 = 1.0;
                   const double T = 1.0;
                   const std::uint64_t steps = 300;
@@ -601,9 +601,9 @@ auto main() -> int {
                   const std::uint64_t paths = 5000;
                   const std::uint64_t seed = 990099;
 
-                  auto const a = [kappa, m](double x) { return -kappa * (x - m); };
-                  auto const a_prime = [kappa](double) { return -kappa; };
-                  auto const b = [sigma](double) { return sigma; };
+                  const auto a = [kappa, m](double x) { return -kappa * (x - m); };
+                  const auto a_prime = [kappa](double) { return -kappa; };
+                  const auto b = [sigma](double) { return sigma; };
 
                   auto euler_mom =
                       terminal_moments(a, b, /*b_prime=*/{}, x0, T, steps, paths, seed, false);
@@ -659,17 +659,17 @@ auto main() -> int {
                   if (!base) { return; }
 
                   std::atomic<std::uint64_t> jump_count{0};
-                  auto const orig_impulse = base->impulse;
+                  const auto orig_impulse = base->impulse;
                   JumpSpec counted{base->lambda, base->size_quantile,
                                    [&jump_count, orig_impulse](double x, double J) -> double {
                                        ++jump_count;
                                        return orig_impulse(x, J);
                                    }};
 
-                  auto const a = [](double) { return 0.0; };
-                  auto const b = [](double) { return 0.0; };  // isolate the jump component
+                  const auto a = [](double) { return 0.0; };
+                  const auto b = [](double) { return 0.0; };  // isolate the jump component
 
-                  auto const terminals = simulate_terminal_jump(a, /*a_prime=*/{}, b, counted, x0, T,
+                  const auto terminals = simulate_terminal_jump(a, /*a_prime=*/{}, b, counted, x0, T,
                                                           steps, paths, seed, /*theta=*/0.0);
                   t.expect(terminals.has_value(),
                            "simulate_terminal_jump (jump-count sanity) succeeds");
@@ -684,9 +684,9 @@ auto main() -> int {
               })
         .test("jump_theta_domain_errors",
               [](TestContext& t) {
-                  auto const a = [](double x) { return x; };
-                  auto const a_prime = [](double) { return 1.0; };
-                  auto const b = [](double x) { return x; };
+                  const auto a = [](double x) { return x; };
+                  const auto a_prime = [](double) { return 1.0; };
+                  const auto b = [](double x) { return x; };
                   const double nan = std::numeric_limits<double>::quiet_NaN();
 
                   auto neg_lambda = merton_jumps(-1.0, 0.0, 0.1);

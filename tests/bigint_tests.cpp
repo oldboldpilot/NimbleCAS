@@ -212,9 +212,9 @@ auto main() -> int {
                   check_divmod(t, bi("-17"), bi("-5"), "-17 / -5");
 
                   // |a| < |b| gives q == 0, r == a.
-                  auto const small = bi("3").divmod(bi("100")).value();
+                  const auto small = bi("3").divmod(bi("100")).value();
                   t.expect(small.first.is_zero() && small.second == bi("3"), "3 / 100 = (0, 3)");
-                  auto const small_neg = bi("-3").divmod(bi("100")).value();
+                  const auto small_neg = bi("-3").divmod(bi("100")).value();
                   t.expect(small_neg.first.is_zero() && small_neg.second == bi("-3"),
                            "-3 / 100 = (0, -3)");
 
@@ -231,14 +231,14 @@ auto main() -> int {
                                bi("18446744073709551616"), "(2^128-1) / 2^64");
 
                   // Explicit quotient/remainder anchors (hand-verified).
-                  auto const e1 = bi("123456789012345678901234567890").divmod(bi("987654321")).value();
+                  const auto e1 = bi("123456789012345678901234567890").divmod(bi("987654321")).value();
                   t.expect_eq(e1.first.to_string(), std::string("124999998873437499901"),
                               "explicit quotient");
                   t.expect_eq(e1.second.to_string(), std::string("574845669"),
                               "explicit remainder");
 
                   // Exact division: remainder is exactly zero.
-                  auto const exact =
+                  const auto exact =
                       bi("98765432109876543210987654321098765432109876543210").divmod(bi("987654321"))
                           .value();
                   t.expect_eq(exact.first.to_string(),

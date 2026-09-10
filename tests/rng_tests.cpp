@@ -86,7 +86,7 @@ auto main() -> int {
               })
         .test("split_streams_are_independent",
               [](TestContext& t) {
-                  auto const parent = Rng::seeded(7);
+                  const auto parent = Rng::seeded(7);
                   auto child0 = parent.split(0);
                   auto child1 = parent.split(1);
                   auto child2 = parent.split(2);

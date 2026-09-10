@@ -136,7 +136,7 @@ namespace {
         return Expr::product({recip(a), Expr::apply("ln", {base})});
     }
     // int (a*x+b)^exp dx = (a*x+b)^(exp+1) / (a*(exp+1)).
-    Expr const denom = Expr::product({a, *next_exp});
+    const Expr denom = Expr::product({a, *next_exp});
     return Expr::product({recip(denom), Expr::power(base, *next_exp)});
 }
 
@@ -203,7 +203,7 @@ namespace {
     if (!poly) {
         return make_error<Expr>(MathError::not_implemented);
     }
-    auto const coeffs = poly->coefficients();  // low-degree first
+    const auto coeffs = poly->coefficients();  // low-degree first
     if (coeffs.size() != 3 || coeffs[1] != 0) {
         return make_error<Expr>(MathError::not_implemented);  // must be c2*x^2 + c0
     }
@@ -222,7 +222,7 @@ namespace {
             return make_error<Expr>(MathError::not_implemented);
         }
         const Expr k_expr = Expr::integer(*k);
-        Expr const arg = (*k == 1) ? x : Expr::product({x, recip(k_expr)});  // x/k
+        const Expr arg = (*k == 1) ? x : Expr::product({x, recip(k_expr)});  // x/k
         return Expr::product({recip(k_expr), Expr::apply("atan", {arg})});
     }
     // int 1/sqrt(k^2 - x^2) dx = asin(x/k).
@@ -232,7 +232,7 @@ namespace {
             return make_error<Expr>(MathError::not_implemented);
         }
         const Expr k_expr = Expr::integer(*k);
-        Expr const arg = (*k == 1) ? x : Expr::product({x, recip(k_expr)});  // x/k
+        const Expr arg = (*k == 1) ? x : Expr::product({x, recip(k_expr)});  // x/k
         return Expr::apply("asin", {arg});
     }
     return make_error<Expr>(MathError::not_implemented);
@@ -297,7 +297,7 @@ namespace {
         return Expr::integer(0);
     }
     const Expr x = Expr::symbol(std::string(var));
-    auto const coeffs = p.coefficients();
+    const auto coeffs = p.coefficients();
     std::vector<Expr> terms;
     for (std::size_t i = 0; i < coeffs.size(); ++i) {
         if (coeffs[i].is_zero()) {
@@ -348,8 +348,8 @@ namespace {
         }
     }
     for (const LogTerm& term : integral->log_terms) {
-        Expr const coeff = rational_to_expr(term.coefficient);
-        Expr const arg = ratpoly_to_expr(term.argument, var);
+        const Expr coeff = rational_to_expr(term.coefficient);
+        const Expr arg = ratpoly_to_expr(term.argument, var);
         parts.push_back(Expr::product({coeff, Expr::apply("ln", {arg})}));
     }
     if (parts.empty()) {
@@ -401,7 +401,7 @@ namespace {
             return Expr::product({f, x});  // wholly constant (defensive; free_of covers it)
         }
         if (!constants.empty()) {
-            Expr const inner = variables.size() == 1 ? variables.front()
+            const Expr inner = variables.size() == 1 ? variables.front()
                                                : Expr::product(std::move(variables));
             auto integrated = integrate_raw(inner, var);
             if (!integrated) {
@@ -458,8 +458,8 @@ auto integrate_definite(const Expr& f, std::string_view var, const Expr& a, cons
         return antideriv;
     }
     const Expr x = Expr::symbol(std::string(var));
-    Expr const upper = substitute(*antideriv, x, b);  // F(b)
-    Expr const lower = substitute(*antideriv, x, a);  // F(a)
+    const Expr upper = substitute(*antideriv, x, b);  // F(b)
+    const Expr lower = substitute(*antideriv, x, a);  // F(a)
     return simplify(Expr::sum({upper, neg(lower)}));
 }
 

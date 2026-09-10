@@ -131,7 +131,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // H = (2s + 4)/(s^2 + 3s + 2): H(0) = 4/2 = 2, strictly proper.
                   const auto h = TF(rp({4, 2}), rp({2, 3, 1}));
-                  auto const g = h.dc_gain();
+                  const auto g = h.dc_gain();
                   t.expect(g.has_value() && g.value_or(ri(0)) == ri(2), "dc gain is 2");
                   t.expect(h.is_proper() && h.is_strictly_proper(), "strictly proper");
                   t.expect(h.relative_degree() == 1, "relative degree 1");
@@ -147,7 +147,7 @@ auto main() -> int {
                       auto back = ss_to_tf(*ss);
                       t.expect(back.has_value(), "ss_to_tf succeeds");
                       if (back) {
-                          auto const eq = h.equivalent(*back);
+                          const auto eq = h.equivalent(*back);
                           t.expect(eq.has_value() && eq.value_or(false),
                                    "round-trip is exactly equivalent");
                       }
@@ -164,7 +164,7 @@ auto main() -> int {
                       auto back = ss_to_tf(*ss);
                       t.expect(back.has_value(), "ss_to_tf succeeds");
                       if (back) {
-                          auto const eq = h.equivalent(*back);
+                          const auto eq = h.equivalent(*back);
                           t.expect(eq.has_value() && eq.value_or(false),
                                    "round-trip is exactly equivalent");
                       }
@@ -185,7 +185,7 @@ auto main() -> int {
                                                mat({{1, 0}}), mat({{0}}));
                   t.expect(ctrb.has_value(), "state space assembled");
                   if (ctrb) {
-                      auto const ok = ctrb->is_controllable();
+                      const auto ok = ctrb->is_controllable();
                       t.expect(ok.has_value() && ok.value_or(false),
                                "([[0,1],[0,0]], [0,1]) is controllable");
                   }
@@ -194,7 +194,7 @@ auto main() -> int {
                                              mat({{1, 0}}), mat({{0}}));
                   t.expect(un.has_value(), "state space assembled");
                   if (un) {
-                      auto const ok = un->is_controllable();
+                      const auto ok = un->is_controllable();
                       t.expect(ok.has_value() && !ok.value_or(true),
                                "(I, [1,0]) is NOT controllable");
                   }
@@ -206,7 +206,7 @@ auto main() -> int {
                                               mat({{1, 0}}), mat({{0}}));
                   t.expect(obs.has_value(), "state space assembled");
                   if (obs) {
-                      auto const ok = obs->is_observable();
+                      const auto ok = obs->is_observable();
                       t.expect(ok.has_value() && ok.value_or(false),
                                "([[0,1],[0,0]], C=[1,0]) is observable");
                   }
@@ -215,7 +215,7 @@ auto main() -> int {
                                              mat({{1, 0}}), mat({{0}}));
                   t.expect(un.has_value(), "state space assembled");
                   if (un) {
-                      auto const ok = un->is_observable();
+                      const auto ok = un->is_observable();
                       t.expect(ok.has_value() && !ok.value_or(true),
                                "(I, C=[1,0]) is NOT observable");
                   }
@@ -223,25 +223,25 @@ auto main() -> int {
         .test("routh_hurwitz_stable_vs_unstable",
               [](TestContext& t) {
                   // Stable: s^2 + 3s + 2 (roots -1, -2).
-                  auto const s1 = is_stable_continuous(TF(rp({1}), rp({2, 3, 1})));
+                  const auto s1 = is_stable_continuous(TF(rp({1}), rp({2, 3, 1})));
                   t.expect(s1.has_value() && s1.value_or(false), "s^2+3s+2 is Hurwitz-stable");
                   // Unstable: s^2 - 1 (roots +/- 1).
-                  auto const s2 = is_stable_continuous(TF(rp({1}), rp({-1, 0, 1})));
+                  const auto s2 = is_stable_continuous(TF(rp({1}), rp({-1, 0, 1})));
                   t.expect(s2.has_value() && !s2.value_or(true), "s^2-1 is not stable");
                   // Marginal: s^2 + 1 (roots +/- i) -> not asymptotically stable.
-                  auto const s3 = is_stable_continuous(TF(rp({1}), rp({1, 0, 1})));
+                  const auto s3 = is_stable_continuous(TF(rp({1}), rp({1, 0, 1})));
                   t.expect(s3.has_value() && !s3.value_or(true), "s^2+1 (imag axis) is not stable");
               })
         .test("discrete_schur_stability",
               [](TestContext& t) {
                   // Pole at z = 1/2 (inside the unit circle): stable.
-                  auto const in = is_stable_discrete(TF(rp({1}), rpq({{-1, 2}, {1, 1}})));
+                  const auto in = is_stable_discrete(TF(rp({1}), rpq({{-1, 2}, {1, 1}})));
                   t.expect(in.has_value() && in.value_or(false), "pole at 1/2 is Schur-stable");
                   // Pole at z = 2 (outside the unit circle): not stable.
-                  auto const out = is_stable_discrete(TF(rp({1}), rp({-2, 1})));
+                  const auto out = is_stable_discrete(TF(rp({1}), rp({-2, 1})));
                   t.expect(out.has_value() && !out.value_or(true), "pole at 2 is not Schur-stable");
                   // Boundary pole at z = -1: not strictly inside -> not stable.
-                  auto const edge = is_stable_discrete(TF(rp({1}), rp({1, 1})));
+                  const auto edge = is_stable_discrete(TF(rp({1}), rp({1, 1})));
                   t.expect(edge.has_value() && !edge.value_or(true),
                            "pole at -1 (unit circle) is not Schur-stable");
               })
@@ -253,14 +253,14 @@ auto main() -> int {
                   auto cascade = g1.series(g2);
                   t.expect(cascade.has_value(), "series computed");
                   if (cascade) {
-                      auto const eq = cascade->equivalent(TF(rp({1}), rp({0, 1, 1})));
+                      const auto eq = cascade->equivalent(TF(rp({1}), rp({0, 1, 1})));
                       t.expect(eq.has_value() && eq.value_or(false), "1/s * 1/(s+1) = 1/(s^2+s)");
                   }
                   // Unity negative feedback of G = 1/s: G/(1+G) = 1/(s+1).
                   auto cl = g1.unity_feedback();
                   t.expect(cl.has_value(), "unity feedback computed");
                   if (cl) {
-                      auto const eq = cl->equivalent(TF(rp({1}), rp({1, 1})));
+                      const auto eq = cl->equivalent(TF(rp({1}), rp({1, 1})));
                       t.expect(eq.has_value() && eq.value_or(false),
                                "(1/s)/(1 + 1/s) = 1/(s+1)");
                   }
@@ -268,7 +268,7 @@ auto main() -> int {
                   auto par = g1.parallel(g2);
                   t.expect(par.has_value(), "parallel computed");
                   if (par) {
-                      auto const eq = par->equivalent(TF(rp({1, 2}), rp({0, 1, 1})));
+                      const auto eq = par->equivalent(TF(rp({1, 2}), rp({0, 1, 1})));
                       t.expect(eq.has_value() && eq.value_or(false),
                                "1/s + 1/(s+1) = (2s+1)/(s^2+s)");
                   }
@@ -306,7 +306,7 @@ auto main() -> int {
                   auto hz = bilinear_c2d(h, ri(2));
                   t.expect(hz.has_value(), "bilinear transform computed");
                   if (hz) {
-                      auto const eq = hz->equivalent(TF(rp({1, 1}), rp({0, 2})));  // (z+1)/(2z)
+                      const auto eq = hz->equivalent(TF(rp({1, 1}), rp({0, 2})));  // (z+1)/(2z)
                       t.expect(eq.has_value() && eq.value_or(false),
                                "Tustin of 1/(s+1) with T=2 is (z+1)/(2z)");
                   }
@@ -321,8 +321,8 @@ auto main() -> int {
                       rp({1, 3, 3, 1}),   // s^3+3s^2+3s+1 (stable: triple root -1)
                       rp({8, 2, 1, 1})};  // s^3+s^2+2s+8  (unstable: a2*a1 < a0)
                   for (const auto& p : polys) {
-                      auto const det_stable = is_hurwitz_stable(p);
-                      auto const routh_stable = is_stable_continuous(TF(rp({1}), p));
+                      const auto det_stable = is_hurwitz_stable(p);
+                      const auto routh_stable = is_stable_continuous(TF(rp({1}), p));
                       t.expect(det_stable.has_value() && routh_stable.has_value(),
                                "both stability tests computed");
                       t.expect(det_stable.value_or(false) == routh_stable.value_or(true),
@@ -345,7 +345,7 @@ auto main() -> int {
                   // a0 in [1,2], a1 in [2,4], a2 in [2,4], a3 = 1.
                   const std::vector<Rational> lo_ok{ri(1), ri(2), ri(2), ri(1)};
                   const std::vector<Rational> hi_ok{ri(2), ri(4), ri(4), ri(1)};
-                  auto const robust = is_robustly_stable(lo_ok, hi_ok);
+                  const auto robust = is_robustly_stable(lo_ok, hi_ok);
                   t.expect(robust.has_value() && robust.value_or(false),
                            "interval family is robustly stable (all four Kharitonov polys)");
                   auto four = kharitonov_polynomials(lo_ok, hi_ok);
@@ -355,7 +355,7 @@ auto main() -> int {
                   // has a negative coefficient and is not Hurwitz.
                   const std::vector<Rational> lo_bad{ri(1), ri(-1), ri(2), ri(1)};
                   const std::vector<Rational> hi_bad{ri(1), ri(1), ri(2), ri(1)};
-                  auto const not_robust = is_robustly_stable(lo_bad, hi_bad);
+                  const auto not_robust = is_robustly_stable(lo_bad, hi_bad);
                   t.expect(not_robust.has_value() && !not_robust.value_or(true),
                            "interval family with a1 in [-1,1] is NOT robustly stable");
               })
@@ -369,23 +369,23 @@ auto main() -> int {
                       t.expect(p->at(0, 0) == rq(1, 2) && p->at(1, 1) == rq(1, 4) &&
                                    p->at(0, 1) == ri(0) && p->at(1, 0) == ri(0),
                                "P = diag(1/2, 1/4) exactly");
-                      auto const pd = is_spd(*p);
+                      const auto pd = is_spd(*p);
                       t.expect(pd.has_value() && pd.value_or(false), "P is positive definite");
                   }
-                  auto const lyap = is_lyapunov_stable(a);
+                  const auto lyap = is_lyapunov_stable(a);
                   t.expect(lyap.has_value() && lyap.value_or(false),
                            "Lyapunov verdict: diag(-1,-2) is stable");
                   // Cross-check against the state-space Routh-Hurwitz verdict.
                   auto ss = StateSpace::make(a, mat({{1}, {0}}), mat({{1, 0}}), mat({{0}}));
                   t.expect(ss.has_value(), "state space assembled");
                   if (ss) {
-                      auto const routh = ss->is_asymptotically_stable();
+                      const auto routh = ss->is_asymptotically_stable();
                       t.expect(routh.has_value() &&
                                    routh.value_or(false) == lyap.value_or(false),
                                "Lyapunov agrees with Routh-Hurwitz");
                   }
                   // Unstable A = diag(1, -2): P exists but is not positive definite.
-                  auto const un = is_lyapunov_stable(mat({{1, 0}, {0, -2}}));
+                  const auto un = is_lyapunov_stable(mat({{1, 0}, {0, -2}}));
                   t.expect(un.has_value() && !un.value_or(true),
                            "diag(1,-2) is not Lyapunov-stable");
                   // Rotation A = [[0,-1],[1,0]] (eigenvalues +/- i): singular Kronecker sum.
@@ -393,7 +393,7 @@ auto main() -> int {
                   auto sing = lyapunov_solve(rot);
                   t.expect(!sing.has_value() && sing.error() == MathError::domain_error,
                            "purely imaginary spectrum => singular Lyapunov operator");
-                  auto const rot_stable = is_lyapunov_stable(rot);
+                  const auto rot_stable = is_lyapunov_stable(rot);
                   t.expect(rot_stable.has_value() && !rot_stable.value_or(true),
                            "rotation is not Lyapunov-stable");
               })

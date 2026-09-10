@@ -35,7 +35,7 @@ auto main() -> int {
     const Polynomial p{{1, 2, 3, 4, 5}};  // 1 + 2x + 3x^2 + 4x^3 + 5x^4
 
     // Warm up: fault in xs and populate caches before timing.
-    volatile float const sink = p.evaluate_batch(xs).front();
+    volatile const float sink = p.evaluate_batch(xs).front();
     (void)sink;
 
     // Allocating variant: a fresh output vector every call.

@@ -186,7 +186,7 @@ auto main() -> int {
                   t.expect(r128->to_string() == p20, "Rational128 value == 10^20");
 
                   // BigRational agrees on the same value (unbounded exact tier).
-                  auto const rb = BigRational::from_int(ten10).multiply(BigRational::from_int(ten10));
+                  const auto rb = BigRational::from_int(ten10).multiply(BigRational::from_int(ten10));
                   t.expect(rb.is_integer() && rb.numerator().to_string() == p20,
                            "BigRational value == 10^20 (agrees with Rational128)");
               })
@@ -196,7 +196,7 @@ auto main() -> int {
                   const std::string p30 = biv(10).pow(30).to_string();
                   const std::string p40 = biv(10).pow(40).to_string();
 
-                  auto const a = Rational128::from_int(ten10);
+                  const auto a = Rational128::from_int(ten10);
                   auto a2 = a.multiply(a);          // 10^20
                   t.expect(a2.has_value(), "Rational128 10^20 ok");
                   auto a3 = a2->multiply(a);        // 10^30 (still < 2^127)
@@ -206,11 +206,11 @@ auto main() -> int {
                            "Rational128 10^40 overflows -> MathError::overflow");
 
                   // BigRational carries 10^40 exactly.
-                  auto const big4 = BigRational::from_int(ten10).pow(4).value();
+                  const auto big4 = BigRational::from_int(ten10).pow(4).value();
                   t.expect(big4.numerator().to_string() == p40, "BigRational 10^40 exact");
 
                   // Cross-tier agreement at the largest commonly representable value, 10^30.
-                  auto const big3 = BigRational::from_int(ten10).pow(3).value();
+                  const auto big3 = BigRational::from_int(ten10).pow(3).value();
                   t.expect(a3->to_string() == p30 && big3.numerator().to_string() == p30,
                            "Rational128 and BigRational agree at 10^30");
               })
@@ -225,9 +225,9 @@ auto main() -> int {
                            "2^127 overflows Int128");
 
                   // 1/3 + 1/6 == 1/2 exactly over Int128, reduced.
-                  auto const third = Rational128::make(int128_from_i64(1), int128_from_i64(3)).value();
-                  auto const sixth = Rational128::make(int128_from_i64(1), int128_from_i64(6)).value();
-                  auto const half = Rational128::make(int128_from_i64(1), int128_from_i64(2)).value();
+                  const auto third = Rational128::make(int128_from_i64(1), int128_from_i64(3)).value();
+                  const auto sixth = Rational128::make(int128_from_i64(1), int128_from_i64(6)).value();
+                  const auto half = Rational128::make(int128_from_i64(1), int128_from_i64(2)).value();
                   t.expect(third.add(sixth).value() == half, "1/3 + 1/6 == 1/2 over Int128");
               })
         // ===================================================================
@@ -281,14 +281,14 @@ auto main() -> int {
                   const BigInt a = bi("314159265358979323846264338327950288419716939937510");
                   const BigInt b = bi("2718281828459045235360287471352");
 
-                  auto const dm = a.divmod(b).value();
+                  const auto dm = a.divmod(b).value();
                   t.expect(dm.first.multiply(b).add(dm.second) == a,
                            "a == (a/b)*b + a%b (positive dividend)");
                   t.expect(dm.second.sign() >= 0 && dm.second < b, "0 <= r < b for positive a");
 
                   // Negative dividend: remainder takes the DIVIDEND's sign, |r| < |b|.
                   const BigInt an = a.negate();
-                  auto const dmn = an.divmod(b).value();
+                  const auto dmn = an.divmod(b).value();
                   t.expect(dmn.first.multiply(b).add(dmn.second) == an,
                            "roundtrip holds for a negative dividend");
                   t.expect((dmn.second.is_zero() || dmn.second.is_negative()) &&

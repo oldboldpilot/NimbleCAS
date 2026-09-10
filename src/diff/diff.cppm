@@ -147,7 +147,7 @@ inline constexpr std::size_t memo_threshold = 32;
     }
     if (name == "lambertW") {
         // W'(u) = W(u) / (u * (1 + W(u)))
-        Expr const w = call("lambertW", u);
+        const Expr w = call("lambertW", u);
         return Expr::product({w, recip(Expr::product({u, one_plus(w)}))});
     }
 
@@ -188,10 +188,10 @@ auto derivative_node(const Expr& u, std::string_view var, ExprMemo& memo) -> Exp
                 // d(f^g) = f^g * ( g'*ln(f) + g * f' / f )
                 const Expr& f = n.base;
                 const Expr& g = n.exponent;
-                Expr const df = derivative_raw(f, var, memo);
-                Expr const dg = derivative_raw(g, var, memo);
-                Expr const term1 = Expr::product({dg, Expr::apply("ln", {f})});
-                Expr const term2 = Expr::product({g, df, Expr::power(f, Expr::integer(-1))});
+                const Expr df = derivative_raw(f, var, memo);
+                const Expr dg = derivative_raw(g, var, memo);
+                const Expr term1 = Expr::product({dg, Expr::apply("ln", {f})});
+                const Expr term2 = Expr::product({g, df, Expr::power(f, Expr::integer(-1))});
                 return Expr::product({Expr::power(f, g), Expr::sum({term1, term2})});
             } else if constexpr (std::is_same_v<T, FunctionNode>) {
                 if (n.args.size() == 1) {

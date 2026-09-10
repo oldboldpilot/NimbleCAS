@@ -822,7 +822,7 @@ auto PrimeSchedule::next() -> Result<std::uint64_t> {
 
 auto modular_gcd(const Polynomial& a, const Polynomial& b, std::size_t max_primes)
     -> Result<Polynomial> {
-    auto const normalized = [](const Polynomial& p) -> Result<Polynomial> {
+    const auto normalized = [](const Polynomial& p) -> Result<Polynomial> {
         return p.leading_coefficient() < 0 ? p.scale(-1) : Result<Polynomial>{p};
     };
     if (a.is_zero()) {
@@ -944,8 +944,8 @@ auto modular_gcd(const Polynomial& a, const Polynomial& b, std::size_t max_prime
 
         if (const auto* cand = std::get_if<Candidate>(&*merge_res)) {
             // Trial division verification (§3.8)
-            auto const div_a = A.divide_exact(cand->polynomial);
-            auto const div_b = B.divide_exact(cand->polynomial);
+            const auto div_a = A.divide_exact(cand->polynomial);
+            const auto div_b = B.divide_exact(cand->polynomial);
             if (div_a.has_value() && div_b.has_value()) {
                 // Exact candidate verified! Scale by content gcd d
                 auto scaled = cand->polynomial.scale(d);

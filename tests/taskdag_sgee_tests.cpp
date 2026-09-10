@@ -77,7 +77,7 @@ class SwallowingResultChannel final : public ResultChannel {
 public:
     explicit SwallowingResultChannel(std::size_t swallow_first_n) : remaining_(swallow_first_n) {}
     [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (remaining_ > 0) { --remaining_; return {}; }  // pretend success, drop bytes
         return inner_.put(qid, std::move(p));
     }
@@ -94,7 +94,7 @@ private:
 class CorruptingResultChannel final : public ResultChannel {
 public:
     [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
-        std::lock_guard const lock(mutex_);
+        const std::lock_guard lock(mutex_);
         if (!p.empty()) { p[0] = p[0] ^ std::byte{0xFF}; }
         return inner_.put(qid, std::move(p));
     }

@@ -434,12 +434,12 @@ auto bootstrap_particle_filter(const StateSampler& initial_sampler,
 
     // Deterministic per-(step, particle) streams from the counter core: no shared mutable
     // RNG state, so the run is reproducible and thread-count/partition independent.
-    auto const root = Rng::seeded(seed);
+    const auto root = Rng::seeded(seed);
 
     std::vector<double> state(n);
     std::vector<double> log_w(n, log_uniform);  // normalized log-weights, uniform to start
     {
-        auto const init_root = root.split(0);  // split index 0 reserved for initialisation
+        const auto init_root = root.split(0);  // split index 0 reserved for initialisation
         for (std::size_t j = 0; j < n; ++j) {
             auto rj = init_root.split(static_cast<std::uint64_t>(j));
             state[j] = initial_sampler(rj);
@@ -455,9 +455,9 @@ auto bootstrap_particle_filter(const StateSampler& initial_sampler,
 
     for (std::size_t t = 0; t < observations.size(); ++t) {
         // Observation steps use split index t+1 so they never collide with init's index 0.
-        auto const step_root = root.split(static_cast<std::uint64_t>(t) + 1);
-        auto const prop_root = step_root.split(0);      // propagation streams
-        auto const resample_root = step_root.split(1);  // resampling stream, disjoint from above
+        const auto step_root = root.split(static_cast<std::uint64_t>(t) + 1);
+        const auto prop_root = step_root.split(0);      // propagation streams
+        const auto resample_root = step_root.split(1);  // resampling stream, disjoint from above
 
         // Propagate each particle through its own independent stream.
         for (std::size_t j = 0; j < n; ++j) {

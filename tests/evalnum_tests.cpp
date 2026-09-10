@@ -28,8 +28,8 @@ auto main() -> int {
         .test("polynomial_single_var",
               [](TestContext& t) {
                   // x^2 + 1 at x = 3 -> 10.0 exactly.
-                  auto const x = Expr::symbol("x");
-                  auto const expr = Expr::sum({Expr::power(x, Expr::integer(2)), Expr::integer(1)});
+                  const auto x = Expr::symbol("x");
+                  const auto expr = Expr::sum({Expr::power(x, Expr::integer(2)), Expr::integer(1)});
                   auto result = eval_double(expr, "x", 3.0);
                   t.expect(result.has_value(), "x^2+1 at x=3 evaluates");
                   t.expect_eq(*result, 10.0, "x^2+1 at x=3 == 10.0 exactly");
@@ -72,7 +72,7 @@ auto main() -> int {
         .test("map_overload_two_variables",
               [](TestContext& t) {
                   // x * y at {x: 2, y: 5} -> 10.0.
-                  auto const expr = Expr::product({Expr::symbol("x"), Expr::symbol("y")});
+                  const auto expr = Expr::product({Expr::symbol("x"), Expr::symbol("y")});
                   const std::unordered_map<std::string, double> bindings{{"x", 2.0}, {"y", 5.0}};
                   auto result = eval_double(expr, bindings);
                   t.expect(result.has_value(), "x*y at {x:2,y:5} evaluates");

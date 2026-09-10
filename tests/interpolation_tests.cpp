@@ -51,9 +51,9 @@ auto main() -> int {
                   // interpolant is exactly x^2.
                   auto nodes = rats({0, 1, 2});
                   auto values = rats({0, 1, 4});
-                  auto const lag = nimblecas::lagrange_polynomial(nodes, values).value();
+                  const auto lag = nimblecas::lagrange_polynomial(nodes, values).value();
                   t.expect(lag.is_equal(ipoly({0, 0, 1})), "Lagrange recovers x^2 exactly");
-                  auto const newt = nimblecas::newton_polynomial(nodes, values).value();
+                  const auto newt = nimblecas::newton_polynomial(nodes, values).value();
                   t.expect(newt.is_equal(ipoly({0, 0, 1})), "Newton recovers x^2 exactly");
 
                   // A cubic 2x^3 - x + 5 sampled at 4 points is recovered exactly.
@@ -63,7 +63,7 @@ auto main() -> int {
                   for (const auto& x : xs) {
                       ys.push_back(nimblecas::poly_evaluate(cubic, x).value());
                   }
-                  auto const rec = nimblecas::lagrange_polynomial(xs, ys).value();
+                  const auto rec = nimblecas::lagrange_polynomial(xs, ys).value();
                   t.expect(rec.is_equal(cubic), "cubic recovered exactly from 4 samples");
               })
         .test("methods_agree",
@@ -76,18 +76,18 @@ auto main() -> int {
                       {rats({0, 2, 5}), rats({7, -3, 11})},
                   };
                   for (const auto& [nodes, values] : data) {
-                      auto const lag = nimblecas::lagrange_polynomial(nodes, values).value();
-                      auto const newt = nimblecas::newton_polynomial(nodes, values).value();
+                      const auto lag = nimblecas::lagrange_polynomial(nodes, values).value();
+                      const auto newt = nimblecas::newton_polynomial(nodes, values).value();
                       t.expect(lag.is_equal(newt), "Lagrange == Newton polynomial");
 
-                      auto const bary = BarycentricInterpolant::make(nodes, values).value();
+                      const auto bary = BarycentricInterpolant::make(nodes, values).value();
                       // Evaluate at a spread of rational probe points (nodes and between).
                       const std::vector<Rational> probes{ri(-3), rat(1, 2), ri(3),
                                                           rat(7, 3), ri(10)};
                       for (const auto& x : probes) {
-                          auto const pv = nimblecas::poly_evaluate(lag, x).value();
-                          auto const bv = bary.evaluate(x).value();
-                          auto const nv = nimblecas::neville_evaluate(nodes, values, x).value();
+                          const auto pv = nimblecas::poly_evaluate(lag, x).value();
+                          const auto bv = bary.evaluate(x).value();
+                          const auto nv = nimblecas::neville_evaluate(nodes, values, x).value();
                           t.expect(bv == pv, "barycentric == polynomial value");
                           t.expect(nv == pv, "Neville == polynomial value");
                       }
@@ -97,8 +97,8 @@ auto main() -> int {
               [](TestContext& t) {
                   auto nodes = rats({-2, -1, 1, 3, 4});
                   auto values = rats({9, -1, 5, 2, 17});
-                  auto const poly = nimblecas::newton_polynomial(nodes, values).value();
-                  auto const bary = BarycentricInterpolant::make(nodes, values).value();
+                  const auto poly = nimblecas::newton_polynomial(nodes, values).value();
+                  const auto bary = BarycentricInterpolant::make(nodes, values).value();
                   for (std::size_t i = 0; i < nodes.size(); ++i) {
                       t.expect(nimblecas::poly_evaluate(poly, nodes[i]).value() == values[i],
                                "polynomial passes through node i");
@@ -114,15 +114,15 @@ auto main() -> int {
                   // Building point-by-point yields the same polynomial as building at once.
                   auto nodes = rats({0, 1, 2, 3});
                   auto values = rats({1, 2, 5, 10});  // x^2 + 1
-                  auto const batch = NewtonInterpolant::from_points(nodes, values).value();
+                  const auto batch = NewtonInterpolant::from_points(nodes, values).value();
 
                   NewtonInterpolant inc;  // empty
                   for (std::size_t i = 0; i < nodes.size(); ++i) {
                       inc = inc.with_point(nodes[i], values[i]).value();
                   }
                   t.expect(inc.size() == 4, "incremental interpolant has 4 points");
-                  auto const pb = batch.polynomial().value();
-                  auto const pi = inc.polynomial().value();
+                  const auto pb = batch.polynomial().value();
+                  const auto pi = inc.polynomial().value();
                   t.expect(pb.is_equal(pi), "incremental == batch Newton polynomial");
                   t.expect(pb.is_equal(ipoly({1, 0, 1})), "polynomial is x^2 + 1");
                   // Nested-Newton evaluate matches the assembled polynomial.
@@ -141,18 +141,18 @@ auto main() -> int {
                   // that all four methods agree at an off-node rational point.
                   std::vector<Rational> nodes{rat(1, 2), rat(3, 2)};
                   std::vector<Rational> values{rat(1, 3), ri(5)};
-                  auto const lag = nimblecas::lagrange_polynomial(nodes, values).value();
+                  const auto lag = nimblecas::lagrange_polynomial(nodes, values).value();
                   t.expect(nimblecas::poly_evaluate(lag, rat(1, 2)).value() == rat(1, 3),
                            "line hits (1/2, 1/3) exactly");
                   t.expect(nimblecas::poly_evaluate(lag, rat(3, 2)).value() == ri(5),
                            "line hits (3/2, 5) exactly");
 
-                  auto const newt = nimblecas::newton_polynomial(nodes, values).value();
+                  const auto newt = nimblecas::newton_polynomial(nodes, values).value();
                   t.expect(lag.is_equal(newt), "Lagrange == Newton on fractional data");
 
-                  auto const bary = BarycentricInterpolant::make(nodes, values).value();
+                  const auto bary = BarycentricInterpolant::make(nodes, values).value();
                   const Rational probe = rat(1, 1);  // x = 1, the midpoint
-                  auto const pv = nimblecas::poly_evaluate(lag, probe).value();
+                  const auto pv = nimblecas::poly_evaluate(lag, probe).value();
                   // Exact midpoint value: (1/3 + 5)/2 = 8/3.
                   t.expect(pv == rat(8, 3), "midpoint value is exactly 8/3");
                   t.expect(bary.evaluate(probe).value() == pv, "barycentric agrees, exact");
@@ -165,8 +165,8 @@ auto main() -> int {
                   std::vector<Rational> nodes{ri(0), ri(1)};
                   std::vector<Rational> values{ri(0), ri(1)};
                   std::vector<Rational> slopes{ri(1), ri(2)};
-                  auto const h = nimblecas::hermite_polynomial(nodes, values, slopes).value();
-                  auto const hp = h.derivative().value();
+                  const auto h = nimblecas::hermite_polynomial(nodes, values, slopes).value();
+                  const auto hp = h.derivative().value();
                   for (std::size_t i = 0; i < nodes.size(); ++i) {
                       t.expect(nimblecas::poly_evaluate(h, nodes[i]).value() == values[i],
                                "Hermite matches value at node");
@@ -179,14 +179,14 @@ auto main() -> int {
                   std::vector<Rational> n1{ri(2)};
                   std::vector<Rational> v1{ri(5)};
                   std::vector<Rational> d1{ri(3)};
-                  auto const line = nimblecas::hermite_polynomial(n1, v1, d1).value();
+                  const auto line = nimblecas::hermite_polynomial(n1, v1, d1).value();
                   t.expect(line.is_equal(ipoly({-1, 3})), "one-point Hermite is 3x - 1");
 
                   // Fractional Hermite stays exact: node 1/2, value 1/4, slope 1.
                   std::vector<Rational> nf{rat(1, 2)};
                   std::vector<Rational> vf{rat(1, 4)};
                   std::vector<Rational> df{ri(1)};
-                  auto const hf = nimblecas::hermite_polynomial(nf, vf, df).value();
+                  const auto hf = nimblecas::hermite_polynomial(nf, vf, df).value();
                   t.expect(nimblecas::poly_evaluate(hf, rat(1, 2)).value() == rat(1, 4),
                            "fractional Hermite hits value exactly");
                   t.expect(nimblecas::poly_evaluate(hf.derivative().value(), rat(1, 2)).value() ==

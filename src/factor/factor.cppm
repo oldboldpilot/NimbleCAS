@@ -381,7 +381,7 @@ auto factor_over_Q(const RationalPoly& p)
             RationalPoly rg = RationalPoly::from_polynomial(g);
             // Distinct square-free factors are pairwise coprime, so an irreducible cannot
             // recur across them; the merge is a defensive combine of equal factors.
-            auto const it = std::ranges::find_if(
+            const auto it = std::ranges::find_if(
                 out, [&](const auto& e) { return e.first.is_equal(rg); });
             if (it != out.end()) {
                 it->second += mult;

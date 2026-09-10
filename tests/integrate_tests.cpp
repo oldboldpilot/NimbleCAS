@@ -69,7 +69,7 @@ auto main() -> int {
                   // int 1/(x-1)^2 dx = -1/(x-1): rational part only, no logs.
                   auto a = ipoly({1});
                   auto d = ipoly({1, -2, 1});  // (x - 1)^2
-                  auto const ri = integrate_rational(a, d).value();
+                  const auto ri = integrate_rational(a, d).value();
                   t.expect(ri.log_terms.empty(), "no logarithmic terms");
                   t.expect(!ri.rational_num.is_zero(), "a rational part is present");
                   t.expect(integrates_to(a, d, ri), "d/dx of the result == A/D");
@@ -79,7 +79,7 @@ auto main() -> int {
                   // int 1/(x^2 - 1) dx = (1/2)log(x-1) - (1/2)log(x+1): logs only.
                   auto a = ipoly({1});
                   auto d = ipoly({-1, 0, 1});
-                  auto const ri = integrate_rational(a, d).value();
+                  const auto ri = integrate_rational(a, d).value();
                   t.expect(ri.rational_num.is_zero(), "no rational part");
                   t.expect(ri.log_terms.size() == 2, "two logarithmic terms");
                   t.expect(integrates_to(a, d, ri), "d/dx of the result == A/D");
@@ -90,7 +90,7 @@ auto main() -> int {
                   // rational part plus a single merged logarithm.
                   auto a = ipoly({0, 0, 0, 1});
                   auto d = ipoly({-1, 0, 1});
-                  auto const ri = integrate_rational(a, d).value();
+                  const auto ri = integrate_rational(a, d).value();
                   t.expect(!ri.rational_num.is_zero(), "rational part present");
                   t.expect(ri.log_terms.size() == 1, "one merged logarithm");
                   t.expect(integrates_to(a, d, ri), "d/dx of the result == A/D");
@@ -101,7 +101,7 @@ auto main() -> int {
                   // rational part; the simple poles give two logs.
                   auto a = ipoly({1});
                   auto d = ipoly({0, 0, -1, 1});  // x^2 (x - 1)
-                  auto const ri = integrate_rational(a, d).value();
+                  const auto ri = integrate_rational(a, d).value();
                   t.expect(!ri.rational_num.is_zero(), "rational part present");
                   t.expect(ri.log_terms.size() == 2, "two logarithmic terms");
                   t.expect(integrates_to(a, d, ri), "d/dx of the result == A/D");
@@ -111,7 +111,7 @@ auto main() -> int {
                   // int (2x)/1 dx = x^2: constant denominator, no poles.
                   auto a = ipoly({0, 2});
                   auto d = ipoly({1});
-                  auto const ri = integrate_rational(a, d).value();
+                  const auto ri = integrate_rational(a, d).value();
                   t.expect(ri.log_terms.empty(), "no logarithmic terms");
                   t.expect(ri.rational_num.is_equal(ipoly({0, 0, 1})), "antiderivative is x^2");
                   t.expect(integrates_to(a, d, ri), "d/dx of the result == A/D");

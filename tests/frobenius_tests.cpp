@@ -60,7 +60,7 @@ auto main() -> int {
                   t.expect(factors.size() == 1, "one invariant factor for a companion matrix");
                   t.expect(factors[0].is_equal(poly({6, -5, 1})),
                            "invariant factor = x^2 - 5x + 6");
-                  auto const rcf = nimblecas::rational_canonical_form(A).value();
+                  const auto rcf = nimblecas::rational_canonical_form(A).value();
                   t.expect(rcf.is_equal(A), "RCF of a companion matrix is the matrix itself");
                   t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({6, -5, 1})),
                            "minimal polynomial = x^2 - 5x + 6");
@@ -68,11 +68,11 @@ auto main() -> int {
         .test("companion_matrix_builder_matches_convention",
               [](TestContext& t) {
                   // companion_matrix(x^2 + 1) = [[0,-1],[1,0]] (right-column form).
-                  auto const c = nimblecas::companion_matrix(poly({1, 0, 1})).value();
+                  const auto c = nimblecas::companion_matrix(poly({1, 0, 1})).value();
                   t.expect(c.is_equal(mat({{ri(0), ri(-1)}, {ri(1), ri(0)}})),
                            "companion(x^2+1) = [[0,-1],[1,0]]");
                   // A non-monic multiple normalises to the same companion.
-                  auto const c2 = nimblecas::companion_matrix(poly({3, 0, 3})).value();
+                  const auto c2 = nimblecas::companion_matrix(poly({3, 0, 3})).value();
                   t.expect(c2.is_equal(c), "non-monic 3x^2+3 gives the same companion as x^2+1");
                   // A constant polynomial has no companion.
                   t.expect(nimblecas::companion_matrix(poly({7})).error() == MathError::domain_error,
@@ -96,7 +96,7 @@ auto main() -> int {
                   t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({6, -5, 1})),
                            "minimal polynomial = (x-2)(x-3)");
                   // RCF = diag( C(x-2), C(x^2-5x+6) ) = [[2,0,0],[0,0,-6],[0,1,5]].
-                  auto const rcf = nimblecas::rational_canonical_form(A).value();
+                  const auto rcf = nimblecas::rational_canonical_form(A).value();
                   t.expect(rcf.is_equal(mat({{ri(2), ri(0), ri(0)},
                                              {ri(0), ri(0), ri(-6)},
                                              {ri(0), ri(1), ri(5)}})),
@@ -145,12 +145,12 @@ auto main() -> int {
                            {ri(0), ri(0), ri(3)}}),                     // diag(2,2,3)
                   };
                   for (std::size_t k = 0; k < mats.size(); ++k) {
-                      auto const factors = nimblecas::invariant_factors(mats[k]).value();
-                      auto const charpoly = nimblecas::characteristic_polynomial(mats[k]).value();
+                      const auto factors = nimblecas::invariant_factors(mats[k]).value();
+                      const auto charpoly = nimblecas::characteristic_polynomial(mats[k]).value();
                       t.expect(product(factors).is_equal(charpoly),
                                "prod(invariant factors) == characteristic polynomial");
                       // The minimal polynomial (last factor) always divides the char poly.
-                      auto const mp = nimblecas::minimal_polynomial(mats[k]).value();
+                      const auto mp = nimblecas::minimal_polynomial(mats[k]).value();
                       t.expect(charpoly.divide(mp).value().remainder.is_zero(),
                                "minimal polynomial divides the characteristic polynomial");
                   }
@@ -176,13 +176,13 @@ auto main() -> int {
                   t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({0, 0, 1})),
                            "minimal polynomial = x^2");
                   // Product of invariant factors == characteristic polynomial x^3.
-                  auto const charpoly = nimblecas::characteristic_polynomial(A).value();
+                  const auto charpoly = nimblecas::characteristic_polynomial(A).value();
                   t.expect(product(factors).is_equal(charpoly),
                            "x * x^2 = x^3 = characteristic polynomial");
                   t.expect(charpoly.is_equal(poly({0, 0, 0, 1})), "characteristic polynomial = x^3");
                   // RCF = diag( C(x), C(x^2) ). C(x) = [[0]] (1x1); C(x^2) = [[0,0],[1,0]].
                   // Block diagonal => [[0,0,0],[0,0,0],[0,1,0]].
-                  auto const rcf = nimblecas::rational_canonical_form(A).value();
+                  const auto rcf = nimblecas::rational_canonical_form(A).value();
                   t.expect(rcf.is_equal(mat({{ri(0), ri(0), ri(0)},
                                              {ri(0), ri(0), ri(0)},
                                              {ri(0), ri(1), ri(0)}})),
@@ -210,7 +210,7 @@ auto main() -> int {
                            "0x0 has no invariant factors");
                   t.expect(nimblecas::minimal_polynomial(empty).value().is_equal(poly({1})),
                            "minimal polynomial of 0x0 = constant 1");
-                  auto const rcf = nimblecas::rational_canonical_form(empty).value();
+                  const auto rcf = nimblecas::rational_canonical_form(empty).value();
                   t.expect(rcf.rows() == 0 && rcf.cols() == 0, "RCF of 0x0 is 0x0");
                   t.expect(rcf.is_equal(Matrix{}), "RCF(0x0) == the empty matrix");
               })
@@ -230,7 +230,7 @@ auto main() -> int {
                   t.expect(factors[1].is_equal(poly({1, 0, 1})), "f_2 = x^2 + 1");
                   t.expect(nimblecas::minimal_polynomial(A).value().is_equal(poly({1, 0, 1})),
                            "minimal polynomial = x^2 + 1");
-                  auto const charpoly = nimblecas::characteristic_polynomial(A).value();
+                  const auto charpoly = nimblecas::characteristic_polynomial(A).value();
                   t.expect(product(factors).is_equal(charpoly),
                            "(x^2+1)^2 = characteristic polynomial");
                   t.expect(charpoly.is_equal(poly({1, 0, 2, 0, 1})),

@@ -434,7 +434,7 @@ auto partial_fractions(const RationalPoly& numerator, const RationalPoly& denomi
     PartialFraction result;
     result.polynomial_part = std::move(sf->polynomial_part);
     // Expand each tower N / base^e across the ascending powers base^1 .. base^e.
-    for (auto const& tower : sf->towers) {
+    for (const auto& tower : sf->towers) {
         auto digits = power_expand(tower.numerator, tower.base, tower.exponent);
         if (!digits) {
             return make_error<PartialFraction>(digits.error());

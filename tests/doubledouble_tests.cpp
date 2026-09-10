@@ -125,7 +125,7 @@ auto main() -> int {
               [](TestContext& t) {
                   const std::array<double, 3> x{1e16, 1.0, -1e16};  // true sum is 1
                   double naive = 0.0;
-                  for (double const v : x) naive += v;
+                  for (const double v : x) naive += v;
                   t.expect(bits_equal(naive, 0.0), "naive double sum collapses to 0");
 
                   const DoubleDouble s = nimblecas::dd_sum(x);
@@ -158,7 +158,7 @@ auto main() -> int {
                       x[i] = (i % 4 == 0) ? 1e16 : (i % 4 == 2) ? -1e16 : 1.0;
                   }
                   double naive = 0.0;
-                  for (double const v : x) naive += v;
+                  for (const double v : x) naive += v;
                   t.expect(!bits_equal(naive, 8.0), "naive double sum loses the small terms");
 
                   const DoubleDouble s = nimblecas::dd_sum(x);

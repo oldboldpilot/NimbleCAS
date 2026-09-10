@@ -144,7 +144,7 @@ auto main() -> int {
                   const Expr H = Expr::sum(
                       {Expr::product({half(), sqr(p)}),
                        Expr::product({half(), sqr(w), sqr(q)})});
-                  auto const act = action_integral(H, one, E).value();
+                  const auto act = action_integral(H, one, E).value();
                   const Expr integrand_expected =
                       Expr::apply("sqrt", {Expr::sum({Expr::product({I(2), E}),
                                                       neg(Expr::product({sqr(w), sqr(q)}))})});

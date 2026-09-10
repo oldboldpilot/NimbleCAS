@@ -1490,7 +1490,7 @@ struct Canonicaliser {
         return make_error<std::int64_t>(MathError::domain_error);
     }
 
-    Term const cur = is_var(t) ? apply_substitution(s, t) : t;
+    const Term cur = is_var(t) ? apply_substitution(s, t) : t;
 
     if (is_int(cur)) {
         return int_of(cur).value;
@@ -1533,7 +1533,7 @@ struct Canonicaliser {
             if (arith_is_unary_float(name)) {
                 return make_error<std::int64_t>(MathError::not_implemented);
             }
-            auto const val = *arg_res;
+            const auto val = *arg_res;
             if (name == "+") {
                 return val;
             }
@@ -1573,8 +1573,8 @@ struct Canonicaliser {
             if (arith_is_binary_float(name)) {
                 return make_error<std::int64_t>(MathError::not_implemented);
             }
-            auto const a = *lhs_res;
-            auto const b = *rhs_res;
+            const auto a = *lhs_res;
+            const auto b = *rhs_res;
             if (name == "+") {
                 return arith_add(a, b);
             }
@@ -1651,7 +1651,7 @@ struct Canonicaliser {
 }
 
 [[nodiscard]] auto eval_arith(const Term& t, const Substitution& s) -> Result<std::int64_t> {
-    Term const resolved = apply_substitution(s, t);
+    const Term resolved = apply_substitution(s, t);
     return arith_eval_impl(resolved, s, 0);
 }
 
@@ -1669,8 +1669,8 @@ struct Canonicaliser {
     if (!rhs_res) {
         return make_error<bool>(rhs_res.error());
     }
-    auto const l = *lhs_res;
-    auto const r = *rhs_res;
+    const auto l = *lhs_res;
+    const auto r = *rhs_res;
     if (op == "=:=") {
         return l == r;
     }
@@ -2784,7 +2784,7 @@ auto strip_carets(const Term& t, std::vector<VarKey>& quantified) -> Term {
     if (!validate_goal(goal)) {
         return make_error<std::vector<Term>>(MathError::domain_error);
     }
-    SubResult const r = run_sub(db, goal, sub, ctx, 0, depth);
+    const SubResult r = run_sub(db, goal, sub, ctx, 0, depth);
     if (ctx.error) {
         return make_error<std::vector<Term>>(*ctx.error);
     }
@@ -2902,7 +2902,7 @@ auto sld_search(Database& db, const GoalList& goals, const Substitution& sub,
             const Term cond = compound_of(lhs).args[0];
             const Term then_goal = compound_of(lhs).args[1];
             // The condition is opaque to cut and, for `->`, committed to its FIRST solution.
-            SubResult const r = run_sub(db, cond, sub, ctx, soft ? 0 : 1, depth + 1);
+            const SubResult r = run_sub(db, cond, sub, ctx, soft ? 0 : 1, depth + 1);
             if (ctx.error) {
                 return;
             }
@@ -2953,7 +2953,7 @@ auto sld_search(Database& db, const GoalList& goals, const Substitution& sub,
         // A bare if-then with no else: the missing else is `fail`.
         --ctx.steps;
         const bool soft = ind == "*->/2";
-        SubResult const r = run_sub(db, args[0], sub, ctx, soft ? 0 : 1, depth + 1);
+        const SubResult r = run_sub(db, args[0], sub, ctx, soft ? 0 : 1, depth + 1);
         if (ctx.error) {
             return;
         }
@@ -2987,7 +2987,7 @@ auto sld_search(Database& db, const GoalList& goals, const Substitution& sub,
             ctx.error = MathError::domain_error;
             return;
         }
-        SubResult const r = run_sub(db, inner, sub, ctx, 1, depth + 1);
+        const SubResult r = run_sub(db, inner, sub, ctx, 1, depth + 1);
         if (ctx.error) {
             return;
         }

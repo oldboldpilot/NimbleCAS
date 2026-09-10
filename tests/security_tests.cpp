@@ -97,7 +97,7 @@ auto main() -> int {
         // --- F4: pricing paths/steps OOM + trinomial overflow --------------------------------
         .test("F4 pricing caps paths/steps before allocating",
               [](TestContext& t) {
-                  auto const spec = px::OptionSpec{}
+                  const auto spec = px::OptionSpec{}
                                   .with_spot(100).with_strike(100).with_rate(0.05)
                                   .with_volatility(0.2).with_expiry(1.0);
                   // 2*steps+1 overflowed int; now refused.

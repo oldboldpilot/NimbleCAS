@@ -42,7 +42,7 @@ auto main() -> int {
         .test("three_simple_roots",
               [](TestContext& t) {
                   // (x-1)(x-2)(x+3) = x^3 - 7x + 6
-                  auto const roots = rational_roots(ipoly({6, -7, 0, 1})).value();
+                  const auto roots = rational_roots(ipoly({6, -7, 0, 1})).value();
                   t.expect(roots.size() == 3, "three distinct roots");
                   t.expect(has_root(roots, Rational::from_int(1), 1), "root 1 (mult 1)");
                   t.expect(has_root(roots, Rational::from_int(2), 1), "root 2 (mult 1)");
@@ -51,7 +51,7 @@ auto main() -> int {
         .test("repeated_root_multiplicity",
               [](TestContext& t) {
                   // (x-1)^2 (x+2) = x^3 - 3x + 2  (coeffs low degree first: 2, -3, 0, 1)
-                  auto const roots = rational_roots(ipoly({2, -3, 0, 1})).value();
+                  const auto roots = rational_roots(ipoly({2, -3, 0, 1})).value();
                   t.expect(roots.size() == 2, "two distinct roots");
                   t.expect(has_root(roots, Rational::from_int(1), 2), "root 1 has multiplicity 2");
                   t.expect(has_root(roots, Rational::from_int(-2), 1), "root -2 (mult 1)");
@@ -59,13 +59,13 @@ auto main() -> int {
         .test("irrational_has_no_rational_roots",
               [](TestContext& t) {
                   // x^2 + 1: complex roots, none rational
-                  auto const roots = rational_roots(ipoly({1, 0, 1})).value();
+                  const auto roots = rational_roots(ipoly({1, 0, 1})).value();
                   t.expect(roots.empty(), "x^2 + 1 has no rational roots");
               })
         .test("common_factor_cleared",
               [](TestContext& t) {
                   // 2x^2 - 2 = 2(x-1)(x+1)
-                  auto const roots = rational_roots(ipoly({-2, 0, 2})).value();
+                  const auto roots = rational_roots(ipoly({-2, 0, 2})).value();
                   t.expect(roots.size() == 2, "two roots after clearing the factor 2");
                   t.expect(has_root(roots, Rational::from_int(1), 1), "root 1 (mult 1)");
                   t.expect(has_root(roots, Rational::from_int(-1), 1), "root -1 (mult 1)");
@@ -73,14 +73,14 @@ auto main() -> int {
         .test("fractional_root",
               [](TestContext& t) {
                   // 2x - 1: root 1/2
-                  auto const roots = rational_roots(ipoly({-1, 2})).value();
+                  const auto roots = rational_roots(ipoly({-1, 2})).value();
                   t.expect(roots.size() == 1, "one root");
                   t.expect(has_root(roots, rat(1, 2), 1), "root 1/2 (mult 1)");
               })
         .test("zero_root_with_multiplicity",
               [](TestContext& t) {
                   // x^2 (x - 1): roots 0 (mult 2) and 1
-                  auto const roots = rational_roots(ipoly({0, 0, -1, 1})).value();
+                  const auto roots = rational_roots(ipoly({0, 0, -1, 1})).value();
                   t.expect(roots.size() == 2, "two distinct roots");
                   t.expect(has_root(roots, Rational{}, 2), "root 0 has multiplicity 2");
                   t.expect(has_root(roots, Rational::from_int(1), 1), "root 1 (mult 1)");
@@ -91,7 +91,7 @@ auto main() -> int {
                   t.expect(rational_roots(RationalPoly{}).error() == MathError::domain_error,
                            "zero polynomial is a domain error");
                   // nonzero constant: no roots
-                  auto const roots = rational_roots(ipoly({5})).value();
+                  const auto roots = rational_roots(ipoly({5})).value();
                   t.expect(roots.empty(), "nonzero constant has no roots");
               })
         .run();

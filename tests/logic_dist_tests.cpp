@@ -324,7 +324,7 @@ auto main() -> int {
                   using namespace nimblecas;
                   using namespace nimblecas::logic_dist;
 
-                  auto const to_payload = [](std::string_view s) -> Payload {
+                  const auto to_payload = [](std::string_view s) -> Payload {
                       Payload p;
                       p.reserve(s.size());
                       for (const char c : s) {
@@ -373,7 +373,7 @@ auto main() -> int {
                   using namespace nimblecas;
                   using namespace nimblecas::logic_dist;
 
-                  auto const to_payload = [](std::string_view s) -> Payload {
+                  const auto to_payload = [](std::string_view s) -> Payload {
                       Payload p;
                       p.reserve(s.size());
                       for (const char c : s) {

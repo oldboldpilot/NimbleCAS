@@ -47,14 +47,14 @@ auto main() -> int {
         .test("first_moment_expectation_argument",
               [](TestContext& t) {
                   // E[X] = 1/2 < 1  =>  P(X=0) > 0  =>  a bad-event-free config EXISTS.
-                  auto const r = nimblecas::first_moment_exists(rat(1, 2)).value();
+                  const auto r = nimblecas::first_moment_exists(rat(1, 2)).value();
                   t.expect(r.verdict == Existence::exists, "E[X]=1/2 < 1 => exists");
                   t.expect(r.expected_value == rat(1, 2), "echoes E[X] = 1/2");
                   // The averaging dual always holds, independent of the < 1 test.
                   t.expect(r.attains_at_least_mean && r.attains_at_most_mean,
                            "averaging: outcomes above and below the mean both exist");
                   // E[X] = 2 >= 1  =>  the first-moment argument does not apply.
-                  auto const r2 = nimblecas::first_moment_exists(ri(2)).value();
+                  const auto r2 = nimblecas::first_moment_exists(ri(2)).value();
                   t.expect(r2.verdict == Existence::not_certified, "E[X]=2 => not_certified");
                   // Exactly E[X] = 1 is not < 1, so not certified (boundary).
                   t.expect(nimblecas::first_moment_exists(ri(1)).value().verdict ==
@@ -69,17 +69,17 @@ auto main() -> int {
               [](TestContext& t) {
                   // Probabilities summing to 3/4 < 1  =>  some outcome avoids all => exists.
                   const std::vector<Rational> good{rat(1, 4), rat(1, 4), rat(1, 4)};
-                  auto const r = nimblecas::union_bound_exists(sp(good)).value();
+                  const auto r = nimblecas::union_bound_exists(sp(good)).value();
                   t.expect(r.verdict == Existence::exists, "sum 3/4 < 1 => exists");
                   t.expect(r.total_probability == rat(3, 4), "exact total probability = 3/4");
                   // Probabilities summing to 5/4 >= 1  =>  union bound is vacuous.
                   const std::vector<Rational> bad{rat(1, 2), rat(1, 2), rat(1, 4)};
-                  auto const r2 = nimblecas::union_bound_exists(sp(bad)).value();
+                  const auto r2 = nimblecas::union_bound_exists(sp(bad)).value();
                   t.expect(r2.verdict == Existence::not_certified, "sum 5/4 => not_certified");
                   t.expect(r2.total_probability == rat(5, 4), "exact total probability = 5/4");
                   // Empty list: no bad events, so any configuration is good (vacuous exists).
                   const std::vector<Rational> none{};
-                  auto const r3 = nimblecas::union_bound_exists(sp(none)).value();
+                  const auto r3 = nimblecas::union_bound_exists(sp(none)).value();
                   t.expect(r3.verdict == Existence::exists && r3.total_probability == ri(0),
                            "empty => total 0 => exists");
                   // An entry outside [0,1] is not a probability.
@@ -91,11 +91,11 @@ auto main() -> int {
         .test("second_moment_chebyshev_bound",
               [](TestContext& t) {
                   // mean = 10, var = 5:  P(X=0) <= Var/E^2 = 5/100 = 1/20 < 1  =>  X>0 exists.
-                  auto const r = nimblecas::second_moment_positive(ri(10), ri(5)).value();
+                  const auto r = nimblecas::second_moment_positive(ri(10), ri(5)).value();
                   t.expect(r.prob_zero_bound == rat(1, 20), "P(X=0) <= 1/20 exactly");
                   t.expect(r.verdict == Existence::exists, "1/20 < 1 => exists");
                   // Var = E^2 gives bound 1 (not < 1): the argument does not certify.
-                  auto const r2 = nimblecas::second_moment_positive(ri(3), ri(9)).value();
+                  const auto r2 = nimblecas::second_moment_positive(ri(3), ri(9)).value();
                   t.expect(r2.prob_zero_bound == ri(1), "Var=E^2 => bound = 1");
                   t.expect(r2.verdict == Existence::not_certified, "bound 1 => not_certified");
                   // E[X] = 0 is guarded (division), as is a negative variance.
@@ -109,27 +109,27 @@ auto main() -> int {
         .test("lovasz_symmetric_e_enclosure_is_sound",
               [](TestContext& t) {
                   // p = 1/100, d = 3:  c = p(d+1) = 1/25.  e*c = 4e/100 ~ 0.1087 <= 1 => exists.
-                  auto const r = nimblecas::lovasz_symmetric(rat(1, 100), 3).value();
+                  const auto r = nimblecas::lovasz_symmetric(rat(1, 100), 3).value();
                   t.expect(r.verdict == LovaszVerdict::exists, "1/25 well below 1/e => exists");
                   t.expect(r.constraint == rat(1, 25), "constraint p(d+1) = 1/25 exactly");
                   // SOUNDNESS: a certified exists must have c * e_hi <= 1 (hence e*c < 1 truly),
                   // computed against the rigorous rational UPPER bound of e.
-                  auto const witness = r.constraint.multiply(nimblecas::e_upper_bound()).value();
+                  const auto witness = r.constraint.multiply(nimblecas::e_upper_bound()).value();
                   t.expect(rle(witness, ri(1)),
                            "certificate is sound: p(d+1)*e_upper <= 1, so e*p*(d+1) < 1");
 
                   // p = 1/2, d = 3:  c = 2.  e*c = 2e ~ 5.4 > 1  =>  condition provably fails.
-                  auto const r2 = nimblecas::lovasz_symmetric(rat(1, 2), 3).value();
+                  const auto r2 = nimblecas::lovasz_symmetric(rat(1, 2), 3).value();
                   t.expect(r2.verdict == LovaszVerdict::condition_fails, "2e > 1 => condition_fails");
                   t.expect(r2.constraint == ri(2), "constraint = 2");
                   // And its failure is real: c * e_lo > 1 against the rational LOWER bound of e.
-                  auto const witness2 = r2.constraint.multiply(nimblecas::e_lower_bound()).value();
+                  const auto witness2 = r2.constraint.multiply(nimblecas::e_lower_bound()).value();
                   t.expect(!rle(witness2, ri(1)),
                            "failure is real: p(d+1)*e_lower > 1, so e*p*(d+1) > 1");
 
                   // A constraint inside the thin rational sliver around 1/e that the enclosure
                   // cannot resolve: c = 3678795/10000000 lies in (1/e_hi, 1/e_lo].
-                  auto const r3 = nimblecas::lovasz_symmetric(rat(3678795, 10000000), 0).value();
+                  const auto r3 = nimblecas::lovasz_symmetric(rat(3678795, 10000000), 0).value();
                   t.expect(r3.verdict == LovaszVerdict::indeterminate,
                            "c in the e-enclosure gap => indeterminate (honest, not guessed)");
 
@@ -176,7 +176,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // R(3,3): threshold 2^{C(3,2)-1} = 2^2 = 4. Largest n with C(n,3) < 4:
                   //   C(3,3)=1<4 (ok), C(4,3)=4 (not < 4) => largest n = 3, so R(3,3) > 3.
-                  auto const r3 = nimblecas::ramsey_lower_bound(3).value();
+                  const auto r3 = nimblecas::ramsey_lower_bound(3).value();
                   t.expect(r3.largest_n == 3, "R(3,3) > 3 (largest certified n)");
                   t.expect(r3.threshold == nimblecas::BigInt::from_u64(4), "threshold 2^2 = 4");
                   t.expect(nimblecas::ramsey_certifies(3, 3).value(), "C(3,3)=1 < 4 certifies");
@@ -185,7 +185,7 @@ auto main() -> int {
 
                   // R(4,4): threshold 2^{C(4,2)-1} = 2^5 = 32. Largest n with C(n,4) < 32:
                   //   C(6,4)=15<32 (ok), C(7,4)=35 (not < 32) => largest n = 6, so R(4,4) > 6.
-                  auto const r4 = nimblecas::ramsey_lower_bound(4).value();
+                  const auto r4 = nimblecas::ramsey_lower_bound(4).value();
                   t.expect(r4.largest_n == 6, "R(4,4) > 6 (largest certified n)");
                   t.expect(r4.threshold == nimblecas::BigInt::from_u64(32), "threshold 2^5 = 32");
                   t.expect(nimblecas::ramsey_certifies(6, 4).value(), "C(6,4)=15 < 32 certifies");

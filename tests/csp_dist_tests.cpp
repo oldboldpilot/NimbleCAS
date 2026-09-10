@@ -103,13 +103,13 @@ auto main() -> int {
                   if (!reference_csp) {
                       return;
                   }
-                  auto const want = backtracking_search(*reference_csp);
+                  const auto want = backtracking_search(*reference_csp);
                   t.expect(want.has_value(), "the in-process search succeeds");
 
                   auto ser = serial_executor();
                   auto par = local_parallel_executor();
-                  auto const a = solve_distributed(w, 1, *ser);
-                  auto const b = solve_distributed(w, 2, *par);
+                  const auto a = solve_distributed(w, 1, *ser);
+                  const auto b = solve_distributed(w, 2, *par);
                   t.expect(a.has_value() && b.has_value(), "both distributed runs succeed");
                   t.expect(a.value_or(std::nullopt) == want.value_or(std::nullopt),
                            "serial executor, one fixed variable: the identical assignment");
@@ -154,7 +154,7 @@ auto main() -> int {
 
                   // And it agrees with the in-process counter on the same problem.
                   auto csp = as_csp(eight);
-                  auto const serial_n = csp.has_value() ? solution_count(*csp, 0)
+                  const auto serial_n = csp.has_value() ? solution_count(*csp, 0)
                                                   : nimblecas::make_error<std::uint64_t>(
                                                         MathError::domain_error);
                   t.expect(serial_n.has_value() && serial_n.value_or(0) == 92,
@@ -231,7 +231,7 @@ auto main() -> int {
                   malformed.domains = {range_domain(3), range_domain(3)};
                   malformed.constraints.push_back(WireConstraint{
                       .kind = ConstraintKind::not_equal, .scope = {0, 5}, .params = {}});
-                  auto const bad = solve_distributed(malformed, 1, *exec);
+                  const auto bad = solve_distributed(malformed, 1, *exec);
                   t.expect(!bad.has_value(),
                            "a malformed problem is refused rather than distributed");
               })
@@ -274,14 +274,14 @@ auto main() -> int {
 
                   const auto w = wire_queens(6);
                   auto ser = serial_executor();
-                  auto const a = solve_distributed(w, 2, *ser);
-                  auto const b = solve_distributed(w, 2, sgee);
+                  const auto a = solve_distributed(w, 2, *ser);
+                  const auto b = solve_distributed(w, 2, sgee);
                   t.expect(a.has_value() && b.has_value(), "both runs succeed");
                   t.expect(a.value_or(std::nullopt) == b.value_or(std::nullopt),
                            "and the cluster returns the identical assignment");
 
-                  auto const ca = count_distributed(w, 2, 0, *ser);
-                  auto const cb = count_distributed(w, 2, 0, sgee);
+                  const auto ca = count_distributed(w, 2, 0, *ser);
+                  const auto cb = count_distributed(w, 2, 0, sgee);
                   t.expect(ca.has_value() && cb.has_value(), "both counts succeed");
                   t.expect(ca.value_or(CountResult{}) == cb.value_or(CountResult{}),
                            "and the counts agree exactly, flag included");

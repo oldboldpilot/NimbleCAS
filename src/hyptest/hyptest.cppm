@@ -757,10 +757,10 @@ auto normal_mean_mle_model() -> Result<MleModel> {
     const Expr mu = sym("mu");
     const Expr sigma2 = sym("sigma2");  // known variance
     // sum (x_i - mu)^2 = n*v - 2*n*m*mu + n*mu^2 ; ell = -(1/(2*sigma2)) * that.
-    Expr const inner = Expr::sum({Expr::product({n, v}),
+    const Expr inner = Expr::sum({Expr::product({n, v}),
                             negate_expr(Expr::product({intg(2), n, m, mu})),
                             Expr::product({n, Expr::power(mu, intg(2))})});
-    Expr const prefactor = negate_expr(inv(Expr::product({intg(2), sigma2})));  // -(2*sigma2)^(-1)
+    const Expr prefactor = negate_expr(inv(Expr::product({intg(2), sigma2})));  // -(2*sigma2)^(-1)
     Expr ll = Expr::product({prefactor, inner});
     Expr fisher = inv(sigma2);  // 1/sigma2
     return make_model("mu", std::move(ll), m, std::move(fisher));
@@ -771,7 +771,7 @@ auto geometric_mle_model() -> Result<MleModel> {
     const Expr m = sym("m");
     const Expr p = sym("p");
     // ell = n*ln(p) + n*(m-1)*ln(1-p) for support k = 1, 2, ...
-    Expr const m_minus_1 = Expr::sum({m, negate_expr(intg(1))});
+    const Expr m_minus_1 = Expr::sum({m, negate_expr(intg(1))});
     Expr ll = Expr::sum({Expr::product({n, ln(p)}),
                          Expr::product({n, m_minus_1, ln(one_minus(p))})});
     Expr mle = inv(m);  // p-hat = 1/m
@@ -926,10 +926,10 @@ auto poisson_score_statistic(std::span<const Rational> data, const Rational& lam
 auto log_likelihood_ratio(const MleModel& model, const Expr& theta_hat, const Expr& theta0)
     -> Result<Expr> {
     const Expr theta = Expr::symbol(model.parameter);
-    Expr const ll_hat = substitute(model.log_likelihood, theta, theta_hat);
-    Expr const ll_0 = substitute(model.log_likelihood, theta, theta0);
+    const Expr ll_hat = substitute(model.log_likelihood, theta, theta_hat);
+    const Expr ll_0 = substitute(model.log_likelihood, theta, theta0);
     // G^2 = 2 ( ell(theta-hat) - ell(theta0) ), left symbolic (contains ln in general).
-    Expr const g = Expr::product({intg(2), Expr::sum({ll_hat, negate_expr(ll_0)})});
+    const Expr g = Expr::product({intg(2), Expr::sum({ll_hat, negate_expr(ll_0)})});
     return simplify(g);
 }
 

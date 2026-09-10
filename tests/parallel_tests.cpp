@@ -34,7 +34,7 @@ auto main() -> int {
         .test("parallel_matches_serial_reference",
               [](TestContext& t) {
                   const std::size_t n = 50'000;
-                  auto const f = [](std::size_t i) { return (i * 2654435761u) ^ (i << 3); };
+                  const auto f = [](std::size_t i) { return (i * 2654435761u) ^ (i << 3); };
                   auto par = np::transform_index(n, f);  // parallel (n >= grain)
                   std::vector<std::size_t> ser(n);
                   for (std::size_t i = 0; i < n; ++i) ser[i] = f(i);
@@ -44,7 +44,7 @@ auto main() -> int {
         .test("small_input_stays_serial_same_result",
               [](TestContext& t) {
                   // below grain -> serial path; must give the same answer
-                  auto const got = np::transform_index(std::size_t{5}, [](std::size_t i) { return i + 1; });
+                  const auto got = np::transform_index(std::size_t{5}, [](std::size_t i) { return i + 1; });
                   t.expect(got == std::vector<std::size_t>{1, 2, 3, 4, 5}, "serial path correct");
               })
         .test("transform_over_span",

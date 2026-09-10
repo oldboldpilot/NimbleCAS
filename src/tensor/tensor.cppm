@@ -215,7 +215,7 @@ inline constexpr std::size_t max_cofactor_dim = 5;
         constexpr std::size_t cap = 8192;
         std::vector<Expr> result{Expr::integer(1)};
         for (const Expr& f : mul->factors) {
-            Expr const df = distribute_all(f);
+            const Expr df = distribute_all(f);
             std::vector<Expr> fterms;
             if (const auto* fadd = std::get_if<AddNode>(&df.node().value)) {
                 fterms.assign(fadd->terms.begin(), fadd->terms.end());

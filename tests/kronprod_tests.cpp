@@ -39,7 +39,7 @@ auto main() -> int {
                   // A is 2x2, B is 2x3 => A (x) B is 4x6, block (i,j) = a_ij * B.
                   const auto A = mat({{ri(1), ri(2)}, {ri(3), ri(4)}});
                   const auto B = mat({{ri(0), ri(5), ri(1)}, {ri(6), ri(7), ri(2)}});
-                  auto const K = nimblecas::kronecker_product(A, B).value();
+                  const auto K = nimblecas::kronecker_product(A, B).value();
                   t.expect(K.rows() == 4 && K.cols() == 6, "A(x)B is 4x6");
                   // Spot-check the four blocks a_ij * B via representative entries.
                   // Block (0,0) = 1*B: K(1,1) = 1*7 = 7.
@@ -61,7 +61,7 @@ auto main() -> int {
                   //          [ 0,   0,  -2, 2 ]].
                   const auto A = mat({{rat(1, 2), ri(0)}, {ri(0), ri(2)}});
                   const auto B = mat({{ri(1), ri(3)}, {ri(-1), ri(1)}});
-                  auto const K = nimblecas::kronecker_product(A, B).value();
+                  const auto K = nimblecas::kronecker_product(A, B).value();
                   const auto expected = mat({{rat(1, 2), rat(3, 2), ri(0), ri(0)},
                                              {rat(-1, 2), rat(1, 2), ri(0), ri(0)},
                                              {ri(0), ri(0), ri(2), ri(6)},
@@ -76,13 +76,13 @@ auto main() -> int {
                   const auto C = mat({{ri(3), ri(0)}, {ri(1), ri(-1)}});
                   const auto B = mat({{rat(1, 2), ri(1)}, {ri(0), ri(2)}});
                   const auto D = mat({{ri(2), ri(0)}, {ri(1), ri(1)}});
-                  auto const lhs = nimblecas::kronecker_product(A, B)
+                  const auto lhs = nimblecas::kronecker_product(A, B)
                                  .value()
                                  .multiply(nimblecas::kronecker_product(C, D).value())
                                  .value();
-                  auto const AC = A.multiply(C).value();
-                  auto const BD = B.multiply(D).value();
-                  auto const rhs = nimblecas::kronecker_product(AC, BD).value();
+                  const auto AC = A.multiply(C).value();
+                  const auto BD = B.multiply(D).value();
+                  const auto rhs = nimblecas::kronecker_product(AC, BD).value();
                   t.expect(lhs.is_equal(rhs), "(A(x)B)(C(x)D) == (AC)(x)(BD)");
               })
         .test("transpose_identity",
@@ -90,8 +90,8 @@ auto main() -> int {
                   // (A (x) B)^T = A^T (x) B^T.
                   const auto A = mat({{ri(1), ri(2), ri(3)}, {ri(4), ri(5), ri(6)}});
                   const auto B = mat({{rat(1, 3), ri(2)}, {ri(-1), ri(0)}});
-                  auto const lhs = nimblecas::kronecker_product(A, B).value().transpose().value();
-                  auto const rhs = nimblecas::kronecker_product(A.transpose().value(),
+                  const auto lhs = nimblecas::kronecker_product(A, B).value().transpose().value();
+                  const auto rhs = nimblecas::kronecker_product(A.transpose().value(),
                                                           B.transpose().value())
                                  .value();
                   t.expect(lhs.is_equal(rhs), "(A(x)B)^T == A^T(x)B^T");
@@ -103,11 +103,11 @@ auto main() -> int {
                   const auto A = mat({{ri(1), ri(2)}, {ri(0), ri(3)}});
                   const auto X = mat({{ri(1), ri(0), ri(2)}, {ri(-1), ri(4), ri(1)}});
                   const auto B = mat({{ri(1), ri(0)}, {ri(2), ri(1)}, {ri(0), ri(3)}});
-                  auto const AXB = A.multiply(X).value().multiply(B).value();
-                  auto const lhs = nimblecas::vec(AXB).value();
-                  auto const Bt = B.transpose().value();
-                  auto const op = nimblecas::kronecker_product(Bt, A).value();  // (B^T (x) A)
-                  auto const rhs = op.multiply(nimblecas::vec(X).value()).value();
+                  const auto AXB = A.multiply(X).value().multiply(B).value();
+                  const auto lhs = nimblecas::vec(AXB).value();
+                  const auto Bt = B.transpose().value();
+                  const auto op = nimblecas::kronecker_product(Bt, A).value();  // (B^T (x) A)
+                  const auto rhs = op.multiply(nimblecas::vec(X).value()).value();
                   t.expect(lhs.rows() == 4 && lhs.cols() == 1, "vec(AXB) is 4x1");
                   t.expect(lhs.is_equal(rhs), "vec(AXB) == (B^T(x)A)vec(X)");
               })
@@ -115,12 +115,12 @@ auto main() -> int {
               [](TestContext& t) {
                   // vec stacks columns: vec([[1,2,3],[4,5,6]]) = [1,4,2,5,3,6]^T.
                   const auto M = mat({{ri(1), ri(2), ri(3)}, {ri(4), ri(5), ri(6)}});
-                  auto const v = nimblecas::vec(M).value();
+                  const auto v = nimblecas::vec(M).value();
                   t.expect(v.rows() == 6 && v.cols() == 1, "vec is 6x1 column");
                   const auto expected =
                       mat({{ri(1)}, {ri(4)}, {ri(2)}, {ri(5)}, {ri(3)}, {ri(6)}});
                   t.expect(v.is_equal(expected), "column-major stacking [1,4,2,5,3,6]");
-                  auto const back = nimblecas::unvec(v, 2).value();
+                  const auto back = nimblecas::unvec(v, 2).value();
                   t.expect(back.is_equal(M), "unvec(vec(M), rows) round-trips");
                   // unvec on a non-column argument is a domain error.
                   t.expect(nimblecas::unvec(M, 2).error() == MathError::domain_error,
@@ -134,11 +134,11 @@ auto main() -> int {
                   // A (+) B = A (x) I_n + I_m (x) B, verified against the direct definition.
                   const auto A = mat({{ri(1), ri(2)}, {ri(3), ri(4)}});   // 2x2
                   const auto B = mat({{ri(0), ri(5)}, {ri(-1), ri(2)}});  // 2x2
-                  auto const S = nimblecas::kronecker_sum(A, B).value();
+                  const auto S = nimblecas::kronecker_sum(A, B).value();
                   t.expect(S.rows() == 4 && S.cols() == 4, "A(+)B is 4x4");
-                  auto const lhs = nimblecas::kronecker_product(A, Matrix::identity(2)).value();
-                  auto const rhs = nimblecas::kronecker_product(Matrix::identity(2), B).value();
-                  auto const expected = lhs.add(rhs).value();
+                  const auto lhs = nimblecas::kronecker_product(A, Matrix::identity(2)).value();
+                  const auto rhs = nimblecas::kronecker_product(Matrix::identity(2), B).value();
+                  const auto expected = lhs.add(rhs).value();
                   t.expect(S.is_equal(expected), "A(+)B == A(x)I + I(x)B");
                   // Non-square operands are a domain error.
                   const auto wide = mat({{ri(1), ri(2), ri(3)}});
@@ -150,7 +150,7 @@ auto main() -> int {
                   // diag(A, B): A in the top-left, B in the bottom-right, zeros elsewhere.
                   const auto A = mat({{ri(1), ri(2)}, {ri(3), ri(4)}});  // 2x2
                   const auto B = mat({{ri(5)}});                          // 1x1
-                  auto const D = nimblecas::direct_sum(A, B).value();
+                  const auto D = nimblecas::direct_sum(A, B).value();
                   const auto expected = mat({{ri(1), ri(2), ri(0)},
                                              {ri(3), ri(4), ri(0)},
                                              {ri(0), ri(0), ri(5)}});
@@ -159,7 +159,7 @@ auto main() -> int {
                   // Rectangular operands: 1x2 (+) 2x1 => 3x3 with off blocks zero.
                   const auto P = mat({{ri(7), ri(8)}});          // 1x2
                   const auto Q = mat({{ri(9)}, {ri(10)}});       // 2x1
-                  auto const DR = nimblecas::direct_sum(P, Q).value();
+                  const auto DR = nimblecas::direct_sum(P, Q).value();
                   const auto expectedR = mat({{ri(7), ri(8), ri(0)},
                                               {ri(0), ri(0), ri(9)},
                                               {ri(0), ri(0), ri(10)}});
@@ -169,7 +169,7 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto A = mat({{ri(1), ri(2)}, {ri(3), ri(4)}});
                   const auto B = mat({{rat(1, 2), ri(0)}, {ri(-1), ri(5)}});
-                  auto const H = nimblecas::hadamard_product(A, B).value();
+                  const auto H = nimblecas::hadamard_product(A, B).value();
                   const auto expected = mat({{rat(1, 2), ri(0)}, {ri(-3), ri(20)}});
                   t.expect(H.is_equal(expected), "elementwise product [[1/2,0],[-3,20]]");
                   // Mismatched shapes are a domain error.
@@ -182,8 +182,8 @@ auto main() -> int {
                   // A basic honesty check: A(x)B != B(x)A in general (no silent symmetrisation).
                   const auto A = mat({{ri(1), ri(2)}, {ri(0), ri(1)}});
                   const auto B = mat({{ri(0), ri(1)}, {ri(1), ri(0)}});
-                  auto const AB = nimblecas::kronecker_product(A, B).value();
-                  auto const BA = nimblecas::kronecker_product(B, A).value();
+                  const auto AB = nimblecas::kronecker_product(A, B).value();
+                  const auto BA = nimblecas::kronecker_product(B, A).value();
                   t.expect(!AB.is_equal(BA), "A(x)B differs from B(x)A for these operands");
                   // But traces agree: tr(A(x)B) = tr(A)tr(B) = tr(B(x)A).
                   t.expect(AB.trace().value() == BA.trace().value(),

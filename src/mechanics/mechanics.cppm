@@ -176,7 +176,7 @@ namespace {
             }
             minor.push_back(std::move(row));
         }
-        Expr const cofactor = Expr::product({m[0][j], determinant(minor)});
+        const Expr cofactor = Expr::product({m[0][j], determinant(minor)});
         terms.push_back((j % 2 == 0) ? cofactor : neg(cofactor));
     }
     return Expr::sum(std::move(terms));
@@ -422,8 +422,8 @@ namespace {
         return d2H;
     }
     // c = H|_{p=0}; b = ∂H/∂p|_{p=0}; a = (1/2) ∂²H/∂p².
-    Expr const c = substitute(H, p, Expr::integer(0));
-    Expr const b = substitute(*dH, p, Expr::integer(0));
+    const Expr c = substitute(H, p, Expr::integer(0));
+    const Expr b = substitute(*dH, p, Expr::integer(0));
     auto a = simplify(Expr::product({Expr::rational(1, 2).value(), *d2H}));
     if (!a) {
         return a;
@@ -451,8 +451,8 @@ namespace {
     if (!disc) {
         return disc;
     }
-    Expr const root = Expr::apply("sqrt", {*disc});
-    Expr const twice_a = Expr::product({Expr::integer(2), *a});
+    const Expr root = Expr::apply("sqrt", {*disc});
+    const Expr twice_a = Expr::product({Expr::integer(2), *a});
     return simplify(Expr::product({sub(root, b), recip(twice_a)}));
 }
 

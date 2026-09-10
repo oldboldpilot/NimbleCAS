@@ -47,7 +47,7 @@ auto bseries(TestContext& t, std::vector<std::int64_t> ints, std::size_t order,
              std::string_view what) -> BigPowerSeries {
     std::vector<BigRational> coeffs;
     coeffs.reserve(ints.size());
-    for (auto const v : ints) {
+    for (const auto v : ints) {
         coeffs.push_back(BigRational::from_int(v));
     }
     auto s = BigPowerSeries::from_coeffs(std::move(coeffs), order);

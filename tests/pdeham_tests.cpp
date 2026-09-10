@@ -124,7 +124,7 @@ auto main() -> int {
                   // By hand: u_1 = -ħ x^2 t, and at HAM order 1 the series is x - ħ x^2 t.
                   // At ħ = -1/2 that is x + (1/2) x^2 t.
                   const std::vector<Rational> f_u2{ri(0), ri(0), ri(1)};  // f(u) = u^2
-                  auto const o1 = nimblecas::ham_reaction_diffusion(ri(0), f_u2, xsym(), rat(-1, 2), 1,
+                  const auto o1 = nimblecas::ham_reaction_diffusion(ri(0), f_u2, xsym(), rat(-1, 2), 1,
                                                               "t", "x")
                                 .value();
                   Expr exp1 = Expr::sum({xsym(), term(rat(1, 2), 2, 1)});
@@ -134,7 +134,7 @@ auto main() -> int {
                   // of HAM: higher orders revise lower t-coefficients away from ħ = -1).
                   // By hand: t^1 -> -2ħ x^2 - ħ^2 x^2, t^2 -> ħ^2 x^3; at ħ = -1/2 that is
                   // t^1 -> (3/4) x^2, t^2 -> (1/4) x^3.
-                  auto const o2 = nimblecas::ham_reaction_diffusion(ri(0), f_u2, xsym(), rat(-1, 2), 2,
+                  const auto o2 = nimblecas::ham_reaction_diffusion(ri(0), f_u2, xsym(), rat(-1, 2), 2,
                                                               "t", "x")
                                 .value();
                   Expr exp2 = Expr::sum(
@@ -151,16 +151,16 @@ auto main() -> int {
                   // Cauchy-Kovalevskaya / ADM forward series of nimblecas.pde term for term.
                   const std::size_t order = 3;
                   const std::vector<Rational> f_u2{ri(0), ri(0), ri(1)};
-                  auto const ham = nimblecas::ham_reaction_diffusion(ri(1), f_u2, xsym(), ri(-1), order,
+                  const auto ham = nimblecas::ham_reaction_diffusion(ri(1), f_u2, xsym(), ri(-1), order,
                                                                "t", "x")
                                  .value();
                   const RationalPoly phi = RationalPoly::monomial(ri(1), 1);  // x
-                  auto const fwd = nimblecas::reaction_diffusion_quadratic(ri(1), phi, order).value();
+                  const auto fwd = nimblecas::reaction_diffusion_quadratic(ri(1), phi, order).value();
                   t.expect(equal_expr(ham, forward_to_expr(fwd)),
                            "HAM(ħ=-1) == forward reaction-diffusion series");
 
                   // Sanity: at order 2 the closed forward series is x + x^2 t + (1 + x^3) t^2.
-                  auto const ham2 = nimblecas::ham_reaction_diffusion(ri(1), f_u2, xsym(), ri(-1), 2,
+                  const auto ham2 = nimblecas::ham_reaction_diffusion(ri(1), f_u2, xsym(), ri(-1), 2,
                                                                 "t", "x")
                                   .value();
                   Expr exp2 = Expr::sum({xsym(), term(ri(1), 2, 1), term(ri(1), 3, 2),
@@ -173,8 +173,8 @@ auto main() -> int {
                   // solution x/(1+t)). ħ = -1 must match nimblecas.pde::burgers.
                   const std::size_t order = 4;
                   const RationalPoly phi = RationalPoly::monomial(ri(1), 1);  // x
-                  auto const ham = nimblecas::ham_burgers(ri(0), xsym(), ri(-1), order, "t", "x").value();
-                  auto const fwd = nimblecas::burgers(ri(0), phi, order).value();
+                  const auto ham = nimblecas::ham_burgers(ri(0), xsym(), ri(-1), order, "t", "x").value();
+                  const auto fwd = nimblecas::burgers(ri(0), phi, order).value();
                   t.expect(equal_expr(ham, forward_to_expr(fwd)),
                            "HAM(ħ=-1) == forward inviscid Burgers series");
               })
@@ -186,7 +186,7 @@ auto main() -> int {
                   // module; the t^k coefficient is read as (d/dt)^k residual |_{t=0}.
                   const std::size_t order = 3;
                   const std::vector<Rational> f_u2{ri(0), ri(0), ri(1)};
-                  auto const u = nimblecas::ham_reaction_diffusion(ri(1), f_u2, xsym(), ri(-1), order,
+                  const auto u = nimblecas::ham_reaction_diffusion(ri(1), f_u2, xsym(), ri(-1), order,
                                                              "t", "x")
                                .value();
                   Expr u_t = nimblecas::differentiate(u, "t").value();

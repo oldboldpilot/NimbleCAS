@@ -236,7 +236,7 @@ inline constexpr std::int64_t kMaxScaleMagnitude = 1'000'000;
                 break;
         }
     }
-    BigInt const mag = increment ? q.add(bi_one()) : q;
+    const BigInt mag = increment ? q.add(bi_one()) : q;
     return negative ? mag.negate() : mag;
 }
 

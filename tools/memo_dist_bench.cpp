@@ -179,8 +179,8 @@ inline constexpr std::uint64_t k_spin_init = 1ULL;
     std::ranges::sort(vals);
     const std::size_t n = vals.size();
     const std::size_t half = n / 2;
-    std::vector<double> const lower(vals.begin(), vals.begin() + static_cast<std::ptrdiff_t>(half));
-    std::vector<double> const upper(
+    const std::vector<double> lower(vals.begin(), vals.begin() + static_cast<std::ptrdiff_t>(half));
+    const std::vector<double> upper(
         vals.begin() + static_cast<std::ptrdiff_t>((n % 2 == 0) ? half : (half + 1)),
         vals.end());
     return compute_median(upper) - compute_median(lower);

@@ -286,7 +286,7 @@ auto Polynomial::pseudo_remainder(const Polynomial& divisor) const -> Result<Pol
     Polynomial r = *this;
     while (!r.is_zero() && r.degree() >= n) {
         // r <- d*r - lc(r) * x^(deg r - n) * divisor
-        auto const s = Polynomial::monomial(r.leading_coefficient(),
+        const auto s = Polynomial::monomial(r.leading_coefficient(),
                                       static_cast<std::size_t>(r.degree() - n));
         auto dr = r.scale(d);
         if (!dr) {
@@ -314,7 +314,7 @@ auto Polynomial::pseudo_remainder(const Polynomial& divisor) const -> Result<Pol
 }
 
 auto Polynomial::gcd(const Polynomial& other) const -> Result<Polynomial> {
-    auto const normalized = [](const Polynomial& p) -> Result<Polynomial> {
+    const auto normalized = [](const Polynomial& p) -> Result<Polynomial> {
         return p.leading_coefficient() < 0 ? p.scale(-1) : Result<Polynomial>{p};
     };
     if (is_zero()) {

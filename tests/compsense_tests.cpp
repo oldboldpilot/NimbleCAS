@@ -228,7 +228,7 @@ auto main() -> int {
                            "batch has one result per measurement, in order");
                   bool all_match = batch.size() == measurements.size();
                   for (std::size_t k = 0; k < measurements.size(); ++k) {
-                      auto const serial = orthogonal_matching_pursuit(A, 4, 5, measurements[k], 2, 1e-9);
+                      const auto serial = orthogonal_matching_pursuit(A, 4, 5, measurements[k], 2, 1e-9);
                       all_match = all_match && same(batch[k], serial);
                   }
                   t.expect(all_match, "each parallel result == serial result (bit-identical)");
@@ -250,7 +250,7 @@ auto main() -> int {
                   t.expect(batch.size() == 3, "batch has one exact result per RHS, in order");
                   bool all_match = batch.size() == 3;
                   for (std::size_t k = 0; k < measurements.size(); ++k) {
-                      auto const serial = basis_pursuit(A, measurements[k]);
+                      const auto serial = basis_pursuit(A, measurements[k]);
                       all_match = all_match && same(batch[k], serial);
                   }
                   t.expect(all_match, "each parallel exact result == serial (exact over Q)");

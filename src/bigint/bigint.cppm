@@ -624,7 +624,7 @@ auto BigInt::modpow(const BigInt& exp, const BigInt& modulus) const -> Result<Bi
     }
     // Left-to-right binary exponentiation, scanning the exponent bits from the most
     // significant down. Every intermediate is kept reduced into [0, modulus).
-    BigInt const base = reduce_mod(*this, modulus);
+    const BigInt base = reduce_mod(*this, modulus);
     BigInt result = reduce_mod(from_u64(1), modulus);  // 1 mod modulus (0 when modulus == 1)
     if (exp.mag_.empty()) {
         return result;  // exponent 0: result is 1 mod modulus

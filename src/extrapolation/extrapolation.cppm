@@ -285,7 +285,7 @@ namespace {
             t[i][j] = *val;
         }
     }
-    Rational const best = t[n - 1][n - 1];
+    const Rational best = t[n - 1][n - 1];
     return RationalTableau{.table = std::move(t), .best = best};
 }
 
@@ -523,7 +523,7 @@ auto romberg_exact(const ExactFunction& f, const Rational& a, const Rational& b,
         // Sum f over the new midpoints x_k = a + (2k-1) h_i, k = 1..2^{i-1}.
         Rational s{};  // 0/1
         for (std::int64_t k = 1; k <= new_pts; ++k) {
-            auto const coef = Rational::from_int(2 * k - 1);
+            const auto coef = Rational::from_int(2 * k - 1);
             auto off = coef.multiply(*h);
             if (!off) {
                 return make_error<RationalTableau>(off.error());

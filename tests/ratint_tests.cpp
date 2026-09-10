@@ -60,7 +60,7 @@ auto main() -> int {
                   // int 1/(x-1)^2 dx = -1/(x-1); no logarithmic part.
                   auto a = ipoly({1});
                   auto d = ipoly({1, -2, 1});  // (x - 1)^2
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(hr.integrand_num.is_zero(), "no leftover integrand (pure rational)");
                   t.expect(!hr.rational_num.is_zero(), "a rational part was extracted");
                   t.expect(integrates_to(a, d, hr), "d/dx(g) + h == A/D");
@@ -70,7 +70,7 @@ auto main() -> int {
                   // int 1/(x^2 - 1) dx is purely logarithmic: g == 0, integrand unchanged.
                   auto a = ipoly({1});
                   auto d = ipoly({-1, 0, 1});  // x^2 - 1 (square-free)
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(hr.rational_num.is_zero(), "no rational part");
                   t.expect(is_square_free(hr.integrand_den), "integrand denominator square-free");
                   t.expect(integrates_to(a, d, hr), "d/dx(g) + h == A/D");
@@ -80,7 +80,7 @@ auto main() -> int {
                   // int 1/(x^2+1)^2 = x/(2(x^2+1)) + (1/2) int 1/(x^2+1): BOTH parts nonzero.
                   auto a = ipoly({1});
                   auto d = ipoly({1, 0, 2, 0, 1});  // (x^2 + 1)^2
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(!hr.rational_num.is_zero(), "rational part present");
                   t.expect(!hr.integrand_num.is_zero(), "logarithmic integrand present");
                   t.expect(hr.integrand_den.is_equal(ipoly({1, 0, 1})),
@@ -92,7 +92,7 @@ auto main() -> int {
                   // int x/(x^2+1)^2 = -1/(2(x^2+1)): a double pole yet purely rational.
                   auto a = ipoly({0, 1});
                   auto d = ipoly({1, 0, 2, 0, 1});  // (x^2 + 1)^2
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(hr.integrand_num.is_zero(), "no logarithmic part");
                   t.expect(!hr.rational_num.is_zero(), "rational part present");
                   t.expect(integrates_to(a, d, hr), "d/dx(g) + h == A/D");
@@ -103,7 +103,7 @@ auto main() -> int {
                   // steps (k: 3 -> 2 -> 1).
                   auto a = ipoly({1, 0, 1});
                   auto d = ipoly({-1, 3, -3, 1});  // (x - 1)^3
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(is_square_free(hr.integrand_den), "integrand denominator square-free");
                   t.expect(integrates_to(a, d, hr), "d/dx(g) + h == A/D");
               })
@@ -112,7 +112,7 @@ auto main() -> int {
                   // int x^3/(x-1)^2 dx: long division contributes a polynomial antiderivative.
                   auto a = ipoly({0, 0, 0, 1});
                   auto d = ipoly({1, -2, 1});  // (x - 1)^2
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(integrates_to(a, d, hr), "d/dx(g) + h == A/D");
               })
         .test("purely_polynomial",
@@ -120,7 +120,7 @@ auto main() -> int {
                   // int (6x)/3 dx = int 2x dx = x^2: constant denominator, no poles.
                   auto a = ipoly({0, 6});
                   auto d = ipoly({3});
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(hr.integrand_num.is_zero(), "no integrand remains");
                   t.expect(hr.rational_den.degree() <= 0, "rational denominator is constant");
                   t.expect(hr.rational_num.is_equal(ipoly({0, 0, 1})), "antiderivative is x^2");
@@ -130,8 +130,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // int x/((x-1)^2 (x+1)) dx: distinct multiplicities, rational + log parts.
                   auto a = ipoly({0, 1});
-                  auto const d = ipoly({1, -2, 1}).multiply(ipoly({1, 1})).value();  // (x-1)^2 (x+1)
-                  auto const hr = hermite_reduce(a, d).value();
+                  const auto d = ipoly({1, -2, 1}).multiply(ipoly({1, 1})).value();  // (x-1)^2 (x+1)
+                  const auto hr = hermite_reduce(a, d).value();
                   t.expect(is_square_free(hr.integrand_den), "integrand denominator square-free");
                   t.expect(integrates_to(a, d, hr), "d/dx(g) + h == A/D");
                   // A zero denominator is a division-by-zero error.

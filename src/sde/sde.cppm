@@ -591,7 +591,7 @@ inline constexpr std::uint64_t kMarkDomain = 0x165667B19E3779F9ULL;
     const double b_dW = b(x) * dW;
     const double xi0 = x + a_x * dt + b_dW;  // explicit Euler predictor (initial guess)
 
-    nlsolve::ResidualFn const F = [&](std::span<const double> xi) -> std::vector<double> {
+    const nlsolve::ResidualFn F = [&](std::span<const double> xi) -> std::vector<double> {
         const double x1 = xi[0];
         return std::vector<double>{x1 - x - (theta * a(x1) + (1.0 - theta) * a_x) * dt - b_dW};
     };
@@ -600,7 +600,7 @@ inline constexpr std::uint64_t kMarkDomain = 0x165667B19E3779F9ULL;
     const nlsolve::Options opts{};
     Result<nlsolve::SolveResult> solved;
     if (a_prime) {
-        nlsolve::JacobianFn const J = [&](std::span<const double> xi) -> std::vector<double> {
+        const nlsolve::JacobianFn J = [&](std::span<const double> xi) -> std::vector<double> {
             return std::vector<double>{1.0 - theta * a_prime(xi[0]) * dt};
         };
         solved = nlsolve::newton(F, J, std::span<const double>{x0}, opts);

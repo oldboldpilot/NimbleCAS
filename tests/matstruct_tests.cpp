@@ -56,8 +56,8 @@ namespace {
 
 // L * D * L^T as an exact Matrix (used to check LDL^T reconstruction).
 [[nodiscard]] auto reconstruct_ldlt(const Matrix& l, const Matrix& d) -> Matrix {
-    auto const lt = l.transpose().value();
-    auto const ld = l.multiply(d).value();
+    const auto lt = l.transpose().value();
+    const auto ld = l.multiply(d).value();
     return ld.multiply(lt).value();
 }
 
