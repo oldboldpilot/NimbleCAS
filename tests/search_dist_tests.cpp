@@ -737,8 +737,9 @@ auto main() -> int {
                   if (!p.has_value()) {
                       return;
                   }
-                  t.expect(p->size() == 8 + 8 + 8 + 8 + 8 + 16,
-                           "the payload is magic + bound + weight pair + count + one 16-byte entry");
+                  t.expect(p->size() == 8 + 8 + 8 + 8 + 8 + 8 + 16,
+                           "the payload is magic + bound + weight pair + semiring + count "
+                           "+ one 16-byte entry");
                   WireGraph g;
                   g.adjacency = {{Edge{.target = 0, .cost = 0}}};
                   auto s = encode_slice(g, 0, 1);
@@ -1126,6 +1127,1187 @@ auto main() -> int {
                                "every all-pairs entry matches dijkstra from that source");
                   }
                   t.expect(graphs_checked == 20, "all twenty randomised graphs were checked");
+              })
+        .test("distributed_connected_components_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_connected_components;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(12);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                      };
+                      add_undirected(0, 1);
+                      add_undirected(1, 2);
+                      add_undirected(2, 3);
+                      add_undirected(3, 4);
+                      add_undirected(4, 0);
+
+                      add_undirected(5, 6);
+                      add_undirected(5, 7);
+                      add_undirected(5, 8);
+
+                      add_undirected(9, 10);
+                      add_undirected(10, 11);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_connected_components(g, 1, *ser);
+                  t.expect(baseline.has_value(), "connected components 1-shard baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  t.expect(baseline->size() == 12, "baseline has one label per node");
+                  if (baseline->size() != 12) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 0, 0, 0, 0, 5, 5, 5, 5, 9, 9, 9};
+                  t.expect(*baseline == expected, "baseline labels match exact component roots");
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_connected_components(g, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "serial executor matches baseline across shard partitions");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_connected_components(g, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "parallel executor matches baseline across repeats without flakes");
+                      }
+                  }
+              })
+        .test("distributed_strongly_connected_components_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_strongly_connected_components;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(8);
+                      auto add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                      };
+                      add_directed(0, 1);
+                      add_directed(1, 2);
+                      add_directed(2, 0);
+                      add_directed(2, 3);
+                      add_directed(3, 4);
+                      add_directed(4, 5);
+                      add_directed(5, 6);
+                      add_directed(6, 4);
+                      add_directed(6, 7);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_strongly_connected_components(g, 1, *ser);
+                  t.expect(baseline.has_value(), "strongly connected components baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  t.expect(baseline->size() == 8, "baseline has one label per node");
+                  if (baseline->size() != 8) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 0, 0, 3, 4, 4, 4, 7};
+                  t.expect(*baseline == expected, "baseline SCC labels match exact components");
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_strongly_connected_components(g, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "strongly connected components serial executor matches baseline");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_strongly_connected_components(g, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "strongly connected components parallel executor matches baseline across repeats");
+                      }
+                  }
+              })
+        .test("distributed_topological_order_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_topological_order;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(7);
+                      auto add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                      };
+                      add_directed(0, 2);
+                      add_directed(0, 3);
+                      add_directed(1, 3);
+                      add_directed(1, 4);
+                      add_directed(2, 5);
+                      add_directed(3, 5);
+                      add_directed(4, 6);
+                      add_directed(5, 6);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_topological_order(g, 1, *ser);
+                  t.expect(baseline.has_value(), "topological order baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  t.expect(baseline->size() == 7, "topological order contains all 7 nodes");
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_topological_order(g, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "topological order serial executor matches baseline for all shard counts");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_topological_order(g, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "topological order parallel executor matches baseline across repeats");
+                      }
+                  }
+              })
+        .test("distributed_k_core_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_k_core;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(10);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                      };
+                      for (std::int64_t i = 0; i < 4; ++i) {
+                          for (std::int64_t j = i + 1; j < 4; ++j) {
+                              add_undirected(i, j);
+                          }
+                      }
+                      add_undirected(4, 5);
+                      add_undirected(5, 6);
+                      add_undirected(6, 4);
+                      add_undirected(3, 4);
+                      add_undirected(6, 7);
+                      add_undirected(7, 8);
+                      add_undirected(8, 9);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_k_core(g, 2, 1, *ser);
+                  t.expect(baseline.has_value(), "k-core baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 1, 2, 3, 4, 5, 6};
+                  t.expect(*baseline == expected, "k-core baseline nodes match expected 2-core");
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_k_core(g, 2, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "k-core serial executor matches baseline for all shard counts");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_k_core(g, 2, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "k-core parallel executor matches baseline across repeats");
+                      }
+                  }
+              })
+        .test("distributed_triangle_counts_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_triangle_counts;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(8);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                      };
+                      for (std::int64_t i = 0; i < 4; ++i) {
+                          for (std::int64_t j = i + 1; j < 4; ++j) {
+                              add_undirected(i, j);
+                          }
+                      }
+                      add_undirected(3, 4);
+                      add_undirected(4, 5);
+                      add_undirected(5, 3);
+                      add_undirected(5, 6);
+                      add_undirected(6, 7);
+                      add_undirected(7, 5);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_triangle_counts(g, 1, *ser);
+                  t.expect(baseline.has_value(), "triangle counts baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+                  t.expect(baseline->size() == 8, "triangle counts vector has size 8");
+                  if (baseline->size() != 8) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{3, 3, 3, 4, 1, 2, 1, 1};
+                  t.expect(*baseline == expected, "baseline triangle counts match exact counts");
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_triangle_counts(g, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "triangle counts serial executor matches baseline for all shard counts");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_triangle_counts(g, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "triangle counts parallel executor matches baseline across repeats");
+                      }
+                  }
+              })
+        .test("distributed_widest_path_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_widest_path;
+                  const WireGraph g = diamond_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_widest_path(g, 0, 5, 1, *ser);
+                  t.expect(baseline.has_value(), "widest path baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_widest_path(g, 0, 5, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "widest path serial executor matches baseline for all shard counts");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_widest_path(g, 0, 5, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "widest path parallel executor matches baseline across repeats");
+                      }
+                  }
+              })
+        .test("distributed_minimum_spanning_forest_is_identical_for_all_shard_counts_and_executors",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::MstEdge;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(6);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
+                      };
+                      add_undirected(0, 1, 4);
+                      add_undirected(0, 2, 2);
+                      add_undirected(1, 2, 1);
+                      add_undirected(1, 3, 5);
+                      add_undirected(2, 3, 8);
+                      add_undirected(2, 4, 10);
+                      add_undirected(3, 4, 2);
+                      add_undirected(3, 5, 6);
+                      add_undirected(4, 5, 3);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto ser = serial_executor();
+                  auto par = local_parallel_executor();
+                  auto baseline = distributed_minimum_spanning_forest(g, 1, *ser);
+                  t.expect(baseline.has_value(), "minimum spanning forest baseline succeeds");
+                  if (!baseline.has_value()) {
+                      return;
+                  }
+
+                  for (const std::size_t shards : {std::size_t{2}, std::size_t{3}, std::size_t{5}, std::size_t{16}}) {
+                      auto r_ser = distributed_minimum_spanning_forest(g, shards, *ser);
+                      t.expect(r_ser.has_value() && *r_ser == *baseline,
+                               "minimum spanning forest serial executor matches baseline for all shard counts");
+                      for ([[maybe_unused]] const int rep : std::views::iota(0, 5)) {
+                          auto r_par = distributed_minimum_spanning_forest(g, shards, *par);
+                          t.expect(r_par.has_value() && *r_par == *baseline,
+                                   "minimum spanning forest parallel executor matches baseline across repeats");
+                      }
+                  }
+              })
+        .test("connected_components_on_two_disjoint_triangles_has_exact_labels",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_connected_components;
+                  [[nodiscard]] auto make_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(6);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                      };
+                      add_undirected(0, 1);
+                      add_undirected(1, 2);
+                      add_undirected(2, 0);
+
+                      add_undirected(3, 4);
+                      add_undirected(4, 5);
+                      add_undirected(5, 3);
+                      return g;
+                  };
+
+                  const WireGraph g = make_graph();
+                  auto exec = serial_executor();
+                  auto r = distributed_connected_components(g, 2, *exec);
+                  t.expect(r.has_value(), "connected components on two disjoint triangles succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 6, "has 6 component labels");
+                  if (r->size() != 6) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 0, 0, 3, 3, 3};
+                  t.expect(*r == expected, "labels are exactly 0 for first triangle and 3 for second triangle");
+              })
+        .test("connected_components_cross_checked_against_serial_path_reachability",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_connected_components;
+                  [[nodiscard]] auto make_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(6);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                      };
+                      add_undirected(0, 1);
+                      add_undirected(1, 2);
+                      add_undirected(3, 4);
+                      return g;
+                  };
+
+                  const WireGraph g = make_graph();
+                  auto exec = serial_executor();
+                  auto r = distributed_connected_components(g, 2, *exec);
+                  t.expect(r.has_value(), "connected components succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 6, "all 6 nodes labeled");
+                  if (r->size() != 6) {
+                      return;
+                  }
+                  const std::vector<std::int64_t>& labels = *r;
+                  for (std::int64_t u = 0; u < 6; ++u) {
+                      for (std::int64_t v = 0; v < 6; ++v) {
+                          const auto oracle = serial_path(g, u, v);
+                          const bool reachable = oracle.has_value();
+                          const bool same_label =
+                              labels[static_cast<std::size_t>(u)] == labels[static_cast<std::size_t>(v)];
+                          t.expect(reachable == same_label,
+                                   "nodes share component label iff mutually reachable in undirected graph");
+                      }
+                  }
+              })
+        .test("strongly_connected_components_on_directed_cycle_and_dag_have_exact_labels",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_strongly_connected_components;
+                  auto exec = serial_executor();
+
+                  WireGraph cycle_g;
+                  cycle_g.adjacency.resize(3);
+                  cycle_g.adjacency[0].push_back(Edge{.target = 1, .cost = 1});
+                  cycle_g.adjacency[1].push_back(Edge{.target = 2, .cost = 1});
+                  cycle_g.adjacency[2].push_back(Edge{.target = 0, .cost = 1});
+
+                  auto r_cycle = distributed_strongly_connected_components(cycle_g, 2, *exec);
+                  t.expect(r_cycle.has_value(), "SCC on directed cycle succeeds");
+                  if (r_cycle.has_value()) {
+                      const std::vector<std::int64_t> expected_cycle{0, 0, 0};
+                      t.expect(*r_cycle == expected_cycle, "all nodes in directed cycle share smallest label 0");
+                  }
+
+                  WireGraph dag_g;
+                  dag_g.adjacency.resize(3);
+                  dag_g.adjacency[0].push_back(Edge{.target = 1, .cost = 1});
+                  dag_g.adjacency[1].push_back(Edge{.target = 2, .cost = 1});
+
+                  auto r_dag = distributed_strongly_connected_components(dag_g, 2, *exec);
+                  t.expect(r_dag.has_value(), "SCC on DAG succeeds");
+                  if (r_dag.has_value()) {
+                      const std::vector<std::int64_t> expected_dag{0, 1, 2};
+                      t.expect(*r_dag == expected_dag, "each node in a DAG is its own SCC label");
+                  }
+              })
+        .test("strongly_connected_components_on_multi_scc_graph_has_exact_labels",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_strongly_connected_components;
+                  WireGraph g;
+                  g.adjacency.resize(6);
+                  auto add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                  };
+                  add_edge(0, 1);
+                  add_edge(1, 0);
+
+                  add_edge(1, 2);
+
+                  add_edge(2, 3);
+                  add_edge(3, 4);
+                  add_edge(4, 2);
+
+                  add_edge(4, 5);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_strongly_connected_components(g, 2, *exec);
+                  t.expect(r.has_value(), "SCC on multi-component graph succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 6, "size is 6");
+                  if (r->size() != 6) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 0, 2, 2, 2, 5};
+                  t.expect(*r == expected, "labels match exact SCC smallest node IDs");
+              })
+        .test("topological_order_of_small_dag_has_exact_level_and_tie_breaking_order",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_topological_order;
+                  WireGraph g;
+                  g.adjacency.resize(5);
+                  auto add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                  };
+                  add_edge(1, 0);
+                  add_edge(1, 2);
+                  add_edge(3, 2);
+                  add_edge(3, 4);
+                  add_edge(0, 4);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_topological_order(g, 2, *exec);
+                  t.expect(r.has_value(), "topological order on small DAG succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 5, "topological order contains all 5 nodes");
+                  if (r->size() != 5) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{1, 3, 0, 2, 4};
+                  t.expect(*r == expected, "topological order matches exact level order with ascending tie breaking");
+              })
+        .test("topological_order_on_disconnected_dag_components_has_exact_order",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_topological_order;
+                  WireGraph g;
+                  g.adjacency.resize(5);
+                  g.adjacency[0].push_back(Edge{.target = 1, .cost = 1});
+                  g.adjacency[1].push_back(Edge{.target = 2, .cost = 1});
+                  g.adjacency[3].push_back(Edge{.target = 4, .cost = 1});
+
+                  auto exec = serial_executor();
+                  auto r = distributed_topological_order(g, 2, *exec);
+                  t.expect(r.has_value(), "topological order on disconnected DAG succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 5, "topological order contains 5 nodes");
+                  if (r->size() != 5) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 3, 1, 4, 2};
+                  t.expect(*r == expected, "order matches exact inter-component level progression");
+              })
+        .test("topological_order_on_dag_validates_every_edge_direction",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_topological_order;
+                  WireGraph g;
+                  g.adjacency.resize(6);
+                  auto add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                  };
+                  add_edge(0, 1);
+                  add_edge(0, 2);
+                  add_edge(1, 3);
+                  add_edge(1, 4);
+                  add_edge(2, 4);
+                  add_edge(3, 5);
+                  add_edge(4, 5);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_topological_order(g, 2, *exec);
+                  t.expect(r.has_value(), "topological order succeeds on complex DAG");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 6, "all 6 nodes present in order");
+                  if (r->size() != 6) {
+                      return;
+                  }
+
+                  std::vector<std::size_t> pos(6, 0);
+                  for (std::size_t i = 0; i < r->size(); ++i) {
+                      pos[static_cast<std::size_t>((*r)[i])] = i;
+                  }
+
+                  for (std::size_t u = 0; u < 6; ++u) {
+                      for (const Edge& e : g.adjacency[u]) {
+                          const auto v = static_cast<std::size_t>(e.target);
+                          t.expect(pos[u] < pos[v], "every edge has its source earlier than its target in the order");
+                      }
+                  }
+              })
+        .test("topological_order_detects_cycle_and_self_loop_as_undefined_value",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_topological_order;
+                  auto exec = serial_executor();
+
+                  WireGraph cycle_g;
+                  cycle_g.adjacency.resize(3);
+                  cycle_g.adjacency[0].push_back(Edge{.target = 1, .cost = 1});
+                  cycle_g.adjacency[1].push_back(Edge{.target = 2, .cost = 1});
+                  cycle_g.adjacency[2].push_back(Edge{.target = 0, .cost = 1});
+
+                  auto r_cycle = distributed_topological_order(cycle_g, 2, *exec);
+                  t.expect(!r_cycle.has_value() && r_cycle.error() == MathError::undefined_value,
+                           "cycle causes undefined_value error");
+
+                  WireGraph loop_g;
+                  loop_g.adjacency.resize(1);
+                  loop_g.adjacency[0].push_back(Edge{.target = 0, .cost = 1});
+
+                  auto r_loop = distributed_topological_order(loop_g, 2, *exec);
+                  t.expect(!r_loop.has_value() && r_loop.error() == MathError::undefined_value,
+                           "self-loop causes undefined_value error");
+
+                  WireGraph emb_g;
+                  emb_g.adjacency.resize(4);
+                  emb_g.adjacency[0].push_back(Edge{.target = 1, .cost = 1});
+                  emb_g.adjacency[0].push_back(Edge{.target = 3, .cost = 1});
+                  emb_g.adjacency[1].push_back(Edge{.target = 2, .cost = 1});
+                  emb_g.adjacency[2].push_back(Edge{.target = 1, .cost = 1});
+
+                  auto r_emb = distributed_topological_order(emb_g, 2, *exec);
+                  t.expect(!r_emb.has_value() && r_emb.error() == MathError::undefined_value,
+                           "embedded cycle in larger graph causes undefined_value error");
+              })
+        .test("triangle_counts_on_single_triangle_and_four_clique_are_exact",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_triangle_counts;
+                  auto exec = serial_executor();
+
+                  WireGraph tri_g;
+                  tri_g.adjacency.resize(3);
+                  auto add_undirected = [](WireGraph& gr, std::int64_t u, std::int64_t v) -> void {
+                      gr.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                      gr.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                  };
+                  add_undirected(tri_g, 0, 1);
+                  add_undirected(tri_g, 1, 2);
+                  add_undirected(tri_g, 2, 0);
+
+                  auto r_tri = distributed_triangle_counts(tri_g, 2, *exec);
+                  t.expect(r_tri.has_value(), "triangle counts on 3-node triangle succeeds");
+                  if (r_tri.has_value()) {
+                      const std::vector<std::int64_t> expected_tri{1, 1, 1};
+                      t.expect(*r_tri == expected_tri, "each node in a triangle has count 1");
+                  }
+
+                  WireGraph clique_g;
+                  clique_g.adjacency.resize(4);
+                  for (std::int64_t i = 0; i < 4; ++i) {
+                      for (std::int64_t j = i + 1; j < 4; ++j) {
+                          add_undirected(clique_g, i, j);
+                      }
+                  }
+
+                  auto r_clique = distributed_triangle_counts(clique_g, 2, *exec);
+                  t.expect(r_clique.has_value(), "triangle counts on 4-clique succeeds");
+                  if (r_clique.has_value()) {
+                      const std::vector<std::int64_t> expected_clique{3, 3, 3, 3};
+                      t.expect(*r_clique == expected_clique, "each node in a 4-clique has count 3");
+                      std::int64_t total = 0;
+                      for (const std::int64_t c : *r_clique) {
+                          total += c;
+                      }
+                      t.expect(total / 3 == 4, "total distinct triangles equals sum / 3 = 4");
+                  }
+              })
+        .test("triangle_counts_on_house_graph_is_exact",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_triangle_counts;
+                  WireGraph g;
+                  g.adjacency.resize(5);
+                  auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                      g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                  };
+                  add_undirected(0, 1);
+                  add_undirected(1, 2);
+                  add_undirected(2, 3);
+                  add_undirected(3, 0);
+                  add_undirected(2, 4);
+                  add_undirected(3, 4);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_triangle_counts(g, 2, *exec);
+                  t.expect(r.has_value(), "triangle counts on house graph succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->size() == 5, "all 5 nodes have counts");
+                  if (r->size() != 5) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 0, 1, 1, 1};
+                  t.expect(*r == expected, "only the roof triangle (2, 3, 4) produces counts");
+              })
+        .test("k_core_for_k_zero_returns_all_nodes_and_for_large_k_returns_empty",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_k_core;
+                  const WireGraph g = diamond_graph();
+                  auto exec = serial_executor();
+                  auto r_zero = distributed_k_core(g, 0, 2, *exec);
+                  t.expect(r_zero.has_value(), "k-core with k=0 succeeds");
+                  if (r_zero.has_value()) {
+                      const std::vector<std::int64_t> all_nodes{0, 1, 2, 3, 4, 5};
+                      t.expect(*r_zero == all_nodes, "k=0 returns all 6 nodes of the graph in ascending order");
+                  }
+                  auto r_large = distributed_k_core(g, 100, 2, *exec);
+                  t.expect(r_large.has_value(), "k-core with large k succeeds");
+                  if (r_large.has_value()) {
+                      const std::vector<std::int64_t> empty_nodes{};
+                      t.expect(*r_large == empty_nodes, "k=100 returns exactly an empty vector, not an error");
+                  }
+              })
+        .test("k_core_clique_survives_and_pendant_node_peels",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_k_core;
+                  auto add_undirected = [](WireGraph& gr, std::int64_t u, std::int64_t v) -> void {
+                      gr.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                      gr.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                  };
+
+                  auto exec = serial_executor();
+
+                  WireGraph clique_g;
+                  clique_g.adjacency.resize(4);
+                  for (std::int64_t i = 0; i < 4; ++i) {
+                      for (std::int64_t j = i + 1; j < 4; ++j) {
+                          add_undirected(clique_g, i, j);
+                      }
+                  }
+                  auto r_clique = distributed_k_core(clique_g, 3, 2, *exec);
+                  t.expect(r_clique.has_value(), "k=3 on 4-clique succeeds");
+                  if (r_clique.has_value()) {
+                      const std::vector<std::int64_t> expected_clique{0, 1, 2, 3};
+                      t.expect(*r_clique == expected_clique, "all 4 nodes in 4-clique survive at k=3");
+                  }
+
+                  WireGraph g;
+                  g.adjacency.resize(5);
+                  for (std::int64_t i = 0; i < 4; ++i) {
+                      for (std::int64_t j = i + 1; j < 4; ++j) {
+                          add_undirected(g, i, j);
+                      }
+                  }
+                  add_undirected(g, 0, 4);
+
+                  auto r_pendant = distributed_k_core(g, 3, 2, *exec);
+                  t.expect(r_pendant.has_value(), "k=3 on clique with pendant succeeds");
+                  if (r_pendant.has_value()) {
+                      const std::vector<std::int64_t> expected_survivors{0, 1, 2, 3};
+                      t.expect(*r_pendant == expected_survivors, "pendant node 4 peels and clique {0, 1, 2, 3} survives");
+                  }
+              })
+        .test("k_core_peeling_cascades_along_a_chain",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_k_core;
+                  auto exec = serial_executor();
+
+                  WireGraph g;
+                  g.adjacency.resize(6);
+                  auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
+                      g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
+                  };
+                  add_undirected(0, 1);
+                  add_undirected(1, 2);
+                  add_undirected(2, 0);
+
+                  add_undirected(2, 3);
+                  add_undirected(3, 4);
+                  add_undirected(4, 5);
+
+                  auto r = distributed_k_core(g, 2, 2, *exec);
+                  t.expect(r.has_value(), "k-core cascading peel succeeds");
+                  if (r.has_value()) {
+                      const std::vector<std::int64_t> expected{0, 1, 2};
+                      t.expect(*r == expected, "peeling 5 cascades through 4 and 3, preserving 2-core {0, 1, 2}");
+                  }
+
+                  WireGraph line_g;
+                  line_g.adjacency.resize(5);
+                  for (std::int64_t i = 0; i < 4; ++i) {
+                      line_g.adjacency[static_cast<std::size_t>(i)].push_back(Edge{.target = i + 1, .cost = 1});
+                      line_g.adjacency[static_cast<std::size_t>(i + 1)].push_back(Edge{.target = i, .cost = 1});
+                  }
+                  auto r_line = distributed_k_core(line_g, 2, 2, *exec);
+                  t.expect(r_line.has_value(), "k-core on line graph succeeds");
+                  if (r_line.has_value()) {
+                      const std::vector<std::int64_t> empty_nodes{};
+                      t.expect(*r_line == empty_nodes, "peeling cascades from both ends, leaving empty 2-core");
+                  }
+              })
+        .test("widest_path_exact_route_differs_from_shortest_path",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_widest_path;
+                  WireGraph g;
+                  g.adjacency.resize(4);
+                  auto add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                  };
+                  add_edge(0, 1, 1);
+                  add_edge(1, 3, 1);
+
+                  add_edge(0, 2, 10);
+                  add_edge(2, 3, 10);
+
+                  auto exec = serial_executor();
+                  auto widest = distributed_widest_path(g, 0, 3, 2, *exec);
+                  auto shortest = serial_path(g, 0, 3);
+
+                  t.expect(widest.has_value(), "widest path query succeeds");
+                  t.expect(shortest.has_value(), "shortest path query succeeds");
+                  if (widest.has_value() && shortest.has_value()) {
+                      const std::vector<std::int64_t> expected_widest{0, 2, 3};
+                      const std::vector<std::int64_t> expected_shortest{0, 1, 3};
+                      t.expect(widest->first == expected_widest, "widest path chooses high-capacity route {0, 2, 3}");
+                      t.expect(widest->second == 10, "widest path bottleneck is 10");
+                      t.expect(shortest->first == expected_shortest, "shortest path chooses minimum sum route {0, 1, 3}");
+                      t.expect(shortest->second == 2, "shortest path sum is 2");
+                      t.expect(widest->first != shortest->first, "widest path route is strictly different from shortest route");
+                  }
+              })
+        .test("widest_path_width_agrees_with_minimum_edge_on_returned_path",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_widest_path;
+                  [[nodiscard]] auto make_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(6);
+                      auto add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                      };
+                      add_edge(0, 1, 15);
+                      add_edge(1, 2, 7);
+                      add_edge(2, 5, 12);
+
+                      add_edge(0, 3, 8);
+                      add_edge(3, 4, 9);
+                      add_edge(4, 5, 8);
+                      return g;
+                  };
+
+                  const WireGraph g = make_graph();
+                  auto exec = serial_executor();
+                  auto r = distributed_widest_path(g, 0, 5, 2, *exec);
+                  t.expect(r.has_value(), "widest path query succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  const auto& path = r->first;
+                  t.expect(path.size() >= 2, "path contains at least 2 nodes");
+                  if (path.size() < 2) {
+                      return;
+                  }
+
+                  std::int64_t min_edge = std::numeric_limits<std::int64_t>::max();
+                  for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+                      const auto u = static_cast<std::size_t>(path[i]);
+                      const std::int64_t target = path[i + 1];
+                      std::int64_t edge_cost = -1;
+                      for (const Edge& e : g.adjacency[u]) {
+                          if (e.target == target) {
+                              edge_cost = e.cost;
+                              break;
+                          }
+                      }
+                      t.expect(edge_cost >= 0, "path traverses genuine edge in graph");
+                      min_edge = std::min(min_edge, edge_cost);
+                  }
+                  t.expect(r->second == min_edge, "returned width equals minimum edge cost along the returned path");
+              })
+        .test("widest_path_start_equals_goal_and_unreachable_node",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_widest_path;
+                  const WireGraph g = diamond_graph();
+                  auto exec = serial_executor();
+                  auto r_same = distributed_widest_path(g, 2, 2, 2, *exec);
+                  t.expect(r_same.has_value(), "widest path from node to itself succeeds");
+                  if (r_same.has_value()) {
+                      const std::vector<std::int64_t> expected_path{2};
+                      t.expect(r_same->first == expected_path, "path from node to itself is {start}");
+                      t.expect(r_same->second == std::numeric_limits<std::int64_t>::max(),
+                               "width from node to itself is INT64_MAX");
+                  }
+                  auto r_unreachable = distributed_widest_path(g, 5, 0, 2, *exec);
+                  t.expect(!r_unreachable.has_value() && r_unreachable.error() == MathError::undefined_value,
+                           "unreachable goal returns undefined_value");
+              })
+        .test("minimum_spanning_forest_exact_edges_and_total_weight",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::MstEdge;
+                  WireGraph g;
+                  g.adjacency.resize(4);
+                  auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                      g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
+                  };
+                  add_undirected(0, 1, 1);
+                  add_undirected(1, 2, 2);
+                  add_undirected(2, 3, 3);
+                  add_undirected(0, 2, 4);
+                  add_undirected(1, 3, 5);
+                  add_undirected(0, 3, 10);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_minimum_spanning_forest(g, 2, *exec);
+                  t.expect(r.has_value(), "MST on 4-node weighted graph succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->first.size() == 3, "MST contains exactly n - 1 = 3 edges");
+                  if (r->first.size() != 3) {
+                      return;
+                  }
+                  const std::vector<MstEdge> expected_edges{
+                      MstEdge{.u = 0, .v = 1, .weight = 1},
+                      MstEdge{.u = 1, .v = 2, .weight = 2},
+                      MstEdge{.u = 2, .v = 3, .weight = 3},
+                  };
+                  t.expect(r->first == expected_edges, "exact edges match hand-computed MST in (u, v) ascending order");
+                  t.expect(r->second == 6, "total weight is exactly 1 + 2 + 3 = 6");
+              })
+        .test("minimum_spanning_forest_deterministic_tie_breaking_for_equal_weights",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::MstEdge;
+                  WireGraph g;
+                  g.adjacency.resize(4);
+                  auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                      g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
+                  };
+                  add_undirected(0, 1, 5);
+                  add_undirected(1, 2, 5);
+                  add_undirected(2, 3, 5);
+                  add_undirected(3, 0, 5);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_minimum_spanning_forest(g, 2, *exec);
+                  t.expect(r.has_value(), "MST with equal weights succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->first.size() == 3, "spanning tree has exactly 3 edges");
+                  if (r->first.size() != 3) {
+                      return;
+                  }
+                  const std::vector<MstEdge> expected_edges{
+                      MstEdge{.u = 0, .v = 1, .weight = 5},
+                      MstEdge{.u = 0, .v = 3, .weight = 5},
+                      MstEdge{.u = 1, .v = 2, .weight = 5},
+                  };
+                  t.expect(r->first == expected_edges, "deterministic tie breaking selects exact edges according to (weight, u, v)");
+                  t.expect(r->second == 15, "total weight is 15");
+              })
+        .test("minimum_spanning_forest_on_disconnected_graph_spans_each_component",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::MstEdge;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(6);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
+                      };
+                      add_undirected(0, 1, 2);
+                      add_undirected(0, 2, 3);
+                      add_undirected(1, 2, 4);
+                      add_undirected(3, 4, 7);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto exec = serial_executor();
+                  auto forest = distributed_minimum_spanning_forest(g, 2, *exec);
+                  t.expect(forest.has_value(), "spanning forest on disconnected graph succeeds");
+                  if (!forest.has_value()) {
+                      return;
+                  }
+                  t.expect(forest->first.size() == 3, "forest has exactly n - c = 6 - 3 = 3 edges");
+                  if (forest->first.size() != 3) {
+                      return;
+                  }
+                  const std::vector<MstEdge> expected_edges{
+                      MstEdge{.u = 0, .v = 1, .weight = 2},
+                      MstEdge{.u = 0, .v = 2, .weight = 3},
+                      MstEdge{.u = 3, .v = 4, .weight = 7},
+                  };
+                  t.expect(forest->first == expected_edges, "edges match exact expected spanning forest");
+                  t.expect(forest->second == 12, "total weight is exactly 2 + 3 + 7 = 12");
+              })
+        .test("minimum_spanning_forest_cross_check_edge_count_and_weight_sum",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_connected_components;
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::MstEdge;
+                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                      WireGraph g;
+                      g.adjacency.resize(9);
+                      auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                          g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                          g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
+                      };
+                      add_undirected(0, 1, 3);
+                      add_undirected(1, 2, 4);
+                      add_undirected(2, 3, 2);
+                      add_undirected(3, 4, 5);
+                      add_undirected(4, 0, 6);
+                      add_undirected(0, 2, 8);
+
+                      add_undirected(5, 6, 1);
+                      add_undirected(6, 7, 7);
+                      add_undirected(7, 8, 3);
+                      add_undirected(8, 5, 2);
+                      add_undirected(5, 7, 4);
+                      return g;
+                  };
+
+                  const WireGraph g = make_test_graph();
+                  auto exec = serial_executor();
+                  auto components = distributed_connected_components(g, 2, *exec);
+                  auto forest = distributed_minimum_spanning_forest(g, 2, *exec);
+                  t.expect(components.has_value(), "connected components succeeds for cross-check");
+                  t.expect(forest.has_value(), "spanning forest succeeds for cross-check");
+                  if (!components.has_value() || !forest.has_value()) {
+                      return;
+                  }
+
+                  std::set<std::int64_t> unique_components(components->begin(), components->end());
+                  const std::size_t c = unique_components.size();
+                  const std::size_t n = g.adjacency.size();
+                  t.expect(c == 2, "graph has exactly 2 components");
+                  t.expect(forest->first.size() == n - c, "forest edge count equals n - c exactly");
+
+                  std::int64_t sum_weights = 0;
+                  for (const MstEdge& e : forest->first) {
+                      sum_weights += e.weight;
+                  }
+                  t.expect(forest->second == sum_weights, "total weight equals sum of returned edge weights");
+              })
+        .test("minimum_spanning_forest_overflow_guard_returns_overflow_error",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  WireGraph g;
+                  g.adjacency.resize(3);
+                  const std::int64_t huge_weight = (std::numeric_limits<std::int64_t>::max() / 2) + 10;
+                  g.adjacency[0].push_back(Edge{.target = 1, .cost = huge_weight});
+                  g.adjacency[1].push_back(Edge{.target = 0, .cost = huge_weight});
+                  g.adjacency[1].push_back(Edge{.target = 2, .cost = huge_weight});
+                  g.adjacency[2].push_back(Edge{.target = 1, .cost = huge_weight});
+
+                  auto exec = serial_executor();
+                  auto r = distributed_minimum_spanning_forest(g, 2, *exec);
+                  t.expect(!r.has_value() && r.error() == MathError::overflow,
+                           "total weight overflow returns MathError::overflow");
+              })
+        .test("domain_error_on_negative_k_zero_shards_and_malformed_graph",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_connected_components;
+                  using nimblecas::search_dist::distributed_strongly_connected_components;
+                  using nimblecas::search_dist::distributed_topological_order;
+                  using nimblecas::search_dist::distributed_k_core;
+                  using nimblecas::search_dist::distributed_triangle_counts;
+                  using nimblecas::search_dist::distributed_widest_path;
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+
+                  const WireGraph g = diamond_graph();
+                  auto exec = serial_executor();
+
+                  auto r_cc_0 = distributed_connected_components(g, 0, *exec);
+                  t.expect(!r_cc_0.has_value() && r_cc_0.error() == MathError::domain_error,
+                           "zero shards in connected components is domain_error");
+                  auto r_scc_0 = distributed_strongly_connected_components(g, 0, *exec);
+                  t.expect(!r_scc_0.has_value() && r_scc_0.error() == MathError::domain_error,
+                           "zero shards in strongly connected components is domain_error");
+                  auto r_topo_0 = distributed_topological_order(g, 0, *exec);
+                  t.expect(!r_topo_0.has_value() && r_topo_0.error() == MathError::domain_error,
+                           "zero shards in topological order is domain_error");
+                  auto r_k_0 = distributed_k_core(g, 2, 0, *exec);
+                  t.expect(!r_k_0.has_value() && r_k_0.error() == MathError::domain_error,
+                           "zero shards in k-core is domain_error");
+                  auto r_tri_0 = distributed_triangle_counts(g, 0, *exec);
+                  t.expect(!r_tri_0.has_value() && r_tri_0.error() == MathError::domain_error,
+                           "zero shards in triangle counts is domain_error");
+                  auto r_wp_0 = distributed_widest_path(g, 0, 5, 0, *exec);
+                  t.expect(!r_wp_0.has_value() && r_wp_0.error() == MathError::domain_error,
+                           "zero shards in widest path is domain_error");
+                  auto r_mst_0 = distributed_minimum_spanning_forest(g, 0, *exec);
+                  t.expect(!r_mst_0.has_value() && r_mst_0.error() == MathError::domain_error,
+                           "zero shards in MST is domain_error");
+
+                  auto r_neg_k = distributed_k_core(g, -1, 2, *exec);
+                  t.expect(!r_neg_k.has_value() && r_neg_k.error() == MathError::domain_error,
+                           "negative k is domain_error");
+
+                  auto r_neg_start = distributed_widest_path(g, -1, 5, 2, *exec);
+                  t.expect(!r_neg_start.has_value() && r_neg_start.error() == MathError::domain_error,
+                           "negative start in widest path is domain_error");
+                  auto r_oor_goal = distributed_widest_path(g, 0, 99, 2, *exec);
+                  t.expect(!r_oor_goal.has_value() && r_oor_goal.error() == MathError::domain_error,
+                           "out of range goal in widest path is domain_error");
+
+                  WireGraph bad_g = diamond_graph();
+                  bad_g.adjacency[0][0].cost = -5;
+                  auto r_bad_cc = distributed_connected_components(bad_g, 2, *exec);
+                  t.expect(!r_bad_cc.has_value() && r_bad_cc.error() == MathError::domain_error,
+                           "malformed graph in connected components is domain_error");
+                  auto r_bad_topo = distributed_topological_order(bad_g, 2, *exec);
+                  t.expect(!r_bad_topo.has_value() && r_bad_topo.error() == MathError::domain_error,
+                           "malformed graph in topological order is domain_error");
+                  auto r_bad_tri = distributed_triangle_counts(bad_g, 2, *exec);
+                  t.expect(!r_bad_tri.has_value() && r_bad_tri.error() == MathError::domain_error,
+                           "malformed graph in triangle counts is domain_error");
+                  auto r_bad_mst = distributed_minimum_spanning_forest(bad_g, 2, *exec);
+                  t.expect(!r_bad_mst.has_value() && r_bad_mst.error() == MathError::domain_error,
+                           "malformed graph in MST is domain_error");
+              })
+        .test("empty_graph_produces_successful_empty_result_for_all_algorithms",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_connected_components;
+                  using nimblecas::search_dist::distributed_strongly_connected_components;
+                  using nimblecas::search_dist::distributed_topological_order;
+                  using nimblecas::search_dist::distributed_k_core;
+                  using nimblecas::search_dist::distributed_triangle_counts;
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::MstEdge;
+
+                  const WireGraph empty_g;
+                  auto exec = serial_executor();
+
+                  auto r_cc = distributed_connected_components(empty_g, 2, *exec);
+                  t.expect(r_cc.has_value(), "connected components on empty graph succeeds");
+                  if (r_cc.has_value()) {
+                      const std::vector<std::int64_t> expected{};
+                      t.expect(*r_cc == expected, "empty graph gives empty component labels");
+                  }
+
+                  auto r_scc = distributed_strongly_connected_components(empty_g, 2, *exec);
+                  t.expect(r_scc.has_value(), "strongly connected components on empty graph succeeds");
+                  if (r_scc.has_value()) {
+                      const std::vector<std::int64_t> expected{};
+                      t.expect(*r_scc == expected, "empty graph gives empty SCC labels");
+                  }
+
+                  auto r_topo = distributed_topological_order(empty_g, 2, *exec);
+                  t.expect(r_topo.has_value(), "topological order on empty graph succeeds");
+                  if (r_topo.has_value()) {
+                      const std::vector<std::int64_t> expected{};
+                      t.expect(*r_topo == expected, "empty graph gives empty topological order");
+                  }
+
+                  auto r_k = distributed_k_core(empty_g, 2, 2, *exec);
+                  t.expect(r_k.has_value(), "k-core on empty graph succeeds");
+                  if (r_k.has_value()) {
+                      const std::vector<std::int64_t> expected{};
+                      t.expect(*r_k == expected, "empty graph gives empty k-core");
+                  }
+
+                  auto r_tri = distributed_triangle_counts(empty_g, 2, *exec);
+                  t.expect(r_tri.has_value(), "triangle counts on empty graph succeeds");
+                  if (r_tri.has_value()) {
+                      const std::vector<std::int64_t> expected{};
+                      t.expect(*r_tri == expected, "empty graph gives empty triangle counts");
+                  }
+
+                  auto r_mst = distributed_minimum_spanning_forest(empty_g, 2, *exec);
+                  t.expect(r_mst.has_value(), "minimum spanning forest on empty graph succeeds");
+                  if (r_mst.has_value()) {
+                      const std::vector<MstEdge> expected_edges{};
+                      t.expect(r_mst->first == expected_edges && r_mst->second == 0,
+                               "empty graph gives empty spanning forest with 0 total weight");
+                  }
+              })
+        .test("self_loops_and_parallel_edges_do_not_distort_graph_algorithms",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_k_core;
+                  using nimblecas::search_dist::distributed_minimum_spanning_forest;
+                  using nimblecas::search_dist::distributed_triangle_counts;
+                  using nimblecas::search_dist::MstEdge;
+
+                  WireGraph g;
+                  g.adjacency.resize(2);
+                  g.adjacency[0].push_back(Edge{.target = 1, .cost = 10});
+                  g.adjacency[0].push_back(Edge{.target = 1, .cost = 4});
+                  g.adjacency[0].push_back(Edge{.target = 0, .cost = 99});
+                  g.adjacency[1].push_back(Edge{.target = 1, .cost = 50});
+                  g.adjacency[1].push_back(Edge{.target = 0, .cost = 6});
+
+                  auto exec = serial_executor();
+
+                  auto r_tri = distributed_triangle_counts(g, 2, *exec);
+                  t.expect(r_tri.has_value(), "triangle counts succeeds with self-loops and parallel edges");
+                  if (r_tri.has_value()) {
+                      const std::vector<std::int64_t> expected_tri{0, 0};
+                      t.expect(*r_tri == expected_tri, "no triangles are counted from self-loops or parallel edges");
+                  }
+
+                  auto r_k1 = distributed_k_core(g, 1, 2, *exec);
+                  t.expect(r_k1.has_value(), "k-core k=1 succeeds");
+                  if (r_k1.has_value()) {
+                      const std::vector<std::int64_t> expected_k1{0, 1};
+                      t.expect(*r_k1 == expected_k1, "both nodes survive at k=1");
+                  }
+                  auto r_k2 = distributed_k_core(g, 2, 2, *exec);
+                  t.expect(r_k2.has_value(), "k-core k=2 succeeds");
+                  if (r_k2.has_value()) {
+                      const std::vector<std::int64_t> expected_k2{};
+                      t.expect(*r_k2 == expected_k2, "parallel edges and self-loops do not inflate degree to survive k=2");
+                  }
+
+                  auto r_mst = distributed_minimum_spanning_forest(g, 2, *exec);
+                  t.expect(r_mst.has_value(), "MST succeeds with self-loops and parallel edges");
+                  if (r_mst.has_value()) {
+                      const std::vector<MstEdge> expected_edges{MstEdge{.u = 0, .v = 1, .weight = 4}};
+                      t.expect(r_mst->first == expected_edges, "MST picks only the cheapest edge between 0 and 1");
+                      t.expect(r_mst->second == 4, "total MST weight is 4");
+                  }
+              })
+        .test("widest_path_multi_hop_bottleneck_evaluation",
+              [](TestContext& t) -> void {
+                  using nimblecas::search_dist::distributed_widest_path;
+                  WireGraph g;
+                  g.adjacency.resize(6);
+                  auto add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
+                  };
+                  add_edge(0, 1, 10);
+                  add_edge(1, 2, 2);
+                  add_edge(2, 5, 10);
+
+                  add_edge(0, 3, 4);
+                  add_edge(3, 5, 4);
+
+                  add_edge(0, 4, 3);
+                  add_edge(4, 5, 8);
+
+                  auto exec = serial_executor();
+                  auto r = distributed_widest_path(g, 0, 5, 2, *exec);
+                  t.expect(r.has_value(), "multi-hop widest path succeeds");
+                  if (r.has_value()) {
+                      const std::vector<std::int64_t> expected_path{0, 3, 5};
+                      t.expect(r->first == expected_path, "widest path selects Route 2 with maximum bottleneck width");
+                      t.expect(r->second == 4, "bottleneck width is exactly 4");
+                  }
               })
         .run();
 }

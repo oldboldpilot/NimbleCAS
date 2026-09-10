@@ -89,6 +89,22 @@ inline constexpr std::string_view tabu_op_id = "nimblecas.search.tabu_run/v1";
 inline constexpr std::string_view dls_op_id = "nimblecas.search.depth_limited/v1";
 // One pivot round's update of one row block, for Floyd-Warshall.
 inline constexpr std::string_view fw_op_id = "nimblecas.search.floyd_block/v1";
+// Triangles closed at the nodes of one shard.
+inline constexpr std::string_view tri_op_id = "nimblecas.search.triangle_shard/v1";
+// The cheapest edge leaving each component a shard touches, for Boruvka.
+inline constexpr std::string_view mst_op_id = "nimblecas.search.boruvka_shard/v1";
+
+// How a round combines a path value with an edge, as a SEMIRING -- which is what these searches
+// actually have in common once the arithmetic is named honestly.
+//
+//   min_plus: value = sum of edge costs, best = smallest. Shortest paths.
+//   max_min:  value = smallest edge on the route, best = largest. Widest (bottleneck) paths.
+//
+// The round loop, the sharding, the frontier and the merge are identical for both; only the two
+// operations change. Writing it once and parameterising by semiring is not generality for its own
+// sake -- it is why widest paths needed no new round machinery, and why a bug fixed in the loop is
+// fixed for every search built on it.
+enum class Semiring : std::uint8_t { min_plus, max_min };
 
 // One directed, weighted edge. `cost` must be non-negative.
 struct Edge {
@@ -306,6 +322,123 @@ struct Proposal {
                                               Executor& exec)
     -> Result<std::vector<std::vector<std::optional<std::int64_t>>>>;
 
+// ---------------------------------------------------------------------------
+// Connectivity, ordering, structure.
+// ---------------------------------------------------------------------------
+
+// Connected components of the UNDIRECTED view, as one label per node: the smallest node id in
+// that node's component. Two nodes are in the same component exactly when their labels match.
+//
+// This is min-label propagation, which is the standard parallel connectivity algorithm and needs
+// no machinery of its own here: over a zero-weighted undirected graph, seeding every node with its
+// own id and running the min_plus rounds propagates the smallest id through each component. Rounds
+// are bounded by the graph's diameter.
+//
+// `domain_error` for a malformed graph or a zero `shard_count`.
+[[nodiscard]] auto distributed_connected_components(const WireGraph& g, std::size_t shard_count,
+                                                    Executor& exec)
+    -> Result<std::vector<std::int64_t>>;
+
+// Strongly connected components of the DIRECTED graph, as one label per node: the smallest node id
+// in that node's component.
+//
+// u and v share a component exactly when each reaches the other, so this is computed from the
+// all-pairs reachability `distributed_floyd_warshall` already produces. That is honest about what
+// it costs: QUADRATIC in the number of nodes, in both memory and wire traffic, where a
+// forward-backward decomposition would be near-linear on sparse graphs. The trade is deliberate --
+// it reuses an algorithm that is already distributed and already tested rather than adding a
+// second, subtler one -- but on a large sparse graph it is the wrong tool, and a caller sizing a
+// run should know that before measuring it.
+[[nodiscard]] auto distributed_strongly_connected_components(const WireGraph& g,
+                                                             std::size_t shard_count,
+                                                             Executor& exec)
+    -> Result<std::vector<std::int64_t>>;
+
+// A topological order of the directed graph: every edge runs from an earlier node to a later one.
+//
+// Kahn's algorithm by LEVELS, which is its naturally parallel form -- every node whose remaining
+// in-degree has reached zero can be emitted at the same time, and one round per level counts the
+// edges leaving that level. Within a level nodes are emitted in ascending id order, so the result
+// is one specific topological order rather than an arbitrary one.
+//
+// `undefined_value` when the graph has a cycle, because then no topological order exists. That is
+// a different thing from an error in the input, and a partial order covering only the acyclic part
+// would be a plausible-looking wrong answer.
+[[nodiscard]] auto distributed_topological_order(const WireGraph& g, std::size_t shard_count,
+                                                 Executor& exec)
+    -> Result<std::vector<std::int64_t>>;
+
+// The k-core: the largest subgraph of the UNDIRECTED view in which every node has degree at least
+// `k`, returned as its nodes in ascending order.
+//
+// Computed by peeling: every node whose degree has fallen below k is removed, its neighbours lose
+// a degree, and the removal cascades. Each peeling wave is one round. An empty result is a real
+// answer -- many graphs have no k-core at all for large k -- and not an error.
+//
+// Degrees are counted on the SIMPLE undirected view: parallel edges count once and self-loops not
+// at all, which is the usual definition and the one that makes "degree at least k" mean what a
+// reader expects.
+//
+// `domain_error` for a negative `k`, a malformed graph, or a zero `shard_count`.
+[[nodiscard]] auto distributed_k_core(const WireGraph& g, std::int64_t k, std::size_t shard_count,
+                                      Executor& exec) -> Result<std::vector<std::int64_t>>;
+
+// The number of triangles through each node of the UNDIRECTED view.
+//
+// Every triangle is counted once at each of its three corners, which is the per-node definition
+// clustering coefficients are built on; the total number of distinct triangles is the sum divided
+// by three. Self-loops and parallel edges close nothing and are ignored.
+//
+// Each shard counts only at its own nodes but receives the whole graph, because closing a triangle
+// at u needs the neighbourhoods of u's neighbours and those live anywhere.
+[[nodiscard]] auto distributed_triangle_counts(const WireGraph& g, std::size_t shard_count,
+                                               Executor& exec)
+    -> Result<std::vector<std::int64_t>>;
+
+// The widest (bottleneck) path from `start` to `goal_node`: the route whose NARROWEST edge is as
+// wide as possible, returned with that width.
+//
+// This is the same round loop under the (max, min) semiring instead of (min, +) -- the value of a
+// route is its smallest edge rather than its total, and the best route is the largest such value.
+// It needed no new round machinery, which is the payoff for naming the semiring.
+//
+// `undefined_value` when `goal_node` is unreachable. A path from a node to itself is `{start}`
+// with width INT64_MAX, since an empty route has no narrow edge to limit it.
+[[nodiscard]] auto distributed_widest_path(const WireGraph& g, std::int64_t start,
+                                           std::int64_t goal_node, std::size_t shard_count,
+                                           Executor& exec)
+    -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
+
+// One edge of a minimum spanning forest.
+struct MstEdge {
+    std::int64_t u{0};
+    std::int64_t v{0};
+    std::int64_t weight{0};
+
+    [[nodiscard]] auto operator==(const MstEdge&) const noexcept -> bool = default;
+};
+
+// A minimum spanning forest of the UNDIRECTED view, as its edges in ascending (u, v) order
+// together with the total weight.
+//
+// Boruvka's algorithm, which is the one classical MST algorithm that is parallel by construction:
+// every component finds its own cheapest outgoing edge simultaneously, all those edges are added,
+// and the components merge. The number of components at least halves each round, so the whole run
+// is a logarithmic number of rounds rather than one round per edge.
+//
+// A FOREST, not a tree: a disconnected graph has no spanning tree, and returning one component's
+// tree while silently dropping the rest would be worse than saying so. The result spans each
+// component separately, and `edges.size()` equals the node count minus the number of components.
+//
+// Ties are broken by the total order (weight, u, v). That is not cosmetic -- Boruvka can close a
+// cycle when two components each pick a different edge of equal weight between them, and a strict
+// total order on edges is what rules that out. It also makes the forest reproducible.
+//
+// `overflow` if the total weight exceeds std::int64_t.
+[[nodiscard]] auto distributed_minimum_spanning_forest(const WireGraph& g, std::size_t shard_count,
+                                                       Executor& exec)
+    -> Result<std::pair<std::vector<MstEdge>, std::int64_t>>;
+
 // Multi-start tabu search over the graph's `landscape`, one independent run per start, each
 // distributed as its own task. A state is a single node; its neighbours are that node's
 // successors; its objective is `landscape[node]`.
@@ -337,6 +470,8 @@ constexpr std::uint64_t proposal_magic = 0x4e43535f50525031ULL;  // "NCS_PRP1"
 constexpr std::uint64_t tabu_magic = 0x4e43535f54425531ULL;      // "NCS_TBU1"
 constexpr std::uint64_t dls_magic = 0x4e43535f444c5331ULL;       // "NCS_DLS1"
 constexpr std::uint64_t fw_magic = 0x4e43535f46574b31ULL;        // "NCS_FWK1"
+constexpr std::uint64_t tri_magic = 0x4e43535f54524931ULL;       // "NCS_TRI1"
+constexpr std::uint64_t mst_magic = 0x4e43535f4d535431ULL;       // "NCS_MST1"
 
 // Distances are never negative, so a negative slot is free to mean "no path" in the
 // Floyd-Warshall matrix on the wire. That is cheaper and less error-prone than a parallel array
@@ -476,6 +611,7 @@ struct Frontier {
     // comparison, so the same graph prunes identically on every machine.
     std::int64_t weight_num{1};
     std::int64_t weight_den{1};
+    Semiring semiring{Semiring::min_plus};
     std::vector<FrontierEntry> entries;
 };
 
@@ -488,9 +624,10 @@ struct Frontier {
     const auto bound = take_i64(bytes, off);
     const auto wnum = take_i64(bytes, off);
     const auto wden = take_i64(bytes, off);
+    const auto ring = take_u64(bytes, off);
     const auto n = take_u64(bytes, off);
-    if (!bound.has_value() || !wnum.has_value() || !wden.has_value() || !n.has_value() ||
-        !count_is_sane(*n, bytes.size() - off, 16)) {
+    if (!bound.has_value() || !wnum.has_value() || !wden.has_value() || !ring.has_value() ||
+        !n.has_value() || *ring > 1 || !count_is_sane(*n, bytes.size() - off, 16)) {
         return make_error<Frontier>(MathError::syntax_error);
     }
     if (*wden <= 0 || *wnum < *wden) {
@@ -500,6 +637,7 @@ struct Frontier {
     f.bound = *bound;
     f.weight_num = *wnum;
     f.weight_den = *wden;
+    f.semiring = *ring == 0 ? Semiring::min_plus : Semiring::max_min;
     f.entries.resize(static_cast<std::size_t>(*n));
     for (FrontierEntry& fe : f.entries) {
         const auto node = take_i64(bytes, off);
@@ -566,8 +704,14 @@ struct Frontier {
         const std::vector<Edge>& edges = slice->adjacency[static_cast<std::size_t>(u - first)];
         for (const Edge& e : edges) {
             std::int64_t nd = 0;
-            if (add_overflows(fe.distance, e.cost, nd)) {
-                return make_error<Payload>(MathError::overflow);
+            if (frontier->semiring == Semiring::min_plus) {
+                if (add_overflows(fe.distance, e.cost, nd)) {
+                    return make_error<Payload>(MathError::overflow);
+                }
+            } else {
+                // max_min: the value of a route is its NARROWEST edge, so extending a route can
+                // only ever narrow it. Nothing is summed, so nothing can overflow.
+                nd = std::min(fe.distance, e.cost);
             }
             // Admissible-heuristic pruning. `bound` is the best goal distance the coordinator has
             // seen; a proposal that cannot beat it cannot lie on a better goal path.
@@ -781,6 +925,16 @@ struct RoundOutcome {
                               std::int64_t weight_den, std::size_t shard_count, Executor& exec)
     -> Result<RoundOutcome>;
 
+// Runs exactly ONE round and hands back the raw proposals.
+//
+// The peeling algorithms -- topological ordering and k-core -- are not relaxations at all: they
+// COUNT how many edges arrive at each node from the current level. A proposal happens to be one
+// per traversed edge, which is exactly that count, so they reuse the sharded round rather than
+// pretending to be shortest-path searches.
+[[nodiscard]] auto run_one_round(const TaskRegistry& reg, const WireGraph& g,
+                                 std::span<const FrontierEntry> frontier, std::size_t shard_count,
+                                 Executor& exec) -> Result<std::vector<Proposal>>;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -899,13 +1053,15 @@ auto encode_slice(const WireGraph& g, std::size_t first, std::size_t count) -> R
 // The weighted form every round builder uses. `encode_frontier` is the exported 1/1 case: plain
 // A*, where the heuristic is taken at face value.
 auto encode_frontier_weighted(std::span<const FrontierEntry> frontier, std::int64_t bound,
-                              std::int64_t weight_num, std::int64_t weight_den) -> Payload {
+                              std::int64_t weight_num, std::int64_t weight_den,
+                              Semiring ring = Semiring::min_plus) -> Payload {
     Payload out;
-    out.reserve(40 + frontier.size() * 16);
+    out.reserve(48 + frontier.size() * 16);
     put_u64(out, frontier_magic);
     put_i64(out, bound);
     put_i64(out, weight_num);
     put_i64(out, weight_den);
+    put_u64(out, ring == Semiring::min_plus ? 0ULL : 1ULL);
     put_u64(out, static_cast<std::uint64_t>(frontier.size()));
     for (const FrontierEntry& fe : frontier) {
         put_i64(out, fe.node);
@@ -1187,17 +1343,197 @@ struct ProbeResult {
 }
 
 // ---------------------------------------------------------------------------
+// Triangle counting — one shard counts the triangles at its own nodes.
+// ---------------------------------------------------------------------------
+
+// Literals are [whole undirected graph, range payload]. The WHOLE graph travels because closing a
+// triangle at u needs the neighbourhood of u's neighbours, which live anywhere; only the nodes
+// COUNTED AT are restricted to the shard's range, and that is what makes the shards disjoint.
+[[nodiscard]] auto triangle_shard(std::span<const Payload> args) -> Result<Payload> {
+    if (args.size() != 2) {
+        return make_error<Payload>(MathError::domain_error);
+    }
+    auto slice = decode_slice(args[0]);
+    if (!slice) {
+        return make_error<Payload>(slice.error());
+    }
+    std::size_t off = 0;
+    const auto magic = take_u64(args[1], off);
+    const auto first64 = take_u64(args[1], off);
+    const auto count64 = take_u64(args[1], off);
+    if (!magic.has_value() || *magic != tri_magic || !first64.has_value() ||
+        !count64.has_value() || off != args[1].size()) {
+        return make_error<Payload>(MathError::syntax_error);
+    }
+    const std::vector<std::vector<Edge>>& adj = slice->adjacency;
+    const auto first = static_cast<std::size_t>(*first64);
+    const auto count = static_cast<std::size_t>(*count64);
+    if (first > adj.size() || count > adj.size() - first) {
+        return make_error<Payload>(MathError::syntax_error);
+    }
+
+    // The adjacency arrives sorted by target (the undirected view is built from an ordered map),
+    // so membership is a binary search rather than a scan.
+    const auto adjacent = [&adj](std::size_t a, std::int64_t b) -> bool {
+        return std::ranges::binary_search(adj[a], b, {}, &Edge::target);
+    };
+
+    std::vector<std::int64_t> counts(count, 0);
+    for (const std::size_t i : std::views::iota(std::size_t{0}, count)) {
+        const std::size_t u = first + i;
+        const std::vector<Edge>& nbrs = adj[u];
+        for (const std::size_t a : std::views::iota(std::size_t{0}, nbrs.size())) {
+            for (const std::size_t b : std::views::iota(a + 1, nbrs.size())) {
+                const std::int64_t v = nbrs[a].target;
+                const std::int64_t w = nbrs[b].target;
+                if (v == static_cast<std::int64_t>(u) || w == static_cast<std::int64_t>(u)) {
+                    continue;  // a self-loop closes nothing
+                }
+                if (adjacent(static_cast<std::size_t>(v), w)) {
+                    ++counts[i];
+                }
+            }
+        }
+    }
+
+    Payload out;
+    put_u64(out, tri_magic);
+    put_u64(out, *first64);
+    put_u64(out, static_cast<std::uint64_t>(counts.size()));
+    for (const std::int64_t c : counts) {
+        put_i64(out, c);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Boruvka — one shard finds the cheapest edge leaving each component it touches.
+// ---------------------------------------------------------------------------
+
+// One candidate: the cheapest edge leaving `component`, as (weight, u, v).
+struct Candidate {
+    std::int64_t component{0};
+    std::int64_t weight{0};
+    std::int64_t u{0};
+    std::int64_t v{0};
+
+    // A STRICT TOTAL ORDER on edges, and it is what makes Boruvka safe here. With ties broken
+    // arbitrarily, two components can each pick a different edge of the same weight between them
+    // and the merge closes a cycle. Ordering by (weight, u, v) makes the cheapest outgoing edge
+    // UNIQUE, so the classic tie-breaking hazard cannot arise -- and it makes the result
+    // reproducible, which a distributed run needs anyway.
+    [[nodiscard]] auto better_than(const Candidate& other) const noexcept -> bool {
+        return std::tie(weight, u, v) < std::tie(other.weight, other.u, other.v);
+    }
+};
+
+[[nodiscard]] auto boruvka_shard(std::span<const Payload> args) -> Result<Payload> {
+    if (args.size() != 2) {
+        return make_error<Payload>(MathError::domain_error);
+    }
+    auto slice = decode_slice(args[0]);
+    if (!slice) {
+        return make_error<Payload>(slice.error());
+    }
+    std::size_t off = 0;
+    const auto magic = take_u64(args[1], off);
+    const auto n64 = take_u64(args[1], off);
+    if (!magic.has_value() || *magic != mst_magic || !n64.has_value() ||
+        !count_is_sane(*n64, args[1].size() - off, 8)) {
+        return make_error<Payload>(MathError::syntax_error);
+    }
+    std::vector<std::int64_t> component(static_cast<std::size_t>(*n64));
+    for (std::int64_t& slot : component) {
+        const auto v = take_i64(args[1], off);
+        if (!v.has_value()) {
+            return make_error<Payload>(MathError::syntax_error);
+        }
+        slot = *v;
+    }
+    if (off != args[1].size()) {
+        return make_error<Payload>(MathError::syntax_error);
+    }
+
+    const auto first = slice->first;
+    std::map<std::int64_t, Candidate> best;
+    for (const std::size_t i : std::views::iota(std::size_t{0}, slice->adjacency.size())) {
+        const auto u = static_cast<std::int64_t>(first + i);
+        if (static_cast<std::size_t>(u) >= component.size()) {
+            return make_error<Payload>(MathError::syntax_error);
+        }
+        const std::int64_t cu = component[static_cast<std::size_t>(u)];
+        for (const Edge& e : slice->adjacency[i]) {
+            if (e.target < 0 || static_cast<std::size_t>(e.target) >= component.size()) {
+                return make_error<Payload>(MathError::syntax_error);
+            }
+            const std::int64_t cv = component[static_cast<std::size_t>(e.target)];
+            if (cu == cv) {
+                continue;  // inside the component: taking it would close a cycle
+            }
+            const Candidate cand{
+                .component = cu, .weight = e.cost, .u = u, .v = e.target};
+            auto it = best.find(cu);
+            if (it == best.end() || cand.better_than(it->second)) {
+                best[cu] = cand;
+            }
+        }
+    }
+
+    Payload out;
+    put_u64(out, mst_magic);
+    put_u64(out, static_cast<std::uint64_t>(best.size()));
+    for (const auto& [comp, cand] : best) {
+        put_i64(out, cand.component);
+        put_i64(out, cand.weight);
+        put_i64(out, cand.u);
+        put_i64(out, cand.v);
+    }
+    return out;
+}
+
+[[nodiscard]] auto decode_candidates(std::span<const std::byte> bytes)
+    -> Result<std::vector<Candidate>> {
+    using Cs = std::vector<Candidate>;
+    std::size_t off = 0;
+    const auto magic = take_u64(bytes, off);
+    if (!magic.has_value() || *magic != mst_magic) {
+        return make_error<Cs>(MathError::syntax_error);
+    }
+    const auto n = take_u64(bytes, off);
+    if (!n.has_value() || !count_is_sane(*n, bytes.size() - off, 32)) {
+        return make_error<Cs>(MathError::syntax_error);
+    }
+    Cs cs(static_cast<std::size_t>(*n));
+    for (Candidate& c : cs) {
+        const auto comp = take_i64(bytes, off);
+        const auto w = take_i64(bytes, off);
+        const auto u = take_i64(bytes, off);
+        const auto v = take_i64(bytes, off);
+        if (!comp.has_value() || !w.has_value() || !u.has_value() || !v.has_value()) {
+            return make_error<Cs>(MathError::syntax_error);
+        }
+        c = Candidate{.component = *comp, .weight = *w, .u = *u, .v = *v};
+    }
+    if (off != bytes.size()) {
+        return make_error<Cs>(MathError::syntax_error);
+    }
+    return cs;
+}
+
+// ---------------------------------------------------------------------------
 // Running.
 // ---------------------------------------------------------------------------
 
 auto register_ops(TaskRegistry& reg) -> Result<void> {
-    // All four or none: a registry that holds half of them would let a graph build and then fail
-    // in a worker, which is the failure this whole registration step exists to move earlier.
-    const std::array<std::pair<std::string_view, TaskFn>, 4> ops{{
+    // All of them or none: a registry holding half would let a graph build and then fail in a
+    // worker, which is the failure this whole registration step exists to move earlier.
+    const std::array<std::pair<std::string_view, TaskFn>, 6> ops{{
         {relax_op_id, relax_shard},
         {tabu_op_id, tabu_run},
         {dls_op_id, depth_limited_probe},
         {fw_op_id, floyd_block},
+        {tri_op_id, triangle_shard},
+        {mst_op_id, boruvka_shard},
     }};
     for (const auto& [id, fn] : ops) {
         auto r = reg.register_op(OpId{id}, fn);
@@ -1210,7 +1546,7 @@ auto register_ops(TaskRegistry& reg) -> Result<void> {
 
 auto build_round_graph_weighted(const TaskRegistry& reg, const WireGraph& g,
                                 std::span<const FrontierEntry> frontier, std::int64_t bound,
-                                std::int64_t weight_num, std::int64_t weight_den,
+                                std::int64_t weight_num, std::int64_t weight_den, Semiring ring,
                                 std::size_t shard_count) -> Result<TaskGraph> {
     if (shard_count == 0) {
         return make_error<TaskGraph>(MathError::domain_error);
@@ -1240,7 +1576,7 @@ auto build_round_graph_weighted(const TaskRegistry& reg, const WireGraph& g,
                 mine.push_back(fe);
             }
         }
-        Payload front = encode_frontier_weighted(mine, bound, weight_num, weight_den);
+        Payload front = encode_frontier_weighted(mine, bound, weight_num, weight_den, ring);
         auto id = graph.add_named_task(reg, OpId{relax_op_id},
                                        std::vector<Payload>{std::move(*slice), std::move(front)});
         if (!id) {
@@ -1254,25 +1590,35 @@ auto build_round_graph_weighted(const TaskRegistry& reg, const WireGraph& g,
 auto build_round_graph(const TaskRegistry& reg, const WireGraph& g,
                        std::span<const FrontierEntry> frontier, std::int64_t bound,
                        std::size_t shard_count) -> Result<TaskGraph> {
-    return build_round_graph_weighted(reg, g, frontier, bound, 1, 1, shard_count);
+    return build_round_graph_weighted(reg, g, frontier, bound, 1, 1, Semiring::min_plus,
+                                      shard_count);
 }
 
 namespace {
 
-auto run_rounds(const TaskRegistry& reg, const WireGraph& g, std::int64_t start,
-                std::optional<std::int64_t> goal, std::int64_t weight_num,
-                std::int64_t weight_den, std::size_t shard_count, Executor& exec)
-    -> Result<RoundOutcome> {
+// The round loop, seeded with whatever initial values the caller has.
+//
+// A single-source search seeds one node at 0. LABEL PROPAGATION seeds EVERY node with its own id
+// and puts them all in the first frontier, and connected components falls straight out of that:
+// over a zero-weighted undirected graph the min_plus semiring propagates the smallest id in each
+// component. That is the same loop, not a similar one, which is the point of separating the
+// seeding from the iteration.
+auto run_rounds_seeded(const TaskRegistry& reg, const WireGraph& g,
+                       std::vector<std::optional<std::int64_t>> initial,
+                       std::vector<FrontierEntry> frontier, std::optional<std::int64_t> goal,
+                       std::int64_t weight_num, std::int64_t weight_den, Semiring ring,
+                       std::size_t shard_count, Executor& exec) -> Result<RoundOutcome> {
     const std::size_t n = g.adjacency.size();
     RoundOutcome out;
-    out.dist.assign(n, std::nullopt);
+    out.dist = std::move(initial);
     out.parent.assign(n, std::nullopt);
-    out.dist[static_cast<std::size_t>(start)] = 0;
 
-    std::vector<FrontierEntry> frontier{FrontierEntry{.node = start, .distance = 0}};
     std::int64_t bound = std::numeric_limits<std::int64_t>::max();
-    if (goal.has_value() && *goal == start) {
-        bound = 0;
+    if (ring == Semiring::min_plus && goal.has_value()) {
+        const auto gi = static_cast<std::size_t>(*goal);
+        if (gi < n && out.dist[gi].has_value()) {
+            bound = *out.dist[gi];
+        }
     }
 
     // One round per node is the worst case: a shortest path has at most n-1 edges, and each round
@@ -1283,7 +1629,7 @@ auto run_rounds(const TaskRegistry& reg, const WireGraph& g, std::int64_t start,
             return out;
         }
         auto graph = build_round_graph_weighted(reg, g, frontier, bound, weight_num, weight_den,
-                                                shard_count);
+                                                ring, shard_count);
         if (!graph) {
             return make_error<RoundOutcome>(graph.error());
         }
@@ -1310,7 +1656,10 @@ auto run_rounds(const TaskRegistry& reg, const WireGraph& g, std::int64_t start,
                 }
                 const auto t = static_cast<std::size_t>(p.target);
                 std::optional<std::int64_t>& d = out.dist[t];
-                const bool better = !d.has_value() || p.distance < *d;
+                // "Better" is the semiring's ordering: smaller for min_plus, larger for max_min.
+                const bool better = !d.has_value() || (ring == Semiring::min_plus
+                                                           ? p.distance < *d
+                                                           : p.distance > *d);
                 // Equal distance, lower parent id: the same tie-break `dijkstra` applies when it
                 // relaxes, so an optimal path that is unique comes out identical.
                 const bool same_but_lower_parent =
@@ -1326,7 +1675,7 @@ auto run_rounds(const TaskRegistry& reg, const WireGraph& g, std::int64_t start,
                 }
             }
         }
-        if (goal.has_value()) {
+        if (ring == Semiring::min_plus && goal.has_value()) {
             const auto gi = static_cast<std::size_t>(*goal);
             if (out.dist[gi].has_value()) {
                 bound = *out.dist[gi];
@@ -1339,6 +1688,74 @@ auto run_rounds(const TaskRegistry& reg, const WireGraph& g, std::int64_t start,
         frontier = std::move(next);
     }
     return make_error<RoundOutcome>(MathError::not_converged);
+}
+
+auto run_rounds(const TaskRegistry& reg, const WireGraph& g, std::int64_t start,
+                std::optional<std::int64_t> goal, std::int64_t weight_num,
+                std::int64_t weight_den, std::size_t shard_count, Executor& exec)
+    -> Result<RoundOutcome> {
+    std::vector<std::optional<std::int64_t>> initial(g.adjacency.size(), std::nullopt);
+    initial[static_cast<std::size_t>(start)] = 0;
+    std::vector<FrontierEntry> frontier{FrontierEntry{.node = start, .distance = 0}};
+    return run_rounds_seeded(reg, g, std::move(initial), std::move(frontier), goal, weight_num,
+                             weight_den, Semiring::min_plus, shard_count, exec);
+}
+
+auto run_one_round(const TaskRegistry& reg, const WireGraph& g,
+                   std::span<const FrontierEntry> frontier, std::size_t shard_count,
+                   Executor& exec) -> Result<std::vector<Proposal>> {
+    using Ps = std::vector<Proposal>;
+    auto graph = build_round_graph_weighted(reg, g, frontier,
+                                            std::numeric_limits<std::int64_t>::max(), 1, 1,
+                                            Semiring::min_plus, shard_count);
+    if (!graph) {
+        return make_error<Ps>(graph.error());
+    }
+    auto run = exec.run(*graph);
+    if (!run) {
+        return make_error<Ps>(run.error());
+    }
+    Ps all;
+    for (const Result<Payload>& outcome : run->outputs) {
+        if (!outcome) {
+            return make_error<Ps>(outcome.error());
+        }
+        auto ps = decode_proposals(*outcome);
+        if (!ps) {
+            return make_error<Ps>(ps.error());
+        }
+        all.insert(all.end(), ps->begin(), ps->end());
+    }
+    return all;
+}
+
+// The undirected view: every edge also runs backwards, and parallel edges collapse to the
+// cheapest. Connected components, k-core, triangles and the spanning forest are all properties of
+// the UNDIRECTED graph, so building this view once -- and saying so -- is better than each of them
+// quietly assuming the caller already symmetrised.
+[[nodiscard]] auto undirected_view(const WireGraph& g, bool unit_weights) -> WireGraph {
+    const std::size_t n = g.adjacency.size();
+    std::vector<std::map<std::int64_t, std::int64_t>> best(n);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        for (const Edge& e : g.adjacency[u]) {
+            const auto v = static_cast<std::size_t>(e.target);
+            const std::int64_t w = unit_weights ? 1 : e.cost;
+            for (const auto& [from, to] : {std::pair{u, v}, std::pair{v, u}}) {
+                auto it = best[from].find(static_cast<std::int64_t>(to));
+                if (it == best[from].end() || w < it->second) {
+                    best[from][static_cast<std::int64_t>(to)] = w;
+                }
+            }
+        }
+    }
+    WireGraph out;
+    out.adjacency.resize(n);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        for (const auto& [v, w] : best[u]) {
+            out.adjacency[u].push_back(Edge{.target = v, .cost = w});
+        }
+    }
+    return out;
 }
 
 }  // namespace
@@ -1821,5 +2238,481 @@ auto distributed_floyd_warshall(const WireGraph& g, std::size_t shard_count, Exe
         }
     }
     return out;
+}
+
+auto distributed_connected_components(const WireGraph& g, std::size_t shard_count, Executor& exec)
+    -> Result<std::vector<std::int64_t>> {
+    using Labels = std::vector<std::int64_t>;
+    auto ok = validate(g);
+    if (!ok) {
+        return make_error<Labels>(ok.error());
+    }
+    const std::size_t n = g.adjacency.size();
+    if (shard_count == 0) {
+        return make_error<Labels>(MathError::domain_error);
+    }
+    if (n == 0) {
+        return Labels{};
+    }
+    TaskRegistry reg;
+    auto reg_ok = register_ops(reg);
+    if (!reg_ok) {
+        return make_error<Labels>(reg_ok.error());
+    }
+
+    // Zero-weighted, so a proposal carries the propagating LABEL rather than a distance: under
+    // min_plus with cost 0, relaxing u across an edge proposes exactly label(u).
+    WireGraph zero = undirected_view(g, false);
+    for (std::vector<Edge>& row : zero.adjacency) {
+        for (Edge& e : row) {
+            e.cost = 0;
+        }
+    }
+
+    std::vector<std::optional<std::int64_t>> initial(n);
+    std::vector<FrontierEntry> frontier;
+    frontier.reserve(n);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        const auto id = static_cast<std::int64_t>(u);
+        initial[u] = id;
+        frontier.push_back(FrontierEntry{.node = id, .distance = id});
+    }
+
+    auto rounds = run_rounds_seeded(reg, zero, std::move(initial), std::move(frontier),
+                                    std::nullopt, 1, 1, Semiring::min_plus, shard_count, exec);
+    if (!rounds) {
+        return make_error<Labels>(rounds.error());
+    }
+    Labels labels(n, 0);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        if (!rounds->dist[u].has_value()) {
+            // Every node was seeded, so an absent label means the loop lost one.
+            return make_error<Labels>(MathError::not_converged);
+        }
+        labels[u] = *rounds->dist[u];
+    }
+    return labels;
+}
+
+auto distributed_strongly_connected_components(const WireGraph& g, std::size_t shard_count,
+                                               Executor& exec) -> Result<std::vector<std::int64_t>> {
+    using Labels = std::vector<std::int64_t>;
+    auto reach = distributed_floyd_warshall(g, shard_count, exec);
+    if (!reach) {
+        return make_error<Labels>(reach.error());
+    }
+    const std::size_t n = reach->size();
+    Labels labels(n, 0);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        std::int64_t smallest = static_cast<std::int64_t>(u);
+        for (const std::size_t v : std::views::iota(std::size_t{0}, u)) {
+            // Mutual reachability, which is the definition of the relation -- one direction alone
+            // says only that v is downstream of u.
+            if ((*reach)[u][v].has_value() && (*reach)[v][u].has_value()) {
+                smallest = static_cast<std::int64_t>(v);
+                break;  // v ascends, so the first match is the smallest
+            }
+        }
+        labels[u] = smallest;
+    }
+    return labels;
+}
+
+auto distributed_topological_order(const WireGraph& g, std::size_t shard_count, Executor& exec)
+    -> Result<std::vector<std::int64_t>> {
+    using Order = std::vector<std::int64_t>;
+    auto ok = validate(g);
+    if (!ok) {
+        return make_error<Order>(ok.error());
+    }
+    const std::size_t n = g.adjacency.size();
+    if (shard_count == 0) {
+        return make_error<Order>(MathError::domain_error);
+    }
+    if (n == 0) {
+        return Order{};
+    }
+    TaskRegistry reg;
+    auto reg_ok = register_ops(reg);
+    if (!reg_ok) {
+        return make_error<Order>(reg_ok.error());
+    }
+
+    // In-degree counts every edge, parallel ones included: two edges u -> v are two dependencies,
+    // and the rounds below emit one proposal per edge, so both sides must count the same way.
+    std::vector<std::int64_t> indegree(n, 0);
+    for (const std::vector<Edge>& row : g.adjacency) {
+        for (const Edge& e : row) {
+            ++indegree[static_cast<std::size_t>(e.target)];
+        }
+    }
+
+    Order order;
+    order.reserve(n);
+    std::vector<FrontierEntry> level;
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        if (indegree[u] == 0) {
+            level.push_back(FrontierEntry{.node = static_cast<std::int64_t>(u), .distance = 0});
+        }
+    }
+
+    for ([[maybe_unused]] const std::size_t round : std::views::iota(std::size_t{0}, n + 1)) {
+        if (level.empty()) {
+            break;
+        }
+        for (const FrontierEntry& fe : level) {
+            order.push_back(fe.node);
+        }
+        auto proposals = run_one_round(reg, g, level, shard_count, exec);
+        if (!proposals) {
+            return make_error<Order>(proposals.error());
+        }
+        for (const Proposal& p : *proposals) {
+            if (p.target < 0 || static_cast<std::size_t>(p.target) >= n) {
+                return make_error<Order>(MathError::domain_error);
+            }
+            --indegree[static_cast<std::size_t>(p.target)];
+        }
+        std::vector<FrontierEntry> next;
+        for (const Proposal& p : *proposals) {
+            const auto t = static_cast<std::size_t>(p.target);
+            if (indegree[t] == 0) {
+                // Guard against emitting a node twice when several edges into it drop to zero in
+                // the same round: only the transition to zero enqueues, so mark it as taken.
+                indegree[t] = -1;
+                next.push_back(FrontierEntry{.node = p.target, .distance = 0});
+            }
+        }
+        std::ranges::sort(next, {}, &FrontierEntry::node);
+        level = std::move(next);
+    }
+
+    if (order.size() != n) {
+        // Nodes remain with a non-zero in-degree, which happens exactly when they lie on a cycle.
+        return make_error<Order>(MathError::undefined_value);
+    }
+    return order;
+}
+
+auto distributed_k_core(const WireGraph& g, std::int64_t k, std::size_t shard_count, Executor& exec)
+    -> Result<std::vector<std::int64_t>> {
+    using Nodes = std::vector<std::int64_t>;
+    auto ok = validate(g);
+    if (!ok) {
+        return make_error<Nodes>(ok.error());
+    }
+    const std::size_t n = g.adjacency.size();
+    if (shard_count == 0 || k < 0) {
+        return make_error<Nodes>(MathError::domain_error);
+    }
+    if (n == 0) {
+        return Nodes{};
+    }
+    TaskRegistry reg;
+    auto reg_ok = register_ops(reg);
+    if (!reg_ok) {
+        return make_error<Nodes>(reg_ok.error());
+    }
+
+    // The simple undirected view: parallel edges once, self-loops not at all, which is what makes
+    // "degree at least k" mean what a reader expects.
+    WireGraph view = undirected_view(g, true);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        std::erase_if(view.adjacency[u],
+                      [u](const Edge& e) { return e.target == static_cast<std::int64_t>(u); });
+    }
+
+    std::vector<std::int64_t> degree(n, 0);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        degree[u] = static_cast<std::int64_t>(view.adjacency[u].size());
+    }
+    std::vector<bool> removed(n, false);
+
+    std::vector<FrontierEntry> wave;
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        if (degree[u] < k) {
+            removed[u] = true;
+            wave.push_back(FrontierEntry{.node = static_cast<std::int64_t>(u), .distance = 0});
+        }
+    }
+
+    for ([[maybe_unused]] const std::size_t round : std::views::iota(std::size_t{0}, n + 1)) {
+        if (wave.empty()) {
+            break;
+        }
+        auto proposals = run_one_round(reg, view, wave, shard_count, exec);
+        if (!proposals) {
+            return make_error<Nodes>(proposals.error());
+        }
+        std::vector<FrontierEntry> next;
+        for (const Proposal& p : *proposals) {
+            if (p.target < 0 || static_cast<std::size_t>(p.target) >= n) {
+                return make_error<Nodes>(MathError::domain_error);
+            }
+            const auto t = static_cast<std::size_t>(p.target);
+            if (removed[t]) {
+                continue;  // already gone; its own edges were accounted for when it went
+            }
+            --degree[t];
+            if (degree[t] < k) {
+                removed[t] = true;
+                next.push_back(FrontierEntry{.node = p.target, .distance = 0});
+            }
+        }
+        std::ranges::sort(next, {}, &FrontierEntry::node);
+        wave = std::move(next);
+    }
+
+    Nodes core;
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        if (!removed[u]) {
+            core.push_back(static_cast<std::int64_t>(u));
+        }
+    }
+    return core;
+}
+
+auto distributed_triangle_counts(const WireGraph& g, std::size_t shard_count, Executor& exec)
+    -> Result<std::vector<std::int64_t>> {
+    using Counts = std::vector<std::int64_t>;
+    auto ok = validate(g);
+    if (!ok) {
+        return make_error<Counts>(ok.error());
+    }
+    const std::size_t n = g.adjacency.size();
+    if (shard_count == 0) {
+        return make_error<Counts>(MathError::domain_error);
+    }
+    if (n == 0) {
+        return Counts{};
+    }
+    TaskRegistry reg;
+    auto reg_ok = register_ops(reg);
+    if (!reg_ok) {
+        return make_error<Counts>(reg_ok.error());
+    }
+
+    WireGraph view = undirected_view(g, true);
+    for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+        std::erase_if(view.adjacency[u],
+                      [u](const Edge& e) { return e.target == static_cast<std::int64_t>(u); });
+    }
+    auto whole = encode_slice(view, 0, n);
+    if (!whole) {
+        return make_error<Counts>(whole.error());
+    }
+
+    const std::vector<std::size_t> bounds = slice_bounds(n, shard_count);
+    TaskGraph graph;
+    for (const std::size_t s : std::views::iota(std::size_t{0}, shard_count)) {
+        Payload range;
+        put_u64(range, tri_magic);
+        put_u64(range, static_cast<std::uint64_t>(bounds[s]));
+        put_u64(range, static_cast<std::uint64_t>(bounds[s + 1] - bounds[s]));
+        auto id = graph.add_named_task(reg, OpId{tri_op_id},
+                                       std::vector<Payload>{*whole, std::move(range)});
+        if (!id) {
+            return make_error<Counts>(id.error());
+        }
+    }
+    auto run = exec.run(graph);
+    if (!run) {
+        return make_error<Counts>(run.error());
+    }
+
+    Counts counts(n, 0);
+    for (const Result<Payload>& outcome : run->outputs) {
+        if (!outcome) {
+            return make_error<Counts>(outcome.error());
+        }
+        std::size_t off = 0;
+        const auto magic = take_u64(*outcome, off);
+        const auto first64 = take_u64(*outcome, off);
+        const auto len = take_u64(*outcome, off);
+        if (!magic.has_value() || *magic != tri_magic || !first64.has_value() || !len.has_value()) {
+            return make_error<Counts>(MathError::syntax_error);
+        }
+        const auto first = static_cast<std::size_t>(*first64);
+        const auto count = static_cast<std::size_t>(*len);
+        if (first > n || count > n - first) {
+            return make_error<Counts>(MathError::syntax_error);
+        }
+        for (const std::size_t i : std::views::iota(std::size_t{0}, count)) {
+            const auto v = take_i64(*outcome, off);
+            if (!v.has_value()) {
+                return make_error<Counts>(MathError::syntax_error);
+            }
+            counts[first + i] = *v;
+        }
+        if (off != outcome->size()) {
+            return make_error<Counts>(MathError::syntax_error);
+        }
+    }
+    return counts;
+}
+
+auto distributed_widest_path(const WireGraph& g, std::int64_t start, std::int64_t goal_node,
+                             std::size_t shard_count, Executor& exec)
+    -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
+    using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
+    auto ok = validate(g);
+    if (!ok) {
+        return make_error<PathCost>(ok.error());
+    }
+    const std::size_t n = g.adjacency.size();
+    if (shard_count == 0 || start < 0 || static_cast<std::size_t>(start) >= n || goal_node < 0 ||
+        static_cast<std::size_t>(goal_node) >= n) {
+        return make_error<PathCost>(MathError::domain_error);
+    }
+    if (start == goal_node) {
+        // An empty route has no narrow edge to limit it.
+        return PathCost{std::vector<std::int64_t>{start}, std::numeric_limits<std::int64_t>::max()};
+    }
+    TaskRegistry reg;
+    auto reg_ok = register_ops(reg);
+    if (!reg_ok) {
+        return make_error<PathCost>(reg_ok.error());
+    }
+
+    std::vector<std::optional<std::int64_t>> initial(n, std::nullopt);
+    initial[static_cast<std::size_t>(start)] = std::numeric_limits<std::int64_t>::max();
+    std::vector<FrontierEntry> frontier{FrontierEntry{
+        .node = start, .distance = std::numeric_limits<std::int64_t>::max()}};
+
+    auto rounds = run_rounds_seeded(reg, g, std::move(initial), std::move(frontier), std::nullopt,
+                                    1, 1, Semiring::max_min, shard_count, exec);
+    if (!rounds) {
+        return make_error<PathCost>(rounds.error());
+    }
+    const std::optional<std::int64_t>& width = rounds->dist[static_cast<std::size_t>(goal_node)];
+    if (!width.has_value()) {
+        return make_error<PathCost>(MathError::undefined_value);
+    }
+    auto path = rebuild_path(rounds->parent, start, goal_node);
+    if (!path) {
+        return make_error<PathCost>(path.error());
+    }
+    return PathCost{std::move(*path), *width};
+}
+
+auto distributed_minimum_spanning_forest(const WireGraph& g, std::size_t shard_count,
+                                         Executor& exec)
+    -> Result<std::pair<std::vector<MstEdge>, std::int64_t>> {
+    using Forest = std::pair<std::vector<MstEdge>, std::int64_t>;
+    auto ok = validate(g);
+    if (!ok) {
+        return make_error<Forest>(ok.error());
+    }
+    const std::size_t n = g.adjacency.size();
+    if (shard_count == 0) {
+        return make_error<Forest>(MathError::domain_error);
+    }
+    if (n == 0) {
+        return Forest{std::vector<MstEdge>{}, 0};
+    }
+    TaskRegistry reg;
+    auto reg_ok = register_ops(reg);
+    if (!reg_ok) {
+        return make_error<Forest>(reg_ok.error());
+    }
+
+    const WireGraph view = undirected_view(g, false);
+
+    // Union-find over components, coordinator-side. The shards only ever READ the labels, so the
+    // merge stays in one place and cannot race.
+    std::vector<std::int64_t> parent(n);
+    std::iota(parent.begin(), parent.end(), std::int64_t{0});
+    const auto find = [&parent](std::int64_t x) -> std::int64_t {
+        while (parent[static_cast<std::size_t>(x)] != x) {
+            parent[static_cast<std::size_t>(x)] =
+                parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(x)])];
+            x = parent[static_cast<std::size_t>(x)];
+        }
+        return x;
+    };
+
+    std::vector<MstEdge> chosen;
+    std::int64_t total = 0;
+
+    // Components at least halve each round, so log2(n) + 1 rounds suffice; the extra guard turns a
+    // broken invariant into an error instead of a spin.
+    for ([[maybe_unused]] const std::size_t round : std::views::iota(std::size_t{0}, n + 1)) {
+        std::vector<std::int64_t> labels(n, 0);
+        for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
+            labels[u] = find(static_cast<std::int64_t>(u));
+        }
+
+        Payload label_payload;
+        put_u64(label_payload, mst_magic);
+        put_u64(label_payload, static_cast<std::uint64_t>(n));
+        for (const std::int64_t l : labels) {
+            put_i64(label_payload, l);
+        }
+
+        const std::vector<std::size_t> bounds = slice_bounds(n, shard_count);
+        TaskGraph graph;
+        for (const std::size_t s : std::views::iota(std::size_t{0}, shard_count)) {
+            auto slice = encode_slice(view, bounds[s], bounds[s + 1] - bounds[s]);
+            if (!slice) {
+                return make_error<Forest>(slice.error());
+            }
+            auto id = graph.add_named_task(
+                reg, OpId{mst_op_id}, std::vector<Payload>{std::move(*slice), label_payload});
+            if (!id) {
+                return make_error<Forest>(id.error());
+            }
+        }
+        auto run = exec.run(graph);
+        if (!run) {
+            return make_error<Forest>(run.error());
+        }
+
+        std::map<std::int64_t, Candidate> best;
+        for (const Result<Payload>& outcome : run->outputs) {
+            if (!outcome) {
+                return make_error<Forest>(outcome.error());
+            }
+            auto cands = decode_candidates(*outcome);
+            if (!cands) {
+                return make_error<Forest>(cands.error());
+            }
+            for (const Candidate& c : *cands) {
+                auto it = best.find(c.component);
+                if (it == best.end() || c.better_than(it->second)) {
+                    best[c.component] = c;
+                }
+            }
+        }
+        if (best.empty()) {
+            break;  // no component has an outgoing edge: the forest is complete
+        }
+
+        bool merged_any = false;
+        for (const auto& [comp, cand] : best) {
+            const std::int64_t ru = find(cand.u);
+            const std::int64_t rv = find(cand.v);
+            if (ru == rv) {
+                continue;  // the other end of this edge already merged us this round
+            }
+            parent[static_cast<std::size_t>(ru)] = rv;
+            std::int64_t next_total = 0;
+            if (add_overflows(total, cand.weight, next_total)) {
+                return make_error<Forest>(MathError::overflow);
+            }
+            total = next_total;
+            chosen.push_back(MstEdge{.u = std::min(cand.u, cand.v),
+                                     .v = std::max(cand.u, cand.v),
+                                     .weight = cand.weight});
+            merged_any = true;
+        }
+        if (!merged_any) {
+            break;
+        }
+    }
+
+    std::ranges::sort(chosen, [](const MstEdge& a, const MstEdge& b) {
+        return std::tie(a.u, a.v) < std::tie(b.u, b.v);
+    });
+    return Forest{std::move(chosen), total};
 }
 }  // namespace nimblecas::search_dist
