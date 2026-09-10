@@ -166,26 +166,93 @@ auto main() -> int {
 
                   t.expect(src->contains("using nc_int = std::int64_t;"),
                            "64-bit preamble defines nc_int as std::int64_t");
-                  t.expect(src->contains("auto nc_lit(long long v) -> nc_int"),
-                           "literal constructor nc_lit is emitted");
-                  t.expect(src->contains("auto nc_add(nc_int a, nc_int b, nc_int& r) -> bool"),
-                           "checked addition helper is emitted");
-                  t.expect(src->contains("auto nc_sub(nc_int a, nc_int b, nc_int& r) -> bool"),
-                           "checked subtraction helper is emitted");
-                  t.expect(src->contains("auto nc_mul(nc_int a, nc_int b, nc_int& r) -> bool"),
-                           "checked multiplication helper is emitted");
+                  t.expect(src->contains("auto nc_lit(std::int64_t v) -> nc_int"),
+                           "literal constructor takes std::int64_t, not long long (Rule 48)");
+                  t.expect(src->contains(
+                               "[[nodiscard]] constexpr auto nc_add(nc_int a, nc_int b) "
+                               "-> std::optional<nc_int>"),
+                           "checked addition returns std::optional (Rules 9/32), constexpr "
+                           "(Rules 8/42), nodiscard (Rule 10)");
+                  t.expect(src->contains(
+                               "[[nodiscard]] constexpr auto nc_sub(nc_int a, nc_int b) "
+                               "-> std::optional<nc_int>"),
+                           "checked subtraction has the same shape");
+                  t.expect(src->contains(
+                               "[[nodiscard]] constexpr auto nc_mul(nc_int a, nc_int b) "
+                               "-> std::optional<nc_int>"),
+                           "checked multiplication has the same shape");
                   t.expect(src->contains("std::numeric_limits<nc_int>::max()"),
                            "pre-checked overflow guards check std::numeric_limits max");
                   t.expect(src->contains("[[nodiscard]] inline auto p_eval_poly_2(nc_int a0, nc_int& a1) -> bool"),
                            "entry predicate has nodiscard trailing return type and moded parameters");
-                  t.expect(src->contains("#include <cstdint>"),
-                           "cstdint header is included for std::int64_t");
-                  t.expect(src->contains("#include <limits>"),
-                           "limits header is included for std::numeric_limits");
+                  // Rules 11/41: import std, never the headers. The arbitrary-precision
+                  // width always did this; the narrow ones used to emit <cstdint>/<limits>,
+                  // so the compiler's own output contradicted the policy depending on which
+                  // width you asked for.
+                  t.expect(src->contains("import std;"),
+                           "the standard library arrives as a module (Rules 11/41)");
+                  t.expect(!src->contains("#include <cstdint>") &&
+                               !src->contains("#include <limits>"),
+                           "and no standard header is included in the C++ target");
                   t.expect(!src->contains("nimblecas.bigint"),
                            "64-bit build does not import bigint module");
                   t.expect(src->contains("// @author Olumuyiwa Oluwasanmi"),
                            "emitted file header preserves repository authorship");
+              })
+        .test("cpp_target_emits_only_c++23_conforming_source",
+              [](TestContext& t) {
+                  // config/cpp_details.txt applied to the code this compiler WRITES, not just
+                  // to the compiler itself. Checked as properties of the text so that any
+                  // future change reintroducing a header, an out-parameter or a `long long`
+                  // in the C++ target fails here.
+                  const Program p = eval_poly_program();
+                  const PredicateSignature sig{
+                      .name = "eval_poly",
+                      .modes = {ArgMode::input, ArgMode::output},
+                  };
+                  for (const Width w : {Width::bits64, Width::bits128, Width::arbitrary}) {
+                      CompileOptions opts{};
+                      opts.target = Target::cpp;
+                      opts.width = w;
+                      const auto src = compile(p, sig, opts);
+                      t.expect(src.has_value(), "compilation succeeds at every width");
+                      if (!src.has_value()) {
+                          continue;
+                      }
+                      t.expect(src->contains("import std;"), "Rules 11/41: import std");
+                      t.expect(!src->contains("#include <"),
+                               "Rules 11/41: no standard header in the C++ target");
+                      t.expect(!src->contains("long long"),
+                               "Rule 48: fixed-width integer types, never long long");
+                      t.expect(!src->contains("nc_int& r) -> bool"),
+                               "Rules 9/32: no out-parameter-plus-status arithmetic helper");
+                      t.expect(src->contains("-> std::optional<nc_int>"),
+                               "Rules 9/32: the checked helpers return std::optional");
+                      t.expect(src->contains("[[nodiscard]]"),
+                               "Rule 10: results that must not be dropped say so");
+                      // Rule 31/46: trailing return types. Checked against the helpers by
+                      // name -- a bare `!contains("nc_int nc_")` would also match the
+                      // `constexpr nc_int nc_max_v` bounds constant, which is a variable and
+                      // has no return type to put anywhere.
+                      t.expect(!src->contains("nc_int nc_add(") &&
+                                   !src->contains("nc_int nc_lit(") &&
+                                   !src->contains("bool nc_"),
+                               "Rule 31: trailing return types throughout");
+                      t.expect(src->contains("auto nc_add(") && src->contains("auto nc_lit("),
+                               "and every helper is declared with auto ... -> T");
+                  }
+                  // CUDA is deliberately exempt and must NOT be changed to match: nvcc has no
+                  // `import std`, and std::optional is not device-callable without libcu++.
+                  CompileOptions cuda{};
+                  cuda.target = Target::cuda;
+                  const auto csrc = compile(p, sig, cuda);
+                  t.expect(csrc.has_value(), "CUDA compilation still succeeds");
+                  if (csrc.has_value()) {
+                      t.expect(csrc->contains("#include <cstdint>"),
+                               "CUDA keeps headers, because nvcc has no import std");
+                      t.expect(csrc->contains("nc_int& r) -> bool"),
+                               "CUDA keeps the out-parameter form, which is device-callable");
+                  }
               })
         .test("cpp_128bit_emission_emits_compiler_overflow_builtins_and_sizeof_guard",
               [](TestContext& t) {
@@ -210,11 +277,11 @@ auto main() -> int {
                            "unsupported compiler triggers documented compile-time error");
                   t.expect(src->contains("using nc_int = __int128;"),
                            "128-bit nc_int alias is defined as __int128");
-                  t.expect(src->contains("return !__builtin_add_overflow(a, b, &r);"),
+                  t.expect(src->contains("if (__builtin_add_overflow(a, b, &out))"),
                            "checked addition uses __builtin_add_overflow");
-                  t.expect(src->contains("return !__builtin_sub_overflow(a, b, &r);"),
+                  t.expect(src->contains("if (__builtin_sub_overflow(a, b, &out))"),
                            "checked subtraction uses __builtin_sub_overflow");
-                  t.expect(src->contains("return !__builtin_mul_overflow(a, b, &r);"),
+                  t.expect(src->contains("if (__builtin_mul_overflow(a, b, &out))"),
                            "checked multiplication uses __builtin_mul_overflow");
                   t.expect(src->contains("[[nodiscard]] inline auto p_eval_poly_2("),
                            "entry predicate signature is emitted");
@@ -242,13 +309,13 @@ auto main() -> int {
                            "nc_int is aliased to nimblecas::BigInt");
                   t.expect(src->contains("nimblecas::BigInt::from_i64"),
                            "integer literals are converted via BigInt::from_i64 factory");
-                  t.expect(src->contains("r = a.add(b);"),
+                  t.expect(src->contains("return a.add(b);"),
                            "addition delegates to BigInt::add without redundant overflow checks");
-                  t.expect(src->contains("r = a.subtract(b);"),
+                  t.expect(src->contains("return a.subtract(b);"),
                            "subtraction delegates to BigInt::subtract");
-                  t.expect(src->contains("r = a.multiply(b);"),
+                  t.expect(src->contains("return a.multiply(b);"),
                            "multiplication delegates to BigInt::multiply");
-                  t.expect(src->contains("r = a.negate();"),
+                  t.expect(src->contains("return a.negate();"),
                            "negation delegates to BigInt::negate");
                   t.expect(src->contains("a.divmod(b)"),
                            "division delegates to BigInt::divmod");
@@ -272,8 +339,9 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->contains("__device__ inline auto nc_add("),
-                           "preamble helpers are decorated with __device__ inline");
+                  t.expect(src->contains("__device__ [[nodiscard]] inline auto nc_add("),
+                           "preamble helpers are __device__, inline, and nodiscard -- a "
+                           "dropped nc_add result is a dropped overflow check");
                   t.expect(src->contains("__device__ inline auto p_eval_poly_2("),
                            "predicate function is decorated with __device__ inline");
                   t.expect(src->contains("__global__ void p_eval_poly_2_batch(int n, unsigned char* ok, const nc_int* arg0, nc_int* arg1)"),
@@ -304,7 +372,7 @@ auto main() -> int {
 
                   t.expect(src->contains("using nc_int = __int128;"),
                            "CUDA 128-bit defines nc_int as __int128");
-                  t.expect(src->contains("__device__ inline auto nc_add"),
+                  t.expect(src->contains("__device__ [[nodiscard]] inline auto nc_add"),
                            "CUDA 128-bit helpers are marked __device__ inline");
                   t.expect(src->contains("__global__ void p_eval_poly_2_batch(int n, unsigned char* ok, const nc_int* arg0, nc_int* arg1)"),
                            "CUDA 128-bit batch kernel is emitted");
@@ -460,10 +528,13 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->contains("#include <thread>"),
-                           "thread header is included for parallel batch processing");
-                  t.expect(src->contains("#include <span>"),
-                           "span header is included");
+                  // std::jthread and std::size_t arrive through `import std`, not headers
+                  // (Rules 11/41). Only the x86 intrinsics, which have no module form
+                  // anywhere, are still included.
+                  t.expect(src->contains("import std;"),
+                           "the batch driver's standard facilities come from the std module");
+                  t.expect(src->contains("#include <immintrin.h>"),
+                           "the SIMD intrinsics, which have no module form, are still included");
                   t.expect(src->contains("inline auto p_eval_poly_2_batch(const nc_int* arg0, nc_int* arg1, unsigned char* ok, std::size_t n) -> void"),
                            "serial batch wrapper is emitted with const input and mutable output pointers");
                   t.expect(src->contains("inline auto p_eval_poly_2_batch_parallel(const nc_int* arg0, nc_int* arg1, unsigned char* ok, std::size_t n,"),
@@ -579,17 +650,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->contains("!nc_quot("),
+                  t.expect(src->contains("= nc_quot("),
                            "// operator emits checked nc_quot helper");
-                  t.expect(src->contains("!nc_fdiv("),
+                  t.expect(src->contains("= nc_fdiv("),
                            "div operator emits checked nc_fdiv helper");
-                  t.expect(src->contains("!nc_rem("),
+                  t.expect(src->contains("= nc_rem("),
                            "rem operator emits checked nc_rem helper");
-                  t.expect(src->contains("!nc_mod("),
+                  t.expect(src->contains("= nc_mod("),
                            "mod operator emits checked nc_mod helper");
-                  t.expect(src->contains("!nc_min("),
+                  t.expect(src->contains("= nc_min("),
                            "min operator emits checked nc_min helper");
-                  t.expect(src->contains("!nc_max("),
+                  t.expect(src->contains("= nc_max("),
                            "max operator emits checked nc_max helper");
               })
         .test("all_relational_comparisons_emit_their_matching_cpp_operators",

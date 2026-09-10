@@ -292,6 +292,29 @@ struct ExprEmitter {
     bool device;  // emit CUDA __device__-callable helper names
 };
 
+// Emits a call to one checked arithmetic helper, binding its result to `tmp`.
+//
+// The two targets differ here and only here. C++ helpers return std::optional (Rules 9/32 of
+// config/cpp_details.txt), so the emitted code tests the optional and then binds a const
+// nc_int -- the value cannot be read without the check having happened, and the binding is
+// const because nothing downstream assigns to a temporary. CUDA helpers take an out-parameter
+// and return bool, because nvcc compiles the generated file as C++17 with no libcu++ assumed
+// and std::optional is not device-callable there.
+auto emit_checked_call(const ExprEmitter& e, std::string_view tmp, std::string_view fn,
+                       std::string_view lhs, std::optional<std::string_view> rhs) -> void {
+    const std::string args =
+        rhs ? std::format("{}, {}", lhs, *rhs) : std::string{lhs};
+    if (e.device) {
+        *e.body += std::format("{}nc_int {} = nc_lit(0);\n", e.indent, tmp);
+        *e.body += std::format("{}if (!{}({}, {})) {{ {} }}\n", e.indent, fn, args, tmp,
+                               e.fail_stmt);
+        return;
+    }
+    *e.body += std::format("{}const auto {}_r = {}({});\n", e.indent, tmp, fn, args);
+    *e.body += std::format("{}if (!{}_r) {{ {} }}\n", e.indent, tmp, e.fail_stmt);
+    *e.body += std::format("{}const nc_int {} = *{}_r;\n", e.indent, tmp, tmp);
+}
+
 [[nodiscard]] auto emit_expr(const ExprEmitter& e, const Term& t) -> Result<std::string> {
     if (is_int(t)) {
         std::string tmp = std::format("t{}", (*e.temp_counter)++);
@@ -318,9 +341,7 @@ struct ExprEmitter {
             return inner;
         }
         std::string tmp = std::format("t{}", (*e.temp_counter)++);
-        *e.body += std::format("{}nc_int {} = nc_lit(0);\n", e.indent, tmp);
-        *e.body += std::format("{}if (!nc_neg({}, {})) {{ {} }}\n", e.indent, *inner, tmp,
-                               e.fail_stmt);
+        emit_checked_call(e, tmp, "nc_neg", *inner, std::nullopt);
         return tmp;
     }
     if (c.args.size() == 2) {
@@ -337,12 +358,10 @@ struct ExprEmitter {
             return rhs;
         }
         std::string tmp = std::format("t{}", (*e.temp_counter)++);
-        *e.body += std::format("{}nc_int {} = nc_lit(0);\n", e.indent, tmp);
         // Every operation goes through a checked helper. An overflow abandons the clause the
         // same way a failed comparison does, so a compiled predicate can never return a wrapped
         // value the interpreter would have refused to produce.
-        *e.body += std::format("{}if (!nc_{}({}, {}, {})) {{ {} }}\n", e.indent, *op, *lhs, *rhs,
-                               tmp, e.fail_stmt);
+        emit_checked_call(e, tmp, std::format("nc_{}", *op), *lhs, *rhs);
         return tmp;
     }
     return make_error<std::string>(MathError::not_implemented);
@@ -352,8 +371,134 @@ struct ExprEmitter {
 // The C++ / CUDA preamble: the checked arithmetic the generated code rests on.
 // ---------------------------------------------------------------------------
 
+// How a checked operation is spelled in the generated code.
+//
+// The two targets cannot share one shape. C++ gets `std::optional<nc_int> nc_add(a, b)` --
+// Rule 9 of config/cpp_details.txt, and railway-oriented per Rule 32: the absence of a value
+// IS the overflow report, so there is no way to read a result without having looked at
+// whether there is one. CUDA gets the out-parameter form, because nvcc compiles the emitted
+// file as C++17 with no libcu++ assumed, where std::optional is not device-callable.
+struct OpStyle {
+    bool optional;  // C++: return std::optional<nc_int>. CUDA: bool + nc_int& out-parameter.
+    std::string qualifiers;  // "[[nodiscard]] constexpr " / "__device__ inline " / ...
+};
+
+// One checked operation, rendered in whichever shape the target needs.
+//
+// `body` is written once, against two names: `NC_OK(expr)` succeeds with a value and
+// `NC_FAIL` abandons. Rendering substitutes the target's spelling for each, so the guards
+// themselves are written down once and cannot drift apart between the two backends.
+[[nodiscard]] auto render_op(const OpStyle& style, std::string_view name,
+                             std::string_view params_by_value, std::string_view params_by_ref,
+                             std::string_view body) -> std::string {
+    std::string out = style.qualifiers;
+    if (style.optional) {
+        out += std::format("auto {}({}) -> std::optional<nc_int> {{\n", name, params_by_value);
+    } else {
+        out += std::format("auto {}({}, nc_int& r) -> bool {{\n", name, params_by_ref);
+    }
+    std::string rendered{body};
+    const std::string ok_open = style.optional ? "return " : "r = ";
+    const std::string ok_close = style.optional ? "" : "; return true";
+    const std::string fail = style.optional ? "return std::nullopt" : "return false";
+    // NC_OK(x) -> `return x` / `r = x; return true`; NC_FAIL -> `return std::nullopt` / false.
+    for (std::size_t at = rendered.find("NC_OK("); at != std::string::npos;
+         at = rendered.find("NC_OK(", at)) {
+        std::size_t depth = 0;
+        std::size_t i = at + 5;
+        for (; i < rendered.size(); ++i) {
+            if (rendered[i] == '(') { ++depth; }
+            if (rendered[i] == ')') {
+                --depth;
+                if (depth == 0) { break; }
+            }
+        }
+        std::string replacement = ok_open;
+        replacement += rendered.substr(at + 6, i - at - 6);
+        replacement += ok_close;
+        rendered.replace(at, i - at + 1, replacement);
+    }
+    for (std::size_t at = rendered.find("NC_FAIL"); at != std::string::npos;
+         at = rendered.find("NC_FAIL", at)) {
+        rendered.replace(at, 7, fail);
+    }
+    out += rendered;
+    out += "}\n\n";
+    return out;
+}
+
+// The representable range, as named constants rather than as calls.
+//
+// std::numeric_limits<T>::min() is a constexpr __host__ function, and nvcc refuses to call
+// one from __device__ code unless the consumer passes --expt-relaxed-constexpr -- which a
+// generated file has no way to arrange. Naming the bounds once lets the overflow guards read
+// identically in both targets while each gets an initialiser its own compiler accepts. For
+// C++ that initialiser is still std::numeric_limits, which is where the value belongs.
+// The width-generic checked-arithmetic bodies: guards written against nc_max_v / nc_min_v,
+// valid for any signed two's-complement type. The 64-bit width always used these; the 128-bit
+// CUDA path needs them too, because nvcc treats __builtin_add_overflow as __host__ and will
+// not call it from device code.
+struct GenericOps {
+    std::string add;
+    std::string sub;
+    std::string neg;
+    std::string mul;
+};
+
+[[nodiscard]] auto generic_ops() -> GenericOps {
+    return GenericOps{
+        .add = "    if (b > 0 && a > nc_max_v - b) { NC_FAIL; }\n"
+               "    if (b < 0 && a < nc_min_v - b) { NC_FAIL; }\n"
+               "    NC_OK(a + b);\n",
+        .sub = "    if (b < 0 && a > nc_max_v + b) { NC_FAIL; }\n"
+               "    if (b > 0 && a < nc_min_v + b) { NC_FAIL; }\n"
+               "    NC_OK(a - b);\n",
+        .neg = "    if (a == nc_min_v) { NC_FAIL; }\n"
+               "    NC_OK(-a);\n",
+        .mul = "    if (a == 0 || b == 0) { NC_OK(nc_int{0}); }\n"
+               "    // Negation is written out rather than delegated to nc_neg: the two\n"
+               "    // targets call that helper differently, and a shared body must not\n"
+               "    // depend on which one it landed in.\n"
+               "    if (a == -1) { if (b == nc_min_v) { NC_FAIL; } NC_OK(-b); }\n"
+               "    if (b == -1) { if (a == nc_min_v) { NC_FAIL; } NC_OK(-a); }\n"
+               "    if (a > 0 ? (b > 0 ? a > nc_max_v / b : b < nc_min_v / a)\n"
+               "              : (b > 0 ? a < nc_min_v / b : a < nc_max_v / b)) {\n"
+               "        NC_FAIL;\n    }\n"
+               "    NC_OK(a * b);\n",
+    };
+}
+
+[[nodiscard]] auto bounds_constants(bool device, Width width) -> std::string {
+    if (!device) {
+        return "inline constexpr nc_int nc_max_v = std::numeric_limits<nc_int>::max();\n"
+               "inline constexpr nc_int nc_min_v = std::numeric_limits<nc_int>::min();\n\n";
+    }
+    if (width == Width::bits64) {
+        return "// Literals, not std::numeric_limits: see bounds_constants in the compiler.\n"
+               "inline constexpr nc_int nc_max_v = 0x7fffffffffffffffLL;\n"
+               "inline constexpr nc_int nc_min_v = -nc_max_v - 1;\n\n";
+    }
+    // 2^127 - 1, built through the UNSIGNED type: shifting a 1 into a signed sign bit is not
+    // something to write down on purpose.
+    return "// Literals, not std::numeric_limits: see bounds_constants in the compiler.\n"
+           "inline constexpr nc_int nc_max_v =\n"
+           "    static_cast<nc_int>((static_cast<unsigned __int128>(1) << 127) - 1);\n"
+           "inline constexpr nc_int nc_min_v = -nc_max_v - 1;\n\n";
+}
+
 [[nodiscard]] auto checked_preamble(bool device, Width width) -> std::string {
-    const std::string q = device ? "__device__ inline " : "inline ";
+    // Rules 8/10/42: pure arithmetic is constexpr and its result must not be discarded --
+    // a dropped nc_add return is a dropped overflow check. The CUDA helpers stay `inline`
+    // rather than `constexpr` so nvcc needs no relaxed-constexpr flag from its caller.
+    const OpStyle style{.optional = !device,
+                        .qualifiers = device ? "__device__ [[nodiscard]] inline "
+                                             : "[[nodiscard]] constexpr "};
+    // BigInt is not a literal type, so its helpers cannot be constexpr whatever the target.
+    const OpStyle big_style{.optional = !device, .qualifiers = "[[nodiscard]] inline "};
+    const OpStyle& st = width == Width::arbitrary ? big_style : style;
+    const std::string val = width == Width::arbitrary ? "const nc_int& " : "nc_int ";
+    const std::string a1 = val + "a";
+    const std::string a2 = val + "a, " + val + "b";
     std::string s;
 
     // `nc_int` is the one place the width lives. Everything the compiler emits is written in
@@ -361,33 +506,18 @@ struct ExprEmitter {
     // code generator — and a generated file always says, in its own text, what it computes in.
     if (width == Width::bits64) {
         s += "// 64-bit arithmetic. Every operation is PRE-checked: signed overflow is undefined\n";
-        s += "// behaviour in C++, so a guard spelled `a + b < a` is itself the bug. Returning\n";
-        s += "// false rather than wrapping is what keeps the compiled program as honest as the\n";
-        s += "// interpreter it came from — it refuses an unrepresentable value, it does not\n";
-        s += "// invent one.\n";
+        s += "// behaviour in C++, so a guard spelled `a + b < a` is itself the bug. Reporting\n";
+        s += "// the absence of a result rather than wrapping is what keeps the compiled program\n";
+        s += "// as honest as the interpreter it came from — it refuses an unrepresentable value,\n";
+        s += "// it does not invent one.\n";
         s += "using nc_int = std::int64_t;\n";
-        s += q + "auto nc_lit(long long v) -> nc_int { return static_cast<nc_int>(v); }\n\n";
-        s += q + "auto nc_add(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-        s += "    if (b > 0 && a > std::numeric_limits<nc_int>::max() - b) { return false; }\n";
-        s += "    if (b < 0 && a < std::numeric_limits<nc_int>::min() - b) { return false; }\n";
-        s += "    r = a + b;\n    return true;\n}\n\n";
-        s += q + "auto nc_sub(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-        s += "    if (b < 0 && a > std::numeric_limits<nc_int>::max() + b) { return false; }\n";
-        s += "    if (b > 0 && a < std::numeric_limits<nc_int>::min() + b) { return false; }\n";
-        s += "    r = a - b;\n    return true;\n}\n\n";
-        s += q + "auto nc_neg(nc_int a, nc_int& r) -> bool {\n";
-        s += "    if (a == std::numeric_limits<nc_int>::min()) { return false; }\n";
-        s += "    r = -a;\n    return true;\n}\n\n";
-        s += q + "auto nc_mul(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-        s += "    if (a == 0 || b == 0) { r = 0; return true; }\n";
-        s += "    if (a == -1) { return nc_neg(b, r); }\n";
-        s += "    if (b == -1) { return nc_neg(a, r); }\n";
-        s += "    if (a > 0 ? (b > 0 ? a > std::numeric_limits<nc_int>::max() / b\n";
-        s += "                       : b < std::numeric_limits<nc_int>::min() / a)\n";
-        s += "              : (b > 0 ? a < std::numeric_limits<nc_int>::min() / b\n";
-        s += "                       : a < std::numeric_limits<nc_int>::max() / b)) {\n";
-        s += "        return false;\n    }\n";
-        s += "    r = a * b;\n    return true;\n}\n\n";
+        s += bounds_constants(device, width);
+        s += st.qualifiers + "auto nc_lit(std::int64_t v) -> nc_int { return v; }\n\n";
+        const GenericOps g = generic_ops();
+        s += render_op(st, "nc_add", a2, a2, g.add);
+        s += render_op(st, "nc_sub", a2, a2, g.sub);
+        s += render_op(st, "nc_neg", a1, a1, g.neg);
+        s += render_op(st, "nc_mul", a2, a2, g.mul);
     } else if (width == Width::bits128) {
         s += "// 128-bit arithmetic, checked with the compiler's overflow builtins — the same\n";
         s += "// three that nimblecas.int128 uses, for the same reason.\n";
@@ -400,34 +530,51 @@ struct ExprEmitter {
         s += "#error \"generated for 128-bit arithmetic, which this compiler does not provide\"\n";
         s += "#endif\n";
         s += "using nc_int = __int128;\n";
-        s += q + "auto nc_lit(long long v) -> nc_int { return static_cast<nc_int>(v); }\n\n";
-        s += q + "auto nc_add(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-        s += "    return !__builtin_add_overflow(a, b, &r);\n}\n\n";
-        s += q + "auto nc_sub(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-        s += "    return !__builtin_sub_overflow(a, b, &r);\n}\n\n";
-        s += q + "auto nc_neg(nc_int a, nc_int& r) -> bool {\n";
-        s += "    return !__builtin_sub_overflow(static_cast<nc_int>(0), a, &r);\n}\n\n";
-        s += q + "auto nc_mul(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-        s += "    return !__builtin_mul_overflow(a, b, &r);\n}\n\n";
+        s += bounds_constants(device, width);
+        s += st.qualifiers
+             + "auto nc_lit(std::int64_t v) -> nc_int { return static_cast<nc_int>(v); }\n\n";
+        if (device) {
+            // nvcc treats the overflow builtins as __host__ and refuses to call them from
+            // device code, so the device path uses the same width-generic guards the 64-bit
+            // output has always used. They hold for any signed two's-complement type.
+            const GenericOps g = generic_ops();
+            s += render_op(st, "nc_add", a2, a2, g.add);
+            s += render_op(st, "nc_sub", a2, a2, g.sub);
+            s += render_op(st, "nc_neg", a1, a1, g.neg);
+            s += render_op(st, "nc_mul", a2, a2, g.mul);
+        } else {
+            s += render_op(st, "nc_add", a2, a2,
+                           "    nc_int out{};\n"
+                           "    if (__builtin_add_overflow(a, b, &out)) { NC_FAIL; }\n"
+                           "    NC_OK(out);\n");
+            s += render_op(st, "nc_sub", a2, a2,
+                           "    nc_int out{};\n"
+                           "    if (__builtin_sub_overflow(a, b, &out)) { NC_FAIL; }\n"
+                           "    NC_OK(out);\n");
+            s += render_op(st, "nc_neg", a1, a1,
+                           "    nc_int out{};\n"
+                           "    if (__builtin_sub_overflow(static_cast<nc_int>(0), a, &out)) { NC_FAIL; }\n"
+                           "    NC_OK(out);\n");
+            s += render_op(st, "nc_mul", a2, a2,
+                           "    nc_int out{};\n"
+                           "    if (__builtin_mul_overflow(a, b, &out)) { NC_FAIL; }\n"
+                           "    NC_OK(out);\n");
+        }
     } else {
         s += "// ARBITRARY-PRECISION arithmetic, on nimblecas::BigInt.\n";
         s += "//\n";
         s += "// Addition, subtraction, multiplication and negation CANNOT FAIL here, and the\n";
-        s += "// helpers below return true unconditionally. That is not laziness: arbitrary\n";
-        s += "// precision has no range to leave, so a check would be theatre — and a reader who\n";
-        s += "// saw one would reasonably conclude there was a failure mode to worry about.\n";
+        s += "// helpers below always yield a value. That is not laziness: arbitrary precision\n";
+        s += "// has no range to leave, so a check would be theatre — and a reader who saw one\n";
+        s += "// would reasonably conclude there was a failure mode to worry about.\n";
         s += "// Division still fails, because dividing by zero is undefined at every precision.\n";
         s += "using nc_int = nimblecas::BigInt;\n";
-        s += "inline auto nc_lit(long long v) -> nc_int {\n";
-        s += "    return nimblecas::BigInt::from_i64(static_cast<std::int64_t>(v));\n}\n\n";
-        s += "inline auto nc_add(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    r = a.add(b);\n    return true;\n}\n\n";
-        s += "inline auto nc_sub(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    r = a.subtract(b);\n    return true;\n}\n\n";
-        s += "inline auto nc_neg(const nc_int& a, nc_int& r) -> bool {\n";
-        s += "    r = a.negate();\n    return true;\n}\n\n";
-        s += "inline auto nc_mul(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    r = a.multiply(b);\n    return true;\n}\n\n";
+        s += st.qualifiers + "auto nc_lit(std::int64_t v) -> nc_int {\n";
+        s += "    return nimblecas::BigInt::from_i64(v);\n}\n\n";
+        s += render_op(st, "nc_add", a2, a2, "    NC_OK(a.add(b));\n");
+        s += render_op(st, "nc_sub", a2, a2, "    NC_OK(a.subtract(b));\n");
+        s += render_op(st, "nc_neg", a1, a1, "    NC_OK(a.negate());\n");
+        s += render_op(st, "nc_mul", a2, a2, "    NC_OK(a.multiply(b));\n");
     }
 
     // Division is where the widths agree again: a zero divisor has no answer, and the four
@@ -436,49 +583,51 @@ struct ExprEmitter {
         s += "// BigInt::divmod truncates toward zero and gives the remainder the DIVIDEND's\n";
         s += "// sign, so `//` and `rem` are direct while `div` and `mod` need the usual\n";
         s += "// correction when the signs differ and the division is not exact.\n";
-        s += "inline auto nc_quot(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    const auto d = a.divmod(b);\n    if (!d) { return false; }\n";
-        s += "    r = d->first;\n    return true;\n}\n\n";
-        s += "inline auto nc_rem(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    const auto d = a.divmod(b);\n    if (!d) { return false; }\n";
-        s += "    r = d->second;\n    return true;\n}\n\n";
-        s += "inline auto nc_fdiv(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    const auto d = a.divmod(b);\n    if (!d) { return false; }\n";
-        s += "    r = d->first;\n";
-        s += "    if (!d->second.is_zero() && (a.is_negative() != b.is_negative())) {\n";
-        s += "        r = r.subtract(nc_lit(1));\n    }\n    return true;\n}\n\n";
-        s += "inline auto nc_mod(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    const auto d = a.divmod(b);\n    if (!d) { return false; }\n";
-        s += "    r = d->second;\n";
-        s += "    if (!r.is_zero() && (a.is_negative() != b.is_negative())) {\n";
-        s += "        r = r.add(b);\n    }\n    return true;\n}\n\n";
-        s += "inline auto nc_min(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    r = (a < b) ? a : b;\n    return true;\n}\n\n";
-        s += "inline auto nc_max(const nc_int& a, const nc_int& b, nc_int& r) -> bool {\n";
-        s += "    r = (a > b) ? a : b;\n    return true;\n}\n";
+        s += render_op(st, "nc_quot", a2, a2,
+                       "    const auto d = a.divmod(b);\n    if (!d) { NC_FAIL; }\n"
+                       "    NC_OK(d->first);\n");
+        s += render_op(st, "nc_rem", a2, a2,
+                       "    const auto d = a.divmod(b);\n    if (!d) { NC_FAIL; }\n"
+                       "    NC_OK(d->second);\n");
+        s += render_op(st, "nc_fdiv", a2, a2,
+                       "    const auto d = a.divmod(b);\n    if (!d) { NC_FAIL; }\n"
+                       "    nc_int out = d->first;\n"
+                       "    if (!d->second.is_zero() && (a.is_negative() != b.is_negative())) {\n"
+                       "        out = out.subtract(nc_lit(1));\n    }\n"
+                       "    NC_OK(out);\n");
+        s += render_op(st, "nc_mod", a2, a2,
+                       "    const auto d = a.divmod(b);\n    if (!d) { NC_FAIL; }\n"
+                       "    nc_int out = d->second;\n"
+                       "    if (!out.is_zero() && (a.is_negative() != b.is_negative())) {\n"
+                       "        out = out.add(b);\n    }\n"
+                       "    NC_OK(out);\n");
+        s += render_op(st, "nc_min", a2, a2, "    NC_OK((a < b) ? a : b);\n");
+        s += render_op(st, "nc_max", a2, a2, "    NC_OK((a > b) ? a : b);\n");
         return s;
     }
 
-    s += q + "auto nc_quot(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-    s += "    if (b == 0) { return false; }\n";
-    s += "    if (a == std::numeric_limits<nc_int>::min() && b == -1) { return false; }\n";
-    s += "    r = a / b;\n    return true;\n}\n\n";
-    s += q + "auto nc_fdiv(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-    s += "    if (!nc_quot(a, b, r)) { return false; }\n";
-    s += "    if (a % b != 0 && ((a < 0) != (b < 0))) { --r; }\n";
-    s += "    return true;\n}\n\n";
-    s += q + "auto nc_rem(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-    s += "    if (b == 0) { return false; }\n";
-    s += "    if (b == 1 || b == -1) { r = 0; return true; }\n";
-    s += "    r = a % b;\n    return true;\n}\n\n";
-    s += q + "auto nc_mod(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-    s += "    if (!nc_rem(a, b, r)) { return false; }\n";
-    s += "    if (r != 0 && ((a < 0) != (b < 0))) { r += b; }\n";
-    s += "    return true;\n}\n\n";
-    s += q + "auto nc_min(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-    s += "    r = a < b ? a : b;\n    return true;\n}\n\n";
-    s += q + "auto nc_max(nc_int a, nc_int b, nc_int& r) -> bool {\n";
-    s += "    r = a > b ? a : b;\n    return true;\n}\n";
+    s += render_op(st, "nc_quot", a2, a2,
+                   "    if (b == 0) { NC_FAIL; }\n"
+                   "    if (a == nc_min_v && b == -1) { NC_FAIL; }\n"
+                   "    NC_OK(a / b);\n");
+    s += render_op(st, "nc_fdiv", a2, a2,
+                   "    if (b == 0) { NC_FAIL; }\n"
+                   "    if (a == nc_min_v && b == -1) { NC_FAIL; }\n"
+                   "    nc_int out = a / b;\n"
+                   "    if (a % b != 0 && ((a < 0) != (b < 0))) { --out; }\n"
+                   "    NC_OK(out);\n");
+    s += render_op(st, "nc_rem", a2, a2,
+                   "    if (b == 0) { NC_FAIL; }\n"
+                   "    if (b == 1 || b == -1) { NC_OK(nc_int{0}); }\n"
+                   "    NC_OK(a % b);\n");
+    s += render_op(st, "nc_mod", a2, a2,
+                   "    if (b == 0) { NC_FAIL; }\n"
+                   "    if (b == 1 || b == -1) { NC_OK(nc_int{0}); }\n"
+                   "    nc_int out = a % b;\n"
+                   "    if (out != 0 && ((a < 0) != (b < 0))) { out += b; }\n"
+                   "    NC_OK(out);\n");
+    s += render_op(st, "nc_min", a2, a2, "    NC_OK(a < b ? a : b);\n");
+    s += render_op(st, "nc_max", a2, a2, "    NC_OK(a > b ? a : b);\n");
     return s;
 }
 
@@ -1659,14 +1808,24 @@ auto compile(const Program& program, const PredicateSignature& entry,
         out += "// for nimblecas.bigint comes from; a plain `clang++ file.cpp` cannot find it.\n";
         out += "// The narrower widths emit a self-contained file with no such requirement.\n\n";
         out += "import std;\nimport nimblecas.core;\nimport nimblecas.bigint;\n\n";
-    } else {
+    } else if (target == Target::cuda) {
+        // nvcc has no `import std`, so the CUDA output keeps headers. That is a property of
+        // the compiler this file is for, not a style choice.
         out += "#include <cstdint>\n#include <limits>\n\n";
+    } else {
+        // Rules 11 and 41 of config/cpp_details.txt: import std, never the headers. The
+        // arbitrary-precision width above has always done this; the narrower ones used to
+        // emit <cstdint> and <limits> instead, which made the compiler contradict its own
+        // policy depending on which width you asked for.
+        out += "// BUILD NOTE: this file uses `import std;`, so it needs a C++23 compiler with\n";
+        out += "// the standard library module available (clang++-23 with libc++, which is what\n";
+        out += "// NimbleCAS itself is built with). It imports nothing from NimbleCAS, so no\n";
+        out += "// other BMI is required.\n\n";
+        out += "import std;\n\n";
         if (options.emit_batch && target == Target::cpp) {
-            // The batch driver needs threads and spans; the SIMD kernels need the CPUID and
-            // intrinsic headers. They are emitted here rather than being assumed present,
-            // because the generated file is compiled on its own by somebody who did not write it.
-            out += "#include <array>\n#include <cstddef>\n#include <span>\n#include <thread>\n";
-            out += "#include <vector>\n";
+            // The SIMD kernels need the CPUID and intrinsic headers, which have no module
+            // form anywhere. They are emitted here rather than being assumed present, because
+            // the generated file is compiled on its own by somebody who did not write it.
             out += "#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || "
                    "defined(_M_IX86)\n";
             out += "#include <immintrin.h>\n";
@@ -1768,6 +1927,12 @@ auto compile(const Program& program, const PredicateSignature& entry,
         out += "// Batch entry point: one thread per row. `ok[i]` records whether row i\n";
         out += "// succeeded, so a failed or unrepresentable row is reported rather than left\n";
         out += "// as a silent zero in the output.\n";
+        out += "//\n";
+        out += "// DEVICE STACK: a recursive predicate needs more than the 1 KB per thread that\n";
+        out += "// CUDA gives by default, and running past it surfaces as `an illegal memory\n";
+        out += "// access was encountered` from cudaDeviceSynchronize -- which reads like a bug\n";
+        out += "// in this file and is not one. Raise the limit before launching:\n";
+        out += "//     cudaDeviceSetLimit(cudaLimitStackSize, 64 * 1024);\n";
         out += std::format("__global__ void {}_batch(int n, unsigned char* ok{})\n", efn, kparams);
         out += "{\n";
         out += "    const int i = blockIdx.x * blockDim.x + threadIdx.x;\n";
