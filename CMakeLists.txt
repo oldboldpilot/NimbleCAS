@@ -580,6 +580,13 @@ target_sources(nimblecas_logic_dist PUBLIC
 target_link_libraries(nimblecas_logic_dist
   PUBLIC nimblecas_logic nimblecas_logic_parser nimblecas_taskdag nimblecas_core std_module)
 
+# ---- nimblecas.search_dist : distributed graph search (serial / parallel / SGEE) ----
+add_library(nimblecas_search_dist STATIC)
+target_sources(nimblecas_search_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/search_dist/search_dist.cppm)
+target_link_libraries(nimblecas_search_dist
+  PUBLIC nimblecas_search nimblecas_taskdag nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -1885,6 +1892,18 @@ add_executable(search_tests tests/search_tests.cpp)
 target_link_libraries(search_tests
   PRIVATE nimblecas_search nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME search_tests COMMAND search_tests)
+
+add_executable(search_dist_tests tests/search_dist_tests.cpp)
+target_link_libraries(search_dist_tests
+  PRIVATE nimblecas_search_dist nimblecas_search nimblecas_taskdag
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME search_dist_tests COMMAND search_dist_tests)
+
+add_executable(logic_dist_tests tests/logic_dist_tests.cpp)
+target_link_libraries(logic_dist_tests
+  PRIVATE nimblecas_logic_dist nimblecas_logic_parser nimblecas_logic
+          nimblecas_taskdag nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_dist_tests COMMAND logic_dist_tests)
 
 add_executable(csp_tests tests/csp_tests.cpp)
 target_link_libraries(csp_tests
