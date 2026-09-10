@@ -2395,21 +2395,38 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   # skips the search when its result variable already holds any value (including ""),
   # which silently leaves nvcc empty and collapses the custom command to a bare `cd`.
   if(NOT NIMBLECAS_NVCC)
+    # Every installed toolkit, newest first, then CUDA_HOME, and PATH only as a last
+    # resort. A distribution's own nvcc package puts an old compiler at /usr/bin/nvcc --
+    # CUDA 12.0 on one of our Blackwell hosts, which cannot emit compute_120 at all -- so
+    # searching PATH first picks the one toolkit guaranteed to fail. Globbing beats naming
+    # a version: the hard-coded /usr/local/cuda-13.2 that used to sit here existed on
+    # neither build machine.
+    file(GLOB _cuda_bin_dirs "/usr/local/cuda-*/bin")
+    list(SORT _cuda_bin_dirs COMPARE NATURAL ORDER DESCENDING)
     find_program(NIMBLECAS_NVCC_EXE nvcc
-      HINTS /usr/local/cuda/bin /usr/local/cuda-13.2/bin ENV CUDA_HOME ENV PATH REQUIRED)
+      HINTS ${_cuda_bin_dirs} /usr/local/cuda/bin ENV CUDA_HOME ENV PATH REQUIRED)
     set(NIMBLECAS_NVCC "${NIMBLECAS_NVCC_EXE}")
   endif()
-  # The GPU architecture nvcc targets.
+  # The GPU architecture nvcc targets. `native` asks nvcc to detect it, which is the default;
+  # override with -DNIMBLECAS_CUDA_ARCH=sm_120.
   #
-  # `native` asks nvcc to detect it, which is convenient and is the default. It is NOT always
-  # right: under WSL it can leave the binary needing the PTX JIT at load time, and the WSL
-  # driver crashes inside libnvidia-ptxjitcompiler when it runs. Naming a REAL architecture
-  # (`sm_120` for Blackwell, `sm_90` for Hopper) emits SASS directly and skips the JIT entirely.
-  # Override with -DNIMBLECAS_CUDA_ARCH=sm_120.
+  # This comment used to blame a WSL crash inside libnvidia-ptxjitcompiler on `native`, and
+  # claim that naming a real architecture emits SASS and skips the JIT. Both halves were
+  # wrong, and the advice did not work. `-arch=sm_120` embeds compute_120 PTX ALONGSIDE the
+  # sm_120 cubin (that is what -arch means; only an explicit
+  # `-gencode arch=compute_120,code=sm_120` drops the PTX), so the JIT is still reachable --
+  # and the crash reproduced with sm_120 anyway. The real cause was outside this repository:
+  # a hand-installed driver-535 userspace stack in /lib/x86_64-linux-gnu shadowing the WSL
+  # GPU driver, so a 535-era PTX JIT was being driven by a 596 libcuda. Removing the stray
+  # 535 libraries fixed it; no build flag here ever could.
   set(NIMBLECAS_CUDA_ARCH "native" CACHE STRING "nvcc -arch value (native, or e.g. sm_120)")
   get_filename_component(_cuda_bin "${NIMBLECAS_NVCC}" DIRECTORY)
+  # Take cudart from the SAME toolkit as nvcc first: mixing a 13.x compiler with a 12.x
+  # runtime is the other way this goes wrong quietly.
+  file(GLOB _cuda_lib_dirs "/usr/local/cuda-*/lib64")
+  list(SORT _cuda_lib_dirs COMPARE NATURAL ORDER DESCENDING)
   find_library(NIMBLECAS_CUDART cudart
-    HINTS "${_cuda_bin}/../lib64" /usr/local/cuda/lib64 /usr/local/cuda-13.2/lib64 REQUIRED)
+    HINTS "${_cuda_bin}/../lib64" ${_cuda_lib_dirs} /usr/local/cuda/lib64 REQUIRED)
   get_filename_component(_cuda_libdir "${NIMBLECAS_CUDART}" DIRECTORY)
 
   set(_gpu_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_kernels.cu")

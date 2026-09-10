@@ -50,15 +50,50 @@ if [[ -z "${SANITIZER}" && -x "${PYTHON_BIN}" ]] \
   )
 fi
 
-# Enable the CUDA GPU kernels when nvcc is available (non-sanitizer builds only; the
-# .cu is compiled by nvcc independently of the sanitized clang/libc++ objects).
+# Enable the CUDA GPU kernels when an nvcc that can actually target this machine's GPU is
+# available (non-sanitizer builds only; the .cu is compiled by nvcc independently of the
+# sanitized clang/libc++ objects).
+#
+# "Available" is not "first on PATH". A distribution's own nvcc package installs
+# /usr/bin/nvcc, which is often years older than the toolkit under /usr/local -- on a
+# Blackwell host /usr/bin/nvcc was CUDA 12.0 and died with
+#   nvcc fatal : Unsupported gpu architecture 'compute_120'
+# while /usr/local/cuda-13.1 built the kernels fine. So: prefer the newest versioned
+# toolkit, take PATH only as a last resort, and PROVE the choice by compiling for the
+# local device before switching CUDA on. A toolkit that cannot target the GPU in this
+# box is not a reason to configure a build that is going to fail; it is a reason to
+# leave the GPU kernels out and say so.
 if [[ -z "${SANITIZER}" ]]; then
-  NVCC_BIN="$(command -v nvcc 2>/dev/null || true)"
-  for d in /usr/local/cuda/bin /usr/local/cuda-13.2/bin; do
-    if [[ -z "${NVCC_BIN}" && -x "${d}/nvcc" ]]; then NVCC_BIN="${d}/nvcc"; fi
+  NVCC_BIN=""
+  NVCC_CANDIDATES=()
+  # Newest versioned toolkit first: `sort -V -r` puts cuda-13.1 ahead of cuda-12.8.
+  while IFS= read -r c; do NVCC_CANDIDATES+=("${c}"); done < <(
+    ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V -r)
+  NVCC_CANDIDATES+=(/usr/local/cuda/bin/nvcc)
+  if command -v nvcc >/dev/null 2>&1; then
+    NVCC_CANDIDATES+=("$(command -v nvcc)")
+  fi
+
+  NVCC_PROBE="$(mktemp -d)/probe.cu"
+  printf '__global__ void k() {}
+' > "${NVCC_PROBE}"
+  for c in "${NVCC_CANDIDATES[@]}"; do
+    [[ -x "${c}" ]] || continue
+    if "${c}" -arch="${NIMBLECAS_CUDA_ARCH:-native}" -c "${NVCC_PROBE}"          -o /dev/null >/dev/null 2>&1; then
+      NVCC_BIN="${c}"
+      break
+    fi
   done
+  rm -rf "$(dirname "${NVCC_PROBE}")"
+
   if [[ -n "${NVCC_BIN}" ]]; then
     CMAKE_ARGS+=(-DNIMBLECAS_CUDA=ON -DNIMBLECAS_NVCC="${NVCC_BIN}")
+    if [[ -n "${NIMBLECAS_CUDA_ARCH:-}" ]]; then
+      CMAKE_ARGS+=(-DNIMBLECAS_CUDA_ARCH="${NIMBLECAS_CUDA_ARCH}")
+    fi
+    echo "CUDA: ${NVCC_BIN} ($("${NVCC_BIN}" --version | sed -n 's/.*release \([0-9.]*\).*//p' | tail -1))"
+  elif ((${#NVCC_CANDIDATES[@]})); then
+    echo "CUDA: found nvcc but none could target this GPU -- building without the GPU kernels" >&2
   fi
 fi
 
