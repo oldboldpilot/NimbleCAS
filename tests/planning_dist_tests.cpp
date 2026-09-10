@@ -267,6 +267,35 @@ auto main() -> int {
                                "and from the parallel executor too");
                   }
               })
+        .test("a_task_already_at_its_goal_yields_the_empty_plan",
+              [](TestContext& t) {
+                  // The degenerate case, and the one a layered search can most easily get wrong:
+                  // the root is the goal, so the answer is a plan of no steps and cost zero, not
+                  // an error and not one wasted expansion.
+                  Task done;
+                  done.domain_size = {3, 3};
+                  done.initial = {1, 2};
+                  done.goal = {FactPair{.var = 0, .value = 1}, FactPair{.var = 1, .value = 2}};
+                  done.operators.push_back(Operator{.name = "noop_ish",
+                                                    .preconditions = {FactPair{.var = 0, .value = 0}},
+                                                    .effects = {FactPair{.var = 0, .value = 1}},
+                                                    .cost = 1});
+                  auto exec = local_parallel_executor();
+                  auto r = distributed_astar_plan(done, 1000, 4, *exec);
+                  t.expect(r.has_value(), "a task already at its goal is solved, not refused");
+                  t.expect(r.has_value() && r->plan.steps.empty(), "with a plan of no steps");
+                  t.expect(r.has_value() && r->plan.cost == 0, "and a cost of zero");
+                  t.expect(r.has_value() && r->stats.expanded == 0,
+                           "having expanded nothing at all");
+                  auto want = astar_plan(done, 1000);
+                  t.expect(want.has_value() && r.has_value() &&
+                               r->plan.cost == want->plan.cost,
+                           "which is what the serial planner says too");
+
+                  auto g = distributed_gbfs_plan(done, 1000, 4, 4, *exec);
+                  t.expect(g.has_value() && g->plan.steps.empty(),
+                           "and the satisficing search agrees");
+              })
         .test("an_unsolvable_task_is_proved_unsolvable_not_merely_unfinished",
               [](TestContext& t) {
                   // undefined_value means the reachable state space was exhausted -- a proof.
