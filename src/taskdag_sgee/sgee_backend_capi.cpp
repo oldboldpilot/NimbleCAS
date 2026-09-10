@@ -46,14 +46,14 @@ CapiBrokerPort::~CapiBrokerPort() {
 }
 
 auto CapiBrokerPort::is_open() const noexcept -> bool {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     return broker_ != nullptr;
 }
 
 auto CapiBrokerPort::enqueue(std::span<const std::byte> payload,
                             SgeePlacement placement, std::uint32_t max_attempts)
     -> Result<std::uint64_t> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<std::uint64_t>(MathError::distributed_error);
     }
@@ -68,7 +68,7 @@ auto CapiBrokerPort::enqueue(std::span<const std::byte> payload,
 
 auto CapiBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
     -> Result<std::optional<Lease>> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<std::optional<Lease>>(MathError::distributed_error);
     }
@@ -116,7 +116,7 @@ auto CapiBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
 
 auto CapiBrokerPort::complete(std::uint64_t qid, std::uint64_t token)
     -> Result<void> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<void>(MathError::distributed_error);
     }
@@ -129,7 +129,7 @@ auto CapiBrokerPort::complete(std::uint64_t qid, std::uint64_t token)
 
 auto CapiBrokerPort::fail(std::uint64_t qid, std::uint64_t token)
     -> Result<void> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<void>(MathError::distributed_error);
     }
@@ -142,7 +142,7 @@ auto CapiBrokerPort::fail(std::uint64_t qid, std::uint64_t token)
 
 auto CapiBrokerPort::heartbeat(std::uint64_t qid, std::uint64_t token,
                               std::uint64_t extend_by_ms) -> Result<void> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<void>(MathError::distributed_error);
     }
@@ -155,7 +155,7 @@ auto CapiBrokerPort::heartbeat(std::uint64_t qid, std::uint64_t token,
 
 auto CapiBrokerPort::sweep_expired(std::uint64_t now_ms)
     -> Result<std::size_t> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<std::size_t>(MathError::distributed_error);
     }
@@ -168,7 +168,7 @@ auto CapiBrokerPort::sweep_expired(std::uint64_t now_ms)
 }
 
 auto CapiBrokerPort::state(std::uint64_t qid) -> Result<QState> {
-    std::lock_guard lock(mutex_);
+    const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<QState>(MathError::distributed_error);
     }
@@ -204,7 +204,7 @@ namespace {
     static std::atomic<std::uint64_t> seq{0};
     static const std::uint64_t proc_nonce = [] {
         std::random_device rd;
-        return (static_cast<std::uint64_t>(rd()) << 32) ^ static_cast<std::uint64_t>(rd());
+        return (static_cast<std::uint64_t>(rd()) << 32U) ^ static_cast<std::uint64_t>(rd());
     }();
     const auto now_ms = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -231,7 +231,7 @@ auto sgee_distributed_executor(SgeeExecutorConfig cfg) -> Result<std::unique_ptr
     // on invalid config.
     RunTransportFactory make_transport =
         [wal_dir = cfg.wal_dir, vis = cfg.visibility_timeout_ms,
-         attempts = cfg.max_attempts]() -> Result<RunTransport> {
+         attempts = cfg.max_attempts] -> Result<RunTransport> {
             std::error_code ec;
             std::filesystem::create_directories(wal_dir, ec);  // idempotent, per-run
             if (ec) {

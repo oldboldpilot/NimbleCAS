@@ -9,8 +9,12 @@ import nimblecas.core;
 namespace nimblecas {
 
 // Both parameters by value, to match the ON-build definition, which modifies its own
-// copy of cfg. NOLINTBEGIN rather than NOLINTNEXTLINE because the signature spans two
-// lines and `opts` sits on the second.
+// copy of cfg. The suppression below is a begin/end pair rather than a single-line one,
+// because the signature spans two lines and `opts` sits on the second.
+//
+// This sentence deliberately does not spell either directive. clang-tidy scans comment
+// text for them anywhere on a line, so an earlier version of this note that named them
+// was itself parsed as an opening directive and reported as an unmatched region.
 // NOLINTBEGIN(performance-unnecessary-value-param)
 auto sgee_grpc_distributed_executor(SgeeExecutorConfig cfg,
                                     SgeeGrpcExecutorOptions opts)

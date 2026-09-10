@@ -1045,6 +1045,34 @@ if(NIMBLECAS_SGEE)
   target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_backend_capi.cpp)
   target_include_directories(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_CAPI_INCLUDE}")
   target_link_libraries(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_CAPI_LIB}")
+
+  # A CUDA build of libsgee_capi.so is UNDER-LINKED: `nm -D --undefined-only` lists
+  # cublasCreate_v2, cublasSgemm_v2, cublasSetStream_v2 and cublasDestroy_v2, while
+  # `objdump -p` records a NEEDED entry for libcudart and none for libcublas. The library
+  # therefore cannot satisfy its own references, and every executable that links it dies on
+  # those four symbols -- which is what made the SGEE configuration unbuildable rather than
+  # merely untested. Supplying cuBLAS here is the consumer paying a debt the producer left;
+  # the real repair belongs in SGEE's own link line.
+  #
+  # Detected, never assumed: a CPU-only SGEE build names no cublas symbol and links exactly
+  # as before. If nm is unavailable the check finds nothing and we change nothing, so the
+  # worst case is the link error we already had.
+  find_program(NIMBLECAS_NM nm)
+  if(NIMBLECAS_NM)
+    execute_process(
+      COMMAND "${NIMBLECAS_NM}" -D --undefined-only "${NIMBLECAS_SGEE_CAPI_LIB}"
+      OUTPUT_VARIABLE _sgee_undefined ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_sgee_undefined MATCHES "cublas")
+      file(GLOB _cuda_lib_dirs_sgee "/usr/local/cuda-*/lib64"
+                                    "/usr/local/cuda-*/targets/x86_64-linux/lib")
+      list(SORT _cuda_lib_dirs_sgee COMPARE NATURAL ORDER DESCENDING)
+      find_library(NIMBLECAS_SGEE_CUBLAS cublas
+        HINTS ${_cuda_lib_dirs_sgee} /usr/local/cuda/lib64 REQUIRED)
+      target_link_libraries(nimblecas_taskdag_sgee PRIVATE "${NIMBLECAS_SGEE_CUBLAS}")
+      message(STATUS "SGEE: libsgee_capi.so needs cuBLAS it does not record; "
+                     "linking ${NIMBLECAS_SGEE_CUBLAS}")
+    endif()
+  endif()
   target_compile_definitions(nimblecas_taskdag_sgee PUBLIC NIMBLECAS_SGEE)
 else()
   target_sources(nimblecas_taskdag_sgee PRIVATE src/taskdag_sgee/sgee_backend_stub.cpp)

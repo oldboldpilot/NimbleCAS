@@ -446,9 +446,9 @@ public:
         -> Result<std::unique_ptr<CapiBrokerPort>>;
 
     explicit CapiBrokerPort(sgee_task_broker_t* broker);
-    CapiBrokerPort(const std::filesystem::path& wal_path,
-                   std::uint64_t vis_timeout_ms = 30'000,
-                   std::uint32_t max_attempts = 3);
+    explicit CapiBrokerPort(const std::filesystem::path& wal_path,
+                            std::uint64_t vis_timeout_ms = 30'000,
+                            std::uint32_t max_attempts = 3);
     ~CapiBrokerPort() override;
 
     // Non-copyable AND non-movable: the port is only ever held by unique_ptr (create()/factory),
@@ -487,7 +487,7 @@ public:
 
 private:
     sgee_task_broker_t* broker_{nullptr};
-    mutable std::mutex mutex_{};
+    mutable std::mutex mutex_;
 };
 #endif
 
@@ -606,7 +606,7 @@ private:
         std::uint64_t index{0};
     };
     std::shared_ptr<GrpcEndpointRing> ring_{nullptr};
-    mutable std::mutex mutex_{};
+    mutable std::mutex mutex_;
     // qid -> the wire token triple for the lease THIS port took (see the class comment).
     std::unordered_map<std::uint64_t, TokenTriple> leases_{};
 };
@@ -653,7 +653,7 @@ public:
 private:
     std::shared_ptr<GrpcEndpointRing> ring_{nullptr};
     bool consume_on_get_{true};
-    mutable std::mutex mutex_{};
+    mutable std::mutex mutex_;
 };
 #endif
 
