@@ -36,7 +36,9 @@ CheckOptions:
   # spells "from_chars succeeded" -- [charconv.from.chars] defines success as a
   # value-initialised ec. The check cannot know that, and flags the one correct spelling of
   # the idiom in nine places. Ignoring the enum is right; rewriting the idiom would not be.
-  bugprone-invalid-enum-default-initialization.IgnoredEnums: '::std::errc'
+  # libc++ declares errc inside the inline namespace std::__1, so the check's own default
+  # exemption of ::std::errc never matches and both spellings are needed.
+  bugprone-invalid-enum-default-initialization.IgnoredEnums: '::std::errc;::std::__1::errc'
 
 WarningsAsErrors: ''
 HeaderFilterRegex: '^.*/(src|tools|tests)/.*$'
