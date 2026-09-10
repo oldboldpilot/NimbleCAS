@@ -277,18 +277,36 @@ namespace {
 }
 
 // Walk predecessor links from `goal` back to `start` and return the path in forward order
-// (start .. goal). `pred` must contain a link for every node on the chain except `start`.
+// (start .. goal).
+//
+// BOUNDED, and that bound is load-bearing rather than defensive dressing. A predecessor chain
+// visits each node at most once, so a walk longer than the map has entries is a CYCLE, and a
+// cycle here would spin forever. The relaxations that build `pred` only ever tie-break across a
+// strictly positive edge precisely so no cycle can form; this bound is what turns a violation of
+// that invariant into an honest error instead of a hang.
+//
+// `std::nullopt` means no chain from `goal` back to `start` -- a missing link or a cycle. Every
+// caller maps it to a MathError rather than returning the partial path it walked, because a
+// truncated path presented as a path is exactly the plausible-looking wrong answer the honesty
+// invariant forbids.
 [[nodiscard]] auto reconstruct(const std::unordered_map<std::int64_t, std::int64_t>& pred,
                                std::int64_t start, std::int64_t goal)
-    -> std::vector<std::int64_t> {
+    -> std::optional<std::vector<std::int64_t>> {
     std::vector<std::int64_t> path;
     std::int64_t cur = goal;
     path.push_back(cur);
     while (cur != start) {
-        cur = pred.at(cur);
+        if (path.size() > pred.size() + 1) {
+            return std::nullopt;
+        }
+        const auto it = pred.find(cur);
+        if (it == pred.end()) {
+            return std::nullopt;
+        }
+        cur = it->second;
         path.push_back(cur);
     }
-    std::reverse(path.begin(), path.end());
+    std::ranges::reverse(path);
     return path;
 }
 
@@ -339,26 +357,6 @@ namespace {
 #endif
 }
 
-// Reconstruct a forward path from start to goal using predecessor links, avoiding .at()
-// to strictly adhere to the no-exceptions invariant.
-[[nodiscard]] auto sx_reconstruct(const std::unordered_map<std::int64_t, std::int64_t>& pred,
-                                  std::int64_t start, std::int64_t goal)
-    -> std::vector<std::int64_t> {
-    std::vector<std::int64_t> path;
-    std::int64_t cur = goal;
-    path.push_back(cur);
-    while (cur != start) {
-        const auto it = pred.find(cur);
-        if (it == pred.end()) {
-            break;
-        }
-        cur = it->second;
-        path.push_back(cur);
-    }
-    std::reverse(path.begin(), path.end());
-    return path;
-}
-
 // Iterative-deepening A*: depth-first search bounded by an f = g + h threshold.
 // OPTIMALITY: Optimal for an admissible heuristic, matching a_star cost. Memory is linear
 // in search depth O(d) rather than exponential in the number of generated nodes.
@@ -372,24 +370,6 @@ namespace {
 // - undefined_value if reachable graph is fully exhausted without finding a goal.
 // - not_converged if max_iterations threshold passes are exhausted without finding a goal.
 
-// Helper to reconstruct predecessor chain in start..goal forward order without throwing.
-[[nodiscard]] auto sp_reconstruct(const std::unordered_map<std::int64_t, std::int64_t>& pred,
-                                  std::int64_t start, std::int64_t goal)
-    -> std::vector<std::int64_t> {
-    std::vector<std::int64_t> path;
-    std::int64_t cur = goal;
-    path.push_back(cur);
-    while (cur != start) {
-        const auto it = pred.find(cur);
-        if (it == pred.end()) {
-            break;
-        }
-        cur = it->second;
-        path.push_back(cur);
-    }
-    std::reverse(path.begin(), path.end());
-    return path;
-}
 
 // Parallel A*: identical answers to `a_star`, with each expansion wave evaluated concurrently.
 // Successor and heuristic callbacks run concurrently across the wave and MUST be pure; any
@@ -420,7 +400,11 @@ auto bfs(std::int64_t start, GoalFn goal, SuccessorFn successors)
             visited.insert(v);
             pred[v] = u;
             if (goal(v)) {
-                return reconstruct(pred, start, v);
+                auto path = reconstruct(pred, start, v);
+                if (!path.has_value()) {
+                    return make_error<std::vector<std::int64_t>>(MathError::not_converged);
+                }
+                return std::move(*path);
             }
             frontier.push(v);
         }
@@ -564,7 +548,11 @@ auto dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn co
             continue;  // stale queue entry superseded by a shorter relaxation
         }
         if (goal(u)) {
-            return PathCost{reconstruct(pred, start, u), d};
+            auto path = reconstruct(pred, start, u);
+            if (!path.has_value()) {
+                return make_error<PathCost>(MathError::not_converged);
+            }
+            return PathCost{std::move(*path), d};
         }
         for (const std::int64_t v : successors(u)) {
             const std::int64_t w = cost(u, v);
@@ -582,7 +570,10 @@ auto dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn co
             } else if (nd == it->second) {
                 // Deterministic tie-break: keep the predecessor with the lower node id.
                 const auto pit = pred.find(v);
-                if (pit != pred.end() && u < pit->second) {
+                // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                // and a predecessor cycle is a path reconstruction that never terminates.
+                if (w > 0 && pit != pred.end() && u < pit->second) {
                     better = true;
                 }
             }
@@ -625,7 +616,11 @@ auto a_star(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn cost
             continue;  // stale entry
         }
         if (goal(u)) {
-            return PathCost{reconstruct(pred, start, u), g};
+            auto path = reconstruct(pred, start, u);
+            if (!path.has_value()) {
+                return make_error<PathCost>(MathError::not_converged);
+            }
+            return PathCost{std::move(*path), g};
         }
         for (const std::int64_t v : successors(u)) {
             const std::int64_t w = cost(u, v);
@@ -642,7 +637,10 @@ auto a_star(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn cost
                 better = true;
             } else if (ng == it->second) {
                 const auto pit = pred.find(v);
-                if (pit != pred.end() && u < pit->second) {
+                // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                // and a predecessor cycle is a path reconstruction that never terminates.
+                if (w > 0 && pit != pred.end() && u < pit->second) {
                     better = true;
                 }
             }
@@ -1202,7 +1200,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
             continue;  // Stale entry
         }
         if (goal(u)) {
-            return PathCost{sx_reconstruct(pred, start, u), g};
+            auto path = reconstruct(pred, start, u);
+            if (!path.has_value()) {
+                return make_error<PathCost>(MathError::not_converged);
+            }
+            return PathCost{std::move(*path), g};
         }
         for (const std::int64_t v : successors(u)) {
             const std::int64_t w = cost(u, v);
@@ -1219,7 +1221,10 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                 better = true;
             } else if (ng == it->second) {
                 const auto pit = pred.find(v);
-                if (pit != pred.end() && u < pit->second) {
+                // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                // and a predecessor cycle is a path reconstruction that never terminates.
+                if (w > 0 && pit != pred.end() && u < pit->second) {
                     better = true;
                 }
             }
@@ -1285,7 +1290,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
             continue;
         }
         if (goal(u)) {
-            return sx_reconstruct(pred, start, u);
+            auto path = reconstruct(pred, start, u);
+            if (!path.has_value()) {
+                return make_error<Path>(MathError::not_converged);
+            }
+            return std::move(*path);
         }
         if (expansions >= max_expansions) {
             return make_error<Path>(MathError::not_converged);
@@ -1402,7 +1411,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
             const auto& cand = candidates[i];
             if (goal(cand.node)) {
                 pred[cand.node] = cand.parent;
-                return sx_reconstruct(pred, start, cand.node);
+                auto path = reconstruct(pred, start, cand.node);
+                if (!path.has_value()) {
+                    return make_error<Path>(MathError::not_converged);
+                }
+                return std::move(*path);
             }
         }
 
@@ -1507,7 +1520,10 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                     better = true;
                 } else if (nd == it->second) {
                     const auto pit = pred_f.find(v);
-                    if (pit != pred_f.end() && u < pit->second) {
+                    // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                    // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                    // and a predecessor cycle is a path reconstruction that never terminates.
+                    if (w > 0 && pit != pred_f.end() && u < pit->second) {
                         better = true;
                     }
                 }
@@ -1552,7 +1568,10 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                     better = true;
                 } else if (nd == it->second) {
                     const auto sit = succ_b.find(p);
-                    if (sit != succ_b.end() && v < sit->second) {
+                    // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                    // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                    // and a predecessor cycle is a path reconstruction that never terminates.
+                    if (w > 0 && sit != succ_b.end() && v < sit->second) {
                         better = true;
                     }
                 }
@@ -1584,11 +1603,17 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
         return make_error<PathCost>(MathError::undefined_value);
     }
 
-    // Reconstruct path: forward from start to best_meeting_node
+    // Reconstruct path: forward from start to best_meeting_node.
+    //
+    // Both walks below are BOUNDED by the size of the link map for the same reason `reconstruct`
+    // is: a link cycle would spin forever, and an honest error beats a hang.
     std::vector<std::int64_t> path;
     std::int64_t cur = best_meeting_node;
     path.push_back(cur);
     while (cur != start) {
+        if (path.size() > pred_f.size() + 1) {
+            return make_error<PathCost>(MathError::not_converged);
+        }
         const auto it = pred_f.find(cur);
         if (it == pred_f.end()) {
             return make_error<PathCost>(MathError::undefined_value);
@@ -1600,7 +1625,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 
     // Append backward path: forward from best_meeting_node to goal_node
     cur = best_meeting_node;
+    const std::size_t forward_len = path.size();
     while (cur != goal_node) {
+        if (path.size() > forward_len + succ_b.size() + 1) {
+            return make_error<PathCost>(MathError::not_converged);
+        }
         const auto it = succ_b.find(cur);
         if (it == succ_b.end()) {
             return make_error<PathCost>(MathError::undefined_value);
@@ -1657,7 +1686,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
         const std::int64_t g_top = std::get<1>(top);
         const std::int64_t u_top = std::get<2>(top);
         if (goal(u_top)) {
-            return PathCost{sp_reconstruct(pred, start, u_top), g_top};
+            auto path = reconstruct(pred, start, u_top);
+            if (!path.has_value()) {
+                return make_error<PathCost>(MathError::not_converged);
+            }
+            return PathCost{std::move(*path), g_top};
         }
 
         // Form an expansion wave of all open nodes sharing the current minimum f value.
@@ -1751,7 +1784,10 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                     better = true;
                 } else if (ng == it->second) {
                     const auto pit = pred.find(v);
-                    if (pit != pred.end() && u < pit->second) {
+                    // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                    // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                    // and a predecessor cycle is a path reconstruction that never terminates.
+                    if (w > 0 && pit != pred.end() && u < pit->second) {
                         better = true;
                     }
                 }
@@ -1805,7 +1841,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
         const std::int64_t min_d = top.first;
         const std::int64_t u_top = top.second;
         if (goal(u_top)) {
-            return PathCost{sp_reconstruct(pred, start, u_top), min_d};
+            auto path = reconstruct(pred, start, u_top);
+            if (!path.has_value()) {
+                return make_error<PathCost>(MathError::not_converged);
+            }
+            return PathCost{std::move(*path), min_d};
         }
 
         struct WaveNode {
@@ -1893,7 +1933,10 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                     better = true;
                 } else if (nd == it->second) {
                     const auto pit = pred.find(v);
-                    if (pit != pred.end() && u < pit->second) {
+                    // Only on a STRICTLY positive edge. At equal distance the tie-break could otherwise make a
+                    // node its own ancestor -- a zero-cost self-loop or cycle lets u and v share a distance --
+                    // and a predecessor cycle is a path reconstruction that never terminates.
+                    if (w > 0 && pit != pred.end() && u < pit->second) {
                         better = true;
                     }
                 }

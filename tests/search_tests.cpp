@@ -11,6 +11,8 @@ import nimblecas.core;
 import nimblecas.search;
 import nimblecas.testing;
 
+using nimblecas::bidirectional_dijkstra;
+using nimblecas::parallel_dijkstra;
 using nimblecas::a_star;
 using nimblecas::bfs;
 using nimblecas::dfs_iterative;
@@ -1233,6 +1235,84 @@ auto main() -> int {
                   auto r_d = parallel_dijkstra(0, unreachable_goal, successors, cost);
                   t.expect(!r_d.has_value() && r_d.error() == MathError::undefined_value,
                            "unreachable goal returns undefined_value in parallel_dijkstra");
+              })
+        .test("a_zero_cost_self_loop_does_not_make_a_node_its_own_predecessor",
+              [](TestContext& t) {
+                  // Regression. The equal-distance predecessor tie-break used to fire across a
+                  // zero-cost edge, so relaxing a self-loop at node 2 could set pred[2] = 2. Path
+                  // reconstruction then walked 2 -> 2 -> 2 forever and the call never returned.
+                  // A hang is the one failure a test cannot report, so this pins it directly.
+                  auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                      switch (u) {
+                          case 0: return {1};
+                          case 1: return {2};
+                          case 2: return {2, 3};   // zero-cost self-loop, then onward
+                          default: return {};
+                      }
+                  };
+                  auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                      if (u == 2 && v == 2) {
+                          return 0;
+                      }
+                      return 1;
+                  };
+                  auto goal = [](std::int64_t u) -> bool { return u == 3; };
+                  auto r = dijkstra(0, goal, successors, cost);
+                  t.expect(r.has_value(), "dijkstra returns rather than spinning on the self-loop");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  const std::vector<std::int64_t> expected{0, 1, 2, 3};
+                  t.expect(r->first == expected, "the path is exactly {0, 1, 2, 3}");
+                  t.expect(r->second == 3, "the cost is exactly 3");
+              })
+        .test("a_zero_cost_two_cycle_does_not_create_a_predecessor_cycle",
+              [](TestContext& t) {
+                  // The same hazard without a self-loop: nodes 1 and 2 sit at equal distance via
+                  // a zero-cost cycle, so the tie-break could set pred[1] = 2 and pred[2] = 1.
+                  auto successors = [](std::int64_t u) -> std::vector<std::int64_t> {
+                      switch (u) {
+                          case 0: return {1};
+                          case 1: return {2};
+                          case 2: return {1, 3};
+                          default: return {};
+                      }
+                  };
+                  auto cost = [](std::int64_t u, std::int64_t v) -> std::int64_t {
+                      if ((u == 1 && v == 2) || (u == 2 && v == 1)) {
+                          return 0;
+                      }
+                      return 2;
+                  };
+                  auto goal = [](std::int64_t u) -> bool { return u == 3; };
+                  auto r = dijkstra(0, goal, successors, cost);
+                  t.expect(r.has_value(), "dijkstra returns on a zero-cost two-cycle");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->second == 4, "the cost is exactly 4");
+                  const std::vector<std::int64_t> expected{0, 1, 2, 3};
+                  t.expect(r->first == expected, "the path is exactly {0, 1, 2, 3}");
+                  auto ra = a_star(0, goal, successors, cost,
+                                   [](std::int64_t) -> std::int64_t { return 0; });
+                  t.expect(ra.has_value() && ra->second == 4,
+                           "a_star returns the same cost on the same graph");
+                  auto rp = parallel_dijkstra(0, goal, successors, cost);
+                  t.expect(rp.has_value() && rp->second == 4,
+                           "parallel_dijkstra returns the same cost on the same graph");
+                  auto rb = bidirectional_dijkstra(
+                      0, 3, successors,
+                      [](std::int64_t u) -> std::vector<std::int64_t> {
+                          switch (u) {
+                              case 1: return {0, 2};
+                              case 2: return {1};
+                              case 3: return {2};
+                              default: return {};
+                          }
+                      },
+                      cost);
+                  t.expect(rb.has_value() && rb->second == 4,
+                           "bidirectional_dijkstra returns the same cost on the same graph");
               })
         .run();
 }
