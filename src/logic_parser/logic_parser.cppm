@@ -75,7 +75,7 @@ public:
     [[nodiscard]] auto definitions() const -> const std::vector<OpDef>&;
 
 private:
-    std::vector<OpDef> defs_{};
+    std::vector<OpDef> defs_;
 };
 
 // ---------------------------------------------------------------------------
@@ -274,6 +274,20 @@ struct PToken {
     }
 }
 
+// Whether a std::from_chars call succeeded.
+//
+// The standard specifies success as the error code being VALUE-INITIALISED, and std::errc has
+// no zero-valued enumerator to name, so testing for it must construct one. That is the correct
+// idiom rather than a mistake, but it is one a static analyser cannot distinguish from an
+// accidental default-initialised enum -- so it lives here, once, with the reason attached,
+// instead of being repeated at every call site.
+[[nodiscard]] auto chars_ok(std::errc ec) noexcept -> bool {
+    // See above: this is what the standard defines from_chars success to be. NOLINTNEXTLINE
+    // must sit on the line IMMEDIATELY before the code, so the explanation goes first.
+    // NOLINTNEXTLINE(bugprone-invalid-enum-default-initialization)
+    return ec == std::errc{};
+}
+
 // Encodes a Unicode code point into UTF-8 bytes to ensure correct representation in atom text.
 [[nodiscard]] auto lex_append_codepoint(std::string& out, std::uint64_t cp) -> bool {
     if (cp <= 0x7F) {
@@ -281,8 +295,8 @@ struct PToken {
         return true;
     }
     if (cp <= 0x7FF) {
-        out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xC0U | ((cp >> 6U) & 0x1FU)));
+        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
         return true;
     }
     // Unicode surrogate code points U+D800..U+DFFF are invalid scalar values.
@@ -290,16 +304,16 @@ struct PToken {
         return false;
     }
     if (cp <= 0xFFFF) {
-        out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xE0U | ((cp >> 12U) & 0x0FU)));
+        out.push_back(static_cast<char>(0x80U | ((cp >> 6U) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
         return true;
     }
     if (cp <= 0x10FFFF) {
-        out.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        out.push_back(static_cast<char>(0xF0U | ((cp >> 18U) & 0x07U)));
+        out.push_back(static_cast<char>(0x80U | ((cp >> 12U) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | ((cp >> 6U) & 0x3FU)));
+        out.push_back(static_cast<char>(0x80U | (cp & 0x3FU)));
         return true;
     }
     return false;
@@ -313,7 +327,7 @@ struct PToken {
     while (true) {
         // Layout and comments are skipped, tracking the gap between tokens.
         while (pos < src.size()) {
-            char c = src[pos];
+            const char c = src[pos];
             if (lex_is_layout(c)) {
                 ++pos;
                 continue;
@@ -482,7 +496,7 @@ struct PToken {
             std::string decoded;
             bool terminated = false;
             while (pos < src.size()) {
-                char qc = src[pos];
+                const char qc = src[pos];
                 if (qc == '\n' || qc == '\r') {
                     return make_error<std::vector<PToken>>(MathError::syntax_error);
                 }
@@ -501,7 +515,7 @@ struct PToken {
                     if (pos >= src.size()) {
                         return make_error<std::vector<PToken>>(MathError::syntax_error);
                     }
-                    char esc = src[pos];
+                    const char esc = src[pos];
                     if (esc == '\r' && pos + 1 < src.size() && src[pos + 1] == '\n') {
                         pos += 2;
                         continue;
@@ -533,7 +547,7 @@ struct PToken {
                         }
                         std::uint64_t cp = 0;
                         auto [ptr, ec] = std::from_chars(src.data() + hex_start, src.data() + pos, cp, 16);
-                        if (ec != std::errc{} || !lex_append_codepoint(decoded, cp)) {
+                        if (!chars_ok(ec) || !lex_append_codepoint(decoded, cp)) {
                             return make_error<std::vector<PToken>>(MathError::syntax_error);
                         }
                         pos += 1;
@@ -547,7 +561,7 @@ struct PToken {
                         if (pos < src.size() && src[pos] == '\\') {
                             std::uint64_t cp = 0;
                             auto [ptr, ec] = std::from_chars(src.data() + oct_start, src.data() + pos, cp, 8);
-                            if (ec != std::errc{} || !lex_append_codepoint(decoded, cp)) {
+                            if (!chars_ok(ec) || !lex_append_codepoint(decoded, cp)) {
                                 return make_error<std::vector<PToken>>(MathError::syntax_error);
                             }
                             pos += 1;
@@ -586,7 +600,7 @@ struct PToken {
                     return make_error<std::vector<PToken>>(MathError::syntax_error);
                 }
                 std::int64_t code_val = 0;
-                char cc = src[pos];
+                const char cc = src[pos];
                 if (cc == '\'') {
                     if (pos + 1 < src.size() && src[pos + 1] == '\'') {
                         code_val = 39;
@@ -600,7 +614,7 @@ struct PToken {
                     if (pos >= src.size()) {
                         return make_error<std::vector<PToken>>(MathError::syntax_error);
                     }
-                    char esc = src[pos];
+                    const char esc = src[pos];
                     if (esc == '\\' || esc == '\'' || esc == '\"' || esc == '`') {
                         code_val = static_cast<unsigned char>(esc);
                         pos += 1;
@@ -625,7 +639,7 @@ struct PToken {
                         if (ec == std::errc::result_out_of_range) {
                             return make_error<std::vector<PToken>>(MathError::overflow);
                         }
-                        if (ec != std::errc{}) {
+                        if (!chars_ok(ec)) {
                             return make_error<std::vector<PToken>>(MathError::syntax_error);
                         }
                         code_val = cp;
@@ -641,7 +655,7 @@ struct PToken {
                             if (ec == std::errc::result_out_of_range) {
                                 return make_error<std::vector<PToken>>(MathError::overflow);
                             }
-                            if (ec != std::errc{}) {
+                            if (!chars_ok(ec)) {
                                 return make_error<std::vector<PToken>>(MathError::syntax_error);
                             }
                             code_val = cp;
@@ -688,7 +702,7 @@ struct PToken {
                 if (ec == std::errc::result_out_of_range) {
                     return make_error<std::vector<PToken>>(MathError::overflow);
                 }
-                if (ec != std::errc{}) {
+                if (!chars_ok(ec)) {
                     return make_error<std::vector<PToken>>(MathError::syntax_error);
                 }
                 PToken tok;
@@ -719,7 +733,7 @@ struct PToken {
                 if (ec == std::errc::result_out_of_range) {
                     return make_error<std::vector<PToken>>(MathError::overflow);
                 }
-                if (ec != std::errc{}) {
+                if (!chars_ok(ec)) {
                     return make_error<std::vector<PToken>>(MathError::syntax_error);
                 }
                 PToken tok;
@@ -750,7 +764,7 @@ struct PToken {
                 if (ec == std::errc::result_out_of_range) {
                     return make_error<std::vector<PToken>>(MathError::overflow);
                 }
-                if (ec != std::errc{}) {
+                if (!chars_ok(ec)) {
                     return make_error<std::vector<PToken>>(MathError::syntax_error);
                 }
                 PToken tok;
@@ -799,7 +813,7 @@ struct PToken {
                 prev_token_end = pos;
                 continue;
             }
-            if (ec != std::errc{}) {
+            if (!chars_ok(ec)) {
                 return make_error<std::vector<PToken>>(MathError::syntax_error);
             }
             PToken tok;
@@ -985,7 +999,7 @@ struct PToken {
 
 [[nodiscard]] auto wr_hex_char(unsigned int nibble) -> char {
     constexpr std::string_view digits = "0123456789abcdef";
-    return digits[nibble & 0x0f];
+    return digits[nibble & 0x0fU];
 }
 
 // The solo atoms !, ;, [], and {} are self-delimiting lexical forms defined by the ISO standard.
@@ -1038,7 +1052,7 @@ struct PToken {
         }
     }
     bool all_symbol = true;
-    for (char c : name) {
+    for (const char c : name) {
         if (!wr_is_symbol_char(c)) {
             all_symbol = false;
             break;
@@ -1062,7 +1076,7 @@ struct PToken {
     }
     std::string out;
     out.push_back('\'');
-    for (char c : name) {
+    for (const char c : name) {
         const auto uc = static_cast<unsigned char>(c);
         if (c == '\\') {
             out.append("\\\\");
@@ -1077,8 +1091,8 @@ struct PToken {
         } else if (uc < 0x20) {
             // Control bytes below 0x20 use the ISO Prolog hex escape syntax \x<hex>\.
             out.append("\\x");
-            out.push_back(wr_hex_char(static_cast<unsigned int>(uc >> 4)));
-            out.push_back(wr_hex_char(static_cast<unsigned int>(uc & 0x0f)));
+            out.push_back(wr_hex_char(static_cast<unsigned int>(uc) >> 4U));
+            out.push_back(wr_hex_char(static_cast<unsigned int>(uc) & 0x0fU));
             out.push_back('\\');
         } else {
             // Bytes >= 0x80 (UTF-8) and printable ASCII characters pass through unchanged.
@@ -1382,10 +1396,10 @@ struct PToken {
                 std::string res = comp.functor;
                 // A space is mandatory after a prefix operator when followed by an opening parenthesis,
                 // because layout determines whether the following parenthesis opens a grouped term or a canonical argument list.
-                bool needs_space = wr_is_alpha_operator(comp.functor) ||
-                                   comp.functor == "\\+" ||
-                                   (!arg_str.empty() && arg_str.front() == '(') ||
-                                   (!arg_str.empty() && wr_needs_space(comp.functor.back(), arg_str.front()));
+                const bool needs_space = wr_is_alpha_operator(comp.functor) ||
+                                         comp.functor == "\\+" ||
+                                         (!arg_str.empty() && arg_str.front() == '(') ||
+                                         (!arg_str.empty() && wr_needs_space(comp.functor.back(), arg_str.front()));
                 if (needs_space) {
                     res.push_back(' ');
                 }
@@ -1403,8 +1417,8 @@ struct PToken {
                 std::string arg_str = wr_to_source_internal(comp.args[0], ops, quoted, depth + 1, max_depth, arg_max, true);
 
                 std::string res = arg_str;
-                bool needs_space = wr_is_alpha_operator(comp.functor) ||
-                                   (!res.empty() && wr_needs_space(res.back(), comp.functor.front()));
+                const bool needs_space = wr_is_alpha_operator(comp.functor) ||
+                                         (!res.empty() && wr_needs_space(res.back(), comp.functor.front()));
                 if (needs_space) {
                     res.push_back(' ');
                 }
@@ -1469,7 +1483,7 @@ struct ParsedTerm {
     if (ec == std::errc::result_out_of_range) {
         return make_error<std::uint64_t>(MathError::overflow);
     }
-    if (ec != std::errc{} || ptr != s.data() + s.size()) {
+    if (!chars_ok(ec) || ptr != s.data() + s.size()) {
         return make_error<std::uint64_t>(MathError::syntax_error);
     }
     return val;
@@ -1674,7 +1688,7 @@ struct ParsedTerm {
             std::string fresh_name = "_$" + std::to_string(scope.anon_counter++);
             return ParsedTerm{make_var(std::move(fresh_name), 0), 0};
         }
-        auto it = std::ranges::find_if(scope.named, [&](const auto& pair) {
+        const auto it = std::ranges::find_if(scope.named, [&](const auto& pair) {
             return pair.first == vname;
         });
         if (it != scope.named.end()) {

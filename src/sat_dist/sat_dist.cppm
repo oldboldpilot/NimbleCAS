@@ -137,8 +137,8 @@ constexpr std::uint64_t cnf_magic = 0x4e43535f434e4631ULL;  // "NCS_CNF1"
 constexpr std::uint64_t res_magic = 0x4e43535f52455331ULL;  // "NCS_RES1"
 
 auto put_u64(std::vector<std::byte>& out, std::uint64_t v) -> void {
-    for (const int i : std::views::iota(0, 8)) {
-        out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xffULL));
+    for (const unsigned int i : std::views::iota(0U, 8U)) {
+        out.push_back(static_cast<std::byte>((v >> (8U * i)) & 0xffULL));
     }
 }
 
@@ -152,10 +152,10 @@ auto put_i64(std::vector<std::byte>& out, std::int64_t v) -> void {
         return std::nullopt;
     }
     std::uint64_t v = 0;
-    for (const int i : std::views::iota(0, 8)) {
+    for (const std::size_t i : std::views::iota(std::size_t{0}, std::size_t{8})) {
         const auto byte =
-            std::to_integer<unsigned char>(bytes[offset + static_cast<std::size_t>(i)]);
-        v |= static_cast<std::uint64_t>(byte) << (8 * i);
+            std::to_integer<unsigned char>(bytes[offset + i]);
+        v |= static_cast<std::uint64_t>(byte) << (8U * i);
     }
     offset += 8;
     return v;

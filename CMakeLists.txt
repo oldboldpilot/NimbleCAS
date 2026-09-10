@@ -601,6 +601,20 @@ target_sources(nimblecas_sat_dist PUBLIC
 target_link_libraries(nimblecas_sat_dist
   PUBLIC nimblecas_sat nimblecas_taskdag nimblecas_core std_module)
 
+# ---- nimblecas.csp_compile : a finite-domain CSP emitted as C++23, CUDA or Triton source ----
+add_library(nimblecas_csp_compile STATIC)
+target_sources(nimblecas_csp_compile PUBLIC
+  FILE_SET CXX_MODULES FILES src/csp_compile/csp_compile.cppm)
+target_link_libraries(nimblecas_csp_compile
+  PUBLIC nimblecas_csp nimblecas_core std_module)
+
+# ---- nimblecas.csp_dist : distributed CSP (exact prefix partition, model counting) ----
+add_library(nimblecas_csp_dist STATIC)
+target_sources(nimblecas_csp_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/csp_dist/csp_dist.cppm)
+target_link_libraries(nimblecas_csp_dist
+  PUBLIC nimblecas_csp nimblecas_taskdag nimblecas_core std_module)
+
 # ---- nimblecas.planning : SAS+ tasks, delete-relaxation heuristics, heuristic search ----
 add_library(nimblecas_planning STATIC)
 target_sources(nimblecas_planning PUBLIC
@@ -1779,6 +1793,12 @@ target_link_libraries(logic_index_tests
           nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_index_tests COMMAND logic_index_tests)
 
+add_executable(logic_compile_tests tests/logic_compile_tests.cpp)
+target_link_libraries(logic_compile_tests
+  PRIVATE nimblecas_logic_compile nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_compile_tests COMMAND logic_compile_tests)
+
 add_executable(doubledouble_tests tests/doubledouble_tests.cpp)
 target_link_libraries(doubledouble_tests
   PRIVATE nimblecas_doubledouble nimblecas_simd nimblecas_core nimblecas_testing std_module)
@@ -1931,6 +1951,18 @@ target_link_libraries(sat_dist_tests
   PRIVATE nimblecas_sat_dist nimblecas_sat nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel
           nimblecas_rng nimblecas_core nimblecas_testing std_module)
 add_test(NAME sat_dist_tests COMMAND sat_dist_tests)
+
+add_executable(csp_compile_tests tests/csp_compile_tests.cpp)
+target_link_libraries(csp_compile_tests
+  PRIVATE nimblecas_csp_compile nimblecas_csp nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME csp_compile_tests COMMAND csp_compile_tests)
+
+add_executable(csp_dist_tests tests/csp_dist_tests.cpp)
+target_link_libraries(csp_dist_tests
+  PRIVATE nimblecas_csp_dist nimblecas_csp nimblecas_taskdag nimblecas_taskdag_sgee
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME csp_dist_tests COMMAND csp_dist_tests)
 
 add_executable(logic_dist_tests tests/logic_dist_tests.cpp)
 target_link_libraries(logic_dist_tests

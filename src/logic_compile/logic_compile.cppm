@@ -224,6 +224,23 @@ using nimblecas::var_of;
     return out + std::format("_{}", arity);
 }
 
+// Whether a Prolog variable is the ANONYMOUS one -- `_`, which binds nothing and is read by
+// nobody, so a head argument holding it needs no binding emitted at all.
+//
+// The decision is made on the SOURCE name rather than on the mangled C++ identifier, and that
+// distinction is load-bearing in both directions. The reader gives every `_` occurrence a
+// distinct fresh name of the form `_$N`, precisely so that two anonymous variables in one
+// clause never unify with each other; mangled, that is `v___N`, never the `v__` a bare `_`
+// would produce -- so a check against the mangled spelling of `_` misses every anonymous
+// variable that came from parsed source. Widening that check to the `v___` prefix instead
+// would be worse: a legitimate named variable such as `_Acc` also mangles to `v___Acc` and
+// would be silently treated as anonymous. `_$` cannot appear in a user-written variable,
+// because `$` is not a legal character in an unquoted Prolog variable name, so testing the
+// source name catches exactly the reader's anonymous variables and nothing else.
+[[nodiscard]] auto is_anonymous_var(std::string_view name) -> bool {
+    return name == "_" || name.starts_with("_$");
+}
+
 // A legal identifier for a Prolog variable, kept recognisable so the emitted source reads like
 // the program it came from.
 [[nodiscard]] auto mangle_var(const VarKey& v) -> std::string {
@@ -247,10 +264,9 @@ struct PredicateDef {
     -> PredicateDef {
     PredicateDef def{.name = std::string(name), .arity = arity, .clauses = {}};
     for (const Clause& c : program) {
-        if (is_compound(c.head) && compound_of(c.head).functor == name &&
-            compound_of(c.head).args.size() == arity) {
-            def.clauses.push_back(c);
-        } else if (arity == 0 && is_atom(c.head) && atom_of(c.head).name == name) {
+        if ((is_compound(c.head) && compound_of(c.head).functor == name &&
+             compound_of(c.head).args.size() == arity) ||
+            (arity == 0 && is_atom(c.head) && atom_of(c.head).name == name)) {
             def.clauses.push_back(c);
         }
     }
@@ -278,14 +294,14 @@ struct ExprEmitter {
 
 [[nodiscard]] auto emit_expr(const ExprEmitter& e, const Term& t) -> Result<std::string> {
     if (is_int(t)) {
-        const std::string tmp = std::format("t{}", (*e.temp_counter)++);
+        std::string tmp = std::format("t{}", (*e.temp_counter)++);
         *e.body += std::format("{}const nc_int {} = nc_lit({});\n", e.indent, tmp,
                                int_of(t).value);
         return tmp;
     }
     if (is_var(t)) {
-        const std::string name = mangle_var(VarKey{.name = var_of(t).name,
-                                                   .generation = var_of(t).generation});
+        std::string name = mangle_var(VarKey{.name = var_of(t).name,
+                                             .generation = var_of(t).generation});
         if (!e.bound->contains(name)) {
             return make_error<std::string>(MathError::domain_error);
         }
@@ -301,7 +317,7 @@ struct ExprEmitter {
         if (!inner) {
             return inner;
         }
-        const std::string tmp = std::format("t{}", (*e.temp_counter)++);
+        std::string tmp = std::format("t{}", (*e.temp_counter)++);
         *e.body += std::format("{}nc_int {} = nc_lit(0);\n", e.indent, tmp);
         *e.body += std::format("{}if (!nc_neg({}, {})) {{ {} }}\n", e.indent, *inner, tmp,
                                e.fail_stmt);
@@ -320,7 +336,7 @@ struct ExprEmitter {
         if (!rhs) {
             return rhs;
         }
-        const std::string tmp = std::format("t{}", (*e.temp_counter)++);
+        std::string tmp = std::format("t{}", (*e.temp_counter)++);
         *e.body += std::format("{}nc_int {} = nc_lit(0);\n", e.indent, tmp);
         // Every operation goes through a checked helper. An overflow abandons the clause the
         // same way a failed comparison does, so a compiled predicate can never return a wrapped
@@ -612,7 +628,7 @@ struct CompileCtx {
         }
         const std::string v = mangle_var(
             VarKey{.name = var_of(h).name, .generation = var_of(h).generation});
-        if (v == "v__") {
+        if (is_anonymous_var(var_of(h).name)) {
             continue;  // the anonymous variable binds nothing and is read by nobody
         }
         if (sig.modes[i] == ArgMode::input) {
@@ -782,8 +798,13 @@ struct CompileCtx {
             const std::string v =
                 mangle_var(VarKey{.name = var_of(head_args[i]).name,
                                   .generation = var_of(head_args[i]).generation});
-            if (v == "v__") {
-                continue;
+            if (is_anonymous_var(var_of(head_args[i]).name)) {
+                // An anonymous variable in an OUTPUT position binds nothing, so there is no
+                // value to hand back. Skipping it would leave the output argument untouched and
+                // skipping it in continuation-passing style would reference an identifier that
+                // was never declared. Both are the plausible-looking wrong answer Rule 32
+                // forbids, so this is refused instead.
+                return make_error<std::string>(MathError::domain_error);
             }
             if (!bound.contains(v)) {
                 // No goal ever gives this output a value, so the clause cannot honestly claim
@@ -861,7 +882,7 @@ struct CompileCtx {
             return c;
         }
         out += *c;
-        out += "\n";
+        out += '\n';
     }
     // Clauses are tried in program order and the first success wins — which is the whole of
     // the determinism assumption, made visible.
@@ -1079,7 +1100,7 @@ struct CompileCtx {
             }
             const std::string v =
                 mangle_var(VarKey{.name = var_of(h).name, .generation = var_of(h).generation});
-            if (v == "v__") {
+            if (is_anonymous_var(var_of(h).name)) {
                 continue;
             }
             if (sig.modes[i] == ArgMode::input) {
@@ -1106,6 +1127,14 @@ struct CompileCtx {
             }
             if (!is_var(head_args[i])) {
                 return make_error<std::string>(MathError::not_implemented);
+            }
+            if (is_anonymous_var(var_of(head_args[i]).name)) {
+                // An anonymous variable in an OUTPUT position binds nothing, so there is no
+                // value to hand back. Skipping it would leave the output argument untouched and
+                // skipping it in continuation-passing style would reference an identifier that
+                // was never declared. Both are the plausible-looking wrong answer Rule 32
+                // forbids, so this is refused instead.
+                return make_error<std::string>(MathError::domain_error);
             }
             k_args += mangle_var(VarKey{.name = var_of(head_args[i]).name,
                                         .generation = var_of(head_args[i]).generation});
@@ -1293,9 +1322,16 @@ struct TritonEmitter {
     } else if (c.functor == "*") {
         // Division by the operand is the only overflow test that never itself overflows, and a
         // zero operand has to be excluded from it before it is used as a divisor.
+        // The round-trip test (a*b)//b == a detects ordinary overflow, but NOT INT64_MIN * -1:
+        // the division that would reveal it is itself unrepresentable and wraps back to
+        // INT64_MIN, so the check passes for an operation that overflowed. That pair is
+        // excluded explicitly.
         *e.body += std::format(
-            "    {}_ok = ({} == 0) | ({} == 0) | ((({} * {}) // tl.where({} == 0, 1, {})) == {})\n",
-            n, lhs->expr, rhs->expr, lhs->expr, rhs->expr, rhs->expr, rhs->expr, lhs->expr);
+            "    {}_ok = (({} == 0) | ({} == 0) | ((({} * {}) // tl.where({} == 0, 1, {})) == "
+            "{})) & (({} != -9223372036854775808) | ({} != -1)) & (({} != "
+            "-9223372036854775808) | ({} != -1))\n",
+            n, lhs->expr, rhs->expr, lhs->expr, rhs->expr, rhs->expr, rhs->expr, lhs->expr,
+            lhs->expr, rhs->expr, rhs->expr, lhs->expr);
         *e.body += std::format("    {} = {} * {}\n", n, lhs->expr, rhs->expr);
     } else if (c.functor == "min" || c.functor == "max") {
         const std::string cmp = c.functor == "min" ? "<" : ">";
@@ -1304,7 +1340,13 @@ struct TritonEmitter {
                                rhs->expr, lhs->expr, rhs->expr);
     } else if (c.functor == "//" || c.functor == "mod" || c.functor == "rem" ||
                c.functor == "div") {
-        *e.body += std::format("    {}_ok = ({} != 0)\n", n, rhs->expr);
+        // Division by zero is not the only unrepresentable case: INT64_MIN / -1 has no
+        // int64 quotient, and on a GPU it wraps silently instead of trapping. Excluding it
+        // here keeps the `ok` mask honest rather than letting a wrapped value through under a
+        // mask that says the operation succeeded.
+        *e.body += std::format(
+            "    {}_ok = ({} != 0) & (({} != -9223372036854775808) | ({} != -1))\n", n,
+            rhs->expr, lhs->expr, rhs->expr);
         const std::string safe = std::format("tl.where({} == 0, 1, {})", rhs->expr, rhs->expr);
         if (c.functor == "//" || c.functor == "div") {
             *e.body += std::format("    {} = {} // {}\n", n, lhs->expr, safe);
@@ -1354,7 +1396,7 @@ struct TritonEmitter {
             }
             const std::string v =
                 mangle_var(VarKey{.name = var_of(h).name, .generation = var_of(h).generation});
-            if (v == "v__") {
+            if (is_anonymous_var(var_of(h).name)) {
                 continue;
             }
             if (head_vars.contains(v)) {
@@ -1431,8 +1473,11 @@ struct TritonEmitter {
             const std::string v =
                 mangle_var(VarKey{.name = var_of(head_args[i]).name,
                                   .generation = var_of(head_args[i]).generation});
-            if (v == "v__") {
-                continue;
+            if (is_anonymous_var(var_of(head_args[i]).name)) {
+                // As on the other targets: an anonymous variable in an OUTPUT position binds
+                // nothing, so there is no value to write into the output lane. Leaving the lane
+                // untouched would silently hand back whatever was there before.
+                return make_error<std::string>(MathError::domain_error);
             }
             if (!bound.contains(v)) {
                 return make_error<std::string>(MathError::domain_error);
@@ -1466,13 +1511,13 @@ struct TritonEmitter {
     out += "# whose arithmetic could not be represented in 64 bits, is reported rather than\n";
     out += "# left holding a wrapped value. Triton executes every lane through every\n";
     out += "# instruction, so overflow is carried as a MASK; there is no trap to raise.\n";
-    out += "\n";
+    out += '\n';
     out += "import triton\n";
     out += "import triton.language as tl\n";
-    out += "\n";
+    out += '\n';
     out += "INT64_MAX = 9223372036854775807\n";
     out += "INT64_MIN = -9223372036854775808\n";
-    out += "\n";
+    out += '\n';
     out += "@triton.jit\n";
     out += std::format("def {}_kernel({}ok_ptr, n, BLOCK: tl.constexpr):\n", fn, ptr_params);
     out += "    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n";
@@ -1539,13 +1584,11 @@ auto compile(const Program& program, const PredicateSignature& entry,
         return make_error<std::string>(collected.error());
     }
 
-    if (target == Target::triton) {
+    if (target == Target::triton && ctx.order.size() != 1) {
         // A Triton kernel is a flat elementwise program over a block of lanes. It has no call
         // stack, so recursion and calls are not "slow" here, they are unrepresentable. One
         // predicate, straight-line, is what the target can honestly express.
-        if (ctx.order.size() != 1) {
-            return make_error<std::string>(MathError::not_implemented);
-        }
+        return make_error<std::string>(MathError::not_implemented);
     }
 
     // Emit callees before callers so the generated source needs no forward declarations —
@@ -1572,7 +1615,7 @@ auto compile(const Program& program, const PredicateSignature& entry,
             decls += std::format("template <class K>\n[[nodiscard]] auto {}({}K&& k) -> bool;\n",
                                  mangle(sig.name, sig.arity()), params);
             defs += *body;
-            defs += "\n";
+            defs += '\n';
             continue;
         }
         std::string params;
@@ -1585,7 +1628,7 @@ auto compile(const Program& program, const PredicateSignature& entry,
                              ctx.device ? "__device__ inline " : "inline ",
                              mangle(sig.name, sig.arity()), params);
         defs += *body;
-        defs += "\n";
+        defs += '\n';
     }
 
     const PredicateSignature& esig = ctx.signatures.at(predicate_key(entry.name, entry.arity()));
@@ -1605,7 +1648,7 @@ auto compile(const Program& program, const PredicateSignature& entry,
     out += "// A `false` return means the predicate FAILED or its arithmetic could not be\n";
     out += "// represented — the compiled code refuses an unrepresentable value exactly as the\n";
     out += "// interpreter does.\n";
-    out += "\n";
+    out += '\n';
     if (options.width == Width::arbitrary) {
         // BigInt is a NAMED-MODULE entity with no header form anywhere in the repo, so a file
         // that uses it cannot be a standalone translation unit — it has to be built by
@@ -1638,9 +1681,9 @@ auto compile(const Program& program, const PredicateSignature& entry,
         }
     }
     out += checked_preamble(ctx.device, options.width);
-    out += "\n";
+    out += '\n';
     out += decls;
-    out += "\n";
+    out += '\n';
     out += defs;
 
     if (options.emit_batch && target == Target::cpp) {
@@ -1653,7 +1696,7 @@ auto compile(const Program& program, const PredicateSignature& entry,
             call_args += call_args.empty() ? "" : ", ";
             call_args += std::format("arg{}[i]", i);
         }
-        out += "\n";
+        out += '\n';
         out += "// Applies the predicate to `n` independent inputs.\n";
         out += "//\n";
         out += "// `ok[i]` records whether lane i SUCCEEDED — the predicate proved its goal and\n";
@@ -1719,10 +1762,9 @@ auto compile(const Program& program, const PredicateSignature& entry,
         }
         for (std::size_t i = 0; i < esig.arity(); ++i) {
             kargs += i == 0 ? "" : ", ";
-            kargs += esig.modes[i] == ArgMode::input ? std::format("arg{}[i]", i)
-                                                     : std::format("arg{}[i]", i);
+            kargs += std::format("arg{}[i]", i);
         }
-        out += "\n";
+        out += '\n';
         out += "// Batch entry point: one thread per row. `ok[i]` records whether row i\n";
         out += "// succeeded, so a failed or unrepresentable row is reported rather than left\n";
         out += "// as a silent zero in the output.\n";

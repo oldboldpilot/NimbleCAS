@@ -16,9 +16,18 @@ using nimblecas::backtracking_search;
 using nimblecas::backtracking_search_fc;
 using nimblecas::BinaryConstraint;
 using nimblecas::Constraint;
+using nimblecas::as_csp;
+using nimblecas::ConstraintKind;
 using nimblecas::Csp;
 using nimblecas::MathError;
+using nimblecas::holds;
 using nimblecas::parallel_search;
+using nimblecas::prefix_assignment;
+using nimblecas::prefix_count;
+using nimblecas::restrict_prefix;
+using nimblecas::validate;
+using nimblecas::WireConstraint;
+using nimblecas::WireCsp;
 using nimblecas::solution_count;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
@@ -82,6 +91,32 @@ namespace {
         }
     }
     return true;
+}
+
+// The same n-queens problem as `queens` above, expressed declaratively: the rows are
+// pairwise distinct (all_different), and no two queens share a diagonal, which is exactly
+// |row_i - row_j| != (j - i) for every pair -- the abs_diff_ne kind.
+[[nodiscard]] auto wire_queens(std::int64_t n) -> WireCsp {
+    WireCsp w;
+    const auto un = static_cast<std::size_t>(n);
+    for (std::size_t i = 0; i < un; ++i) {
+        w.domains.push_back(range_domain(n));
+    }
+    std::vector<std::size_t> all;
+    for (std::size_t i = 0; i < un; ++i) {
+        all.push_back(i);
+    }
+    w.constraints.push_back(WireConstraint{
+        .kind = ConstraintKind::all_different, .scope = std::move(all), .params = {}});
+    for (std::size_t i = 0; i < un; ++i) {
+        for (std::size_t j = i + 1; j < un; ++j) {
+            w.constraints.push_back(
+                WireConstraint{.kind = ConstraintKind::abs_diff_ne,
+                               .scope = {i, j},
+                               .params = {static_cast<std::int64_t>(j - i)}});
+        }
+    }
+    return w;
 }
 
 }  // namespace
@@ -305,6 +340,298 @@ auto main() -> int {
                   auto pe = parallel_search(empty);
                   t.expect(!pe.has_value() && pe.error() == MathError::domain_error,
                            "parallel_search rejects the empty CSP too");
+              })
+        .test("wire_queens_denotes_the_same_problem_as_the_functional_queens",
+              [](TestContext& t) {
+                  // The whole point of the declarative layer: the SAME problem, expressed as
+                  // data instead of closures, must have the same solutions. 8-queens is the
+                  // right check because its count is a fixed, published number.
+                  auto w = wire_queens(8);
+                  auto c = as_csp(w);
+                  t.expect(c.has_value(), "the wire form converts to a functional Csp");
+                  if (!c) {
+                      return;
+                  }
+                  auto n = solution_count(*c, 0);
+                  t.expect(n.has_value(), "count succeeds");
+                  t.expect(n.value_or(0) == 92,
+                           "the declarative 8-queens has the same 92 solutions");
+                  // And the first solution agrees with the functional encoding exactly, not
+                  // merely in count -- both contracts promise the lexicographically-first one.
+                  auto a = backtracking_search(*c);
+                  auto b = backtracking_search(queens(8));
+                  t.expect(a.has_value() && b.has_value(), "both searches succeed");
+                  t.expect(a.value_or(std::nullopt) == b.value_or(std::nullopt),
+                           "and return the identical first assignment");
+              })
+        .test("all_different_expands_to_binary_constraints_so_ac3_can_prune",
+              [](TestContext& t) {
+                  // all_different IS pairwise not-equal, and AC-3 propagates over binary
+                  // constraints only. Leaving it as one general constraint would be
+                  // semantically identical and strictly weaker, so the expansion is checked.
+                  WireCsp w;
+                  w.domains = {range_domain(4), range_domain(4), range_domain(4)};
+                  w.constraints.push_back(
+                      WireConstraint{.kind = ConstraintKind::all_different,
+                                     .scope = {0, 1, 2},
+                                     .params = {}});
+                  auto c = as_csp(w);
+                  t.expect(c.has_value(), "conversion succeeds");
+                  if (!c) {
+                      return;
+                  }
+                  t.expect(c->binary.size() == 3, "3 variables give 3 pairwise not-equals");
+                  t.expect(c->general.empty(), "and nothing is left in the general list");
+              })
+        .test("holds_evaluates_each_constraint_kind",
+              [](TestContext& t) {
+                  const auto ck = [&t](ConstraintKind kind, std::vector<std::size_t> scope,
+                                       std::vector<std::int64_t> params,
+                                       std::vector<std::int64_t> values, bool want,
+                                       const char* why) {
+                      const WireConstraint c{
+                          .kind = kind, .scope = std::move(scope), .params = std::move(params)};
+                      t.expect(holds(c, std::span<const std::int64_t>(values)) == want, why);
+                  };
+                  ck(ConstraintKind::not_equal, {0, 1}, {}, {1, 2}, true, "1 != 2");
+                  ck(ConstraintKind::not_equal, {0, 1}, {}, {2, 2}, false, "2 != 2 is false");
+                  ck(ConstraintKind::equal, {0, 1}, {}, {5, 5}, true, "5 == 5");
+                  // less_equal is x + k <= y.
+                  ck(ConstraintKind::less_equal, {0, 1}, {3}, {1, 4}, true, "1 + 3 <= 4");
+                  ck(ConstraintKind::less_equal, {0, 1}, {3}, {2, 4}, false, "2 + 3 <= 4 is false");
+                  ck(ConstraintKind::abs_diff_ne, {0, 1}, {2}, {1, 3}, false, "|1-3| != 2 is false");
+                  ck(ConstraintKind::abs_diff_ne, {0, 1}, {2}, {1, 4}, true, "|1-4| != 2");
+                  ck(ConstraintKind::all_different, {0, 1, 2}, {}, {1, 2, 3}, true, "all distinct");
+                  ck(ConstraintKind::all_different, {0, 1, 2}, {}, {1, 2, 1}, false, "a repeat");
+                  // 2x + 3y == 12.
+                  ck(ConstraintKind::linear_eq, {0, 1}, {2, 3, 12}, {3, 2}, true, "2*3 + 3*2 == 12");
+                  ck(ConstraintKind::linear_eq, {0, 1}, {2, 3, 12}, {3, 3}, false, "15 != 12");
+                  ck(ConstraintKind::linear_le, {0, 1}, {2, 3, 12}, {1, 1}, true, "5 <= 12");
+                  ck(ConstraintKind::table_allowed, {0, 1}, {1, 2, 3, 4}, {3, 4}, true,
+                     "the tuple (3,4) is a row of the table");
+                  ck(ConstraintKind::table_allowed, {0, 1}, {1, 2, 3, 4}, {1, 4}, false,
+                     "the tuple (1,4) is not a row of the table");
+              })
+        .test("validate_names_every_shape_fault",
+              [](TestContext& t) {
+                  const auto bad = [&t](WireCsp w, MathError want, const char* why) {
+                      auto r = validate(w);
+                      t.expect(!r.has_value() && r.error() == want, why);
+                  };
+                  WireCsp base;
+                  base.domains = {range_domain(3), range_domain(3)};
+
+                  WireCsp empty_vars;
+                  bad(empty_vars, MathError::domain_error, "an empty variable set is refused");
+
+                  WireCsp empty_dom;
+                  empty_dom.domains = {{}};
+                  bad(empty_dom, MathError::domain_error, "an empty domain is refused");
+
+                  auto out_of_range = base;
+                  out_of_range.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::not_equal, .scope = {0, 7}, .params = {}});
+                  bad(out_of_range, MathError::domain_error, "an out-of-range scope is refused");
+
+                  auto dup = base;
+                  dup.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::not_equal, .scope = {1, 1}, .params = {}});
+                  bad(dup, MathError::domain_error,
+                      "a variable repeated in one scope is refused, not given a reading");
+
+                  auto wrong_arity = base;
+                  wrong_arity.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::not_equal, .scope = {0, 1}, .params = {4}});
+                  bad(wrong_arity, MathError::domain_error, "not_equal takes no parameters");
+
+                  auto missing_param = base;
+                  missing_param.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {}});
+                  bad(missing_param, MathError::domain_error, "abs_diff_ne needs its one parameter");
+
+                  auto ragged = base;
+                  ragged.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::table_allowed, .scope = {0, 1}, .params = {1, 2, 3}});
+                  bad(ragged, MathError::domain_error, "a ragged tuple table is refused");
+
+                  auto short_linear = base;
+                  short_linear.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::linear_eq, .scope = {0, 1}, .params = {1, 1}});
+                  bad(short_linear, MathError::domain_error,
+                      "a linear constraint needs one coefficient per variable plus a rhs");
+              })
+        .test("a_difference_constraint_that_could_overflow_is_refused_not_evaluated",
+              [](TestContext& t) {
+                  // less_equal and abs_diff_ne both evaluate values[0] - values[1], and both
+                  // negate. Signed overflow there is undefined behaviour in the evaluator and
+                  // silently wrong in emitted code, so the domains are bounded ONCE at
+                  // validation rather than checked on every evaluation.
+                  constexpr std::int64_t lo = std::numeric_limits<std::int64_t>::min();
+                  constexpr std::int64_t hi = std::numeric_limits<std::int64_t>::max();
+
+                  WireCsp wide;
+                  wide.domains = {{hi - 1, hi}, {lo, lo + 1}};
+                  wide.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {1}});
+                  auto r = validate(wide);
+                  t.expect(!r.has_value() && r.error() == MathError::overflow,
+                           "a difference that cannot fit in int64 is an honest overflow");
+
+                  // A parameter of INT64_MIN cannot be negated, which less_equal must do.
+                  WireCsp bad_param;
+                  bad_param.domains = {range_domain(3), range_domain(3)};
+                  bad_param.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::less_equal, .scope = {0, 1}, .params = {lo}});
+                  auto p = validate(bad_param);
+                  t.expect(!p.has_value() && p.error() == MathError::overflow,
+                           "a parameter whose negation is unrepresentable is refused");
+
+                  // The case the first version of this guard missed: a difference of exactly
+                  // INT64_MIN, reached with a non-positive upper bound on the second domain,
+                  // so the "cannot be negated" test must not depend on that bound being
+                  // positive.
+                  WireCsp exact_min;
+                  exact_min.domains = {{lo, lo + 1}, {0, 1}};
+                  exact_min.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {1}});
+                  auto m = validate(exact_min);
+                  t.expect(!m.has_value() && m.error() == MathError::overflow,
+                           "a difference of exactly INT64_MIN is refused, having no negation");
+
+                  // Ordinary domains are of course accepted, and evaluate correctly.
+                  WireCsp ok;
+                  ok.domains = {range_domain(5), range_domain(5)};
+                  ok.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {2}});
+                  t.expect(validate(ok).has_value(), "a bounded difference constraint is accepted");
+              })
+        .test("a_linear_constraint_that_could_overflow_is_refused_not_evaluated",
+              [](TestContext& t) {
+                  // The evaluator adds coef*value with plain int64. Rather than check for
+                  // overflow on every evaluation -- in a search inner loop, and in emitted
+                  // code with nowhere to report it -- the worst case is bounded once here.
+                  // A constraint that could overflow must be REFUSED, never silently wrong.
+                  constexpr std::int64_t huge = std::numeric_limits<std::int64_t>::max() / 2;
+                  WireCsp w;
+                  w.domains = {{0, huge}, {0, huge}};
+                  w.constraints.push_back(WireConstraint{.kind = ConstraintKind::linear_eq,
+                                                         .scope = {0, 1},
+                                                         .params = {3, 3, 0}});
+                  auto r = validate(w);
+                  t.expect(!r.has_value() && r.error() == MathError::overflow,
+                           "a weighted sum that cannot fit in int64 is an honest overflow");
+
+                  // A large right-hand side is NOT a reason to refuse. `holds` compares the
+                  // finished sum against it and never forms `sum - rhs`, so the rhs cannot
+                  // overflow anything; refusing here would be a false refusal.
+                  WireCsp big_rhs;
+                  big_rhs.domains = {range_domain(4), range_domain(4)};
+                  big_rhs.constraints.push_back(
+                      WireConstraint{.kind = ConstraintKind::linear_le,
+                                     .scope = {0, 1},
+                                     .params = {1, 1, std::numeric_limits<std::int64_t>::max()}});
+                  t.expect(validate(big_rhs).has_value(),
+                           "a bounded sum against a huge rhs is accepted, not refused");
+
+                  // The same shape with domains that fit is accepted.
+                  WireCsp ok;
+                  ok.domains = {range_domain(10), range_domain(10)};
+                  ok.constraints.push_back(WireConstraint{.kind = ConstraintKind::linear_eq,
+                                                          .scope = {0, 1},
+                                                          .params = {3, 3, 12}});
+                  t.expect(validate(ok).has_value(), "and a bounded one is accepted");
+              })
+        .test("the_prefix_split_partitions_the_assignment_space_exactly",
+              [](TestContext& t) {
+                  // This is the property distribution rests on. If the sub-problems did not
+                  // partition the space, a distributed solve could double-count a solution or
+                  // miss one, and an UNSAT verdict merged from them would be worthless.
+                  // Checked by counting: the sub-counts must sum to the whole count exactly.
+                  auto w = wire_queens(6);
+                  auto whole = as_csp(w);
+                  t.expect(whole.has_value(), "the 6-queens wire form converts");
+                  if (!whole) {
+                      return;
+                  }
+                  auto total = solution_count(*whole, 0);
+                  t.expect(total.has_value() && total.value_or(0) == 4,
+                           "6-queens has exactly 4 solutions");
+
+                  constexpr std::size_t fixed_vars = 2;
+                  auto count = prefix_count(w, fixed_vars);
+                  t.expect(count.has_value(), "the prefix count is computable");
+                  t.expect(count.value_or(0) == 36, "6 x 6 = 36 prefixes over the first 2 columns");
+                  if (!count) {
+                      return;
+                  }
+                  std::uint64_t summed = 0;
+                  bool all_ok = true;
+                  for (std::uint64_t i = 0; i < *count; ++i) {
+                      auto prefix = prefix_assignment(w, fixed_vars, i);
+                      if (!prefix) {
+                          all_ok = false;
+                          break;
+                      }
+                      auto sub = restrict_prefix(w, std::span<const std::int64_t>(*prefix));
+                      if (!sub) {
+                          all_ok = false;
+                          break;
+                      }
+                      auto sub_csp = as_csp(*sub);
+                      if (!sub_csp) {
+                          all_ok = false;
+                          break;
+                      }
+                      auto n = solution_count(*sub_csp, 0);
+                      if (!n) {
+                          all_ok = false;
+                          break;
+                      }
+                      summed += *n;
+                  }
+                  t.expect(all_ok, "every sub-problem is well formed and solvable");
+                  t.expect(summed == total.value_or(0),
+                           "the sub-counts sum to the whole count: no solution double-counted, "
+                           "none missed");
+              })
+        .test("prefix_assignment_enumerates_in_ascending_lexicographic_order",
+              [](TestContext& t) {
+                  // Ascending index must mean ascending assignment, because that is what makes
+                  // "the lowest-indexed shard wins" the same answer the serial search gives.
+                  WireCsp w;
+                  w.domains = {{10, 20}, {5, 6, 7}, range_domain(4)};
+                  auto count = prefix_count(w, 2);
+                  t.expect(count.value_or(0) == 6, "2 x 3 = 6 prefixes");
+                  std::vector<std::vector<std::int64_t>> seen;
+                  for (std::uint64_t i = 0; i < count.value_or(0); ++i) {
+                      auto p = prefix_assignment(w, 2, i);
+                      t.expect(p.has_value(), "each index yields an assignment");
+                      if (p) {
+                          seen.push_back(*p);
+                      }
+                  }
+                  const std::vector<std::vector<std::int64_t>> want{
+                      {10, 5}, {10, 6}, {10, 7}, {20, 5}, {20, 6}, {20, 7}};
+                  t.expect(seen == want, "the enumeration is exactly ascending lexicographic");
+                  auto past = prefix_assignment(w, 2, 6);
+                  t.expect(!past.has_value() && past.error() == MathError::domain_error,
+                           "an index past the end is a domain_error, not a wrapped value");
+              })
+        .test("restrict_prefix_refuses_a_value_outside_the_domain",
+              [](TestContext& t) {
+                  WireCsp w;
+                  w.domains = {{1, 2, 3}, {4, 5}};
+                  const std::vector<std::int64_t> not_in_domain{9};
+                  auto r = restrict_prefix(w, std::span<const std::int64_t>(not_in_domain));
+                  t.expect(!r.has_value() && r.error() == MathError::domain_error,
+                           "fixing a variable to a value it cannot take is a domain_error");
+                  const std::vector<std::int64_t> good{2};
+                  auto ok = restrict_prefix(w, std::span<const std::int64_t>(good));
+                  t.expect(ok.has_value(), "a legal prefix restricts");
+                  t.expect(ok.has_value() && ok->domains[0].size() == 1 && ok->domains[0][0] == 2,
+                           "and collapses that domain to the single fixed value");
+                  t.expect(ok.has_value() && ok->domains[1].size() == 2,
+                           "leaving the unfixed domains untouched");
               })
         .run();
 }

@@ -341,7 +341,7 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
     if (opts.emit_parallel) {
         out += "#include <thread>\n#include <vector>\n#include <algorithm>\n";
     }
-    out += "\n";
+    out += '\n';
 
     out += std::format("inline constexpr unsigned nc_{}_vars = {};\n", e, cnf.num_vars);
     out += std::format("inline constexpr unsigned long long nc_{}_none = ~0ULL;\n", e);
@@ -792,7 +792,7 @@ template <typename T>
     out += table_of(qualifier, "unsigned", std::format("nc_{}_opstart", e), f.op_start);
     out += table_of(qualifier, "unsigned", std::format("nc_{}_occn", e), f.occ_neg);
     out += table_of(qualifier, "unsigned", std::format("nc_{}_onstart", e), f.on_start);
-    out += "\n";
+    out += '\n';
     return out;
 }
 
@@ -1035,7 +1035,7 @@ template <typename T>
     if (opts.emit_parallel) {
         out += "#include <thread>\n";
     }
-    out += "\n";
+    out += '\n';
     out += emit_tables(cnf, f, e, "static const ");
 
     out += std::format(
@@ -1765,7 +1765,7 @@ auto reference_solve(const Cnf& cnf, std::uint64_t max_blocks)
             }
         }
         if (sat != 0) {
-            return Answer{(b << 6) | static_cast<std::uint64_t>(std::countr_zero(sat))};
+            return Answer{(b << 6U) | static_cast<std::uint64_t>(std::countr_zero(sat))};
         }
     }
     return Answer{std::nullopt};
@@ -1790,15 +1790,15 @@ auto reference_walksat(const Cnf& cnf, std::uint32_t walkers, std::uint64_t max_
     // sequence of moves rather than two algorithms that merely resemble each other.
     const auto mix = [](std::uint64_t z) -> std::uint64_t {
         z += 0x9E3779B97F4A7C15ULL;
-        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-        return z ^ (z >> 31);
+        z = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
+        return z ^ (z >> 31U);
     };
     const auto next = [](std::uint64_t& s) -> std::uint64_t {
         std::uint64_t x = s;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
+        x ^= x >> 12U;
+        x ^= x << 25U;
+        x ^= x >> 27U;
         s = x;
         return x * 0x2545F4914F6CDD1DULL;
     };
