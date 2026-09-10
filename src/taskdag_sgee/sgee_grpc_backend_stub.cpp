@@ -8,8 +8,13 @@ import nimblecas.core;
 
 namespace nimblecas {
 
-auto sgee_grpc_distributed_executor(const SgeeExecutorConfig& cfg,
-                                    const SgeeGrpcExecutorOptions& opts)
+// Both parameters by value, to match the ON-build definition, which modifies its own
+// copy of cfg. NOLINTBEGIN rather than NOLINTNEXTLINE because the signature spans two
+// lines and `opts` sits on the second.
+// NOLINTBEGIN(performance-unnecessary-value-param)
+auto sgee_grpc_distributed_executor(SgeeExecutorConfig cfg,
+                                    SgeeGrpcExecutorOptions opts)
+// NOLINTEND(performance-unnecessary-value-param)
     -> Result<std::unique_ptr<Executor>> {
     // Validate identically to the real (ON) factory so callers get a stable error for the same
     // input across build configs; a valid config then honestly reports not_implemented. wal_dir is

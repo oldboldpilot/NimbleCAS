@@ -881,7 +881,15 @@ private:
 // and retained on failure. The factory does NOT open a broker itself: broker-open failure surfaces
 // at run() time as distributed_error, and an executor is safe to reuse after a failed run. With
 // NIMBLECAS_SGEE=OFF the stub honestly returns not_implemented for a valid config.
-[[nodiscard]] auto sgee_distributed_executor(const SgeeExecutorConfig& cfg)
+// cfg is taken BY VALUE, and stays that way. The definition this declaration must match
+// lives in sgee_backend_capi.cpp / sgee_backend_grpc.cpp, compiled only with the backend
+// switched ON -- and the gRPC one modifies its own copy (max_result_recoveries). A tool
+// looking only at the declaration and the OFF stub sees an unnecessary copy and is wrong
+// about the program: changing it here makes the exported factory a different overload
+// from its definition, which fails at link time in a configuration the default build
+// never exercises.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+[[nodiscard]] auto sgee_distributed_executor(SgeeExecutorConfig cfg)
     -> Result<std::unique_ptr<Executor>>;
 
 // ---------------------------------------------------------------------------
@@ -895,8 +903,10 @@ private:
 // pumps against the remote broker (a useful halfway configuration). The RunTransport carries no
 // local WAL, so nothing is reaped on success. With NIMBLECAS_SGEE_GRPC=OFF the stub honestly
 // returns not_implemented for a valid config.
-[[nodiscard]] auto sgee_grpc_distributed_executor(const SgeeExecutorConfig& cfg,
-                                                  const SgeeGrpcExecutorOptions& opts)
+// NOLINTBEGIN(performance-unnecessary-value-param)
+[[nodiscard]] auto sgee_grpc_distributed_executor(SgeeExecutorConfig cfg,
+                                                  SgeeGrpcExecutorOptions opts)
+// NOLINTEND(performance-unnecessary-value-param)
     -> Result<std::unique_ptr<Executor>>;
 
 }  // namespace nimblecas
