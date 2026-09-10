@@ -769,8 +769,8 @@ auto encode_state(const State& state) -> std::vector<std::byte> {
     out.reserve(state.size() * 4);
     for (const std::int32_t v : state) {
         const auto u = static_cast<std::uint32_t>(v);
-        for (const int i : std::views::iota(0, 4)) {
-            out.push_back(static_cast<std::byte>((u >> (8 * i)) & 0xFFU));
+        for (const unsigned int i : std::views::iota(0U, 4U)) {
+            out.push_back(static_cast<std::byte>((u >> (8U * i)) & 0xFFU));
         }
     }
     return out;
@@ -783,9 +783,9 @@ auto decode_state(std::span<const std::byte> bytes, std::size_t num_vars) -> Res
     State out(num_vars, 0);
     for (const std::size_t v : std::views::iota(std::size_t{0}, num_vars)) {
         std::uint32_t u = 0;
-        for (const int i : std::views::iota(0, 4)) {
-            const auto byte = std::to_integer<unsigned char>(bytes[v * 4 + static_cast<std::size_t>(i)]);
-            u |= static_cast<std::uint32_t>(byte) << (8 * i);
+        for (const std::size_t i : std::views::iota(std::size_t{0}, std::size_t{4})) {
+            const auto byte = std::to_integer<unsigned char>(bytes[v * 4 + i]);
+            u |= static_cast<std::uint32_t>(byte) << (8U * i);
         }
         out[v] = static_cast<std::int32_t>(u);
     }
@@ -801,8 +801,8 @@ auto hash_state(const State& state) noexcept -> std::uint64_t {
     constexpr std::uint64_t prime = 0x00000100000001b3ULL;
     for (const std::int32_t v : state) {
         const auto u = static_cast<std::uint32_t>(v);
-        for (const int i : std::views::iota(0, 4)) {
-            hash ^= static_cast<std::uint64_t>((u >> (8 * i)) & 0xFFU);
+        for (const unsigned int i : std::views::iota(0U, 4U)) {
+            hash ^= static_cast<std::uint64_t>((u >> (8U * i)) & 0xFFU);
             hash *= prime;
         }
     }

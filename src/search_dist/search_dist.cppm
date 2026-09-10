@@ -483,7 +483,7 @@ constexpr std::int64_t fw_absent = -1;
 // ---------------------------------------------------------------------------
 
 auto put_u64(std::vector<std::byte>& out, std::uint64_t v) -> void {
-    for (const int shift : std::views::iota(0, 8) | std::views::transform([](int i) { return 8 * i; })) {
+    for (const unsigned int shift : std::views::iota(0U, 8U) | std::views::transform([](unsigned int i) { return 8U * i; })) {
         out.push_back(static_cast<std::byte>((v >> shift) & 0xffULL));
     }
 }
@@ -500,9 +500,9 @@ auto put_i64(std::vector<std::byte>& out, std::int64_t v) -> void {
         return std::nullopt;
     }
     std::uint64_t v = 0;
-    for (const int i : std::views::iota(0, 8)) {
-        const auto byte = std::to_integer<unsigned char>(bytes[offset + static_cast<std::size_t>(i)]);
-        v |= static_cast<std::uint64_t>(byte) << (8 * i);
+    for (const std::size_t i : std::views::iota(std::size_t{0}, std::size_t{8})) {
+        const auto byte = std::to_integer<unsigned char>(bytes[offset + i]);
+        v |= static_cast<std::uint64_t>(byte) << (8U * i);
     }
     offset += 8;
     return v;
@@ -1218,7 +1218,7 @@ struct ProbeResult {
             f.entered = true;
             if (is_goal(f.node)) {
                 result.found = true;
-                result.path = on_path;
+                result.path = std::move(on_path);
                 result.path.push_back(f.node);
                 return encode_probe(result);
             }
@@ -1472,7 +1472,7 @@ struct Candidate {
             }
             const Candidate cand{
                 .component = cu, .weight = e.cost, .u = u, .v = e.target};
-            auto it = best.find(cu);
+            const auto it = best.find(cu);
             if (it == best.end() || cand.better_than(it->second)) {
                 best[cu] = cand;
             }
@@ -1616,8 +1616,10 @@ auto run_rounds_seeded(const TaskRegistry& reg, const WireGraph& g,
     std::int64_t bound = std::numeric_limits<std::int64_t>::max();
     if (ring == Semiring::min_plus && goal.has_value()) {
         const auto gi = static_cast<std::size_t>(*goal);
-        if (gi < n && out.dist[gi].has_value()) {
-            bound = *out.dist[gi];
+        if (gi < n) {
+            if (const auto& gd = out.dist[gi]; gd.has_value()) {
+                bound = *gd;
+            }
         }
     }
 
@@ -1662,9 +1664,10 @@ auto run_rounds_seeded(const TaskRegistry& reg, const WireGraph& g,
                                                            : p.distance > *d);
                 // Equal distance, lower parent id: the same tie-break `dijkstra` applies when it
                 // relaxes, so an optimal path that is unique comes out identical.
-                const bool same_but_lower_parent =
-                    d.has_value() && p.distance == *d && out.parent[t].has_value() &&
-                    p.parent < *out.parent[t];
+                const auto& cur_parent = out.parent[t];
+                const bool same_but_lower_parent = d.has_value() && p.distance == *d &&
+                                                   cur_parent.has_value() &&
+                                                   p.parent < *cur_parent;
                 if (better || same_but_lower_parent) {
                     d = p.distance;
                     out.parent[t] = p.parent;
@@ -1677,8 +1680,14 @@ auto run_rounds_seeded(const TaskRegistry& reg, const WireGraph& g,
         }
         if (ring == Semiring::min_plus && goal.has_value()) {
             const auto gi = static_cast<std::size_t>(*goal);
-            if (out.dist[gi].has_value()) {
-                bound = *out.dist[gi];
+            // The same bounds guard its twin above carries. Every caller validates the goal
+            // against the node count, so this cannot trigger today; it is here so that the
+            // two readings of `out.dist[gi]` in this function defend themselves alike, rather
+            // than one of them depending on a precondition the other does not trust.
+            if (gi < n) {
+                if (const auto& gd = out.dist[gi]; gd.has_value()) {
+                    bound = *gd;
+                }
             }
         }
         next.reserve(improved.size());
@@ -1741,7 +1750,7 @@ auto run_one_round(const TaskRegistry& reg, const WireGraph& g,
             const auto v = static_cast<std::size_t>(e.target);
             const std::int64_t w = unit_weights ? 1 : e.cost;
             for (const auto& [from, to] : {std::pair{u, v}, std::pair{v, u}}) {
-                auto it = best[from].find(static_cast<std::int64_t>(to));
+                const auto it = best[from].find(static_cast<std::int64_t>(to));
                 if (it == best[from].end() || w < it->second) {
                     best[from][static_cast<std::int64_t>(to)] = w;
                 }
@@ -2285,11 +2294,12 @@ auto distributed_connected_components(const WireGraph& g, std::size_t shard_coun
     }
     Labels labels(n, 0);
     for (const std::size_t u : std::views::iota(std::size_t{0}, n)) {
-        if (!rounds->dist[u].has_value()) {
+        const auto& du = rounds->dist[u];
+        if (!du.has_value()) {
             // Every node was seeded, so an absent label means the loop lost one.
             return make_error<Labels>(MathError::not_converged);
         }
-        labels[u] = *rounds->dist[u];
+        labels[u] = *du;
     }
     return labels;
 }
@@ -2677,7 +2687,7 @@ auto distributed_minimum_spanning_forest(const WireGraph& g, std::size_t shard_c
                 return make_error<Forest>(cands.error());
             }
             for (const Candidate& c : *cands) {
-                auto it = best.find(c.component);
+                const auto it = best.find(c.component);
                 if (it == best.end() || c.better_than(it->second)) {
                     best[c.component] = c;
                 }
