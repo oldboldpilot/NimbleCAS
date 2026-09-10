@@ -1,0 +1,16 @@
+# Benchmark and code-generator drivers: the repository configuration, minus one check.
+# @author Olumuyiwa Oluwasanmi
+#
+# InheritParentConfig keeps everything from the root .clang-tidy; only the line below
+# differs, and it applies to this directory alone rather than to the whole repository.
+#
+#   concurrency-mt-unsafe   15 findings here, every one a `std::getenv` reading HOSTNAME /
+#                           COMPUTERNAME / GIT_COMMIT for a result record, or a `std::exit`
+#                           on an argument-parsing error. Both run on the main thread before
+#                           any worker exists, and nothing in these tools calls setenv at
+#                           all -- so the race the check names cannot occur. It stays ON for
+#                           src/, where library code has no idea what threads a caller has
+#                           already started.
+InheritParentConfig: true
+Checks: >
+  -concurrency-mt-unsafe

@@ -1,7 +1,7 @@
 # NimbleCAS clang-tidy configuration (Code Policy Rules 34 / 50).
 # @author Olumuyiwa Oluwasanmi
 #
-# Run with scripts/tidy.sh, which points clang-tidy-23 at build/compile_commands.json.
+# Run with scripts/tidy.sh, which points clang-tidy-23 at build23/compile_commands.json.
 #
 # The enabled set is deliberately narrow: checks that find BUGS and checks that enforce
 # rules this codebase actually holds. Broad style families are left off rather than
@@ -13,6 +13,37 @@
 #   misc-include-cleaner             C++23 named modules; the include graph is not the truth here
 #   modernize-use-trailing-return-type  already mandatory and universally followed
 #   readability-identifier-length    i, j, k, n, p are the right names in numerical code
+#
+# The four below were switched off after the first sweep that ever covered the whole
+# repository (scripts/tidy.sh could not run one until the out-of-repo std.cppm was excluded
+# from it). Each was read before being disabled, not disabled to make a number go down:
+#
+#   bugprone-exception-escape        183 of its 195 findings are `main` -- every test
+#                                    executable has one. The rest are a `reserve` or a
+#                                    guarded `string_view::substr` inside a noexcept
+#                                    function. Nothing here throws deliberately: fallible
+#                                    operations return Result (Rule 32), so the only
+#                                    reachable throw is an allocation failure, and
+#                                    terminating on one is the behaviour we want. The check
+#                                    cannot tell that from a logic error escaping a
+#                                    destructor, which is the case it exists for.
+#   misc-no-recursion                65 findings, and recursion is the natural shape of
+#                                    nearly all of them: recursive-descent parsing, walking
+#                                    an Expr tree, divide-and-conquer over polynomials.
+#                                    Every one is bounded by a depth or step budget.
+#   portability-simd-intrinsics      41 findings, all in the AVX-512/AVX2/scalar dispatch
+#                                    waterfall that Rule 50 requires. The check wants
+#                                    std::experimental::simd, which cannot express a runtime
+#                                    waterfall; the intrinsics are the design, not an
+#                                    oversight.
+#   bugprone-branch-clone            11 findings, 8 of them arms of a switch that IS a
+#                                    lookup table (test graph fixtures where several nodes
+#                                    share a successor set) and the rest documented case
+#                                    analyses whose arms deliberately mirror a specification
+#                                    line by line. Merging them would cost the correspondence
+#                                    and save nothing. The one real clone it found -- two
+#                                    arms assigning the same parent in `beam_search` -- is
+#                                    fixed rather than suppressed.
 Checks: >
   -*,
   bugprone-*,
@@ -24,9 +55,13 @@ Checks: >
   readability-const-return-type,
   readability-misleading-indentation,
   readability-redundant-*,
+  -bugprone-branch-clone,
   -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
   -misc-include-cleaner,
+  -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
+  -portability-simd-intrinsics,
   -readability-identifier-length,
   -*-magic-numbers,
   -*-avoid-do-while
