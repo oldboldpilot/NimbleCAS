@@ -202,7 +202,8 @@ struct TaskSpec {
     for (std::size_t r = 1; r <= 33; ++r) {
         const double factor = 32.0 / static_cast<double>(r);
         const auto rounds = std::max<std::uint64_t>(
-            1ULL, static_cast<std::uint64_t>(std::round(cal.rounds_per_unit * factor)));
+            1ULL, static_cast<std::uint64_t>(
+                      std::round(static_cast<double>(cal.rounds_per_unit) * factor)));
         const double mean_sec = cal.seconds_per_unit * factor;
         const double std_sec = mean_sec * 0.5;  // non-zero variance model for risk_lambda
         specs.push_back(TaskSpec{
@@ -266,7 +267,7 @@ struct TaskSpec {
 // 5. Execution Runner & Interleaved Harness
 // ===========================================================================
 
-enum class ExecutorBackendKind {
+enum class ExecutorBackendKind : std::uint8_t {
     sgee_fake,
     local_parallel
 };
@@ -854,13 +855,12 @@ auto main(int argc, char* const* argv) -> int {
                     "[FAIL] SKEW-LAST (w=4): {:.1f}% reduction did not meet 10% threshold (p={:.2e}).\n",
                     sr.median_reduction_pct, sr.sign_test_p);
             }
-        } else if (sr.workload.starts_with("SKEW-PERM") && sr.config_name == "sgee_w4") {
-            if (sr.median_reduction_pct < 5.0 || sr.sign_test_p >= 0.05) {
-                skew_perm_passed = false;
-                std::cout << std::format(
-                    "[WARN] {} (w=4): {:.1f}% reduction below 5% threshold (p={:.2e}).\n",
-                    sr.workload, sr.median_reduction_pct, sr.sign_test_p);
-            }
+        } else if (sr.workload.starts_with("SKEW-PERM") && sr.config_name == "sgee_w4" &&
+                   (sr.median_reduction_pct < 5.0 || sr.sign_test_p >= 0.05)) {
+            skew_perm_passed = false;
+            std::cout << std::format(
+                "[WARN] {} (w=4): {:.1f}% reduction below 5% threshold (p={:.2e}).\n",
+                sr.workload, sr.median_reduction_pct, sr.sign_test_p);
         }
     }
 

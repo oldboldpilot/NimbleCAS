@@ -51,10 +51,10 @@ namespace {
 // All eight clauses over three variables: every assignment is excluded by exactly one of them.
 [[nodiscard]] auto exhaustive_unsat() -> Cnf {
     Cnf cnf{.num_vars = 3, .clauses = {}};
-    for (int mask = 0; mask < 8; ++mask) {
+    for (unsigned mask = 0; mask < 8; ++mask) {
         std::vector<std::int64_t> clause;
-        for (int v = 0; v < 3; ++v) {
-            const bool bit = ((mask >> v) & 1) != 0;
+        for (unsigned v = 0; v < 3; ++v) {
+            const bool bit = ((mask >> v) & 1U) != 0;
             // Exclude the assignment `mask` by asserting at least one variable differs from it.
             clause.push_back(bit ? -(v + 1) : (v + 1));
         }

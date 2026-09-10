@@ -57,8 +57,10 @@ auto poly(std::vector<std::int64_t> coeffs) -> Polynomial {
 
 [[nodiscard]] auto decode_i64(std::span<const std::byte> p) -> std::int64_t {
     std::array<std::byte, sizeof(std::int64_t)> bytes{};
-    std::ranges::copy_n(p.begin(), std::min<std::size_t>(p.size(), sizeof(std::int64_t)),
-                        bytes.begin());
+    std::ranges::copy_n(
+        p.begin(),
+        static_cast<std::ptrdiff_t>(std::min<std::size_t>(p.size(), sizeof(std::int64_t))),
+        bytes.begin());
     return std::bit_cast<std::int64_t>(bytes);
 }
 
@@ -122,7 +124,7 @@ auto main() -> int {
             std::uint64_t state = 0xABCDEF0123456789ULL;
             const auto next_rand = [&] -> std::int64_t {
                 state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-                return static_cast<std::int64_t>((state >> 60U) & 0xF) - 7;
+                return static_cast<std::int64_t>((state >> 60U) & 0xFU) - 7;
             };
 
             for (std::size_t trial = 0; trial < 15; ++trial) {

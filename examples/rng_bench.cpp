@@ -25,7 +25,7 @@ auto main() -> int {
 
     // --- Batched (AVX-512 when available) ---
     {
-        std::vector<std::uint64_t> buf(1 << 16U);
+        std::vector<std::uint64_t> buf(std::size_t{1} << 16U);
         const auto t0 = std::chrono::steady_clock::now();
         std::uint64_t acc = 0;
         std::size_t done = 0;

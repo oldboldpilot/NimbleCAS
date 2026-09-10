@@ -127,7 +127,7 @@ auto main() -> int {
 
                   bool all_bit_flips_differ = true;
                   for (std::size_t byte_idx = 0; byte_idx < buf.size(); ++byte_idx) {
-                      for (int bit = 0; bit < 8; ++bit) {
+                      for (unsigned bit = 0; bit < 8; ++bit) {
                           auto mutated = buf;
                           mutated[byte_idx] = static_cast<std::byte>(
                               static_cast<std::uint8_t>(mutated[byte_idx]) ^ static_cast<std::uint8_t>(1u << bit));
@@ -223,7 +223,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("publish_then_lookup_hit_returns_exact_payload",
               [](TestContext& t) {
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   const auto key_bytes = to_payload("task_canonical_input_001");
                   const auto val_bytes = to_payload("task_output_payload_42");
                   const auto ck = content_key(as_bytes(key_bytes));
@@ -249,7 +249,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("lookup_absent_key_is_clean_miss",
               [](TestContext& t) {
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   const auto absent_key_bytes = to_payload("key_that_was_never_published");
                   const auto ck = content_key(as_bytes(absent_key_bytes));
 
@@ -268,7 +268,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("forged_fingerprint_collision_exactness_rule_32",
               [](TestContext& t) {
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
 
                   // Two distinct full keys that we deliberately bind to the SAME ContentKey
                   const auto forged_ck = ContentKey{0x1234567890ABCDEFULL, 0xFEDCBA0987654321ULL};
@@ -326,7 +326,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("multiple_keys_in_same_bucket_coexist_correctly",
               [](TestContext& t) {
-                  InProcessMemo memo(4, 1000, 1024 * 1024);
+                  InProcessMemo memo(4, 1000, std::size_t{1024} * 1024);
                   // Two entries forced into the same shard (same hi) and same bucket (same lo)
                   const auto shared_ck = ContentKey{0xCAFEULL, 0xBABEULL};
                   const auto k1 = to_payload("key_1_in_shared_bucket");
@@ -355,7 +355,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("idempotent_duplicate_publish_first_writer_wins",
               [](TestContext& t) {
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   const auto key = to_payload("idempotent_key");
                   const auto val1 = to_payload("initial_pure_value");
                   const auto val2 = to_payload("second_writer_value");
@@ -383,7 +383,7 @@ auto main() -> int {
         .test("capacity_refusal_max_entries_bounded_no_eviction",
               [](TestContext& t) {
                   constexpr std::size_t max_ent = 5;
-                  InProcessMemo memo(2, max_ent, 1024 * 1024);
+                  InProcessMemo memo(2, max_ent, std::size_t{1024} * 1024);
 
                   // Fill to capacity
                   std::vector<Payload> keys;
@@ -506,7 +506,7 @@ auto main() -> int {
         // -------------------------------------------------------------------
         .test("large_and_empty_payloads",
               [](TestContext& t) {
-                  InProcessMemo memo(8, 100, 4 * 1024 * 1024);
+                  InProcessMemo memo(8, 100, std::size_t{4} * 1024 * 1024);
 
                   // Empty key and empty value
                   const auto empty_k = Payload{};
@@ -520,7 +520,7 @@ auto main() -> int {
                            "lookup of empty key returns empty value");
 
                   // Large 512KB payload
-                  const auto large_val = make_pattern_payload(512 * 1024, 0x7E);
+                  const auto large_val = make_pattern_payload(std::size_t{512} * 1024, 0x7E);
                   const auto large_key = to_payload("large_payload_key");
                   const auto ck_large = content_key(as_bytes(large_key));
 
@@ -541,7 +541,7 @@ auto main() -> int {
                   constexpr int num_threads = 16;
                   constexpr int ops_per_thread = 200;
 
-                  InProcessMemo memo(shard_count, 10'000, 1024 * 1024);
+                  InProcessMemo memo(shard_count, 10'000, std::size_t{1024} * 1024);
 
                   std::vector<Payload> keys(total_keys);
                   std::vector<Payload> vals(total_keys);
@@ -782,7 +782,7 @@ auto main() -> int {
                       f.seekg(pos, std::ios::beg);
                       char byte = 0;
                       f.read(&byte, 1);
-                      byte = static_cast<char>(byte ^ 0x40);
+                      byte = static_cast<char>(static_cast<unsigned char>(byte) ^ 0x40U);
                       f.seekp(pos, std::ios::beg);
                       f.write(&byte, 1);
                   }
@@ -973,7 +973,7 @@ auto main() -> int {
                       f.seekg(pos, std::ios::beg);
                       char byte = 0;
                       f.read(&byte, 1);
-                      byte = static_cast<char>(byte ^ 0x20);
+                      byte = static_cast<char>(static_cast<unsigned char>(byte) ^ 0x20U);
                       f.seekp(pos, std::ios::beg);
                       f.write(&byte, 1);
                   }

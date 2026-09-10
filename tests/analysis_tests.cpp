@@ -77,7 +77,7 @@ namespace {
 
 // 2^n as an int64 (n small).
 [[nodiscard]] auto pow2(std::int64_t n) -> std::int64_t {
-    return static_cast<std::int64_t>(1) << n;
+    return static_cast<std::int64_t>(std::uint64_t{1} << static_cast<unsigned>(n));
 }
 
 // Reconstruct A^T P + P A exactly.
@@ -176,8 +176,14 @@ auto main() -> int {
               [](TestContext& t) {
                   // 0 <= 1/(n^2+1) <= 1/n^2, and sum 1/n^2 converges -> converges.
                   const auto v = comparison_test(
-                      [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n + 1.0); },
-                      [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n); },
+                      [](std::int64_t n) {
+                          const double d = static_cast<double>(n);
+                          return 1.0 / ((d * d) + 1.0);
+                      },
+                      [](std::int64_t n) {
+                          const double d = static_cast<double>(n);
+                          return 1.0 / (d * d);
+                      },
                       Verdict::converges);
                   t.expect(v == Verdict::converges, "term-wise dominated by a convergent series");
               })
@@ -289,8 +295,14 @@ auto main() -> int {
                   // a_n = 1/(n^2+1), b_n = 1/n^2: a_n/b_n = n^2/(n^2+1) -> 1 in (0, inf).
                   // Sum b_n converges => Sum a_n converges.
                   const auto lc = limit_comparison_test(
-                      [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n + 1.0); },
-                      [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n); },
+                      [](std::int64_t n) {
+                          const double d = static_cast<double>(n);
+                          return 1.0 / ((d * d) + 1.0);
+                      },
+                      [](std::int64_t n) {
+                          const double d = static_cast<double>(n);
+                          return 1.0 / (d * d);
+                      },
                       Verdict::converges);
                   t.expect(std::fabs(lc.numeric_limit - 1.0) < 1e-2,
                            "limit-comparison ratio l ~ 1");

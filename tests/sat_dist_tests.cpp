@@ -59,7 +59,7 @@ namespace {
 // p(i,j) is variable 2*(i-1) + j for i in 1..3, j in 1..2.
 [[nodiscard]] auto pigeonhole_3_2() -> Cnf {
     const auto p = [](int i, int j) -> std::int64_t {
-        return static_cast<std::int64_t>(2 * (i - 1) + j);
+        return (2 * static_cast<std::int64_t>(i - 1)) + static_cast<std::int64_t>(j);
     };
     Cnf cnf{.num_vars = 6, .clauses = {}};
     for (int i = 1; i <= 3; ++i) {

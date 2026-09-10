@@ -411,7 +411,8 @@ auto main() -> int {
                       for (std::int64_t k = 0; k <= n; ++k) {
                           sum += binomial(n, k).value();
                       }
-                      t.expect(sum == (std::int64_t{1} << n), "sum_k C(n,k) == 2^n");
+                      t.expect(sum == static_cast<std::int64_t>(std::uint64_t{1} << static_cast<unsigned>(n)),
+                           "sum_k C(n,k) == 2^n");
                   }
               })
         .test("combinatorics_factorial_sequences",

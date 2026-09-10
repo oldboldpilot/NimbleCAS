@@ -129,8 +129,11 @@ auto main() -> int {
                       t.expect((*p)[0] == rat(1, 2), "Sobol'(1) dim0 == 1/2 exact");
                       bool dyadic = true;
                       for (const Rational& c : *p) {
-                          std::int64_t den = c.denominator();
-                          if (den <= 0 || (den & (den - 1)) != 0) {  // not a power of two
+                          const std::int64_t den = c.denominator();
+                          const auto uden = static_cast<std::uint64_t>(den);
+                          // (u & (u - 1)) == 0 identifies a power of two, in the unsigned
+                          // domain the trick is stated for.
+                          if (den <= 0 || (uden & (uden - 1)) != 0) {
                               dyadic = false;
                           }
                       }

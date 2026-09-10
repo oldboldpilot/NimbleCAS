@@ -34,6 +34,9 @@ using nimblecas::testing::TestSuite;
 namespace {
 
 [[nodiscard]] auto dsn() -> std::optional<std::string> {
+    // Read once, on the main thread, before this file starts any of its own. Nothing in
+    // the suite calls setenv, so there is no writer for this to race with.
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char* raw = std::getenv("NIMBLECAS_POSTGRES_DSN");
     if (raw == nullptr) {
         return std::nullopt;
@@ -292,7 +295,7 @@ auto main() -> int {
                   t.expect(good.load() == threads * per_thread,
                            "every thread read back exactly the value it published");
                   auto rows = (*memo)->row_count();
-                  t.expect(rows.has_value() && *rows == threads * per_thread,
+                  t.expect(rows.has_value() && *rows == static_cast<std::size_t>(threads) * per_thread,
                            "and the table holds one row per distinct key");
                   t.expect((*memo)->clear().has_value(), "the table clears");
               })

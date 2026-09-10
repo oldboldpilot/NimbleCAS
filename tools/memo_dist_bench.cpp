@@ -434,7 +434,7 @@ auto main(int argc, char* const* argv) -> int {
             // cost of DURABILITY is measured against the in-memory table rather than assumed.
             // A FRESH file per cell: a store carried across cells would make later cells look
             // faster for a reason that has nothing to do with the cell.
-            InProcessMemo mem_memo(32, 100'000, 16u * 1024u * 1024u);
+            InProcessMemo mem_memo(32, 100'000, std::size_t{16} * 1024 * 1024);
             std::unique_ptr<FileMemo> file_memo;
             if (!opts.file_memo_path.empty()) {
                 std::error_code fec;

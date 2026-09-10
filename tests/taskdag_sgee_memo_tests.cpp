@@ -165,7 +165,7 @@ auto main() -> int {
                   const auto res_dedup = exec_dedup.run(g).value();
 
                   // (c) Fresh InProcessMemo attached
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   FakeBrokerPort port_memo;
                   InMemoryResultChannel chan_memo;
                   SgeeExecutorConfig cfg_memo;
@@ -249,7 +249,7 @@ auto main() -> int {
                   const auto res_dedup = exec_dedup.run(g).value();
 
                   // (c) Fresh InProcessMemo attached
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   FakeBrokerPort port_memo;
                   InMemoryResultChannel chan_memo;
                   SgeeExecutorConfig cfg_memo;
@@ -360,7 +360,7 @@ auto main() -> int {
                   const auto d = g.add_named_task(reg, "op.add/v1", std::vector<TaskId>{b, c}).value();
                   const auto probe = g.add_named_task(reg, "op.probe/v1", std::vector<TaskId>{b, c}).value();
 
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
 
                   // Run 1: cold cache -> executes all tasks and populates memo
                   FakeBrokerPort port1;
@@ -422,7 +422,7 @@ auto main() -> int {
                   const auto t_err = g.add_named_task(reg, "op.fail_div0/v1").value();
                   const auto t_ok = g.add_named_task(reg, "op.c5/v1").value();
 
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
 
                   // Run 1: executes deterministic failure and success, caches both
                   FakeBrokerPort port1;
@@ -527,7 +527,7 @@ auto main() -> int {
                   const auto res_dedup = exec_dedup.run(g).value();
 
                   // Mode (c): fresh InProcessMemo attached
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   FakeBrokerPort port_memo;
                   InMemoryResultChannel chan_memo;
                   SgeeExecutorConfig cfg_memo;
@@ -613,7 +613,7 @@ auto main() -> int {
                   };
                   const Payload bogus_val_bytes = encode_result(bogus_res_env).value();
 
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   const auto pub_res = memo.publish(real_ck, forged_key_bytes, bogus_val_bytes);
                   t.expect(pub_res.has_value(), "pre-poison publish succeeds");
                   t.expect_eq(memo.stats().publishes, std::uint64_t{1}, "1 publish in memo before run");
@@ -686,7 +686,7 @@ auto main() -> int {
                   const auto res_dedup = exec_dedup.run(g).value();
 
                   // Memo run
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   FakeBrokerPort port_memo;
                   InMemoryResultChannel chan_memo;
                   SgeeExecutorConfig cfg_memo;
@@ -755,7 +755,7 @@ auto main() -> int {
                   const ContentKey ck0 = content_key(full_key0);
 
                   // Leg 1: Publish deliberate garbage bytes that are not a decodable ResultEnvelope
-                  InProcessMemo memo_garbage(8, 1000, 1024 * 1024);
+                  InProcessMemo memo_garbage(8, 1000, std::size_t{1024} * 1024);
                   const Payload garbage{std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
                   const auto pub_garbage = memo_garbage.publish(ck0, full_key0, garbage);
                   t.expect(pub_garbage.has_value(), "garbage entry published to memo");
@@ -790,7 +790,7 @@ auto main() -> int {
                   };
                   const Payload bridge_err_bytes = encode_result(bridge_err_env).value();
 
-                  InProcessMemo memo_bridge(8, 1000, 1024 * 1024);
+                  InProcessMemo memo_bridge(8, 1000, std::size_t{1024} * 1024);
                   const auto pub_bridge = memo_bridge.publish(ck0, full_key0, bridge_err_bytes);
                   t.expect(pub_bridge.has_value(), "bridge_error entry published to memo");
                   t.expect_eq(memo_bridge.stats().publishes, std::uint64_t{1}, "1 publish recorded");
@@ -868,7 +868,7 @@ auto main() -> int {
 
                   FakeBrokerPort port_rec;
                   SwallowingResultChannel chan_rec{1};  // swallows the 1st completed task's result
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
                   SgeeExecutorConfig cfg_rec;
                   cfg_rec.with_registry(reg).with_num_workers(2).with_poll_interval_ms(1)
                          .with_max_result_recoveries(2)
@@ -947,7 +947,7 @@ auto main() -> int {
                   const auto res_ref2 = exec_ref2.run(g2).value();
 
                   // Run two executors CONCURRENTLY on std::threads sharing one InProcessMemo
-                  InProcessMemo shared_memo(8, 1000, 1024 * 1024);
+                  InProcessMemo shared_memo(8, 1000, std::size_t{1024} * 1024);
 
                   Result<TaskRunResult> res1_res = nimblecas::make_error<TaskRunResult>(MathError::not_implemented);
                   Result<TaskRunResult> res2_res = nimblecas::make_error<TaskRunResult>(MathError::not_implemented);
@@ -1033,7 +1033,7 @@ auto main() -> int {
                   const Payload key_bytes0 = encode_task(env0).value();
                   const ContentKey ck0 = content_key(key_bytes0);
 
-                  InProcessMemo memo(8, 1000, 1024 * 1024);
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
 
                   // Run 1: Drive a real bridge_error through the executor with memo attached
                   FakeBrokerPort port1;
