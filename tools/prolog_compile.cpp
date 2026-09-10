@@ -112,8 +112,8 @@ auto main(int argc, char** argv) -> int {
                      "[cpp|cuda|triton] [64|128|big] [det|cps] [batch]");
         return 2;
     }
-    const std::string path = args[1];
-    const std::string entry_name = args[2];
+    const std::string& path = args[1];
+    const std::string& entry_name = args[2];
     const auto modes = parse_modes(args[3]);
     if (!modes) {
         std::println(std::cerr, "error: modes must be a string of 'i' and 'o', got '{}'", args[3]);

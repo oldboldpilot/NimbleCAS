@@ -86,14 +86,14 @@ auto main() -> int {
         std::println("FATAL: could not construct Q(i)");
         return 1;
     }
-    const BigNumberField qi = *qi_r;
+    const BigNumberField& qi = *qi_r;
 
     auto q2_r = BigNumberField::create(poly_x2_minus_2());
     if (!q2_r) {
         std::println("FATAL: could not construct Q(sqrt2)");
         return 1;
     }
-    const BigNumberField q2 = *q2_r;
+    const BigNumberField& q2 = *q2_r;
 
     return TestSuite("nimblecas.bigalgpoly")
         .test("zero polynomial has empty coeffs and degree -1",

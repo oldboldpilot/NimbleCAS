@@ -196,7 +196,7 @@ constexpr std::int64_t kDivisorTupleBudget = 1'000'000;
     if (!prim) {
         return make_error<Factors>(prim.error());
     }
-    const Polynomial pf = *prim;
+    const Polynomial& pf = *prim;
     const std::int64_t n = pf.degree();
     if (n <= 0) {
         return Factors{};       // a constant contributes no non-unit factor

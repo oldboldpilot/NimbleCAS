@@ -471,7 +471,7 @@ auto BigFloat::from_string(std::string_view text, std::int64_t prec) -> Result<B
     if (!parsed) {
         return make_error<BigFloat>(MathError::syntax_error);
     }
-    const BigInt n_int = *parsed;
+    const BigInt& n_int = *parsed;
     if (n_int.is_zero()) {
         return BigFloat{bi_zero(), 0, prec};
     }

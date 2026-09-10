@@ -850,6 +850,7 @@ auto main() -> int {
 
                   TaskGraph g;
                   std::vector<TaskId> leaves;
+                  leaves.reserve(8);
                   for (int i = 0; i < 8; ++i) {
                       leaves.push_back(g.add_named_task(reg, "op.leaf" + std::to_string(i) + "/v1").value());
                   }
@@ -1440,6 +1441,7 @@ auto main() -> int {
                   t.expect(any_hit, "the affinity table matches at least one task in the graph");
 
                   std::vector<SgeePlacement> first;
+                  first.reserve(g.size());
                   for (std::size_t i = 0; i < g.size(); ++i) {
                       first.push_back(place(g, TaskId{i}));
                   }

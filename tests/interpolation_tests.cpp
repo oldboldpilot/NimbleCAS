@@ -60,6 +60,7 @@ auto main() -> int {
                   auto cubic = ipoly({5, -1, 0, 2});
                   auto xs = rats({-1, 0, 1, 2});
                   std::vector<Rational> ys;
+                  ys.reserve(xs.size());
                   for (const auto& x : xs) {
                       ys.push_back(nimblecas::poly_evaluate(cubic, x).value());
                   }

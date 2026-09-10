@@ -416,7 +416,7 @@ auto Polynomial::square_free_factorization() const
     if (!prim) {
         return make_error<std::vector<std::pair<Polynomial, std::int64_t>>>(prim.error());
     }
-    const Polynomial f = *prim;
+    const Polynomial& f = *prim;
 
     // Yun: a0 = gcd(f, f'); b1 = f/a0; c1 = f'/a0; d1 = c1 - b1'.
     auto fp = f.derivative();

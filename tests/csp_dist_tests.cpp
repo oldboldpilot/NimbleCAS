@@ -64,6 +64,7 @@ namespace {
         w.domains.push_back(range_domain(n));
     }
     std::vector<std::size_t> all;
+    all.reserve(un);
     for (std::size_t i = 0; i < un; ++i) {
         all.push_back(i);
     }

@@ -2854,7 +2854,7 @@ auto sld_search(Database& db, const GoalList& goals, const Substitution& sub,
         ctx.error = MathError::domain_error;
         return;
     }
-    const std::string ind = *ind_opt;
+    const std::string& ind = *ind_opt;
     const std::vector<Term> args = args_of(goal);
     const GoalList rest = goals->next;
 

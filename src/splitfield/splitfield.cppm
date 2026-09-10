@@ -258,7 +258,7 @@ namespace {
 // a and f must live in the same field.
 [[nodiscard]] auto shift_by(const AlgebraicPoly& f, const AlgebraicNumber& a)
     -> Result<AlgebraicPoly> {
-    const NumberField field = f.field();
+    const NumberField& field = f.field();
     auto neg_a = a.negate();
     if (!neg_a) {
         return make_error<AlgebraicPoly>(neg_a.error());
@@ -336,7 +336,7 @@ namespace {
 // induced by generator |-> image_of_generator.
 [[nodiscard]] auto reembed(const AlgebraicNumber& x, const NumberField& new_field,
                            const AlgebraicNumber& image_of_generator) -> Result<AlgebraicNumber> {
-    const RationalPoly rep = x.value();
+    const RationalPoly& rep = x.value();
     const AlgebraicPoly lifted = AlgebraicPoly::embed(new_field, rep);
     return lifted.evaluate(image_of_generator);
 }
@@ -388,7 +388,7 @@ auto factor_over_field(const NumberField& l, const AlgebraicPoly& f)
         return make_error<Out>(gamma_res.error());
     }
     const AlgebraicNumber gamma = std::move(*gamma_res);
-    const RationalPoly h = l.modulus();
+    const RationalPoly& h = l.modulus();
 
     auto deg_n_opt = checked_mul_i64(d, deg_f);
     if (!deg_n_opt) {

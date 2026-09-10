@@ -380,13 +380,13 @@ struct CellSummary {
 
 }  // namespace
 
-auto main(int argc, char** argv) -> int {
+auto main(int argc, char* const* argv) -> int {
     auto cli_res = parse_cli(argc, argv);
     if (!cli_res.has_value()) {
         print_help(argv[0]);
         return 1;
     }
-    const CliOptions opts = *cli_res;
+    const CliOptions& opts = *cli_res;
     if (opts.show_help) {
         print_help(argv[0]);
         return 0;

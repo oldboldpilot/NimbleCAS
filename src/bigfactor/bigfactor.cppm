@@ -159,7 +159,7 @@ using IntPoly = std::vector<BigInt>;
     if (a.size() < b.size()) {
         return std::nullopt;  // deg a < deg b with a != 0 -> not exact
     }
-    const BigInt lc_b = b.back();
+    const BigInt& lc_b = b.back();
     IntPoly r = a;
     IntPoly q(a.size() - b.size() + 1);  // BigInt default is the canonical zero
     while (!r.empty() && r.size() >= b.size()) {

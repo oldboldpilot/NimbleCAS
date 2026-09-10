@@ -475,7 +475,7 @@ auto rsa_generate(std::uint64_t bits, std::uint64_t seed) -> Result<RsaKey> {
     if (!p_res) {
         return make_error<RsaKey>(p_res.error());
     }
-    const BigInt p = *p_res;
+    const BigInt& p = *p_res;
 
     // Draw q, resampling in the (tiny-probability) event it collides with p.
     BigInt q;

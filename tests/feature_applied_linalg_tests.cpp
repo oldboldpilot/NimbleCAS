@@ -87,7 +87,7 @@ namespace {
 [[nodiscard]] auto col(std::vector<Rational> entries) -> Matrix {
     std::vector<std::vector<Rational>> rows;
     rows.reserve(entries.size());
-    for (auto& e : entries) {
+    for (const auto& e : entries) {
         rows.push_back({e});
     }
     return Matrix::from_rows(std::move(rows)).value();

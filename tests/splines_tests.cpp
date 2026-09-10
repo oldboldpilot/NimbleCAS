@@ -86,6 +86,7 @@ auto main() -> int {
                   const RationalPoly q = RationalPoly::from_coeffs({ri(5), ri(-1), ri(0), ri(2)});
                   auto xs = rats({-1, 0, 1, 2});
                   std::vector<Rational> ys;
+                  ys.reserve(xs.size());
                   for (const auto& x : xs) {
                       ys.push_back(peval(q, x));
                   }

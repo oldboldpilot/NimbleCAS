@@ -869,7 +869,7 @@ auto modular_gcd(const Polynomial& a, const Polynomial& b, std::size_t max_prime
     if (!b_lm_res) {
         return make_error<Polynomial>(b_lm_res.error());
     }
-    const BigInt b_lm = *b_lm_res;
+    const BigInt& b_lm = *b_lm_res;
 
     // Sizing: least k with 2^k > 2 * B_lm
     const BigInt target_prod = BigInt::from_u64(2).multiply(b_lm);

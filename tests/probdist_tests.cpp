@@ -49,6 +49,7 @@ namespace {
 [[nodiscard]] auto gammaf(const Expr& u) -> Expr { return Expr::apply("gamma", {u}); }
 [[nodiscard]] auto sum_of_squares(const std::vector<Expr>& xs) -> Expr {
     std::vector<Expr> terms;
+    terms.reserve(xs.size());
     for (const Expr& x : xs) {
         terms.push_back(square(x));
     }

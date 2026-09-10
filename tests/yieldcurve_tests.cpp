@@ -198,6 +198,7 @@ auto main() -> int {
                            "NS(0) == beta0 + beta1");
                   const std::vector<double> times{0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0};
                   std::vector<double> zeros;
+                  zeros.reserve(times.size());
                   for (const double tt : times) { zeros.push_back(truth.zero_rate(tt).value()); }
                   auto fit = fit_nelson_siegel(times, zeros);
                   t.expect(fit.has_value(), "NS fit converges");
@@ -223,6 +224,7 @@ auto main() -> int {
                   const std::vector<double> times{0.25, 0.5, 1.0, 2.0, 3.0,
                                                   5.0,  7.0, 10.0, 15.0, 20.0};
                   std::vector<double> zeros;
+                  zeros.reserve(times.size());
                   for (const double tt : times) { zeros.push_back(truth.zero_rate(tt).value()); }
                   auto fit = fit_svensson(times, zeros);
                   t.expect(fit.has_value(), "Svensson fit converges");

@@ -112,7 +112,7 @@ auto main() -> int {
                   const bool okf = qi_r.has_value();
                   t.expect(okf, "constructed Q(i)");
                   if (!okf) return;
-                  const BigNumberField qi = *qi_r;
+                  const BigNumberField& qi = *qi_r;
                   const BigAlgebraicPoly embedded = BigAlgebraicPoly::embed(qi, poly_x2_plus_1());
 
                   auto factors = nimblecas::factor_over_field(qi, embedded);

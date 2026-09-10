@@ -287,6 +287,7 @@ auto main() -> int {
                   // (preserves ascending TaskId issuance order).
                   TaskGraph g;
                   std::vector<TaskId> expected;
+                  expected.reserve(8);
                   for (std::size_t i = 0; i < 8; ++i) {
                       expected.push_back(g.add_task(const_task(static_cast<std::int64_t>(i))).value());
                   }

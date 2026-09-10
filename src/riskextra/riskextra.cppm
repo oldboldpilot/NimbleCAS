@@ -645,8 +645,7 @@ struct LinCon {
         return make_error<std::vector<double>>(MathError::domain_error);  // infeasible box/target
     }
     const std::vector<std::vector<double>> G(cov.begin(), cov.end());
-    const std::vector<LinCon> eq_copy = eqs;
-    auto w = active_set_box_qp(G, eq_copy, lo, hi, feas->x);
+    auto w = active_set_box_qp(G, eqs, lo, hi, feas->x);
     if (!w) { return make_error<std::vector<double>>(MathError::not_converged); }
     // Clamp tiny box excursions from round-off back into [lo, hi].
     for (std::size_t i = 0; i < n; ++i) {

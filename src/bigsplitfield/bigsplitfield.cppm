@@ -275,7 +275,7 @@ namespace {
 // a and f must live in the same field.
 [[nodiscard]] auto shift_by(const BigAlgebraicPoly& f, const BigAlgebraicNumber& a)
     -> Result<BigAlgebraicPoly> {
-    const BigNumberField field = f.field();
+    const BigNumberField& field = f.field();
     auto neg_a = a.negate();
     if (!neg_a) {
         return make_error<BigAlgebraicPoly>(neg_a.error());
@@ -345,7 +345,7 @@ namespace {
 [[nodiscard]] auto reembed(const BigAlgebraicNumber& x, const BigNumberField& new_field,
                            const BigAlgebraicNumber& image_of_generator)
     -> Result<BigAlgebraicNumber> {
-    const BigRationalPoly rep = x.value();
+    const BigRationalPoly& rep = x.value();
     const BigAlgebraicPoly lifted = BigAlgebraicPoly::embed(new_field, rep);
     return lifted.evaluate(image_of_generator);
 }
@@ -458,7 +458,7 @@ auto factor_over_field(const BigNumberField& l, const BigAlgebraicPoly& f)
         return make_error<Out>(gamma_res.error());
     }
     const BigAlgebraicNumber gamma = std::move(*gamma_res);
-    const BigRationalPoly h = l.modulus();
+    const BigRationalPoly& h = l.modulus();
 
     // deg N(x) = [L:Q] * deg f. This is a pure int64 DEGREE product (not coefficient
     // arithmetic, which cannot overflow on this tier); a degree beyond int64 is physically

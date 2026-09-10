@@ -353,7 +353,7 @@ struct Consts {
         TRY(twop, p.multiply(two));
         const Rational one = Rational::from_int(1);
         TRY(ycube, solve_cubic(one, twop, p2_4r, negq2));
-        const Expr y = ycube[0];
+        const Expr& y = ycube[0];
         const Expr A = Expr::power(y, consts.half);
         TRY(q_2, q.divide(two));
         TRY(negq_2, q_2.negate());

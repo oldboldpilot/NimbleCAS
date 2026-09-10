@@ -41,14 +41,14 @@ auto main() -> int {
         std::println("FATAL: could not construct Q(i)");
         return 1;
     }
-    const NumberField qi = *qi_r;
+    const NumberField& qi = *qi_r;
 
     auto q2_r = NumberField::create(poly_x2_minus_2());
     if (!q2_r) {
         std::println("FATAL: could not construct Q(sqrt2)");
         return 1;
     }
-    const NumberField q2 = *q2_r;
+    const NumberField& q2 = *q2_r;
 
     // Helper: build (x - alpha) and (x + alpha) over Q(i). Returns std::nullopt on any
     // arithmetic failure so a test can report it rather than crash.
