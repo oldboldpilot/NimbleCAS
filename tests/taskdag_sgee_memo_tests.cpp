@@ -11,13 +11,11 @@ import nimblecas.testing;
 using nimblecas::ContentKey;
 using nimblecas::content_key;
 using nimblecas::DistributedMemo;
-using nimblecas::Executor;
 using nimblecas::FakeBrokerPort;
 using nimblecas::InMemoryResultChannel;
 using nimblecas::InProcessMemo;
 using nimblecas::is_memoizable_status;
 using nimblecas::MathError;
-using nimblecas::MemoStats;
 using nimblecas::Payload;
 using nimblecas::Result;
 using nimblecas::SgeeDistributedExecutor;
@@ -954,7 +952,7 @@ auto main() -> int {
                   Result<TaskRunResult> res1_res = nimblecas::make_error<TaskRunResult>(MathError::not_implemented);
                   Result<TaskRunResult> res2_res = nimblecas::make_error<TaskRunResult>(MathError::not_implemented);
 
-                  std::thread thread1([&]() {
+                  std::thread thread1([&] {
                       FakeBrokerPort port1;
                       InMemoryResultChannel chan1;
                       SgeeExecutorConfig cfg1;
@@ -964,7 +962,7 @@ auto main() -> int {
                       res1_res = exec1.run(g1);
                   });
 
-                  std::thread thread2([&]() {
+                  std::thread thread2([&] {
                       FakeBrokerPort port2;
                       InMemoryResultChannel chan2;
                       SgeeExecutorConfig cfg2;

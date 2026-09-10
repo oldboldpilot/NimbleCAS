@@ -16,9 +16,7 @@ import nimblecas.taskdag_sgee;
 import nimblecas.testing;
 
 using nimblecas::Cnf;
-using nimblecas::cdcl;
 using nimblecas::dpll;
-using nimblecas::Executor;
 using nimblecas::local_parallel_executor;
 using nimblecas::MathError;
 using nimblecas::Payload;

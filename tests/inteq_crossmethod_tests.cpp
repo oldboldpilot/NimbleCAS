@@ -33,7 +33,6 @@ using nimblecas::fredholm2_separable;
 using nimblecas::ham_solve;
 using nimblecas::hpm_solve;
 using nimblecas::IntegralOperator;
-using nimblecas::MathError;
 using nimblecas::Nonlinearity;
 using nimblecas::Polynomial;
 using nimblecas::Rational;

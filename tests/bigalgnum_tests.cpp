@@ -17,7 +17,6 @@ import nimblecas.bigratpoly;
 import nimblecas.bigalgnum;
 import nimblecas.testing;
 
-using nimblecas::BigAlgebraicNumber;
 using nimblecas::BigNumberField;
 using nimblecas::BigRational;
 using nimblecas::BigRationalPoly;

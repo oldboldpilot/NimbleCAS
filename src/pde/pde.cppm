@@ -558,7 +558,7 @@ auto burgers(Rational viscosity, const RationalPoly& phi, std::size_t order)
         }
         return series_scale(*prod, Rational::from_int(-1));
     };
-    return solve_nonlinear_evolution_pde(heat_operator(std::move(viscosity)),
+    return solve_nonlinear_evolution_pde(heat_operator(viscosity),
                                          std::move(convective), phi, order);
 }
 
@@ -567,7 +567,7 @@ auto reaction_diffusion_quadratic(Rational diffusivity, const RationalPoly& phi,
     // N[u] = u^2: the truncated Cauchy square of the series.
     TimeSeriesOperator square = [](const std::vector<RationalPoly>& u)
         -> Result<std::vector<RationalPoly>> { return series_product(u, u); };
-    return solve_nonlinear_evolution_pde(heat_operator(std::move(diffusivity)),
+    return solve_nonlinear_evolution_pde(heat_operator(diffusivity),
                                          std::move(square), phi, order);
 }
 

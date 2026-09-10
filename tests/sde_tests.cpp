@@ -26,7 +26,6 @@ using nimblecas::stochastic_heun;
 using nimblecas::tamed_euler;
 using nimblecas::terminal_moments_scheme;
 // Jump-diffusion and drift-implicit (theta) additions under test.
-using nimblecas::EnsembleEstimate;
 using nimblecas::JumpSpec;
 using nimblecas::jump_euler_maruyama;
 using nimblecas::jump_theta_euler;

@@ -54,11 +54,11 @@ enum class SeriesKind : std::uint8_t { line, scatter };
 // optional ranges emit `[lo,hi]` when set and `null` when absent; when present they
 // must be finite (domain_error otherwise).
 struct PlotSpecOptions {
-    std::string title = "";
-    std::string xLabel = "";
-    std::string yLabel = "";
+    std::string title;
+    std::string xLabel;
+    std::string yLabel;
     std::string color = "#1f77b4";  // default series colour (a valid #rrggbb)
-    std::string label = "";
+    std::string label;
     std::optional<std::pair<double, double>> xRange = std::nullopt;
     std::optional<std::pair<double, double>> yRange = std::nullopt;
 };
@@ -67,7 +67,7 @@ struct PlotSpecOptions {
 // produced. xs.size() must equal ys.size() and all values must be finite.
 struct Series {
     SeriesKind kind = SeriesKind::line;
-    std::string label = "";
+    std::string label;
     std::string color = "#1f77b4";
     std::vector<double> xs{};
     std::vector<double> ys{};

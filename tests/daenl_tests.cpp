@@ -34,7 +34,6 @@ import nimblecas.dae;
 import nimblecas.daenl;
 import nimblecas.testing;
 
-using nimblecas::DaeSolution;
 using nimblecas::Expr;
 using nimblecas::MathError;
 using nimblecas::Rational;

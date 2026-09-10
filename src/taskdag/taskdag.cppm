@@ -126,7 +126,7 @@ private:
         }
         // The prefix must be <domain>.<operation> — require the '.' separator so the grammar the
         // docs advertise is actually enforced (e.g. "poly_eval/v1" without a domain is rejected).
-        if (id.substr(0, v_pos).find('.') == std::string_view::npos) {
+        if (!id.substr(0, v_pos).contains('.')) {
             return false;
         }
         const std::string_view ver = id.substr(v_pos + 2);

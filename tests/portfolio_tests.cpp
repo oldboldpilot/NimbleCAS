@@ -13,7 +13,6 @@ import nimblecas.portfolio;
 import nimblecas.testing;
 
 using namespace nimblecas::portfolio;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

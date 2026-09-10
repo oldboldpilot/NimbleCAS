@@ -10,13 +10,10 @@ import nimblecas.mechanics;
 import nimblecas.testing;
 
 using nimblecas::action_integral;
-using nimblecas::ActionIntegral;
 using nimblecas::Coordinates;
 using nimblecas::cyclic_coordinates;
 using nimblecas::Expr;
 using nimblecas::hamilton_equations;
-using nimblecas::Hamiltonian;
-using nimblecas::HamiltonSystem;
 using nimblecas::is_constant_of_motion;
 using nimblecas::legendre_transform;
 using nimblecas::MathError;

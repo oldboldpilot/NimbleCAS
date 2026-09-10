@@ -12,7 +12,6 @@ import nimblecas.mmstrat;
 import nimblecas.testing;
 
 using namespace nimblecas::mmstrat;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

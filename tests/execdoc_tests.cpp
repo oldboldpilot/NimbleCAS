@@ -10,7 +10,6 @@ import nimblecas.execdoc;
 import nimblecas.testing;
 
 using nimblecas::Expr;
-using nimblecas::MathError;
 using nimblecas::simplify;
 using nimblecas::to_latex;
 using nimblecas::execdoc::CellResult;
@@ -30,7 +29,7 @@ namespace {
 }
 
 [[nodiscard]] auto contains(std::string_view haystack, std::string_view needle) -> bool {
-    return haystack.find(needle) != std::string_view::npos;
+    return haystack.contains(needle);
 }
 
 }  // namespace

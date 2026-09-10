@@ -38,7 +38,7 @@ struct PlotOptions {
     int height = 480;
     int margin = 40;
     std::string stroke = "black";
-    std::string title = "";
+    std::string title;
     bool axes = true;
 };
 

@@ -10,11 +10,9 @@ import nimblecas.stats;
 import nimblecas.stochastic;
 import nimblecas.testing;
 
-using nimblecas::AbsorbingChain;
 using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::Rational;
-using nimblecas::Spectrum;
 using nimblecas::StabilityCertificate;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;

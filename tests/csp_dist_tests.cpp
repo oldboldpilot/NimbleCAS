@@ -20,7 +20,6 @@ import nimblecas.testing;
 using nimblecas::as_csp;
 using nimblecas::backtracking_search;
 using nimblecas::ConstraintKind;
-using nimblecas::Executor;
 using nimblecas::FakeBrokerPort;
 using nimblecas::InMemoryResultChannel;
 using nimblecas::local_parallel_executor;

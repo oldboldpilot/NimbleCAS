@@ -16,7 +16,6 @@ import nimblecas.finance;
 import nimblecas.testing;
 
 using nimblecas::BigRational;
-using nimblecas::MathError;
 using namespace nimblecas::finance;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;

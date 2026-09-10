@@ -14,7 +14,6 @@ import nimblecas.testing;
 using nimblecas::integrate_rational;
 using nimblecas::MathError;
 using nimblecas::Polynomial;
-using nimblecas::Rational;
 using nimblecas::RationalIntegral;
 using nimblecas::RationalPoly;
 using nimblecas::testing::TestContext;

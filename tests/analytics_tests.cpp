@@ -13,7 +13,6 @@ import nimblecas.analytics;
 import nimblecas.testing;
 
 using namespace nimblecas::analytics;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

@@ -432,7 +432,7 @@ void normal_transform_scalar(const std::uint64_t* bits, double* out, std::size_t
     double* tdst[kFlush];            // destination slot for each deferred tail result
     double tsign[kFlush];            // +1 lower tail, -1 upper tail
     std::size_t tc = 0;
-    const auto flush = [&]() {
+    const auto flush = [&] {
         simd::log_into(std::span<const double>(tp, tc), std::span<double>(tlg, tc));
         for (std::size_t t = 0; t < tc; ++t) {
             *tdst[t] = tsign[t] * acklam_tail(std::sqrt(-2.0 * tlg[t]));

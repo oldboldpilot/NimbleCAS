@@ -27,7 +27,6 @@ using nimblecas::sat_compile::is_compilable_for;
 using nimblecas::sat_compile::reference_walksat;
 using nimblecas::sat_compile::SlsVariant;
 using nimblecas::sat_compile::Strategy;
-using nimblecas::sat_compile::WalkResult;
 using nimblecas::sat_compile::max_variables;
 using nimblecas::sat_compile::model_of;
 using nimblecas::sat_compile::reference_solve;
@@ -256,17 +255,17 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("puzzle_solve_range") != std::string::npos,
+                  t.expect(src->contains("puzzle_solve_range"),
                            "the range entry point is emitted under the requested name");
-                  t.expect(src->find("puzzle_solve(") != std::string::npos,
+                  t.expect(src->contains("puzzle_solve("),
                            "the whole-space entry point is emitted");
-                  t.expect(src->find("puzzle_solve_parallel") != std::string::npos,
+                  t.expect(src->contains("puzzle_solve_parallel"),
                            "the threaded entry point is emitted");
-                  t.expect(src->find("puzzle_solve_range_simd") != std::string::npos,
+                  t.expect(src->contains("puzzle_solve_range_simd"),
                            "the SIMD range entry point is emitted");
-                  t.expect(src->find("nc_puzzle_none") != std::string::npos,
+                  t.expect(src->contains("nc_puzzle_none"),
                            "the no-solution sentinel is emitted");
-                  t.expect(src->find("nc_puzzle_blocks = 1ULL") != std::string::npos,
+                  t.expect(src->contains("nc_puzzle_blocks = 1ULL"),
                            "three variables need exactly one block of sixty-four assignments");
               })
         .test("cpp_emission_is_standalone_and_free_of_nimblecas_headers",
@@ -278,12 +277,12 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("nimblecas") == std::string::npos ||
-                               src->find("#include \"nimblecas") == std::string::npos,
+                  t.expect(!src->contains("nimblecas") ||
+                               !src->contains("#include \"nimblecas"),
                            "the emitted code includes no NimbleCAS header");
-                  t.expect(src->find("import ") == std::string::npos,
+                  t.expect(!src->contains("import "),
                            "the emitted code imports no module, so it drops into any build");
-                  t.expect(src->find("#include <cstdint>") != std::string::npos,
+                  t.expect(src->contains("#include <cstdint>"),
                            "it includes what it actually needs");
               })
         .test("emission_can_omit_the_simd_and_threaded_paths",
@@ -297,11 +296,11 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("_simd") == std::string::npos,
+                  t.expect(!src->contains("_simd"),
                            "no SIMD path is emitted when it was not asked for");
-                  t.expect(src->find("jthread") == std::string::npos,
+                  t.expect(!src->contains("jthread"),
                            "no threading is emitted when it was not asked for");
-                  t.expect(src->find("formula_solve(") != std::string::npos,
+                  t.expect(src->contains("formula_solve("),
                            "the scalar entry point is still there");
               })
         .test("cuda_emission_contains_a_kernel_and_a_deterministic_reduction",
@@ -314,14 +313,14 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("__global__ void board_kernel") != std::string::npos,
+                  t.expect(src->contains("__global__ void board_kernel"),
                            "a kernel is emitted under the requested name");
-                  t.expect(src->find("atomicMin") != std::string::npos,
+                  t.expect(src->contains("atomicMin"),
                            "the reduction is a minimum, which is what makes the answer "
                            "independent of launch geometry");
-                  t.expect(src->find("board_solve_cuda") != std::string::npos,
+                  t.expect(src->contains("board_solve_cuda"),
                            "a host wrapper is emitted");
-                  t.expect(src->find("__device__") != std::string::npos,
+                  t.expect(src->contains("__device__"),
                            "the block evaluator is a device function");
               })
         .test("triton_emission_contains_a_jit_kernel_and_a_host_resolver",
@@ -334,16 +333,16 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("@triton.jit") != std::string::npos,
+                  t.expect(src->contains("@triton.jit"),
                            "the kernel is decorated for Triton");
-                  t.expect(src->find("def grid_kernel") != std::string::npos,
+                  t.expect(src->contains("def grid_kernel"),
                            "the kernel takes the requested name");
-                  t.expect(src->find("tl.atomic_min") != std::string::npos,
+                  t.expect(src->contains("tl.atomic_min"),
                            "the reduction is a minimum");
-                  t.expect(src->find("def grid_block_mask") != std::string::npos,
+                  t.expect(src->contains("def grid_block_mask"),
                            "a host-side block evaluator is emitted, since Triton has no "
                            "count-trailing-zeros to resolve the lane with");
-                  t.expect(src->find("def grid_solve") != std::string::npos,
+                  t.expect(src->contains("def grid_solve"),
                            "a host entry point is emitted");
               })
         .test("every_target_bakes_in_every_clause",
@@ -400,7 +399,7 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("~(0xAAAAAAAAAAAAAAAAULL)") != std::string::npos,
+                  t.expect(src->contains("~(0xAAAAAAAAAAAAAAAAULL)"),
                            "negating variable 1 complements its lane pattern");
               })
         .test("a_variable_beyond_the_sixth_is_emitted_as_a_block_indexed_mask",
@@ -417,11 +416,11 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("(0ULL - ((b >> 0) & 1ULL))") != std::string::npos,
+                  t.expect(src->contains("(0ULL - ((b >> 0) & 1ULL))"),
                            "variable 7 reads bit 0 of the block index");
-                  t.expect(src->find("(0ULL - ((b >> 1) & 1ULL))") != std::string::npos,
+                  t.expect(src->contains("(0ULL - ((b >> 1) & 1ULL))"),
                            "variable 8 reads bit 1 of the block index");
-                  t.expect(src->find("nc_formula_blocks = 4ULL") != std::string::npos,
+                  t.expect(src->contains("nc_formula_blocks = 4ULL"),
                            "eight variables need exactly four blocks");
               })
         .test("two_emissions_share_no_unprefixed_symbol",
@@ -445,16 +444,16 @@ auto main() -> int {
                   // Anything the emitter declares begins "nc_" or the entry name; the shared
                   // helpers are the ones that used to escape that rule.
                   for (const std::string_view bare : {"nc_u64x8", "nc_splat("}) {
-                      t.expect(sa->find(bare) == std::string::npos,
+                      t.expect(!sa->contains(bare),
                                "no unprefixed helper is declared in the first emission");
-                      t.expect(sb->find(bare) == std::string::npos,
+                      t.expect(!sb->contains(bare),
                                "nor in the second");
                   }
-                  t.expect(sa->find("nc_alpha_u64x8") != std::string::npos,
+                  t.expect(sa->contains("nc_alpha_u64x8"),
                            "the vector type carries the first entry name");
-                  t.expect(sb->find("nc_beta_u64x8") != std::string::npos,
+                  t.expect(sb->contains("nc_beta_u64x8"),
                            "and the second carries its own");
-                  t.expect(sa->find("nc_beta_") == std::string::npos,
+                  t.expect(!sa->contains("nc_beta_"),
                            "neither emission mentions the other's names");
               })
         .test("compile_rejects_an_entry_name_that_is_not_an_identifier",
@@ -729,19 +728,19 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("wsolve_solve_range") != std::string::npos,
+                  t.expect(src->contains("wsolve_solve_range"),
                            "the range entry point is emitted");
-                  t.expect(src->find("wsolve_solve_parallel") != std::string::npos,
+                  t.expect(src->contains("wsolve_solve_parallel"),
                            "the threaded entry point is emitted");
-                  t.expect(src->find("struct wsolve_result") != std::string::npos,
+                  t.expect(src->contains("struct wsolve_result"),
                            "the result type is emitted");
-                  t.expect(src->find("nc_wsolve_lits") != std::string::npos,
+                  t.expect(src->contains("nc_wsolve_lits"),
                            "the formula is baked into a literal table");
-                  t.expect(src->find("nc_wsolve_occp") != std::string::npos &&
-                               src->find("nc_wsolve_occn") != std::string::npos,
+                  t.expect(src->contains("nc_wsolve_occp") &&
+                               src->contains("nc_wsolve_occn"),
                            "occurrences are split by sign, which is what makes the break count "
                            "one contiguous scan");
-                  t.expect(src->find("nc_wsolve_break_count") != std::string::npos,
+                  t.expect(src->contains("nc_wsolve_break_count"),
                            "the break-count helper is emitted");
               })
         .test("walksat_cuda_emission_uses_managed_tables_and_one_thread_per_walker",
@@ -755,17 +754,17 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("__global__ void gwalk_kernel") != std::string::npos,
+                  t.expect(src->contains("__global__ void gwalk_kernel"),
                            "a kernel is emitted");
-                  t.expect(src->find("__managed__") != std::string::npos,
+                  t.expect(src->contains("__managed__"),
                            "the tables are managed memory -- a real formula overflows the 64 KB "
                            "constant bank, and the host needs to read them too");
-                  t.expect(src->find("__constant__") == std::string::npos,
+                  t.expect(!src->contains("__constant__"),
                            "and specifically not constant memory");
-                  t.expect(src->find("atomicMin") != std::string::npos,
+                  t.expect(src->contains("atomicMin"),
                            "the winner is reduced by minimum, so it is the lowest walker rather "
                            "than whichever warp finished first");
-                  t.expect(src->find("gwalk_scratch_words") != std::string::npos,
+                  t.expect(src->contains("gwalk_scratch_words"),
                            "the per-walker scratch size is exposed, since the host allocates it");
               })
         .test("walksat_triton_emission_is_a_scorer_and_says_so",
@@ -779,12 +778,12 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("@triton.jit") != std::string::npos, "a kernel is emitted");
-                  t.expect(src->find("tscore_score_kernel") != std::string::npos,
+                  t.expect(src->contains("@triton.jit"), "a kernel is emitted");
+                  t.expect(src->contains("tscore_score_kernel"),
                            "it is a scorer");
-                  t.expect(src->find("tscore_sample_and_score") != std::string::npos,
+                  t.expect(src->contains("tscore_sample_and_score"),
                            "with a host entry point that draws and scores samples");
-                  t.expect(src->find("deliberately NOT the walk") != std::string::npos,
+                  t.expect(src->contains("deliberately NOT the walk"),
                            "and the emission says plainly that the walk belongs on CUDA, rather "
                            "than pretending a random walk suits a tensor kernel");
               })
@@ -828,9 +827,9 @@ auto main() -> int {
                       if (!src.has_value()) {
                           continue;
                       }
-                      t.expect(src->find(c.marker) != std::string::npos,
+                      t.expect(src->contains(c.marker),
                                "the emitted source names the rule it implements");
-                      t.expect(src->find("_choose(") != std::string::npos,
+                      t.expect(src->contains("_choose("),
                                "and routes the decision through the shared choice function");
                   }
               })
@@ -847,10 +846,9 @@ auto main() -> int {
                       auto src = compile(simple_sat(), opts);
                       t.expect(src.has_value(), "the variant compiles");
                       if (src.has_value()) {
-                          t.expect(src->find("AdaptNovelty+") == std::string::npos,
+                          t.expect(!src->contains("AdaptNovelty+"),
                                    "a non-adaptive variant emits no noise schedule");
-                          t.expect(src->find("unsigned noise = noise_percent;") !=
-                                       std::string::npos,
+                          t.expect(src->contains("unsigned noise = noise_percent;"),
                                    "and takes the caller's noise as given");
                       }
                   }
@@ -862,10 +860,10 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("unsigned noise = 0u;") != std::string::npos,
+                  t.expect(src->contains("unsigned noise = 0u;"),
                            "it starts from pure greed, as the published algorithm does, rather "
                            "than from the caller's setting");
-                  t.expect(src->find("best_unsat = now_unsat;") != std::string::npos,
+                  t.expect(src->contains("best_unsat = now_unsat;"),
                            "and RESETS its reference count when it adapts -- without that the "
                            "decay is unreachable once the search plateaus and the noise ratchets "
                            "to its ceiling, which measured 0 solves out of 40");
@@ -884,7 +882,7 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("s->age[v] = 0ULL;") != std::string::npos,
+                  t.expect(src->contains("s->age[v] = 0ULL;"),
                            "ages are cleared inside the walk, not only at allocation");
                   const std::size_t walk_at = src->find("_walk(");
                   const std::size_t reset_at = src->find("s->age[v] = 0ULL;");
@@ -905,9 +903,9 @@ auto main() -> int {
                       auto src = compile(simple_sat(), opts);
                       t.expect(src.has_value(), "the variant compiles");
                       if (src.has_value()) {
-                          t.expect(src->find("_make_count(") != std::string::npos,
+                          t.expect(src->contains("_make_count("),
                                    "a make count is emitted");
-                          t.expect(src->find("score[i] = (int)") != std::string::npos,
+                          t.expect(src->contains("score[i] = (int)"),
                                    "and the ranking is a score rather than a raw break count");
                       }
                   }
@@ -915,7 +913,7 @@ auto main() -> int {
                   skc.strategy = Strategy::walksat;
                   skc.variant = SlsVariant::skc;
                   auto src = compile(simple_sat(), skc);
-                  t.expect(src.has_value() && src->find("score[i] = (int)") == std::string::npos,
+                  t.expect(src.has_value() && !src->contains("score[i] = (int)"),
                            "SKC ranks on break alone, which is what SKC is");
               })
         .test("probsat_emits_no_noise_parameter_and_no_freebie_case",
@@ -930,9 +928,9 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->find("weight[i] = 1ULL <<") != std::string::npos,
+                  t.expect(src->contains("weight[i] = 1ULL <<"),
                            "weights decay with the break count");
-                  t.expect(src->find("freebie") == std::string::npos,
+                  t.expect(!src->contains("freebie"),
                            "and there is no special case for a free move");
               })
         .test("every_variant_still_refuses_what_it_should",

@@ -31,7 +31,6 @@ using nimblecas::is_nilpotent;
 using nimblecas::is_symmetric;
 using nimblecas::is_tridiagonal;
 using nimblecas::is_upper_triangular;
-using nimblecas::LpSolution;
 using nimblecas::LpStatus;
 using nimblecas::lu_decompose;
 using nimblecas::MathError;
@@ -82,7 +81,7 @@ namespace {
     std::vector<std::vector<Rational>> rows;
     rows.reserve(entries.size());
     for (auto& e : entries) {
-        rows.push_back({std::move(e)});
+        rows.push_back({e});
     }
     return Matrix::from_rows(std::move(rows)).value();
 }

@@ -22,7 +22,6 @@ using nimblecas::a_star;
 using nimblecas::bfs;
 using nimblecas::iterative_deepening_dfs;
 using nimblecas::dijkstra;
-using nimblecas::Executor;
 using nimblecas::local_parallel_executor;
 using nimblecas::MathError;
 using nimblecas::parallel_multistart_tabu;
@@ -1136,7 +1135,7 @@ auto main() -> int {
         .test("distributed_connected_components_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_connected_components;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(12);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1187,7 +1186,7 @@ auto main() -> int {
         .test("distributed_strongly_connected_components_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_strongly_connected_components;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(8);
                       auto const add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1234,7 +1233,7 @@ auto main() -> int {
         .test("distributed_topological_order_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_topological_order;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(7);
                       auto const add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1275,7 +1274,7 @@ auto main() -> int {
         .test("distributed_k_core_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_k_core;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(10);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1322,7 +1321,7 @@ auto main() -> int {
         .test("distributed_triangle_counts_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_triangle_counts;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(8);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1396,7 +1395,7 @@ auto main() -> int {
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_minimum_spanning_forest;
                   using nimblecas::search_dist::MstEdge;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
@@ -1438,7 +1437,7 @@ auto main() -> int {
         .test("connected_components_on_two_disjoint_triangles_has_exact_labels",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_connected_components;
-                  [[nodiscard]] auto const make_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1472,7 +1471,7 @@ auto main() -> int {
         .test("connected_components_cross_checked_against_serial_path_reachability",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_connected_components;
-                  [[nodiscard]] auto const make_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
@@ -1893,7 +1892,7 @@ auto main() -> int {
         .test("widest_path_width_agrees_with_minimum_edge_on_returned_path",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_widest_path;
-                  [[nodiscard]] auto const make_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
                       auto const add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
@@ -2027,7 +2026,7 @@ auto main() -> int {
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_minimum_spanning_forest;
                   using nimblecas::search_dist::MstEdge;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
@@ -2065,7 +2064,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_connected_components;
                   using nimblecas::search_dist::distributed_minimum_spanning_forest;
                   using nimblecas::search_dist::MstEdge;
-                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = [] -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(9);
                       auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {

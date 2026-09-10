@@ -1119,7 +1119,7 @@ auto nelder_mead(Objective f, std::span<const double> x0, Options opts)
         verts.push_back(std::move(v));
     }
 
-    auto const order = [&]() -> std::vector<std::size_t> {
+    auto const order = [&] -> std::vector<std::size_t> {
         std::vector<std::size_t> idx(n + 1);
         std::iota(idx.begin(), idx.end(), std::size_t{0});
         std::ranges::sort(idx, [&](std::size_t a, std::size_t b) { return fval[a] < fval[b]; });

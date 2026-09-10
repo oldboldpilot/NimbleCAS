@@ -18,7 +18,6 @@ using nimblecas::smc::antithetic_estimate;
 using nimblecas::smc::bootstrap_particle_filter;
 using nimblecas::smc::control_variate_estimate;
 using nimblecas::smc::effective_sample_size;
-using nimblecas::smc::Estimate;
 using nimblecas::smc::multinomial_resample;
 using nimblecas::smc::plain_estimate;
 using nimblecas::smc::ResampleScheme;

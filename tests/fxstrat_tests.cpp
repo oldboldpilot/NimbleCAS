@@ -12,7 +12,6 @@ import nimblecas.fxstrat;
 import nimblecas.testing;
 
 using namespace nimblecas::fxstrat;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

@@ -14,7 +14,6 @@ import nimblecas.testing;
 using nimblecas::is_banded;
 using nimblecas::is_diagonal;
 using nimblecas::is_identity;
-using nimblecas::is_lower_hessenberg;
 using nimblecas::is_lower_triangular;
 using nimblecas::is_skew_symmetric;
 using nimblecas::is_symmetric;

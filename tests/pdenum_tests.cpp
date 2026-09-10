@@ -15,11 +15,9 @@ import nimblecas.pdenum;
 import nimblecas.testing;
 
 using nimblecas::BoundaryCondition;
-using nimblecas::DiffScheme;
 using nimblecas::Grid1D;
 using nimblecas::Grid2D;
 using nimblecas::MathError;
-using nimblecas::Matrix;
 using nimblecas::Mesh1D;
 using nimblecas::Rational;
 using nimblecas::RationalPoly;

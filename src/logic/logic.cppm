@@ -2286,7 +2286,7 @@ struct SubResult {
                                     SearchCtx& ctx) -> Result<std::optional<Substitution>> {
     using Answer = std::optional<Substitution>;
     const auto ok = [](Substitution s) -> Result<Answer> { return Answer(std::move(s)); };
-    const auto fail = []() -> Result<Answer> { return Answer(std::nullopt); };
+    const auto fail = [] -> Result<Answer> { return Answer(std::nullopt); };
     const auto err = [](MathError e) -> Result<Answer> { return make_error<Answer>(e); };
 
     // Every builtin below works on RESOLVED arguments: a builtin inspects the shape of its
@@ -3414,7 +3414,7 @@ auto sld_search(Database& db, const GoalList& goals, const Substitution& sub,
             for (std::size_t i = renamed.body.size(); i-- > 0;) {
                 body = i + 1 == renamed.body.size()
                            ? renamed.body[i]
-                           : make_compound(",", {renamed.body[i], std::move(body)});
+                           : make_compound(",", {renamed.body[i], body});
             }
             auto v = unify_terms(args[1], body, *u);
             if (v) {

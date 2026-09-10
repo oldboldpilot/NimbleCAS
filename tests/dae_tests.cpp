@@ -23,15 +23,12 @@ import nimblecas.dae;
 import nimblecas.testing;
 
 using nimblecas::ConsistencyPolicy;
-using nimblecas::DaeSolution;
 using nimblecas::linear_dae_index;
 using nimblecas::linear_dae_is_consistent;
-using nimblecas::LinearDaeSolution;
 using nimblecas::Matrix;
 using nimblecas::PowerSeries;
 using nimblecas::project_to_consistent;
 using nimblecas::Rational;
-using nimblecas::SemiExplicitDaeSolution;
 using nimblecas::solve_linear_dae;
 using nimblecas::solve_linear_index1_dae;
 using nimblecas::solve_semiexplicit_dae;

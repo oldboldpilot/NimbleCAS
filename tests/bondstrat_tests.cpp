@@ -12,7 +12,6 @@ import nimblecas.bondstrat;
 import nimblecas.testing;
 
 using namespace nimblecas::bondstrat;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

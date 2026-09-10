@@ -13,7 +13,6 @@ import nimblecas.testing;
 
 using nimblecas::apply_substitution;
 using nimblecas::atom_of;
-using nimblecas::Clause;
 using nimblecas::compound_of;
 using nimblecas::int_of;
 using nimblecas::is_atom;
@@ -34,7 +33,6 @@ using nimblecas::Term;
 using nimblecas::to_string;
 using nimblecas::logic_parser::atom_needs_quotes;
 using nimblecas::logic_parser::OperatorTable;
-using nimblecas::logic_parser::OpType;
 using nimblecas::logic_parser::parse_clause;
 using nimblecas::logic_parser::parse_program;
 using nimblecas::logic_parser::parse_query;

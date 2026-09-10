@@ -225,10 +225,10 @@ auto main() -> int {
                   PlotOptions opt{};
                   opt.title = "payoff";
                   auto svg = payoff_diagram_svg(atm(), 50.0, 150.0, 64, opt);
-                  t.expect(svg.has_value() && svg->find("<svg") != std::string::npos,
+                  t.expect(svg.has_value() && svg->contains("<svg"),
                            "payoff diagram is SVG");
                   auto dens = terminal_density_svg(atm(), 40.0, 200.0, 128, opt);
-                  t.expect(dens.has_value() && dens->find("<svg") != std::string::npos,
+                  t.expect(dens.has_value() && dens->contains("<svg"),
                            "terminal density is SVG");
                   auto const curve = price_vs_spot_svg(atm(), 50.0, 150.0, 64, opt);
                   t.expect(curve.has_value(), "price-vs-spot curve renders");

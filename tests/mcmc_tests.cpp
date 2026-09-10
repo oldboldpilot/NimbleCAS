@@ -13,7 +13,6 @@ import nimblecas.testing;
 using nimblecas::chain_mean;
 using nimblecas::chain_variance;
 using nimblecas::MathError;
-using nimblecas::McmcResult;
 using nimblecas::metropolis_hastings;
 using nimblecas::run_parallel_chains;
 using nimblecas::testing::TestContext;

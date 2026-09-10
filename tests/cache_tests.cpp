@@ -15,7 +15,7 @@ using nimblecas::testing::TestSuite;
 
 namespace {
 auto constant_fn(Expr value) -> std::function<Result<Expr>()> {
-    return [value]() -> Result<Expr> { return value; };
+    return [value] -> Result<Expr> { return value; };
 }
 }  // namespace
 
@@ -25,7 +25,7 @@ auto main() -> int {
               [](TestContext& t) {
                   ExprMemo memo;
                   std::atomic<int> calls{0};
-                  auto const compute = [&]() -> Result<Expr> {
+                  auto const compute = [&] -> Result<Expr> {
                       calls.fetch_add(1, std::memory_order_relaxed);
                       return Expr::symbol("result");
                   };
@@ -51,7 +51,7 @@ auto main() -> int {
               [](TestContext& t) {
                   ExprMemo memo;
                   auto const key = Expr::symbol("z");
-                  auto r = memo.get_or_compute(key, []() -> Result<Expr> {
+                  auto r = memo.get_or_compute(key, [] -> Result<Expr> {
                       return nimblecas::make_error<Expr>(nimblecas::MathError::overflow);
                   });
                   t.expect(!r.has_value() && r.error() == nimblecas::MathError::overflow,
@@ -65,7 +65,7 @@ auto main() -> int {
                   ExprMemo memo;
                   const auto key = Expr::symbol("x").pow(Expr::integer(2));
                   std::atomic<int> calls{0};
-                  auto compute = [&]() -> Result<Expr> {
+                  auto compute = [&] -> Result<Expr> {
                       calls.fetch_add(1, std::memory_order_relaxed);
                       std::this_thread::sleep_for(std::chrono::milliseconds(2));  // widen race
                       return Expr::integer(42);

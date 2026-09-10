@@ -192,7 +192,7 @@ public:
     using ClockFn = std::function<std::uint64_t()>;
 
     explicit FakeBrokerPort(ClockFn clock = nullptr)
-        : clock_(clock ? std::move(clock) : [this]() { return current_time_ms_.load(); }) {}
+        : clock_(clock ? std::move(clock) : [this] { return current_time_ms_.load(); }) {}
 
     // current_time_ms_ is atomic so the default clock lambda can read it lock-free from any thread
     // (including now_ms() called inside a mutex-held lease()/heartbeat()) without racing the writers
@@ -816,7 +816,7 @@ public:
     // test suite uses so it can inspect/fault the port directly.
     SgeeDistributedExecutor(SgeeExecutorConfig cfg, BrokerPort& port, ResultChannel& results)
         : cfg_(std::move(cfg)),
-          make_transport_([&port, &results]() -> Result<RunTransport> {
+          make_transport_([&port, &results] -> Result<RunTransport> {
               return RunTransport{.port = &port, .channel = &results};
           }) {}
 
@@ -1212,7 +1212,7 @@ auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& r
 
             HeartbeatGuard(BrokerPort& p, std::uint64_t q, std::uint64_t tok, std::uint64_t interval)
                 : port(p), qid(q), token(tok), interval_ms(interval) {
-                thread = std::thread([this]() {
+                thread = std::thread([this] {
                     std::unique_lock lock(mtx);
                     // INTERRUPTIBLE wait: wake the instant the destructor clears `active` instead of
                     // sleeping out the whole interval. An uninterruptible sleep_for here would stall
@@ -1410,7 +1410,7 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             };
             pumps.threads.emplace_back(
                 [&port, &results, reg = cfg_.registry, pump_cfg,
-                 token = pumps.stop.get_token()]() {
+                 token = pumps.stop.get_token()] {
                     run_worker_pump(port, *reg, results, pump_cfg, token);
                 });
         }
@@ -1682,10 +1682,9 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                                     .recoveries = info.recoveries + 1
                                 });
                             continue;
-                        } else {
-                            // Recoveries exhausted or bound == 0: honest abort!
-                            return make_error<TaskRunResult>(MathError::distributed_error);
                         }
+                        // Recoveries exhausted or bound == 0: honest abort!
+                        return make_error<TaskRunResult>(MathError::distributed_error);
                     }
 
                     const Payload& res_bytes = **res_bytes_res;

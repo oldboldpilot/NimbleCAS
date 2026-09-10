@@ -28,13 +28,11 @@ import nimblecas.logic_parser;
 import nimblecas.testing;
 
 using nimblecas::Clause;
-using nimblecas::make_atom;
 using nimblecas::make_compound;
 using nimblecas::make_int;
 using nimblecas::make_var;
 using nimblecas::MathError;
 using nimblecas::Program;
-using nimblecas::Term;
 using nimblecas::logic_compile::ArgMode;
 using nimblecas::logic_compile::compile;
 using nimblecas::logic_compile::CompileOptions;
@@ -166,31 +164,27 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("using nc_int = std::int64_t;") != std::string::npos,
+                  t.expect(src->contains("using nc_int = std::int64_t;"),
                            "64-bit preamble defines nc_int as std::int64_t");
-                  t.expect(src->find("auto nc_lit(long long v) -> nc_int") != std::string::npos,
+                  t.expect(src->contains("auto nc_lit(long long v) -> nc_int"),
                            "literal constructor nc_lit is emitted");
-                  t.expect(src->find("auto nc_add(nc_int a, nc_int b, nc_int& r) -> bool") !=
-                               std::string::npos,
+                  t.expect(src->contains("auto nc_add(nc_int a, nc_int b, nc_int& r) -> bool"),
                            "checked addition helper is emitted");
-                  t.expect(src->find("auto nc_sub(nc_int a, nc_int b, nc_int& r) -> bool") !=
-                               std::string::npos,
+                  t.expect(src->contains("auto nc_sub(nc_int a, nc_int b, nc_int& r) -> bool"),
                            "checked subtraction helper is emitted");
-                  t.expect(src->find("auto nc_mul(nc_int a, nc_int b, nc_int& r) -> bool") !=
-                               std::string::npos,
+                  t.expect(src->contains("auto nc_mul(nc_int a, nc_int b, nc_int& r) -> bool"),
                            "checked multiplication helper is emitted");
-                  t.expect(src->find("std::numeric_limits<nc_int>::max()") != std::string::npos,
+                  t.expect(src->contains("std::numeric_limits<nc_int>::max()"),
                            "pre-checked overflow guards check std::numeric_limits max");
-                  t.expect(src->find("[[nodiscard]] inline auto p_eval_poly_2(nc_int a0, nc_int& a1) -> bool") !=
-                               std::string::npos,
+                  t.expect(src->contains("[[nodiscard]] inline auto p_eval_poly_2(nc_int a0, nc_int& a1) -> bool"),
                            "entry predicate has nodiscard trailing return type and moded parameters");
-                  t.expect(src->find("#include <cstdint>") != std::string::npos,
+                  t.expect(src->contains("#include <cstdint>"),
                            "cstdint header is included for std::int64_t");
-                  t.expect(src->find("#include <limits>") != std::string::npos,
+                  t.expect(src->contains("#include <limits>"),
                            "limits header is included for std::numeric_limits");
-                  t.expect(src->find("nimblecas.bigint") == std::string::npos,
+                  t.expect(!src->contains("nimblecas.bigint"),
                            "64-bit build does not import bigint module");
-                  t.expect(src->find("// @author Olumuyiwa Oluwasanmi") != std::string::npos,
+                  t.expect(src->contains("// @author Olumuyiwa Oluwasanmi"),
                            "emitted file header preserves repository authorship");
               })
         .test("cpp_128bit_emission_emits_compiler_overflow_builtins_and_sizeof_guard",
@@ -210,24 +204,19 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("#if !defined(__SIZEOF_INT128__)") != std::string::npos,
+                  t.expect(src->contains("#if !defined(__SIZEOF_INT128__)"),
                            "128-bit preamble guards against compilers lacking __int128");
-                  t.expect(src->find("#error \"generated for 128-bit arithmetic, which this compiler does not provide\"") !=
-                               std::string::npos,
+                  t.expect(src->contains("#error \"generated for 128-bit arithmetic, which this compiler does not provide\""),
                            "unsupported compiler triggers documented compile-time error");
-                  t.expect(src->find("using nc_int = __int128;") != std::string::npos,
+                  t.expect(src->contains("using nc_int = __int128;"),
                            "128-bit nc_int alias is defined as __int128");
-                  t.expect(src->find("return !__builtin_add_overflow(a, b, &r);") !=
-                               std::string::npos,
+                  t.expect(src->contains("return !__builtin_add_overflow(a, b, &r);"),
                            "checked addition uses __builtin_add_overflow");
-                  t.expect(src->find("return !__builtin_sub_overflow(a, b, &r);") !=
-                               std::string::npos,
+                  t.expect(src->contains("return !__builtin_sub_overflow(a, b, &r);"),
                            "checked subtraction uses __builtin_sub_overflow");
-                  t.expect(src->find("return !__builtin_mul_overflow(a, b, &r);") !=
-                               std::string::npos,
+                  t.expect(src->contains("return !__builtin_mul_overflow(a, b, &r);"),
                            "checked multiplication uses __builtin_mul_overflow");
-                  t.expect(src->find("[[nodiscard]] inline auto p_eval_poly_2(") !=
-                               std::string::npos,
+                  t.expect(src->contains("[[nodiscard]] inline auto p_eval_poly_2("),
                            "entry predicate signature is emitted");
               })
         .test("cpp_arbitrary_width_emission_imports_bigint_module_and_delegates_to_bigint_methods",
@@ -247,24 +236,23 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("import std;\nimport nimblecas.core;\nimport nimblecas.bigint;\n") !=
-                               std::string::npos,
+                  t.expect(src->contains("import std;\nimport nimblecas.core;\nimport nimblecas.bigint;\n"),
                            "arbitrary-precision translation unit imports nimblecas.bigint module");
-                  t.expect(src->find("using nc_int = nimblecas::BigInt;") != std::string::npos,
+                  t.expect(src->contains("using nc_int = nimblecas::BigInt;"),
                            "nc_int is aliased to nimblecas::BigInt");
-                  t.expect(src->find("nimblecas::BigInt::from_i64") != std::string::npos,
+                  t.expect(src->contains("nimblecas::BigInt::from_i64"),
                            "integer literals are converted via BigInt::from_i64 factory");
-                  t.expect(src->find("r = a.add(b);") != std::string::npos,
+                  t.expect(src->contains("r = a.add(b);"),
                            "addition delegates to BigInt::add without redundant overflow checks");
-                  t.expect(src->find("r = a.subtract(b);") != std::string::npos,
+                  t.expect(src->contains("r = a.subtract(b);"),
                            "subtraction delegates to BigInt::subtract");
-                  t.expect(src->find("r = a.multiply(b);") != std::string::npos,
+                  t.expect(src->contains("r = a.multiply(b);"),
                            "multiplication delegates to BigInt::multiply");
-                  t.expect(src->find("r = a.negate();") != std::string::npos,
+                  t.expect(src->contains("r = a.negate();"),
                            "negation delegates to BigInt::negate");
-                  t.expect(src->find("a.divmod(b)") != std::string::npos,
+                  t.expect(src->contains("a.divmod(b)"),
                            "division delegates to BigInt::divmod");
-                  t.expect(src->find("#include <cstdint>") == std::string::npos,
+                  t.expect(!src->contains("#include <cstdint>"),
                            "modular translation unit does not include cstdint header");
               })
         .test("cuda_64bit_emission_emits_device_functions_and_global_batch_kernel",
@@ -284,20 +272,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("__device__ inline auto nc_add(") != std::string::npos,
+                  t.expect(src->contains("__device__ inline auto nc_add("),
                            "preamble helpers are decorated with __device__ inline");
-                  t.expect(src->find("__device__ inline auto p_eval_poly_2(") != std::string::npos,
+                  t.expect(src->contains("__device__ inline auto p_eval_poly_2("),
                            "predicate function is decorated with __device__ inline");
-                  t.expect(src->find("__global__ void p_eval_poly_2_batch(int n, unsigned char* ok, const nc_int* arg0, nc_int* arg1)") !=
-                               std::string::npos,
+                  t.expect(src->contains("__global__ void p_eval_poly_2_batch(int n, unsigned char* ok, const nc_int* arg0, nc_int* arg1)"),
                            "global batch kernel is emitted with exact parameter qualifiers");
-                  t.expect(src->find("const int i = blockIdx.x * blockDim.x + threadIdx.x;") !=
-                               std::string::npos,
+                  t.expect(src->contains("const int i = blockIdx.x * blockDim.x + threadIdx.x;"),
                            "batch kernel computes flat lane index from block and thread dimensions");
-                  t.expect(src->find("if (i >= n) { return; }") != std::string::npos,
+                  t.expect(src->contains("if (i >= n) { return; }"),
                            "batch kernel guards against thread indices exceeding batch length");
-                  t.expect(src->find("ok[i] = p_eval_poly_2(arg0[i], arg1[i]) ? 1 : 0;") !=
-                               std::string::npos,
+                  t.expect(src->contains("ok[i] = p_eval_poly_2(arg0[i], arg1[i]) ? 1 : 0;"),
                            "batch kernel invokes device predicate and records success in ok mask");
               })
         .test("cuda_128bit_emission_synthesises_128bit_types_for_device_functions",
@@ -317,12 +302,11 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("using nc_int = __int128;") != std::string::npos,
+                  t.expect(src->contains("using nc_int = __int128;"),
                            "CUDA 128-bit defines nc_int as __int128");
-                  t.expect(src->find("__device__ inline auto nc_add") != std::string::npos,
+                  t.expect(src->contains("__device__ inline auto nc_add"),
                            "CUDA 128-bit helpers are marked __device__ inline");
-                  t.expect(src->find("__global__ void p_eval_poly_2_batch(int n, unsigned char* ok, const nc_int* arg0, nc_int* arg1)") !=
-                               std::string::npos,
+                  t.expect(src->contains("__global__ void p_eval_poly_2_batch(int n, unsigned char* ok, const nc_int* arg0, nc_int* arg1)"),
                            "CUDA 128-bit batch kernel is emitted");
               })
         .test("triton_emission_emits_jit_decorated_kernel_with_lane_masks_and_elementwise_loads",
@@ -342,30 +326,25 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("import triton\nimport triton.language as tl\n") !=
-                               std::string::npos,
+                  t.expect(src->contains("import triton\nimport triton.language as tl\n"),
                            "triton and triton.language modules are imported");
-                  t.expect(src->find("INT64_MAX = 9223372036854775807") != std::string::npos,
+                  t.expect(src->contains("INT64_MAX = 9223372036854775807"),
                            "INT64_MAX constant boundary is defined for overflow checks");
-                  t.expect(src->find("INT64_MIN = -9223372036854775808") != std::string::npos,
+                  t.expect(src->contains("INT64_MIN = -9223372036854775808"),
                            "INT64_MIN constant boundary is defined for overflow checks");
-                  t.expect(src->find("@triton.jit") != std::string::npos,
+                  t.expect(src->contains("@triton.jit"),
                            "kernel function is decorated with @triton.jit");
-                  t.expect(src->find("def p_eval_poly_2_kernel(a0_ptr, a1_ptr, ok_ptr, n, BLOCK: tl.constexpr):") !=
-                               std::string::npos,
+                  t.expect(src->contains("def p_eval_poly_2_kernel(a0_ptr, a1_ptr, ok_ptr, n, BLOCK: tl.constexpr):"),
                            "kernel function signature matches arguments and block size constexpr");
-                  t.expect(src->find("offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)") !=
-                               std::string::npos,
+                  t.expect(src->contains("offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)"),
                            "lane offsets are computed with tl.program_id and tl.arange");
-                  t.expect(src->find("m = offs < n") != std::string::npos,
+                  t.expect(src->contains("m = offs < n"),
                            "boundary mask m is computed from offsets and batch length");
-                  t.expect(src->find("a0 = tl.load(a0_ptr + offs, mask=m, other=0)") !=
-                               std::string::npos,
+                  t.expect(src->contains("a0 = tl.load(a0_ptr + offs, mask=m, other=0)"),
                            "input parameter is loaded with mask");
-                  t.expect(src->find("tl.store(a1_ptr + offs, a1, mask=m)") != std::string::npos,
+                  t.expect(src->contains("tl.store(a1_ptr + offs, a1, mask=m)"),
                            "output parameter is stored with mask");
-                  t.expect(src->find("tl.store(ok_ptr + offs, done.to(tl.int8), mask=m)") !=
-                               std::string::npos,
+                  t.expect(src->contains("tl.store(ok_ptr + offs, done.to(tl.int8), mask=m)"),
                            "success mask is converted to int8 and stored to ok_ptr");
               })
         .test("emission_is_strictly_deterministic_across_all_supported_targets_and_widths",
@@ -421,17 +400,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("for (;;) {") != std::string::npos,
+                  t.expect(src->contains("for (;;) {"),
                            "tail-call optimised code wraps clauses in an unbounded for loop");
-                  t.expect(src->find("bool nc_again = false;") != std::string::npos,
+                  t.expect(src->contains("bool nc_again = false;"),
                            "loop iteration re-entry flag nc_again is declared");
-                  t.expect(src->find("nc_again = true;\n") != std::string::npos,
+                  t.expect(src->contains("nc_again = true;\n"),
                            "self tail call sets nc_again to true");
-                  t.expect(src->find("if (nc_again) { continue; }") != std::string::npos,
+                  t.expect(src->contains("if (nc_again) { continue; }"),
                            "nc_again triggers loop continuation rather than call stack recursion");
-                  t.expect(src->find("compiled to a LOOP") != std::string::npos,
+                  t.expect(src->contains("compiled to a LOOP"),
                            "explanatory comment documents loop transform");
-                  t.expect(src->find("const nc_int n") != std::string::npos,
+                  t.expect(src->contains("const nc_int n"),
                            "new argument values are evaluated into temporaries before write-back");
               })
         .test("disabling_tail_call_optimisation_preserves_recursive_function_calls",
@@ -451,18 +430,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("nc_again") == std::string::npos,
+                  t.expect(!src->contains("nc_again"),
                            "unoptimised code emits no nc_again loop flag");
-                  t.expect(src->find("for (;;)") == std::string::npos,
+                  t.expect(!src->contains("for (;;)"),
                            "unoptimised code emits no outer infinite loop");
-                  t.expect(src->find("p_fact_acc_3_c0(") != std::string::npos,
+                  t.expect(src->contains("p_fact_acc_3_c0("),
                            "clause 0 is emitted as an independent helper function");
-                  t.expect(src->find("p_fact_acc_3_c1(") != std::string::npos,
+                  t.expect(src->contains("p_fact_acc_3_c1("),
                            "clause 1 is emitted as an independent helper function");
-                  t.expect(src->find("if (p_fact_acc_3_c0(a0, a1, a2)) { return true; }") !=
-                               std::string::npos,
+                  t.expect(src->contains("if (p_fact_acc_3_c0(a0, a1, a2)) { return true; }"),
                            "dispatcher tries clause 0 first in program order");
-                  t.expect(src->find("p_fact_acc_3(") != std::string::npos,
+                  t.expect(src->contains("p_fact_acc_3("),
                            "recursive call is emitted as a standard function call");
               })
         .test("batch_driver_emission_emits_serial_and_multithreaded_map_wrappers",
@@ -482,22 +460,19 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("#include <thread>") != std::string::npos,
+                  t.expect(src->contains("#include <thread>"),
                            "thread header is included for parallel batch processing");
-                  t.expect(src->find("#include <span>") != std::string::npos,
+                  t.expect(src->contains("#include <span>"),
                            "span header is included");
-                  t.expect(src->find("inline auto p_eval_poly_2_batch(const nc_int* arg0, nc_int* arg1, unsigned char* ok, std::size_t n) -> void") !=
-                               std::string::npos,
+                  t.expect(src->contains("inline auto p_eval_poly_2_batch(const nc_int* arg0, nc_int* arg1, unsigned char* ok, std::size_t n) -> void"),
                            "serial batch wrapper is emitted with const input and mutable output pointers");
-                  t.expect(src->find("inline auto p_eval_poly_2_batch_parallel(const nc_int* arg0, nc_int* arg1, unsigned char* ok, std::size_t n,") !=
-                               std::string::npos,
+                  t.expect(src->contains("inline auto p_eval_poly_2_batch_parallel(const nc_int* arg0, nc_int* arg1, unsigned char* ok, std::size_t n,"),
                            "parallel batch wrapper is emitted");
-                  t.expect(src->find("std::jthread") != std::string::npos,
+                  t.expect(src->contains("std::jthread"),
                            "parallel batch wrapper employs std::jthread workers");
-                  t.expect(src->find("std::thread::hardware_concurrency()") != std::string::npos,
+                  t.expect(src->contains("std::thread::hardware_concurrency()"),
                            "worker count defaults to hardware_concurrency when threads == 0");
-                  t.expect(src->find("constexpr std::size_t serial_below = 4096;") !=
-                               std::string::npos,
+                  t.expect(src->contains("constexpr std::size_t serial_below = 4096;"),
                            "small batch sizes below 4096 lanes run serially on the calling thread");
               })
         .test("continuation_passing_style_emits_templated_caller_and_nested_closures",
@@ -517,19 +492,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("template <class K>\n[[nodiscard]] auto p_between_3(nc_int a0, nc_int a1, K&& k) -> bool;") !=
-                               std::string::npos,
+                  t.expect(src->contains("template <class K>\n[[nodiscard]] auto p_between_3(nc_int a0, nc_int a1, K&& k) -> bool;"),
                            "forward declaration is templated on continuation callable K");
-                  t.expect(src->find("template <class K>\n[[nodiscard]] auto p_between_3(nc_int a0, nc_int a1, K&& k) -> bool {") !=
-                               std::string::npos,
+                  t.expect(src->contains("template <class K>\n[[nodiscard]] auto p_between_3(nc_int a0, nc_int a1, K&& k) -> bool {"),
                            "predicate definition takes continuation argument k");
-                  t.expect(src->find("return k(v_Low);") != std::string::npos,
+                  t.expect(src->contains("return k(v_Low);"),
                            "base clause invokes continuation with solution value v_Low");
-                  t.expect(src->find("return k(v_Out);") != std::string::npos,
+                  t.expect(src->contains("return k(v_Out);"),
                            "recursive clause invokes continuation with solution value v_Out");
-                  t.expect(src->find("return p_between_3(") != std::string::npos,
+                  t.expect(src->contains("return p_between_3("),
                            "recursive call passes trailing lambda continuation");
-                  t.expect(src->find("[&](nc_int v_Out) -> bool") != std::string::npos,
+                  t.expect(src->contains("[&](nc_int v_Out) -> bool"),
                            "continuation closure binds returned argument and chains the rest of the clause");
               })
         .test("continuation_passing_style_handles_cut_to_prune_subsequent_clauses",
@@ -549,11 +522,11 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("bool nc_cut = false;") != std::string::npos,
+                  t.expect(src->contains("bool nc_cut = false;"),
                            "clause dispatcher tracks cut status with nc_cut flag");
-                  t.expect(src->find("nc_cut = true;") != std::string::npos,
+                  t.expect(src->contains("nc_cut = true;"),
                            "cut operator in clause body sets nc_cut flag");
-                  t.expect(src->find("if (nc_cut) { return true; }") != std::string::npos,
+                  t.expect(src->contains("if (nc_cut) { return true; }"),
                            "pruning stops searching subsequent clauses once cut succeeds");
               })
         .test("multi_predicate_call_graph_walk_emits_callees_before_callers",
@@ -585,8 +558,7 @@ auto main() -> int {
 
                   // The call passes the HEAD-BOUND variable, not the raw argument: an input
                   // head argument is bound to `v_A` first, and that is what the goal refers to.
-                  t.expect(src->find("if (!p_square_2(v_A, v_SA)) { return false; }") !=
-                               std::string::npos,
+                  t.expect(src->contains("if (!p_square_2(v_A, v_SA)) { return false; }"),
                            "caller invokes compiled callee and checks return status");
               })
         .test("all_arithmetic_operators_emit_their_corresponding_checked_helpers",
@@ -607,17 +579,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("!nc_quot(") != std::string::npos,
+                  t.expect(src->contains("!nc_quot("),
                            "// operator emits checked nc_quot helper");
-                  t.expect(src->find("!nc_fdiv(") != std::string::npos,
+                  t.expect(src->contains("!nc_fdiv("),
                            "div operator emits checked nc_fdiv helper");
-                  t.expect(src->find("!nc_rem(") != std::string::npos,
+                  t.expect(src->contains("!nc_rem("),
                            "rem operator emits checked nc_rem helper");
-                  t.expect(src->find("!nc_mod(") != std::string::npos,
+                  t.expect(src->contains("!nc_mod("),
                            "mod operator emits checked nc_mod helper");
-                  t.expect(src->find("!nc_min(") != std::string::npos,
+                  t.expect(src->contains("!nc_min("),
                            "min operator emits checked nc_min helper");
-                  t.expect(src->find("!nc_max(") != std::string::npos,
+                  t.expect(src->contains("!nc_max("),
                            "max operator emits checked nc_max helper");
               })
         .test("all_relational_comparisons_emit_their_matching_cpp_operators",
@@ -636,17 +608,17 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find(" < ") != std::string::npos,
+                  t.expect(src->contains(" < "),
                            "< operator emits C++ < comparison");
-                  t.expect(src->find(" > ") != std::string::npos,
+                  t.expect(src->contains(" > "),
                            "> operator emits C++ > comparison");
-                  t.expect(src->find(" <= ") != std::string::npos,
+                  t.expect(src->contains(" <= "),
                            "=< operator emits C++ <= comparison");
-                  t.expect(src->find(" >= ") != std::string::npos,
+                  t.expect(src->contains(" >= "),
                            ">= operator emits C++ >= comparison");
-                  t.expect(src->find(" == ") != std::string::npos,
+                  t.expect(src->contains(" == "),
                            "=:=" " operator emits C++ == equality comparison");
-                  t.expect(src->find(" != ") != std::string::npos,
+                  t.expect(src->contains(" != "),
                            "=\\= operator emits C++ != inequality comparison");
               })
         .test("fact_only_and_zero_arity_predicates_compile_correctly",
@@ -659,9 +631,9 @@ auto main() -> int {
                   auto fact_src = compile(fact_prog, fact_sig, Target::cpp);
                   t.expect(fact_src.has_value(), "fact-only predicate compiles");
                   if (fact_src.has_value()) {
-                      t.expect(fact_src->find("a0 = nc_lit(42);") != std::string::npos,
+                      t.expect(fact_src->contains("a0 = nc_lit(42);"),
                                "fact assigns literal constant to output argument");
-                      t.expect(fact_src->find("return true;") != std::string::npos,
+                      t.expect(fact_src->contains("return true;"),
                                "fact returns true");
                   }
 
@@ -673,8 +645,7 @@ auto main() -> int {
                   auto zero_src = compile(zero_prog, zero_sig, Target::cpp);
                   t.expect(zero_src.has_value(), "zero-arity atom fact predicate compiles");
                   if (zero_src.has_value()) {
-                      t.expect(zero_src->find("[[nodiscard]] inline auto p_truth_0() -> bool") !=
-                                   std::string::npos,
+                      t.expect(zero_src->contains("[[nodiscard]] inline auto p_truth_0() -> bool"),
                                "zero-arity function signature takes no arguments");
                   }
               })
@@ -691,9 +662,9 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("const nc_int v_X = a0;") != std::string::npos,
+                  t.expect(src->contains("const nc_int v_X = a0;"),
                            "first input occurrence of X binds variable");
-                  t.expect(src->find("if (a1 != v_X) { return false; }") != std::string::npos,
+                  t.expect(src->contains("if (a1 != v_X) { return false; }"),
                            "subsequent input occurrence checks argument equality against bound variable");
               })
         .test("an_anonymous_variable_in_an_output_position_is_refused",
@@ -733,11 +704,11 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("v__") == std::string::npos,
+                  t.expect(!src->contains("v__"),
                            "anonymous variable _ does not generate an unneeded variable declaration");
-                  t.expect(src->find("const nc_int v_Y = a1;") != std::string::npos,
+                  t.expect(src->contains("const nc_int v_Y = a1;"),
                            "named head variable Y is bound as expected");
-                  t.expect(src->find("a2 = v_Y;") != std::string::npos,
+                  t.expect(src->contains("a2 = v_Y;"),
                            "output argument is assigned from Y");
               })
         .test("symbolic_predicate_names_are_escaped_cleanly",
@@ -755,7 +726,7 @@ auto main() -> int {
                   auto src = compile(p, sig, Target::cpp);
                   t.expect(src.has_value(), "predicate with symbolic character in name compiles");
                   if (src.has_value()) {
-                      t.expect(src->find("p_plus_x2bone_2") != std::string::npos,
+                      t.expect(src->contains("p_plus_x2bone_2"),
                                "plus symbol + is escaped as _x2b in mangled function identifier");
                   }
               })
@@ -774,11 +745,11 @@ auto main() -> int {
                       return;
                   }
 
-                  t.expect(src->find("tl.where") != std::string::npos,
+                  t.expect(src->contains("tl.where"),
                            "triton division employs tl.where guards to prevent division by zero");
-                  t.expect(src->find("// tl.where") != std::string::npos,
+                  t.expect(src->contains("// tl.where"),
                            "integer division emits floor division // with guarded divisor");
-                  t.expect(src->find("% tl.where") != std::string::npos,
+                  t.expect(src->contains("% tl.where"),
                            "remainder emits modulo % with guarded divisor");
               })
         .test("compile_and_is_compilable_refuse_unbound_output_variables",

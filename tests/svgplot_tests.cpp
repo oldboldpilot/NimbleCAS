@@ -25,7 +25,7 @@ namespace {
 
 // Substring presence.
 [[nodiscard]] auto has(const std::string& s, std::string_view sub) -> bool {
-    return s.find(sub) != std::string::npos;
+    return s.contains(sub);
 }
 
 // Count non-overlapping occurrences of `sub` in `s`.

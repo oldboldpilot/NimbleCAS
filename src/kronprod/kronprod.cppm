@@ -137,7 +137,7 @@ auto kronecker_product(const Matrix& a, const Matrix& b) -> Result<Matrix> {
             for (std::size_t k = 0; k < bp; ++k) {
                 for (std::size_t l = 0; l < bq; ++l) {
                     TRY(prod, aij.multiply(b.at(k, l)));
-                    rows[i * bp + k][j * bq + l] = std::move(prod);
+                    rows[i * bp + k][j * bq + l] = prod;
                 }
             }
         }
@@ -197,7 +197,7 @@ auto hadamard_product(const Matrix& a, const Matrix& b) -> Result<Matrix> {
     for (std::size_t i = 0; i < a.rows(); ++i) {
         for (std::size_t j = 0; j < a.cols(); ++j) {
             TRY(prod, a.at(i, j).multiply(b.at(i, j)));
-            rows[i][j] = std::move(prod);
+            rows[i][j] = prod;
         }
     }
     return Matrix::from_rows(std::move(rows));

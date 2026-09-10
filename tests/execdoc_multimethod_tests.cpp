@@ -31,7 +31,6 @@ import nimblecas.testing;
 using nimblecas::Expr;
 using nimblecas::simplify;
 using nimblecas::to_latex;
-using nimblecas::execdoc::CellResult;
 using nimblecas::execdoc::run_document;
 using nimblecas::execdoc::Session;
 using nimblecas::testing::TestContext;
@@ -45,7 +44,7 @@ namespace {
 }
 
 [[nodiscard]] auto contains(std::string_view haystack, std::string_view needle) -> bool {
-    return haystack.find(needle) != std::string_view::npos;
+    return haystack.contains(needle);
 }
 
 [[nodiscard]] auto latex_fragment(const Expr& e) -> std::string {

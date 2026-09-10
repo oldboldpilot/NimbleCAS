@@ -302,7 +302,7 @@ auto days_from_civil(std::int64_t y, unsigned m, unsigned d) noexcept -> std::in
     // calendar. y is the actual year (offset so March is month 0 of the year's "era").
     y -= (m <= 2);
     const std::int64_t era = (y >= 0 ? y : y - 399) / 400;
-    const auto yoe = static_cast<std::int64_t>(y - era * 400);            // [0, 399]
+    const auto yoe = (y - era * 400);            // [0, 399]
     const auto doy = static_cast<std::int64_t>((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);  // [0,365]
     const std::int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;       // [0, 146096]
     return era * 146097 + doe - 719468;

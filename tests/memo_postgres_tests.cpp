@@ -25,7 +25,6 @@ import nimblecas.taskdag;
 import nimblecas.testing;
 
 using nimblecas::content_key;
-using nimblecas::ContentKey;
 using nimblecas::MathError;
 using nimblecas::Payload;
 using nimblecas::PostgresMemo;
@@ -274,7 +273,7 @@ auto main() -> int {
                       std::vector<std::jthread> ts;
                       ts.reserve(threads);
                       for (int ti = 0; ti < threads; ++ti) {
-                          ts.emplace_back([&, ti]() {
+                          ts.emplace_back([&, ti] {
                               for (int k = 0; k < per_thread; ++k) {
                                   const auto full = bytes_of(std::format("t{}-k{}", ti, k));
                                   const auto key = content_key(full);

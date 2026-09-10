@@ -33,7 +33,6 @@ using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::nyquist;
 using nimblecas::nyquist_criterion;
-using nimblecas::NyquistPoint;
 using nimblecas::parallel_bode;
 using nimblecas::parallel_nyquist;
 using nimblecas::Rational;

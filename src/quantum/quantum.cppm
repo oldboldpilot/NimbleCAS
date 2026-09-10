@@ -391,7 +391,7 @@ auto Op::unitary_symbol(std::string name) -> Op {
     return Op(OpNode{.value = OpSymbolNode{.name = std::move(name), .unitary = true}});
 }
 auto Op::scalar(Complex value) -> Op {
-    return Op(OpNode{.value = OpScalarNode{.value = std::move(value)}});
+    return Op(OpNode{.value = OpScalarNode{.value = value}});
 }
 auto Op::identity() -> Op { return Op(OpNode{.value = OpIdentityNode{}}); }
 auto Op::ket(std::string name) -> Op {
@@ -407,7 +407,7 @@ auto Op::product(std::vector<Op> factors) -> Op {
     return Op(OpNode{.value = OpProductNode{.factors = std::move(factors)}});
 }
 auto Op::scaled(Complex coeff, Op operand) -> Op {
-    return Op(OpNode{.value = OpScaleNode{.coeff = std::move(coeff), .operand = std::move(operand)}});
+    return Op(OpNode{.value = OpScaleNode{.coeff = coeff, .operand = std::move(operand)}});
 }
 
 // --- structural equality ---
@@ -493,7 +493,7 @@ auto join(const std::vector<Op>& items, std::string_view sep) -> std::string {
 // --- free-function builders ---
 auto op_symbol(std::string name) -> Op { return Op::symbol(std::move(name)); }
 auto self_adjoint(std::string name) -> Op { return Op::self_adjoint_symbol(std::move(name)); }
-auto op_scalar(Complex value) -> Op { return Op::scalar(std::move(value)); }
+auto op_scalar(Complex value) -> Op { return Op::scalar(value); }
 auto identity() -> Op { return Op::identity(); }
 auto ket(std::string name) -> Op { return Op::ket(std::move(name)); }
 auto bra(std::string name) -> Op { return Op::bra(std::move(name)); }

@@ -15,7 +15,6 @@ using nimblecas::hermite_reduce;
 using nimblecas::HermiteReduction;
 using nimblecas::MathError;
 using nimblecas::Polynomial;
-using nimblecas::Rational;
 using nimblecas::RationalPoly;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;

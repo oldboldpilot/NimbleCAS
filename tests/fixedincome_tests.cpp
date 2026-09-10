@@ -15,7 +15,6 @@ import nimblecas.finance;
 import nimblecas.fixedincome;
 import nimblecas.testing;
 
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 namespace fin = nimblecas::finance;

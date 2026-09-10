@@ -12,8 +12,6 @@ using nimblecas::BrokerPort;
 #ifdef NIMBLECAS_SGEE
 using nimblecas::CapiBrokerPort;
 #endif
-using nimblecas::CostHint;
-using nimblecas::Executor;
 using nimblecas::FakeBrokerPort;
 using nimblecas::InMemoryResultChannel;
 using nimblecas::MathError;
@@ -567,7 +565,7 @@ auto main() -> int {
                   SgeeDistributedExecutor exec3(cfg3, port3, results3);
 
                   // We force task 1 state to dead asynchronously
-                  std::thread stopper([&port3]() {
+                  std::thread stopper([&port3] {
                       std::this_thread::sleep_for(std::chrono::milliseconds(5));
                       port3.force_state(1, BrokerPort::QState::dead);
                   });
@@ -1000,7 +998,7 @@ auto main() -> int {
                       SgeeExecutorConfig cfg;
                       cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
                       SgeeDistributedExecutor exec(cfg, nimblecas::RunTransportFactory{
-                          []() -> Result<nimblecas::RunTransport> {
+                          [] -> Result<nimblecas::RunTransport> {
                               return nimblecas::make_error<nimblecas::RunTransport>(MathError::distributed_error);
                           }});
                       const auto res = exec.run(g);
@@ -1012,7 +1010,7 @@ auto main() -> int {
                       SgeeExecutorConfig cfg;
                       cfg.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1);
                       SgeeDistributedExecutor exec(cfg, nimblecas::RunTransportFactory{
-                          []() -> Result<nimblecas::RunTransport> {
+                          [] -> Result<nimblecas::RunTransport> {
                               return nimblecas::RunTransport{};  // null port/channel views
                           }});
                       const auto res = exec.run(g);

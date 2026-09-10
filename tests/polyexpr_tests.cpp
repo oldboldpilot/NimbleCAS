@@ -10,7 +10,6 @@ import nimblecas.testing;
 
 using nimblecas::Expr;
 using nimblecas::from_polynomial;
-using nimblecas::MathError;
 using nimblecas::Polynomial;
 using nimblecas::to_polynomial;
 using nimblecas::testing::TestContext;

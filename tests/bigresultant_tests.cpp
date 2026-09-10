@@ -17,7 +17,6 @@ import nimblecas.testing;
 
 using nimblecas::BigRational;
 using nimblecas::BigRationalPoly;
-using nimblecas::MathError;
 using nimblecas::discriminant;
 using nimblecas::resultant;
 using nimblecas::testing::TestContext;

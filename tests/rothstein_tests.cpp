@@ -14,14 +14,11 @@ import nimblecas.rothstein;
 import nimblecas.testing;
 
 using nimblecas::AlgebraicLogTerm;
-using nimblecas::AlgebraicNumber;
-using nimblecas::AlgebraicPoly;
 using nimblecas::ExtendedLogarithmicPart;
 using nimblecas::LogarithmicPart;
 using nimblecas::log_part;
 using nimblecas::log_part_extended;
 using nimblecas::MathError;
-using nimblecas::NumberField;
 using nimblecas::Polynomial;
 using nimblecas::Rational;
 using nimblecas::RationalPoly;

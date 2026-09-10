@@ -17,21 +17,8 @@ import nimblecas.taskdag_sgee;
 import nimblecas.modgcd_dist;
 import nimblecas.testing;
 
-using nimblecas::BigInt;
 using nimblecas::BrokerPort;
-using nimblecas::Candidate;
-using nimblecas::CoprimeProven;
-using nimblecas::CostHint;
-using nimblecas::decode_image_request;
-using nimblecas::decode_image_result;
-using nimblecas::decode_polynomial;
-using nimblecas::encode_image_request;
-using nimblecas::encode_image_result;
-using nimblecas::encode_polynomial;
-using nimblecas::Executor;
 using nimblecas::FakeBrokerPort;
-using nimblecas::gcd_image_mod_p;
-using nimblecas::ImageRequest;
 using nimblecas::ImageResult;
 using nimblecas::InMemoryResultChannel;
 using nimblecas::local_parallel_executor;
@@ -133,7 +120,7 @@ auto main() -> int {
 
             // Seeded sweep cases (T8 inputs)
             std::uint64_t state = 0xABCDEF0123456789ULL;
-            auto const next_rand = [&]() -> std::int64_t {
+            auto const next_rand = [&] -> std::int64_t {
                 state = state * 6364136223846793005ULL + 1442695040888963407ULL;
                 return static_cast<std::int64_t>((state >> 60) & 0xF) - 7;
             };
@@ -374,7 +361,7 @@ auto main() -> int {
                 cfg.with_registry(reg).with_num_workers(0).with_poll_interval_ms(1);
                 SgeeDistributedExecutor dist_exec(cfg, port, results);
 
-                std::thread stopper([&port]() {
+                std::thread stopper([&port] {
                     std::this_thread::sleep_for(std::chrono::milliseconds(5));
                     port.force_state(1, BrokerPort::QState::dead);
                 });
@@ -394,7 +381,7 @@ auto main() -> int {
                 SgeeDistributedExecutor dist_exec(cfg, port, results);
 
                 Result<Polynomial> dist_res;
-                std::thread coord([&]() {
+                std::thread coord([&] {
                     dist_res = modular_gcd_with(a, b, dist_exec, reg);
                 });
 

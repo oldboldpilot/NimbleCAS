@@ -14,7 +14,6 @@ import nimblecas.futures;
 import nimblecas.testing;
 
 using namespace nimblecas::futures;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

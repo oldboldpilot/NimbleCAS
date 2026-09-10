@@ -51,7 +51,6 @@ using nimblecas::ldlt_decompose;
 using nimblecas::lie_bracket;
 using nimblecas::Matrix;
 using nimblecas::Rational;
-using nimblecas::RationalPoly;
 using nimblecas::rational_eigenvalues;
 using nimblecas::structure_constants;
 using nimblecas::testing::TestContext;
@@ -89,7 +88,7 @@ namespace {
     std::vector<std::vector<Rational>> rows;
     rows.reserve(entries.size());
     for (auto& e : entries) {
-        rows.push_back({std::move(e)});
+        rows.push_back({e});
     }
     return Matrix::from_rows(std::move(rows)).value();
 }

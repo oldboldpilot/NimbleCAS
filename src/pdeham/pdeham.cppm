@@ -557,7 +557,7 @@ auto ham_pde_solve(const HamPde& pde, const Expr& u0, Rational hbar, std::size_t
 auto ham_reaction_diffusion(Rational diffusivity, std::vector<Rational> reaction_coeffs,
                             const Expr& u0, Rational hbar, std::size_t order,
                             std::string_view tvar, std::string_view xvar) -> Result<Expr> {
-    HamPde const pde{.diffusivity = std::move(diffusivity),
+    HamPde const pde{.diffusivity = diffusivity,
                .convection = Rational{},
                .reaction_coeffs = std::move(reaction_coeffs)};
     return ham_pde_solve(pde, u0, hbar, order, tvar, xvar);
@@ -566,7 +566,7 @@ auto ham_reaction_diffusion(Rational diffusivity, std::vector<Rational> reaction
 auto ham_burgers(Rational viscosity, const Expr& u0, Rational hbar, std::size_t order,
                  std::string_view tvar, std::string_view xvar) -> Result<Expr> {
     // u_t + u u_x = ν u_xx  =>  u_t = ν u_xx − u u_x  =>  convection coefficient = −1.
-    HamPde const pde{.diffusivity = std::move(viscosity),
+    HamPde const pde{.diffusivity = viscosity,
                .convection = Rational::from_int(-1),
                .reaction_coeffs = {}};
     return ham_pde_solve(pde, u0, hbar, order, tvar, xvar);

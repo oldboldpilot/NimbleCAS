@@ -214,7 +214,7 @@ auto main() -> int {
                           t.expect(src.has_value(), "emission succeeds");
                           t.expect(src.has_value() && !src->empty(), "and returns real text");
                           t.expect(src.has_value() &&
-                                       src->find(entry_point_name(opts)) != std::string::npos,
+                                       src->contains(entry_point_name(opts)),
                                    "the text defines the entry point the module names");
                       }
                   }
@@ -222,9 +222,9 @@ auto main() -> int {
                   tri.target = Target::triton;
                   auto ts = emit(w, tri);
                   t.expect(ts.has_value(), "the Triton scorer emits");
-                  t.expect(ts.has_value() && ts->find("@triton.jit") != std::string::npos,
+                  t.expect(ts.has_value() && ts->contains("@triton.jit"),
                            "and is a real Triton kernel");
-                  t.expect(ts.has_value() && ts->find("conflicts_ptr") != std::string::npos,
+                  t.expect(ts.has_value() && ts->contains("conflicts_ptr"),
                            "that writes a conflict count rather than a solution");
 
                   // The per-walker result buffers must be SIZED. An empty vector here would
@@ -236,7 +236,7 @@ auto main() -> int {
                   mc.strategy = Strategy::min_conflicts;
                   auto ms = emit(wire_queens(5), mc);
                   t.expect(ms.has_value() &&
-                               ms->find("std::vector<long long>(5)") != std::string::npos,
+                               ms->contains("std::vector<long long>(5)"),
                            "each walker's result buffer is sized to the variable count");
               })
         .test("the_emitted_text_states_which_guarantee_it_carries",
@@ -248,18 +248,18 @@ auto main() -> int {
                   ex.target = Target::cpp;
                   ex.strategy = Strategy::exhaustive;
                   auto a = emit(w, ex);
-                  t.expect(a.has_value() && a->find("COMPLETE") != std::string::npos,
+                  t.expect(a.has_value() && a->contains("COMPLETE"),
                            "the exhaustive output says it is complete");
-                  t.expect(a.has_value() && a->find("PROOF") != std::string::npos,
+                  t.expect(a.has_value() && a->contains("PROOF"),
                            "and that a false return is a proof");
 
                   EmitOptions mc;
                   mc.target = Target::cpp;
                   mc.strategy = Strategy::min_conflicts;
                   auto b = emit(w, mc);
-                  t.expect(b.has_value() && b->find("INCOMPLETE") != std::string::npos,
+                  t.expect(b.has_value() && b->contains("INCOMPLETE"),
                            "the local-search output says it is incomplete");
-                  t.expect(b.has_value() && b->find("UNKNOWN") != std::string::npos,
+                  t.expect(b.has_value() && b->contains("UNKNOWN"),
                            "and that a false return means unknown, not unsatisfiable");
               })
         .test("the_emitted_text_is_well_formed_for_the_language_it_targets",
@@ -274,9 +274,9 @@ auto main() -> int {
                   tri.target = Target::triton;
                   auto ts = emit(w, tri);
                   t.expect(ts.has_value(), "the Triton scorer emits");
-                  t.expect(ts.has_value() && ts->find(" ? ") == std::string::npos,
+                  t.expect(ts.has_value() && !ts->contains(" ? "),
                            "and contains no C-style ternary, which Python cannot parse");
-                  t.expect(ts.has_value() && ts->find("tl.abs") != std::string::npos,
+                  t.expect(ts.has_value() && ts->contains("tl.abs"),
                            "using tl.abs for the magnitude instead");
 
                   // 2. The CUDA min_conflicts path must define the symbol entry_point_name
@@ -287,10 +287,9 @@ auto main() -> int {
                   auto cs = emit(w, cu);
                   t.expect(cs.has_value(), "the CUDA local search emits");
                   t.expect(cs.has_value() &&
-                               cs->find("bool " + entry_point_name(cu) + "(long long* out)") !=
-                                   std::string::npos,
+                               cs->contains("bool " + entry_point_name(cu) + "(long long* out)"),
                            "and defines a host launcher with exactly the promised name");
-                  t.expect(cs.has_value() && cs->find("cudaMemcpy") != std::string::npos,
+                  t.expect(cs.has_value() && cs->contains("cudaMemcpy"),
                            "which actually copies the results back");
 
                   // 3. INT64_MIN cannot be written as a plain decimal literal in C or C++:
@@ -305,10 +304,10 @@ auto main() -> int {
                   auto es = emit(extreme, ex);
                   t.expect(es.has_value(), "a domain containing INT64_MIN emits");
                   t.expect(es.has_value() &&
-                               es->find("-9223372036854775808") == std::string::npos,
+                               !es->contains("-9223372036854775808"),
                            "without the decimal spelling of INT64_MIN, which is ill-formed");
                   t.expect(es.has_value() &&
-                               es->find("(-9223372036854775807LL - 1)") != std::string::npos,
+                               es->contains("(-9223372036854775807LL - 1)"),
                            "spelling it as a representable expression instead");
               })
         .test("emission_is_deterministic",
@@ -440,7 +439,7 @@ auto main() -> int {
                   for (const char* name : {"not_equal", "equal", "less_equal", "abs_diff_ne",
                                            "all_different", "linear_eq", "linear_le",
                                            "table_allowed"}) {
-                      t.expect(src->find(name) != std::string::npos,
+                      t.expect(src->contains(name),
                                "the emitted source accounts for every constraint kind");
                   }
               })

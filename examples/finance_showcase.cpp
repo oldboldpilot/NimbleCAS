@@ -29,7 +29,6 @@ import nimblecas.simplify;
 using nimblecas::BigDecimal;
 using nimblecas::BigRational;
 using nimblecas::Expr;
-using nimblecas::MathError;
 using nimblecas::Rounding;
 using nimblecas::to_string_view;
 

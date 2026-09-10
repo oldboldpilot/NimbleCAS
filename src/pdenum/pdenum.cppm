@@ -66,10 +66,10 @@ struct BoundaryCondition {
     Rational value{};
 
     [[nodiscard]] static auto dirichlet(Rational v) -> BoundaryCondition {
-        return BoundaryCondition{BCKind::dirichlet, std::move(v)};
+        return BoundaryCondition{BCKind::dirichlet, v};
     }
     [[nodiscard]] static auto neumann(Rational v) -> BoundaryCondition {
-        return BoundaryCondition{BCKind::neumann, std::move(v)};
+        return BoundaryCondition{BCKind::neumann, v};
     }
 };
 
@@ -100,7 +100,7 @@ struct Grid1D {
         if (diff->numerator() <= 0) {  // den > 0 always, so the sign is the numerator's
             return make_error<Grid1D>(MathError::domain_error);  // require b > a
         }
-        return Grid1D{std::move(a), std::move(b), n_intervals};
+        return Grid1D{a, b, n_intervals};
     }
 
     [[nodiscard]] auto num_nodes() const noexcept -> std::size_t { return n_intervals + 1; }
@@ -159,7 +159,7 @@ struct Grid2D {
         if (dx->numerator() <= 0 || dy->numerator() <= 0) {
             return make_error<Grid2D>(MathError::domain_error);
         }
-        return Grid2D{std::move(ax), std::move(bx), std::move(ay), std::move(by), nx, ny};
+        return Grid2D{ax, bx, ay, by, nx, ny};
     }
 
     [[nodiscard]] auto hx() const -> Result<Rational> {

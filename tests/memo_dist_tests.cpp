@@ -14,7 +14,6 @@ using nimblecas::FileMemo;
 using nimblecas::InProcessMemo;
 using nimblecas::MathError;
 using nimblecas::is_memoizable_status;
-using nimblecas::MemoStats;
 using nimblecas::Payload;
 using nimblecas::Result;
 using nimblecas::to_hex;

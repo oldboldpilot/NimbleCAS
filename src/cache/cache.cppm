@@ -107,7 +107,7 @@ auto ExprMemo::get_or_compute(const Expr& key, const std::function<Result<Expr>(
 
 auto ExprMemo::get_or_compute_value(const Expr& key, const std::function<Expr()>& compute)
     -> Expr {
-    auto result = get_or_compute(key, [&]() -> Result<Expr> { return compute(); });
+    auto result = get_or_compute(key, [&] -> Result<Expr> { return compute(); });
     assert(result.has_value() && "value-only memo unexpectedly holds an error");
     return std::move(result).value();
 }

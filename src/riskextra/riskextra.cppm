@@ -668,7 +668,7 @@ struct LinCon {
 // Fill `out` with independent standard normals via Box-Muller from the RNG's uniform draws.
 auto fill_normals(nimblecas::Rng& rng, std::span<double> out) -> void {
     const double two_pi = 2.0 * std::numbers::pi;
-    const auto pos_unit = [&]() -> double {
+    const auto pos_unit = [&] -> double {
         const double u = rng.next_unit();
         return u <= 0.0 ? std::numeric_limits<double>::min() : u;
     };

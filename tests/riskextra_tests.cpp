@@ -25,7 +25,6 @@ import nimblecas.riskextra;
 import nimblecas.testing;
 
 using namespace nimblecas::riskextra;
-using nimblecas::MathError;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 

@@ -711,7 +711,7 @@ auto Session::run_cell(std::string_view src, std::vector<std::pair<std::string, 
     CellResult cr;
     cr.source = std::string(src);
     for (const std::string& stmt : split_statements(src)) {
-        Result<Expr> value = [&]() -> Result<Expr> {
+        Result<Expr> value = [&] -> Result<Expr> {
             if (auto assign = as_assignment(stmt)) {
                 return eval_expression(assign->second);
             }

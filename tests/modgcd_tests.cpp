@@ -15,7 +15,6 @@ import nimblecas.modgcd;
 import nimblecas.testing;
 
 using nimblecas::BigInt;
-using nimblecas::Candidate;
 using nimblecas::CoprimeProven;
 using nimblecas::decode_image_request;
 using nimblecas::decode_image_result;
@@ -31,8 +30,6 @@ using nimblecas::MathError;
 using nimblecas::merge_images;
 using nimblecas::MergeOutcome;
 using nimblecas::modular_gcd;
-using nimblecas::NeedMorePrimes;
-using nimblecas::next_prime;
 using nimblecas::Polynomial;
 using nimblecas::ZpImage;
 using nimblecas::testing::TestContext;
@@ -398,7 +395,7 @@ auto main() -> int {
         .test("T8_seeded_sweep_vs_prs", [](TestContext& t) {
             // Simple deterministic linear congruential generator for reproducible tests
             std::uint64_t state = 0x123456789ABCDEF0ULL;
-            auto const next_rand = [&]() -> std::int64_t {
+            auto const next_rand = [&] -> std::int64_t {
                 state = state * 6364136223846793005ULL + 1442695040888963407ULL;
                 // Small coefficients in [-8, 8]
                 return static_cast<std::int64_t>((state >> 60) & 0xF) - 7;

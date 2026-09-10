@@ -11,9 +11,7 @@ import nimblecas.contfrac;
 import nimblecas.testing;
 
 using nimblecas::MathError;
-using nimblecas::PeriodicCF;
 using nimblecas::Rational;
-using nimblecas::SeriesCF;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 
