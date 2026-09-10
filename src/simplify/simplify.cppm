@@ -143,6 +143,31 @@ struct ConstVal {
     return make_number(numerator, denominator);
 }
 
+// Expr-level overloads of the two folders above. `simplify_sum` and `simplify_product` carry
+// their running constant as an `Expr`, and every value they hand to a folder is one a
+// `ConstantNode` test has just admitted -- but that is an invariant spread across a loop body,
+// not something a reader (or a static analyser) can confirm at the call site, which is why the
+// call sites used to dereference `as_constant` unchecked. Doing the conversion here, once, with
+// an honest error on the branch the invariant says is unreachable, keeps the accumulators
+// readable and leaves no unchecked optional access anywhere in the module.
+[[nodiscard]] auto add_constants(const Expr& a, const Expr& b) -> Result<Expr> {
+    const auto ca = as_constant(a);
+    const auto cb = as_constant(b);
+    if (!ca || !cb) {
+        return make_error<Expr>(MathError::domain_error);
+    }
+    return add_constants(*ca, *cb);
+}
+
+[[nodiscard]] auto mul_constants(const Expr& a, const Expr& b) -> Result<Expr> {
+    const auto ca = as_constant(a);
+    const auto cb = as_constant(b);
+    if (!ca || !cb) {
+        return make_error<Expr>(MathError::domain_error);
+    }
+    return mul_constants(*ca, *cb);
+}
+
 // base^exp for exp >= 0 via exponentiation by squaring (O(log exp), not O(exp), so
 // crafted large exponents cannot hang the simplifier). Returns true on overflow.
 [[nodiscard]] auto ipow_checked(std::int64_t base, std::int64_t exp, std::int64_t& out) -> bool {
@@ -324,7 +349,7 @@ auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
 
     for (const Expr& term : terms) {
         if (is_constant(term)) {
-            auto folded = add_constants(*as_constant(constant_sum), *as_constant(term));
+            auto folded = add_constants(constant_sum, term);
             if (!folded) {
                 return folded;
             }
@@ -337,7 +362,7 @@ auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
         if (it == groups.end()) {
             groups.emplace_back(std::move(coeff), std::move(rest));
         } else {
-            auto combined = add_constants(*as_constant(it->first), *as_constant(coeff));
+            auto combined = add_constants(it->first, coeff);
             if (!combined) {
                 return combined;
             }
@@ -385,7 +410,7 @@ auto simplify_product(std::vector<Expr> factors) -> Result<Expr> {
             return Expr::integer(0);  // absorbing element
         }
         if (is_constant(factor)) {
-            auto folded = mul_constants(*as_constant(constant_product), *as_constant(factor));
+            auto folded = mul_constants(constant_product, factor);
             if (!folded) {
                 return folded;
             }

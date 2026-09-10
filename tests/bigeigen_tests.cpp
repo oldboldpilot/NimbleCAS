@@ -295,8 +295,8 @@ auto main() -> int {
                            "charpoly = x^3 -x^2 -2x +2");
                   auto eig = nimblecas::rational_eigenvalues(m).value();
                   t.expect(mult_of(eig, bi(1)) == 1, "the one rational eigenvalue 1 is found");
-                  t.expect(total_mult(eig) == 1 && total_mult(eig) < 3,
-                           "0 < total_mult(1) < n(3): spectrum only partly rational");
+                  t.expect(total_mult(eig) == 1,
+                           "total rational multiplicity is 1, short of n(3): only partly rational");
               })
         .test("rational_eigenvalue_negative_fraction",
               [](TestContext& t) {

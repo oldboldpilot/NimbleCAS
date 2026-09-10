@@ -183,8 +183,8 @@ __attribute__((target("avx512f"))) void counter_u64_batch_avx512(
             if ((r + 1U) % 4U == 0U) {
                 const unsigned s = (r + 1U) / 4U;  // key-injection index 1..5
                 x0 = _mm512_add_epi64(x0, _mm512_set1_epi64(static_cast<long long>(kk.k[s % 3U])));
-                x1 = _mm512_add_epi64(
-                    x1, _mm512_set1_epi64(static_cast<long long>(kk.k[(s + 1U) % 3U] + s)));
+                const std::uint64_t inject = kk.k[(s + 1U) % 3U] + s;  // wraps by design
+                x1 = _mm512_add_epi64(x1, _mm512_set1_epi64(static_cast<long long>(inject)));
             }
         }
         _mm512_storeu_si512(reinterpret_cast<__m512i*>(out + b * 8ULL),

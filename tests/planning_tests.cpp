@@ -580,7 +580,10 @@ auto main() -> int {
                   t.expect(hash_state(a) == hash_state(b), "equal states hash equally");
                   t.expect(hash_state(a) != hash_state(c),
                            "a state differing in one value hashes differently");
-                  t.expect(hash_state(a) == hash_state(a), "and the hash is stable across calls");
+                  // Held in a variable first: `hash_state(a) == hash_state(a)` is one call
+                  // compared with itself, which says nothing about stability across calls.
+                  const std::uint64_t first_hash = hash_state(a);
+                  t.expect(hash_state(a) == first_hash, "and the hash is stable across calls");
                   const State empty;
                   t.expect(hash_state(empty) == hash_state(State{}),
                            "the empty state hashes consistently too");

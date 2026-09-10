@@ -2846,7 +2846,15 @@ auto sld_search(Database& db, const GoalList& goals, const Substitution& sub,
         return;
     }
 
-    const std::string ind = *indicator_of(goal);
+    // `is_callable` above means this is an atom or a compound, and both have an indicator.
+    // Checking it anyway costs one branch and matches the two guards immediately above,
+    // rather than resting a dereference on an invariant established in another function.
+    const auto ind_opt = indicator_of(goal);
+    if (!ind_opt) {
+        ctx.error = MathError::domain_error;
+        return;
+    }
+    const std::string ind = *ind_opt;
     const std::vector<Term> args = args_of(goal);
     const GoalList rest = goals->next;
 

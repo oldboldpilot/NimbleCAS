@@ -76,9 +76,18 @@ auto main() -> int {
                   // Assert that directly — summing the same indices in any grouping is
                   // therefore invariant.
                   const std::uint64_t key = splitmix64(99);
+                  // Materialise the whole sequence, then generate it again and compare the two
+                  // runs. Comparing counter_u64(key, i) against counter_u64(key, i) inline is a
+                  // tautology: both sides are the same call on a pure function, which the
+                  // optimiser may fold to `true` without ever running the generator.
+                  std::vector<std::uint64_t> first;
+                  first.reserve(256);
+                  for (std::uint64_t i = 0; i < 256; ++i) {
+                      first.push_back(counter_u64(key, i));
+                  }
                   bool det = true;
                   for (std::uint64_t i = 0; i < 256; ++i) {
-                      if (counter_u64(key, i) != counter_u64(key, i)) {
+                      if (counter_u64(key, i) != first[i]) {
                           det = false;
                       }
                   }

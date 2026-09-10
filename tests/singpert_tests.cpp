@@ -123,8 +123,17 @@ auto main() -> int {
                   auto exp_coeff_sum = beta.add(*neg_beta);  // β + (−β)
                   t.expect(exp_coeff_sum.has_value() && exp_coeff_sum->is_zero(),
                            "exp(b/a) coefficients β and −β cancel -> y_in(0) has no exp term");
-                  // The surviving constant is α, i.e. y_in(0) = α exactly.
-                  t.expect(alpha == alpha, "surviving wall value equals α");
+                  // The exp-free level: the common part β·exp(b/a) contributes none, and the
+                  // amplitude contributes α. Adding those two is the other half of y_in(0);
+                  // this used to read `alpha == alpha`, which certified nothing.
+                  auto wall_value = rat(0, 1).add(alpha);
+                  t.expect(wall_value.has_value(), "the exp-free level of y_in(0) builds");
+                  if (!wall_value) {
+                      return;
+                  }
+                  t.expect(*wall_value == alpha, "surviving wall value equals α");
+                  t.expect(wall_value->numerator() == -2 && wall_value->denominator() == 5,
+                           "and it is exactly -2/5, not merely equal to whatever alpha holds");
               })
         .test("outer_carries_the_x_equals_1_boundary_condition",
               [](TestContext& t) {

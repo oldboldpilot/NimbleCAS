@@ -414,7 +414,14 @@ using IntPoly = std::vector<BigInt>;
             if (v.is_zero()) {
                 const IntPoly lin{a.negate(), BigInt::from_i64(1)};  // x - a
                 auto q = ipoly_divide_exact(pf, lin);
-                assert(q.has_value() && "an integer root peels an exact linear factor");
+                if (!q) {
+                    // The mathematics says this cannot happen: f(a) == 0 means (x - a) divides
+                    // f exactly. It was an `assert`, which is not a check -- under NDEBUG the
+                    // assert vanishes and the dereference below it is undefined behaviour, so
+                    // the one build that ships was the one build with no guard at all. An
+                    // honest error costs nothing and cannot be compiled away.
+                    return make_error<Factors>(MathError::domain_error);
+                }
                 auto left = factor_square_free(lin, budget);
                 if (!left) {
                     return left;

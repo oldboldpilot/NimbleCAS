@@ -142,7 +142,12 @@ struct TaskOutcome {
     std::optional<std::size_t> best_origin;
     for (const TaskId d : task_deps) {
         if (!outputs[d.value].has_value()) {
-            const std::size_t origin = origins[d.value].value();
+            // A failed dependency always has an origin recorded. `.value()` enforced that by
+            // throwing, which is the one thing this codebase never does -- with exceptions off
+            // it is a call to std::terminate. `value_or` states the fallback the invariant
+            // implies anyway: if a dep failed and nothing upstream was blamed, the dep is
+            // itself the origin.
+            const std::size_t origin = origins[d.value].value_or(d.value);
             if (!best_origin.has_value() || origin < *best_origin) {
                 best_origin = origin;
             }

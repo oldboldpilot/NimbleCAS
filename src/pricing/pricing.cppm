@@ -788,7 +788,7 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
     }
 
     // Terminal layer: 2*steps + 1 nodes, index k in [0, 2*steps], log-offset (k - steps).
-    const std::size_t width = static_cast<std::size_t>(2 * steps + 1);
+    const std::size_t width = (2 * static_cast<std::size_t>(steps)) + 1;
     std::vector<double> cur(width);   // holds step i+1 during the sweep of step i
     std::vector<double> next(width);  // receives step i
     for (std::size_t k = 0; k < width; ++k) {
@@ -799,8 +799,8 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
     // three step-(i+1) children from `cur` and write step i into `next`, then swap — reading
     // and writing distinct buffers so a node's down-child is never overwritten before use.
     for (int i = steps - 1; i >= 0; --i) {
-        const std::size_t lo = static_cast<std::size_t>(steps - i);
-        const std::size_t hi = static_cast<std::size_t>(steps + i);
+        const std::size_t lo = static_cast<std::size_t>(steps) - static_cast<std::size_t>(i);
+        const std::size_t hi = static_cast<std::size_t>(steps) + static_cast<std::size_t>(i);
         const bool exercisable = can_exercise[static_cast<std::size_t>(i)] != 0;
         for (std::size_t k = lo; k <= hi; ++k) {
             const double cont = disc * (pu * cur[k + 1] + pm * cur[k] + pd * cur[k - 1]);

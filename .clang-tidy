@@ -31,6 +31,13 @@ Checks: >
   -*-magic-numbers,
   -*-avoid-do-while
 
+CheckOptions:
+  # `std::errc` has no zero enumerator, but `std::errc{}` is precisely how the standard
+  # spells "from_chars succeeded" -- [charconv.from.chars] defines success as a
+  # value-initialised ec. The check cannot know that, and flags the one correct spelling of
+  # the idiom in nine places. Ignoring the enum is right; rewriting the idiom would not be.
+  bugprone-invalid-enum-default-initialization.IgnoredEnums: '::std::errc'
+
 WarningsAsErrors: ''
 HeaderFilterRegex: '^.*/(src|tools|tests)/.*$'
 FormatStyle: none

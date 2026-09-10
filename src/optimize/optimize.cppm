@@ -1631,17 +1631,21 @@ auto reduce_shards(std::span<const MultistartResult> shard_results) -> Result<Mu
     if (shard_results.empty()) {
         return make_error<MultistartResult>(MathError::domain_error);
     }
-    std::optional<std::size_t> best;
+    // The emptiness guard above means shard 0 is always a valid incumbent, so there is no
+    // "no candidate yet" state to represent and the index need not be optional -- which also
+    // removes a dereference whose safety depended on a guard several lines away. At k == 0 the
+    // comparison is a value against itself, and `better_candidate` is strict, so the incumbent
+    // survives.
+    std::size_t best = 0;
     std::size_t total_succeeded = 0;
     for (std::size_t k = 0; k < shard_results.size(); ++k) {
         total_succeeded += shard_results[k].succeeded;
-        if (!best.has_value() ||
-            better_candidate(shard_results[k].best.fx, shard_results[k].best_start,
-                             shard_results[*best].best.fx, shard_results[*best].best_start)) {
+        if (better_candidate(shard_results[k].best.fx, shard_results[k].best_start,
+                             shard_results[best].best.fx, shard_results[best].best_start)) {
             best = k;
         }
     }
-    MultistartResult out = shard_results[*best];  // copy the winning shard's best.
+    MultistartResult out = shard_results[best];  // copy the winning shard's best.
     out.succeeded = total_succeeded;              // aggregate across shards.
     return out;
 }

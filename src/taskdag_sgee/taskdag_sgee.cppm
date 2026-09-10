@@ -1120,7 +1120,8 @@ auto encode_result(const ResultEnvelope& env) -> Result<Payload> {
     write_u64_le(static_cast<std::uint64_t>(len), out);
 
     if (len > 0) {
-        out.insert(out.end(), env.bytes.begin(), env.bytes.begin() + len);
+        out.insert(out.end(), env.bytes.begin(),
+                   std::next(env.bytes.begin(), static_cast<std::ptrdiff_t>(len)));
     }
     return out;
 }

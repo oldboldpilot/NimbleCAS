@@ -1175,17 +1175,23 @@ auto HullWhiteLattice::callable_bond_price(std::span<const double> times,
     // backward step and (with the min-cap) is monotone non-increasing in `oas` — the property
     // callable_bond_oas relies on to bracket the spread. A signed schedule would break that
     // monotonicity, so it is refused rather than fed to a solver whose precondition it violates.
+    // Keep the slices the validation loop computes. The second loop used to call `to_slice`
+    // again and dereference the result unchecked, which both repeated the work and left a
+    // dereference whose safety lived in the loop above it.
     int N = 0;
+    std::vector<int> slices;
+    slices.reserve(times.size());
     for (std::size_t k = 0; k < times.size(); ++k) {
         const auto s = to_slice(times[k]);
         if (!s || !std::isfinite(cashflows[k]) || cashflows[k] < 0.0) {
             return make_error<double>(MathError::domain_error);
         }
+        slices.push_back(*s);
         N = std::max(N, *s);
     }
     std::vector<double> cf(static_cast<std::size_t>(N) + 1, 0.0);
     for (std::size_t k = 0; k < times.size(); ++k) {
-        cf[static_cast<std::size_t>(*to_slice(times[k]))] += cashflows[k];
+        cf[static_cast<std::size_t>(slices[k])] += cashflows[k];
     }
     // Bucket the Bermudan call schedule by slice (a call after maturity is meaningless).
     std::vector<char> is_call(static_cast<std::size_t>(N) + 1, 0);
