@@ -68,7 +68,7 @@ namespace {
 }
 
 // Whether a(n) reproduces the given first terms (values[i] == a(i), integer-valued).
-[[nodiscard]] auto reproduces(TestContext& t, const Expr& closed,
+auto reproduces(TestContext& t, const Expr& closed,
                               std::vector<std::int64_t> values) -> void {
     for (std::size_t n = 0; n < values.size(); ++n) {
         const Expr got = value_at(closed, static_cast<std::int64_t>(n));

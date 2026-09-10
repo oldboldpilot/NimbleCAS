@@ -79,7 +79,7 @@ namespace {
 }  // namespace
 
 auto main() -> int {
-    TestSuite("nimblecas.logic_dist")
+    return TestSuite("nimblecas.logic_dist")
         .test("encode_decode_shard_roundtrip_basic_types",
               [](TestContext& t) -> void {
                   using namespace nimblecas;

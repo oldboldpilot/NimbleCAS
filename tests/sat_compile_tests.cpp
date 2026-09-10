@@ -56,7 +56,13 @@ namespace {
         for (unsigned v = 0; v < 3; ++v) {
             const bool bit = ((mask >> v) & 1U) != 0;
             // Exclude the assignment `mask` by asserting at least one variable differs from it.
-            clause.push_back(bit ? -(v + 1) : (v + 1));
+            //
+            // The variable number is built as int64_t BEFORE it is negated. Written as
+            // `-(v + 1)` on the unsigned `v` it is unsigned arithmetic: literal -1 came out
+            // as 4294967295, so this formula named three variables that do not exist, every
+            // solver rejected it as malformed, and the case proved nothing.
+            const auto lit = static_cast<std::int64_t>(v) + 1;
+            clause.push_back(bit ? -lit : lit);
         }
         cnf.clauses.push_back(clause);
     }
@@ -68,7 +74,7 @@ constexpr std::uint64_t plenty = 1ULL << 20U;
 }  // namespace
 
 auto main() -> int {
-    TestSuite("nimblecas.sat_compile")
+    return TestSuite("nimblecas.sat_compile")
         .test("reference_solve_finds_the_smallest_satisfying_assignment",
               [](TestContext& t) {
                   auto r = reference_solve(simple_sat(), plenty);

@@ -42,9 +42,17 @@ auto main() -> int {
         .test("distinct_keys_cache_separately",
               [](TestContext& t) {
                   ExprMemo memo;
-                  memo.get_or_compute(Expr::symbol("a"), constant_fn(Expr::integer(1)));
-                  memo.get_or_compute(Expr::symbol("b"), constant_fn(Expr::integer(2)));
-                  memo.get_or_compute(Expr::symbol("a"), constant_fn(Expr::integer(9)));  // hit
+                  const auto a1 = memo.get_or_compute(Expr::symbol("a"), constant_fn(Expr::integer(1)));
+                  const auto b1 = memo.get_or_compute(Expr::symbol("b"), constant_fn(Expr::integer(2)));
+                  // A second lookup of "a" must be served from the cache, so the compute
+                  // function offering 9 is never called and the answer is still 1. Checking
+                  // that is what makes this a cache-hit test; the entry count alone would
+                  // also be 2 if the hit had recomputed and overwritten in place.
+                  const auto a2 = memo.get_or_compute(Expr::symbol("a"), constant_fn(Expr::integer(9)));
+                  t.expect(a1.has_value() && b1.has_value() && a2.has_value(),
+                           "every lookup succeeds");
+                  t.expect(a2->is_equivalent_to(Expr::integer(1)),
+                           "the repeat lookup returns the cached 1, not the offered 9");
                   t.expect_eq(memo.size(), std::size_t{2}, "two distinct entries (a reused)");
               })
         .test("error_results_are_cached",

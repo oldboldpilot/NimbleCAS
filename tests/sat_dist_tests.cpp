@@ -78,7 +78,7 @@ namespace {
 }  // namespace
 
 auto main() -> int {
-    TestSuite("nimblecas.sat_dist")
+    return TestSuite("nimblecas.sat_dist")
         .test("encode_and_decode_round_trip_a_formula",
               [](TestContext& t) {
                   const Cnf cnf = simple_sat();

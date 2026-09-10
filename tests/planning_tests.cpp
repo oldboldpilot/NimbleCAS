@@ -151,7 +151,7 @@ namespace {
 }  // namespace
 
 auto main() -> int {
-    TestSuite("nimblecas.planning")
+    return TestSuite("nimblecas.planning")
         .test("validate_accepts_a_well_formed_task",
               [](TestContext& t) {
                   t.expect(validate(corridor(5)).has_value(), "a corridor task validates");
