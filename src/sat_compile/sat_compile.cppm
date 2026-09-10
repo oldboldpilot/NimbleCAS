@@ -82,6 +82,37 @@ enum class Target : std::uint8_t { cpp, cuda, triton };
 //     random walk, which is as close to embarrassing as parallelism gets.
 enum class Strategy : std::uint8_t { exhaustive, walksat };
 
+// WHICH LOCAL-SEARCH RULE, when the strategy is `walksat`. All four share the outer walk -- pick
+// an unsatisfied clause, flip one of its variables -- and differ ONLY in which variable they pick.
+// That is the whole design space of stochastic local search for SAT, and these are the rules that
+// have actually won competitions.
+//
+//   skc         WalkSAT/SKC (Selman, Kautz, Cohen 1994). If some variable breaks nothing, take it;
+//               otherwise flip a coin between a random variable of the clause and the one that
+//               breaks fewest. The baseline every later rule is measured against, and still
+//               respectable.
+//
+//   probsat     probSAT (Balint & Schoning 2012), which won the random track of the SAT
+//               Competition. It abandons the greedy/random dichotomy entirely: every variable in
+//               the clause gets a probability that DECAYS WITH ITS BREAK COUNT, and one draw
+//               picks among them. There is no noise parameter to tune and no special case for a
+//               free move -- a break of zero simply gets the largest weight. Simpler than what it
+//               beat, which is the interesting part.
+//
+//   novelty_plus       Novelty+ (McAllester, Selman & Kautz 1997; Hoos 1999). Ranks the clause's
+//               variables by score and consults AGE: if the best variable is the one flipped most
+//               recently, it is probably being undone, so the second best is taken with some
+//               probability instead. The `+` is Hoos's fix for the stagnation the original
+//               suffered -- a small chance of a uniformly random walk step, which is what makes
+//               it probabilistically approximately complete rather than able to loop forever.
+//
+//   adaptive_novelty_plus  AdaptNovelty+ (Hoos 2002). Novelty+ with the noise TUNED BY THE SEARCH
+//               ITSELF: when the best unsatisfied-clause count stops improving the noise rises,
+//               and when it improves again the noise falls back. It removes the parameter that
+//               mattered most and was hardest to set, which is why it stayed competitive for a
+//               decade.
+enum class SlsVariant : std::uint8_t { skc, probsat, novelty_plus, adaptive_novelty_plus };
+
 // How much a variable count costs. `max_variables` is the representability limit, not a taste
 // judgement: assignment numbers are unsigned 64-bit and `~0` is reserved as the "no solution"
 // sentinel, so 63 variables is where the numbering itself runs out.
@@ -117,6 +148,8 @@ struct CompileOptions {
     // Walkers are seeded from this, deterministically, so the same base seed gives the same
     // answer whatever order they finish in.
     std::uint64_t base_seed{0x9E3779B97F4A7C15ULL};
+    // Which variable-choice rule the walk uses.
+    SlsVariant variant{SlsVariant::skc};
 };
 
 // Whether this formula can be compiled at all, and why not when it cannot.
@@ -767,10 +800,218 @@ template <typename T>
 // WalkSAT — C++.
 // ---------------------------------------------------------------------------
 
+// The variable-choice rule, which is the ONLY thing the four variants disagree about.
+//
+// Everything around it -- the random unsatisfied clause, the incremental counts, the flip -- is
+// shared, so emitting the rule as one function keeps the variants honest: a bug in the walk is a
+// bug in all four, and a difference between them is a difference in the rule and nothing else.
+[[nodiscard]] auto emit_choose_cpp(SlsVariant variant, std::string_view e, std::size_t max_clause)
+    -> std::string {
+    std::string out;
+
+    out += std::format(
+        "// The largest clause in this formula, so the per-clause scratch is a fixed array rather\n"
+        "// than an allocation inside the hot loop.\n"
+        "static const unsigned nc_{0}_maxclause = {1}u;\n\n",
+        e, std::max<std::size_t>(max_clause, 1));
+
+    // Common prologue: gather the clause's variables and their break counts.
+    out += std::format(
+        "// Picks the variable to flip from clause [from, to).\n"
+        "//\n"
+        "// `noise` is a percentage; `step` is the flip counter, which the age-based rules need.\n"
+        "static inline unsigned nc_{0}_choose(nc_{0}_scratch* s, unsigned from, unsigned to,\n"
+        "                                     unsigned long long step, unsigned noise,\n"
+        "                                     unsigned long long* rng) {{\n"
+        "    unsigned vars[64];\n"
+        "    unsigned brk[64];\n"
+        "    unsigned n = 0;\n"
+        "    for (unsigned i = from; i < to && n < 64u; ++i) {{\n"
+        "        const int lit = nc_{0}_lits[i];\n"
+        "        vars[n] = (unsigned)(lit < 0 ? -lit : lit) - 1u;\n"
+        "        brk[n] = nc_{0}_break_count(s, vars[n]);\n"
+        "        ++n;\n"
+        "    }}\n"
+        "    if (n == 0u) {{\n"
+        "        return 0u;\n"
+        "    }}\n",
+        e);
+
+    switch (variant) {
+        case SlsVariant::skc:
+            out += std::format(
+                "    // WalkSAT/SKC. A free move is never worth gambling against, so a zero break\n"
+                "    // is taken outright; otherwise flip a coin between random and greedy.\n"
+                "    unsigned best = 0u;\n"
+                "    int freebie = 0;\n"
+                "    for (unsigned i = 1u; i < n; ++i) {{\n"
+                "        if (brk[i] < brk[best] || (brk[i] == brk[best] && vars[i] < vars[best])) {{\n"
+                "            best = i;\n"
+                "        }}\n"
+                "    }}\n"
+                "    for (unsigned i = 0; i < n; ++i) {{\n"
+                "        if (brk[i] == 0u) {{\n"
+                "            freebie = 1;\n"
+                "        }}\n"
+                "    }}\n"
+                "    (void)step;\n"
+                "    if (freebie == 0 && (nc_{0}_next(rng) % 100ULL) < noise) {{\n"
+                "        return vars[nc_{0}_next(rng) % n];\n"
+                "    }}\n"
+                "    return vars[best];\n"
+                "}}\n\n",
+                e);
+            break;
+
+        case SlsVariant::probsat:
+            out += std::format(
+                "    // probSAT. Every variable gets a weight that HALVES with each unit of break,\n"
+                "    // and one draw picks among them -- no noise parameter, and no special case\n"
+                "    // for a free move, because a break of zero simply carries the largest weight.\n"
+                "    //\n"
+                "    // Halving is cb = 2 in the exponential family. The literature's best 3-SAT\n"
+                "    // setting is nearer 2.3 to 2.5, which cannot be represented exactly in\n"
+                "    // integers -- and a floating-point weight would make the same seed give\n"
+                "    // different answers on different machines. Exact reproducibility is worth\n"
+                "    // more here than the last few percent of solve rate, and this comment is the\n"
+                "    // honest record of that trade.\n"
+                "    (void)noise;\n"
+                "    (void)step;\n"
+                "    unsigned long long weight[64];\n"
+                "    unsigned long long total = 0ULL;\n"
+                "    for (unsigned i = 0; i < n; ++i) {{\n"
+                "        const unsigned capped = brk[i] > 40u ? 40u : brk[i];\n"
+                "        weight[i] = 1ULL << (40u - capped);\n"
+                "        total += weight[i];\n"
+                "    }}\n"
+                "    unsigned long long r = nc_{0}_next(rng) % total;\n"
+                "    for (unsigned i = 0; i < n; ++i) {{\n"
+                "        if (r < weight[i]) {{\n"
+                "            return vars[i];\n"
+                "        }}\n"
+                "        r -= weight[i];\n"
+                "    }}\n"
+                "    return vars[n - 1u];\n"
+                "}}\n\n",
+                e);
+            break;
+
+        case SlsVariant::novelty_plus:
+        case SlsVariant::adaptive_novelty_plus:
+            out += std::format(
+                "    // Novelty scores by MAKE MINUS BREAK, not by break alone. A variable that\n"
+                "    // breaks two clauses but repairs five is a good move, and a rule that cannot\n"
+                "    // see the five will refuse it -- scoring on break alone measurably wrecks\n"
+                "    // this variant, which is why the make count is computed here and not\n"
+                "    // borrowed from the SKC path.\n"
+                "    int score[64];\n"
+                "    for (unsigned i = 0; i < n; ++i) {{\n"
+                "        score[i] = (int)nc_{0}_make_count(s, vars[i]) - (int)brk[i];\n"
+                "    }}\n"
+                "    // The `+` is this branch: a small chance of a uniformly random step, which\n"
+                "    // stops the rule looping forever on a region it keeps re-entering. Without\n"
+                "    // it the original Novelty can stagnate outright.\n"
+                "    if ((nc_{0}_next(rng) % 100ULL) < 2ULL) {{\n"
+                "        return vars[nc_{0}_next(rng) % n];\n"
+                "    }}\n"
+                "    unsigned best = 0u;\n"
+                "    unsigned second = 0u;\n"
+                "    int have_second = 0;\n"
+                "    for (unsigned i = 1u; i < n; ++i) {{\n"
+                "        if (score[i] > score[best] ||\n"
+                "            (score[i] == score[best] && vars[i] < vars[best])) {{\n"
+                "            second = best;\n"
+                "            have_second = 1;\n"
+                "            best = i;\n"
+                "        }} else if (have_second == 0 ||\n"
+                "                   score[i] > score[second] ||\n"
+                "                   (score[i] == score[second] && vars[i] < vars[second])) {{\n"
+                "            second = i;\n"
+                "            have_second = 1;\n"
+                "        }}\n"
+                "    }}\n"
+                "    if (have_second == 0) {{\n"
+                "        return vars[best];\n"
+                "    }}\n"
+                "    // The AGE test, and the whole idea of Novelty: if the best variable is the\n"
+                "    // one flipped most recently in this clause, taking it again probably just\n"
+                "    // undoes the last move, so the second best is considered instead.\n"
+                "    unsigned youngest = 0u;\n"
+                "    for (unsigned i = 1u; i < n; ++i) {{\n"
+                "        if (s->age[vars[i]] > s->age[vars[youngest]]) {{\n"
+                "            youngest = i;\n"
+                "        }}\n"
+                "    }}\n"
+                "    (void)step;\n"
+                "    if (best != youngest) {{\n"
+                "        return vars[best];\n"
+                "    }}\n"
+                "    if ((nc_{0}_next(rng) % 100ULL) < noise) {{\n"
+                "        return vars[second];\n"
+                "    }}\n"
+                "    return vars[best];\n"
+                "}}\n\n",
+                e);
+            break;
+    }
+    return out;
+}
 [[nodiscard]] auto emit_cpp_walksat(const Cnf& cnf, const CompileOptions& opts) -> std::string {
     const std::string& e = opts.entry;
     const FlatFormula f = flatten(cnf);
     std::string out;
+
+    std::size_t max_clause = 1;
+    for (const std::vector<std::int64_t>& clause : cnf.clauses) {
+        max_clause = std::max(max_clause, clause.size());
+    }
+
+    // AdaptNovelty+ starts from PURE GREED and lets stagnation raise the noise; every other
+    // variant takes the caller's setting. Starting the adaptive rule at the caller's noise would
+    // be a different algorithm wearing its name.
+    const std::string initial_noise =
+        opts.variant == SlsVariant::adaptive_novelty_plus ? "0u" : "noise_percent";
+
+    // AdaptNovelty+'s noise control, emitted into the walk loop only for that variant. Hoos's
+    // constants: the noise rises when the best unsatisfied count has not improved for a sixth of
+    // the clause count, and falls by half that step when it does improve. Everything is integer
+    // percent, so the schedule is exact and reproducible.
+    const std::string adapt =
+        opts.variant == SlsVariant::adaptive_novelty_plus
+            ? std::string(
+                  "        // AdaptNovelty+ (Hoos 2002): the noise is tuned by the search rather\n"
+                  "        // than by the caller, which removes the parameter that mattered most\n"
+                  "        // and was hardest to set.\n"
+                  "        //\n"
+                  "        // Hoos's constants, and they are the algorithm rather than taste. The\n"
+                  "        // noise starts at ZERO -- pure greedy -- and only stagnation raises it:\n"
+                  "        // if the best unsatisfied count has not improved for a sixth of the\n"
+                  "        // clause count, p rises by a fifth of its headroom. Progress lowers it\n"
+                  "        // again, by HALF that step, so the noise falls back more slowly than it\n"
+                  "        // climbed and the search is not thrown straight back into greed.\n"
+                  "        const unsigned long long now_unsat = s->unsat.size();\n"
+                  "        if (now_unsat < best_unsat) {\n"
+                  "            best_unsat = now_unsat;\n"
+                  "            last_improve = flip;\n"
+                  "            noise = noise - noise / 10u;\n"
+                  "        } else if (flip - last_improve > (nc_" + e +
+                  "_nclauses / 6u) + 1u) {\n"
+                  "            noise = noise + ((100u - noise) / 5u);\n"
+                  "            if (noise > 99u) {\n"
+                  "                noise = 99u;\n"
+                  "            }\n"
+                  "            last_improve = flip;\n"
+                  "            // The reference count RESETS here, and this line is the whole\n"
+                  "            // difference between a working adaptive schedule and a ratchet.\n"
+                  "            // Measured against an all-time minimum, the decay becomes\n"
+                  "            // unreachable the moment the search plateaus: the noise then only\n"
+                  "            // ever climbs, reaching 99 and staying there, and the search is\n"
+                  "            // left flipping almost at random. Comparing against the count at\n"
+                  "            // the last adaptation instead lets progress pull the noise back\n"
+                  "            // down, which is what makes the schedule two-directional.\n"
+                  "            best_unsat = now_unsat;\n"
+                  "        }\n")
+            : std::string("");
 
     out += std::format(
         "// Generated by nimblecas.sat_compile. Do not edit.\n"
@@ -822,6 +1063,7 @@ template <typename T>
         "    std::vector<unsigned> true_count;     // true literals in each clause\n"
         "    std::vector<unsigned> unsat;          // the currently unsatisfied clauses\n"
         "    std::vector<unsigned> unsat_at;       // where clause c sits in `unsat`\n"
+        "    std::vector<unsigned long long> age;  // step each variable was last flipped at\n"
         "}};\n\n"
         "static inline void nc_{0}_alloc(nc_{0}_scratch* s) {{\n"
         "    s->assign.assign(nc_{0}_nvars, 0);\n"
@@ -829,6 +1071,7 @@ template <typename T>
         "    s->unsat.clear();\n"
         "    s->unsat.reserve(nc_{0}_nclauses);\n"
         "    s->unsat_at.assign(nc_{0}_nclauses, 0);\n"
+        "    s->age.assign(nc_{0}_nvars, 0ULL);\n"
         "}}\n\n",
         e);
 
@@ -876,6 +1119,26 @@ template <typename T>
     out += "    return broken;\n}\n\n";
 
     out += std::format(
+        "// The number of clauses that flipping v would MAKE: those currently unsatisfied in\n"
+        "// which v's literal would become true.\n"
+        "//\n"
+        "// Novelty scores by make MINUS break, not by break alone. A variable that breaks two\n"
+        "// clauses but repairs five is a good move, and a rule that cannot see the five will\n"
+        "// refuse it -- which is measurably worse, not merely different.\n"
+        "static inline unsigned nc_{0}_make_count(const nc_{0}_scratch* s, unsigned v) {{\n"
+        "    const unsigned char val = s->assign[v];\n"
+        "    // Flipping v makes its OPPOSITE-sign occurrences true.\n"
+        "    const unsigned* list = val ? nc_{0}_occn : nc_{0}_occp;\n"
+        "    const unsigned* start = val ? nc_{0}_onstart : nc_{0}_opstart;\n"
+        "    unsigned made = 0;\n"
+        "    for (unsigned i = start[v]; i < start[v + 1u]; ++i) {{\n"
+        "        made += (s->true_count[list[i]] == 0u) ? 1u : 0u;\n"
+        "    }}\n"
+        "    return made;\n"
+        "}}\n\n",
+        e);
+
+    out += std::format(
         "static inline void nc_{0}_set_unsat(nc_{0}_scratch* s, unsigned c) {{\n"
         "    s->unsat_at[c] = static_cast<unsigned>(s->unsat.size());\n"
         "    s->unsat.push_back(c);\n"
@@ -914,6 +1177,8 @@ template <typename T>
         "}}\n\n",
         e);
 
+    out += emit_choose_cpp(opts.variant, e, max_clause);
+
     out += std::format(
         "// One independent walk. Returns 1 and leaves the model in `s->assign` on success.\n"
         "//\n"
@@ -924,9 +1189,16 @@ template <typename T>
         "// and without it this degenerates into greedy descent that sticks.\n"
         "static int nc_{0}_walk(nc_{0}_scratch* s, unsigned long long seed,\n"
         "                       unsigned long long max_flips, unsigned noise_percent) {{\n"
+        "    unsigned noise = {2};\n"
+        "    unsigned long long best_unsat = 0xFFFFFFFFFFFFFFFFULL;\n"
+        "    unsigned long long last_improve = 0ULL;\n"
         "    unsigned long long rng = nc_{0}_mix(seed) | 1ULL;\n"
         "    for (unsigned v = 0; v < nc_{0}_nvars; ++v) {{\n"
         "        s->assign[v] = static_cast<unsigned char>(nc_{0}_next(&rng) & 1ULL);\n"
+        "        // Ages MUST be cleared per walk, not per walker range. The flip counter restarts\n"
+        "        // at zero here, so an age left from the previous walk would read as being in the\n"
+        "        // future, and the age-based rules would consult nonsense.\n"
+        "        s->age[v] = 0ULL;\n"
         "    }}\n"
         "    s->unsat.clear();\n"
         "    for (unsigned c = 0; c < nc_{0}_nclauses; ++c) {{\n"
@@ -953,35 +1225,17 @@ template <typename T>
         "        if (from == to) {{\n"
         "            return 0;  // an empty clause can never be satisfied by any walk\n"
         "        }}\n"
-        "        unsigned best_v = 0;\n"
-        "        unsigned best_break = 0xFFFFFFFFu;\n"
-        "        int freebie = 0;\n"
-        "        for (unsigned i = from; i < to; ++i) {{\n"
-        "            const int lit = nc_{0}_lits[i];\n"
-        "            const unsigned v = static_cast<unsigned>(lit < 0 ? -lit : lit) - 1u;\n"
-        "            const unsigned b = nc_{0}_break_count(s, v);\n"
-        "            // Ties go to the lower variable index, so a walk is reproducible from its\n"
-        "            // seed rather than depending on how the loop happened to be ordered.\n"
-        "            if (b < best_break || (b == best_break && v < best_v)) {{\n"
-        "                best_break = b;\n"
-        "                best_v = v;\n"
-        "            }}\n"
-        "            if (b == 0u) {{\n"
-        "                freebie = 1;\n"
-        "            }}\n"
-        "        }}\n"
-        "        unsigned chosen = best_v;\n"
-        "        if (freebie == 0 && (nc_{0}_next(&rng) % 100ULL) < noise_percent) {{\n"
-        "            const unsigned idx = from + static_cast<unsigned>(\n"
-        "                nc_{0}_next(&rng) % static_cast<unsigned long long>(to - from));\n"
-        "            const int lit = nc_{0}_lits[idx];\n"
-        "            chosen = static_cast<unsigned>(lit < 0 ? -lit : lit) - 1u;\n"
-        "        }}\n"
+        "        // The variable-choice rule. Everything above this line is shared by all four\n"
+        "        // variants; the rule is the only thing they disagree about.\n"
+        "        const unsigned chosen =\n"
+        "            nc_{0}_choose(s, from, to, flip, noise, &rng);\n"
+        "        s->age[chosen] = flip + 1ULL;\n"
+        "{1}"
         "        nc_{0}_flip(s, chosen);\n"
         "    }}\n"
         "    return s->unsat.empty() ? 1 : 0;\n"
         "}}\n\n",
-        e);
+        e, adapt, initial_noise);
 
     out += std::format(
         "// The result of a solve: `found` is 0 or 1, and `model` is meaningful only when found.\n"

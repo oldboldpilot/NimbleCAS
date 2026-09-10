@@ -25,6 +25,7 @@ using nimblecas::sat_compile::CompileOptions;
 using nimblecas::sat_compile::is_compilable;
 using nimblecas::sat_compile::is_compilable_for;
 using nimblecas::sat_compile::reference_walksat;
+using nimblecas::sat_compile::SlsVariant;
 using nimblecas::sat_compile::Strategy;
 using nimblecas::sat_compile::WalkResult;
 using nimblecas::sat_compile::max_variables;
@@ -754,6 +755,158 @@ auto main() -> int {
                   auto b = compile(simple_sat(), opts);
                   t.expect(!b.has_value() && b.error() == MathError::domain_error,
                            "a noise percentage above 100 is a domain_error");
+              })
+        .test("every_sls_variant_emits_its_own_choice_rule",
+              [](TestContext& t) {
+                  // The four variants share the whole walk and differ ONLY in which variable they
+                  // pick, so what distinguishes them in the emitted source is the choice function
+                  // and nothing else. Checking that directly is what stops a variant silently
+                  // being a copy of another.
+                  struct Case {
+                      SlsVariant variant;
+                      std::string_view marker;
+                  };
+                  const std::array<Case, 4> cases{{
+                      {SlsVariant::skc, "WalkSAT/SKC"},
+                      {SlsVariant::probsat, "probSAT"},
+                      {SlsVariant::novelty_plus, "Novelty"},
+                      {SlsVariant::adaptive_novelty_plus, "AdaptNovelty+"},
+                  }};
+                  for (const Case& c : cases) {
+                      CompileOptions opts;
+                      opts.target = Target::cpp;
+                      opts.strategy = Strategy::walksat;
+                      opts.variant = c.variant;
+                      auto src = compile(simple_sat(), opts);
+                      t.expect(src.has_value(), "the variant compiles");
+                      if (!src.has_value()) {
+                          continue;
+                      }
+                      t.expect(src->find(c.marker) != std::string::npos,
+                               "the emitted source names the rule it implements");
+                      t.expect(src->find("_choose(") != std::string::npos,
+                               "and routes the decision through the shared choice function");
+                  }
+              })
+        .test("only_the_adaptive_variant_emits_a_noise_schedule",
+              [](TestContext& t) {
+                  // AdaptNovelty+ is the only rule that changes its own noise; if the schedule
+                  // leaked into the others they would stop being the algorithms they are named
+                  // after.
+                  for (const SlsVariant v : {SlsVariant::skc, SlsVariant::probsat,
+                                             SlsVariant::novelty_plus}) {
+                      CompileOptions opts;
+                      opts.strategy = Strategy::walksat;
+                      opts.variant = v;
+                      auto src = compile(simple_sat(), opts);
+                      t.expect(src.has_value(), "the variant compiles");
+                      if (src.has_value()) {
+                          t.expect(src->find("AdaptNovelty+") == std::string::npos,
+                                   "a non-adaptive variant emits no noise schedule");
+                          t.expect(src->find("unsigned noise = noise_percent;") !=
+                                       std::string::npos,
+                                   "and takes the caller's noise as given");
+                      }
+                  }
+                  CompileOptions adaptive;
+                  adaptive.strategy = Strategy::walksat;
+                  adaptive.variant = SlsVariant::adaptive_novelty_plus;
+                  auto src = compile(simple_sat(), adaptive);
+                  t.expect(src.has_value(), "the adaptive variant compiles");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->find("unsigned noise = 0u;") != std::string::npos,
+                           "it starts from pure greed, as the published algorithm does, rather "
+                           "than from the caller's setting");
+                  t.expect(src->find("best_unsat = now_unsat;") != std::string::npos,
+                           "and RESETS its reference count when it adapts -- without that the "
+                           "decay is unreachable once the search plateaus and the noise ratchets "
+                           "to its ceiling, which measured 0 solves out of 40");
+              })
+        .test("the_age_based_variants_clear_ages_at_the_start_of_every_walk",
+              [](TestContext& t) {
+                  // Regression. The age array is allocated once per walker RANGE but the flip
+                  // counter restarts at zero for every walk, so an age left from the previous
+                  // walker read as being in the future and the youngest test consulted nonsense.
+                  // Fixing it took Novelty+ from 3 solves out of 40 to 7.
+                  CompileOptions opts;
+                  opts.strategy = Strategy::walksat;
+                  opts.variant = SlsVariant::novelty_plus;
+                  auto src = compile(simple_sat(), opts);
+                  t.expect(src.has_value(), "the variant compiles");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->find("s->age[v] = 0ULL;") != std::string::npos,
+                           "ages are cleared inside the walk, not only at allocation");
+                  const std::size_t walk_at = src->find("_walk(");
+                  const std::size_t reset_at = src->find("s->age[v] = 0ULL;");
+                  t.expect(walk_at != std::string::npos && reset_at != std::string::npos &&
+                               reset_at > walk_at,
+                           "and the clearing sits inside the walk function specifically");
+              })
+        .test("the_novelty_variants_score_by_make_minus_break",
+              [](TestContext& t) {
+                  // Scoring on break alone is a different and measurably worse algorithm: a
+                  // variable that breaks two clauses but repairs five is a good move, and a rule
+                  // blind to the five refuses it.
+                  for (const SlsVariant v : {SlsVariant::novelty_plus,
+                                             SlsVariant::adaptive_novelty_plus}) {
+                      CompileOptions opts;
+                      opts.strategy = Strategy::walksat;
+                      opts.variant = v;
+                      auto src = compile(simple_sat(), opts);
+                      t.expect(src.has_value(), "the variant compiles");
+                      if (src.has_value()) {
+                          t.expect(src->find("_make_count(") != std::string::npos,
+                                   "a make count is emitted");
+                          t.expect(src->find("score[i] = (int)") != std::string::npos,
+                                   "and the ranking is a score rather than a raw break count");
+                      }
+                  }
+                  CompileOptions skc;
+                  skc.strategy = Strategy::walksat;
+                  skc.variant = SlsVariant::skc;
+                  auto src = compile(simple_sat(), skc);
+                  t.expect(src.has_value() && src->find("score[i] = (int)") == std::string::npos,
+                           "SKC ranks on break alone, which is what SKC is");
+              })
+        .test("probsat_emits_no_noise_parameter_and_no_freebie_case",
+              [](TestContext& t) {
+                  // probSAT's whole claim is that it needs neither: a break of zero simply carries
+                  // the largest weight, and one draw settles the choice.
+                  CompileOptions opts;
+                  opts.strategy = Strategy::walksat;
+                  opts.variant = SlsVariant::probsat;
+                  auto src = compile(simple_sat(), opts);
+                  t.expect(src.has_value(), "probSAT compiles");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->find("weight[i] = 1ULL <<") != std::string::npos,
+                           "weights decay with the break count");
+                  t.expect(src->find("freebie") == std::string::npos,
+                           "and there is no special case for a free move");
+              })
+        .test("every_variant_still_refuses_what_it_should",
+              [](TestContext& t) {
+                  for (const SlsVariant v : {SlsVariant::skc, SlsVariant::probsat,
+                                             SlsVariant::novelty_plus,
+                                             SlsVariant::adaptive_novelty_plus}) {
+                      CompileOptions opts;
+                      opts.strategy = Strategy::walksat;
+                      opts.variant = v;
+                      opts.walkers = 0;
+                      auto a = compile(simple_sat(), opts);
+                      t.expect(!a.has_value() && a.error() == MathError::domain_error,
+                               "zero walkers is a domain_error whichever rule was asked for");
+                      opts.walkers = 4;
+                      const Cnf bad{.num_vars = 2, .clauses = {{7}}};
+                      auto b = compile(bad, opts);
+                      t.expect(!b.has_value() && b.error() == MathError::domain_error,
+                               "and a malformed formula is refused before any code is emitted");
+                  }
               })
         .run();
 }

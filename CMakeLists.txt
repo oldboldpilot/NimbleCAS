@@ -601,6 +601,13 @@ target_sources(nimblecas_sat_dist PUBLIC
 target_link_libraries(nimblecas_sat_dist
   PUBLIC nimblecas_sat nimblecas_taskdag nimblecas_core std_module)
 
+# ---- nimblecas.planning : SAS+ tasks, delete-relaxation heuristics, heuristic search ----
+add_library(nimblecas_planning STATIC)
+target_sources(nimblecas_planning PUBLIC
+  FILE_SET CXX_MODULES FILES src/planning/planning.cppm)
+target_link_libraries(nimblecas_planning
+  PUBLIC nimblecas_core std_module)
+
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
 target_sources(nimblecas_bandsolve PUBLIC
@@ -1930,6 +1937,11 @@ target_link_libraries(logic_dist_tests
   PRIVATE nimblecas_logic_dist nimblecas_logic_parser nimblecas_logic
           nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME logic_dist_tests COMMAND logic_dist_tests)
+
+add_executable(planning_tests tests/planning_tests.cpp)
+target_link_libraries(planning_tests
+  PRIVATE nimblecas_planning nimblecas_core nimblecas_testing std_module)
+add_test(NAME planning_tests COMMAND planning_tests)
 
 add_executable(csp_tests tests/csp_tests.cpp)
 target_link_libraries(csp_tests

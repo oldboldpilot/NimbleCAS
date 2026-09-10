@@ -23,6 +23,7 @@ using nimblecas::sat_compile::CompileOptions;
 using nimblecas::sat_compile::model_of;
 using nimblecas::sat_compile::reference_solve;
 using nimblecas::sat_compile::reference_walksat;
+using nimblecas::sat_compile::SlsVariant;
 using nimblecas::sat_compile::Strategy;
 using nimblecas::sat_compile::Target;
 
@@ -76,6 +77,22 @@ namespace {
         cnf.clauses.push_back(current);  // a final clause with no terminating 0
     }
     return cnf;
+}
+
+[[nodiscard]] auto variant_of(std::string_view s) -> std::optional<SlsVariant> {
+    if (s == "skc") {
+        return SlsVariant::skc;
+    }
+    if (s == "probsat") {
+        return SlsVariant::probsat;
+    }
+    if (s == "novelty") {
+        return SlsVariant::novelty_plus;
+    }
+    if (s == "adaptnovelty") {
+        return SlsVariant::adaptive_novelty_plus;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] auto strategy_of(std::string_view s) -> std::optional<Strategy> {
@@ -142,6 +159,8 @@ auto main(int argc, char** argv) -> int {
             opts.emit_parallel = false;
         } else if (const auto st = strategy_of(a); st.has_value()) {
             opts.strategy = *st;
+        } else if (const auto vr = variant_of(a); vr.has_value()) {
+            opts.variant = *vr;
         } else if (a.starts_with("walkers=")) {
             opts.walkers = static_cast<std::uint32_t>(std::strtoul(std::string(a.substr(8)).c_str(), nullptr, 10));
         } else if (a.starts_with("flips=")) {
