@@ -590,6 +590,52 @@ auto main() -> int {
                   t.expect(verify_assignment(cnf, r->model),
                            "and the model satisfies all eight hundred clauses");
               })
+        .test("reference_walksat_solves_a_fifty_thousand_variable_instance",
+              [](TestContext& t) {
+                  // The instance the reference documentation quotes a timing for. It is here so
+                  // that claim is REPRODUCIBLE rather than merely asserted: a reader who doubts
+                  // the number can run this test and time it. Nothing here asserts a duration --
+                  // a wall-clock bound would be a flaky test on a shared machine, and a flaky
+                  // test is worse than no test. What is asserted is the part that must hold on
+                  // every machine: the walk finds a model, and the model satisfies the formula.
+                  std::mt19937_64 rng(0xBEEF1234ULL);
+                  constexpr std::size_t nv = 50000;
+                  std::vector<bool> planted(nv);
+                  for (std::size_t v = 0; v < nv; ++v) {
+                      planted[v] = (rng() % 2) == 0;
+                  }
+                  Cnf cnf{.num_vars = nv, .clauses = {}};
+                  while (cnf.clauses.size() < nv * 42 / 10) {
+                      std::vector<std::int64_t> clause;
+                      bool satisfied = false;
+                      for (int k = 0; k < 3; ++k) {
+                          const auto v = static_cast<std::int64_t>(1 + (rng() % nv));
+                          const bool pos = (rng() % 2) == 0;
+                          clause.push_back(pos ? v : -v);
+                          if (pos == planted[static_cast<std::size_t>(v) - 1]) {
+                              satisfied = true;
+                          }
+                      }
+                      if (satisfied) {
+                          cnf.clauses.push_back(clause);
+                      }
+                  }
+                  t.expect(cnf.clauses.size() == 210000,
+                           "the instance is the documented 210,000 clauses");
+                  t.expect(is_compilable_for(cnf, Strategy::walksat).has_value(),
+                           "fifty thousand variables is compilable for walksat");
+                  auto r = reference_walksat(cnf, 8, 2000000, 50, 4242);
+                  t.expect(r.has_value(), "the walk runs");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->found, "and solves a fifty-thousand-variable planted instance");
+                  if (!r->found) {
+                      return;
+                  }
+                  t.expect(verify_assignment(cnf, r->model),
+                           "with a model that satisfies every one of the 210,000 clauses");
+              })
         .test("reference_walksat_agrees_with_dpll_on_satisfiability_where_it_succeeds",
               [](TestContext& t) {
                   // A local search that says SAT must be right, since it exhibits a model; where
