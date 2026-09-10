@@ -2,7 +2,10 @@
 // @author Olumuyiwa Oluwasanmi
 //
 // Usage:
-//   sat_compile <file.cnf> [cpp|cuda|triton] [entry] [nosimd] [noparallel]
+//   sat_compile <file.cnf> [cpp|cuda|triton] [entry] [OPTIONS...]
+//
+// OPTIONS: exhaustive (default) | walksat, nosimd, noparallel,
+//          walkers=N, flips=N, noise=PERCENT
 //
 // Reads DIMACS on the given path (`p cnf <vars> <clauses>`, then clauses of literals terminated
 // by 0, with `c` comment lines ignored) and writes the emitted source to standard output. A
@@ -19,6 +22,8 @@ using nimblecas::sat_compile::compile;
 using nimblecas::sat_compile::CompileOptions;
 using nimblecas::sat_compile::model_of;
 using nimblecas::sat_compile::reference_solve;
+using nimblecas::sat_compile::reference_walksat;
+using nimblecas::sat_compile::Strategy;
 using nimblecas::sat_compile::Target;
 
 namespace {
@@ -73,6 +78,16 @@ namespace {
     return cnf;
 }
 
+[[nodiscard]] auto strategy_of(std::string_view s) -> std::optional<Strategy> {
+    if (s == "exhaustive") {
+        return Strategy::exhaustive;
+    }
+    if (s == "walksat") {
+        return Strategy::walksat;
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] auto target_of(std::string_view s) -> std::optional<Target> {
     if (s == "cpp") {
         return Target::cpp;
@@ -125,6 +140,14 @@ auto main(int argc, char** argv) -> int {
             opts.emit_simd = false;
         } else if (a == "noparallel") {
             opts.emit_parallel = false;
+        } else if (const auto st = strategy_of(a); st.has_value()) {
+            opts.strategy = *st;
+        } else if (a.starts_with("walkers=")) {
+            opts.walkers = static_cast<std::uint32_t>(std::strtoul(std::string(a.substr(8)).c_str(), nullptr, 10));
+        } else if (a.starts_with("flips=")) {
+            opts.max_flips = std::strtoull(std::string(a.substr(6)).c_str(), nullptr, 10);
+        } else if (a.starts_with("noise=")) {
+            opts.noise_percent = static_cast<std::uint32_t>(std::strtoul(std::string(a.substr(6)).c_str(), nullptr, 10));
         }
     }
 
@@ -137,6 +160,29 @@ auto main(int argc, char** argv) -> int {
 
     std::println(std::cerr, "sat_compile: {} variables, {} clauses", cnf->num_vars,
                  cnf->clauses.size());
+    if (opts.strategy == Strategy::walksat) {
+        // The reference walk, so a caller can check the emitted walker against it. Same seeding,
+        // same move rule, same walker ordering -- so the answer is comparable model for model
+        // rather than merely both being satisfying.
+        auto walk = reference_walksat(*cnf, opts.walkers, opts.max_flips, opts.noise_percent,
+                                      opts.base_seed);
+        if (!walk) {
+            std::println(std::cerr, "sat_compile: reference walk refused");
+            return 1;
+        }
+        if (walk->found) {
+            std::println(std::cerr,
+                         "sat_compile: reference walk solved it -- walker {} of {} run",
+                         walk->walker, walk->walkers_run);
+        } else {
+            std::println(std::cerr,
+                         "sat_compile: reference walk found nothing in {} walkers x {} flips "
+                         "(UNKNOWN, not unsatisfiable)",
+                         opts.walkers, opts.max_flips);
+        }
+        return 0;
+    }
+
     // The reference answer, so a caller can check the emitted solver against it without writing
     // their own oracle. Bounded, because a large formula's enumeration is not worth waiting for
     // just to print a line.

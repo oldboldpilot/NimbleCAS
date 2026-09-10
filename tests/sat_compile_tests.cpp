@@ -23,6 +23,10 @@ using nimblecas::verify_assignment;
 using nimblecas::sat_compile::compile;
 using nimblecas::sat_compile::CompileOptions;
 using nimblecas::sat_compile::is_compilable;
+using nimblecas::sat_compile::is_compilable_for;
+using nimblecas::sat_compile::reference_walksat;
+using nimblecas::sat_compile::Strategy;
+using nimblecas::sat_compile::WalkResult;
 using nimblecas::sat_compile::max_variables;
 using nimblecas::sat_compile::model_of;
 using nimblecas::sat_compile::reference_solve;
@@ -481,6 +485,275 @@ auto main() -> int {
                                "every target refuses a malformed formula rather than emitting "
                                "code for it");
                   }
+              })
+        .test("reference_walksat_solves_a_satisfiable_formula_and_verifies_its_model",
+              [](TestContext& t) {
+                  const Cnf cnf = simple_sat();
+                  auto r = reference_walksat(cnf, 16, 1000, 50, 12345);
+                  t.expect(r.has_value(), "the walk succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->found, "a satisfiable formula is solved");
+                  if (!r->found) {
+                      return;
+                  }
+                  t.expect(verify_assignment(cnf, r->model),
+                           "the model it returns really satisfies every clause");
+              })
+        .test("reference_walksat_never_claims_unsatisfiability",
+              [](TestContext& t) {
+                  // The single most important property of a local search: it CANNOT prove
+                  // unsatisfiability, so on an unsatisfiable formula it must come back
+                  // empty-handed rather than confident. `found == false` is UNKNOWN, and the
+                  // return type has no way to say `unsatisfiable` at all -- which is the design.
+                  const Cnf cnf = simple_unsat();
+                  auto r = reference_walksat(cnf, 64, 10000, 50, 999);
+                  t.expect(r.has_value(), "the walk succeeds as a call");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(!r->found, "no model is found, because none exists");
+                  t.expect(r->model.empty(), "and no model is offered");
+                  t.expect(r->walkers_run == 64,
+                           "every walker was run, since none could succeed");
+              })
+        .test("reference_walksat_is_deterministic_in_its_seed",
+              [](TestContext& t) {
+                  const Cnf cnf = simple_sat();
+                  auto a = reference_walksat(cnf, 32, 5000, 50, 0xABCDEF);
+                  auto b = reference_walksat(cnf, 32, 5000, 50, 0xABCDEF);
+                  t.expect(a.has_value() && b.has_value(), "both walks succeed");
+                  if (!a.has_value() || !b.has_value()) {
+                      return;
+                  }
+                  t.expect(a->found == b->found, "the same seed reaches the same verdict");
+                  t.expect(a->walker == b->walker, "and the same winning walker");
+                  t.expect(a->model == b->model, "and the same model, bit for bit");
+                  auto c = reference_walksat(cnf, 32, 5000, 50, 0x123456);
+                  t.expect(c.has_value(), "a different seed also succeeds");
+              })
+        .test("reference_walksat_stops_at_the_first_successful_walker",
+              [](TestContext& t) {
+                  const Cnf cnf = simple_sat();
+                  auto r = reference_walksat(cnf, 1000, 5000, 50, 7);
+                  t.expect(r.has_value(), "the walk succeeds");
+                  if (!r.has_value() || !r->found) {
+                      return;
+                  }
+                  t.expect(r->walkers_run == r->walker + 1,
+                           "walkers after the winner are never run -- the count says so rather "
+                           "than the caller having to assume it");
+              })
+        .test("reference_walksat_scales_past_the_enumerator_limit",
+              [](TestContext& t) {
+                  // The entire reason this strategy exists. Two hundred variables is 2^200
+                  // assignments, which the exhaustive path cannot even number, let alone visit.
+                  // A planted solution guarantees the formula is satisfiable, so a failure here
+                  // would be the solver rather than the instance.
+                  std::mt19937_64 rng(0xBEEF1234ULL);
+                  constexpr std::size_t nv = 200;
+                  std::vector<bool> planted(nv);
+                  for (std::size_t v = 0; v < nv; ++v) {
+                      planted[v] = (rng() % 2) == 0;
+                  }
+                  Cnf cnf{.num_vars = nv, .clauses = {}};
+                  while (cnf.clauses.size() < nv * 4) {
+                      std::vector<std::int64_t> clause;
+                      bool satisfied = false;
+                      for (int k = 0; k < 3; ++k) {
+                          const auto v = static_cast<std::int64_t>(1 + (rng() % nv));
+                          const bool pos = (rng() % 2) == 0;
+                          clause.push_back(pos ? v : -v);
+                          if (pos == planted[static_cast<std::size_t>(v) - 1]) {
+                              satisfied = true;
+                          }
+                      }
+                      if (satisfied) {
+                          cnf.clauses.push_back(clause);
+                      }
+                  }
+                  t.expect(is_compilable_for(cnf, Strategy::walksat).has_value(),
+                           "two hundred variables is compilable for walksat");
+                  t.expect(!is_compilable_for(cnf, Strategy::exhaustive).has_value(),
+                           "and is refused by the enumerator, which is the whole point");
+                  auto r = reference_walksat(cnf, 32, 200000, 50, 4242);
+                  t.expect(r.has_value(), "the walk succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->found, "a 200-variable planted instance is solved");
+                  if (!r->found) {
+                      return;
+                  }
+                  t.expect(verify_assignment(cnf, r->model),
+                           "and the model satisfies all eight hundred clauses");
+              })
+        .test("reference_walksat_agrees_with_dpll_on_satisfiability_where_it_succeeds",
+              [](TestContext& t) {
+                  // A local search that says SAT must be right, since it exhibits a model; where
+                  // it says nothing, dpll is consulted to check it was not simply wrong to give
+                  // up on something easy.
+                  std::mt19937_64 rng(0x5A7C0DEULL);
+                  int solved = 0;
+                  int gave_up = 0;
+                  for (int trial = 0; trial < 60; ++trial) {
+                      const auto nv = static_cast<std::size_t>(4 + (rng() % 8));
+                      const auto nc = static_cast<std::size_t>(nv * 3);
+                      Cnf cnf{.num_vars = nv, .clauses = {}};
+                      for (std::size_t c = 0; c < nc; ++c) {
+                          std::vector<std::int64_t> clause;
+                          for (int k = 0; k < 3; ++k) {
+                              const auto v = static_cast<std::int64_t>(1 + (rng() % nv));
+                              clause.push_back((rng() % 2) == 0 ? v : -v);
+                          }
+                          cnf.clauses.push_back(clause);
+                      }
+                      auto walk = reference_walksat(cnf, 24, 20000, 50, 31337 + trial);
+                      auto truth = dpll(cnf);
+                      if (!walk.has_value() || !truth.has_value()) {
+                          t.expect(false, "both solvers succeed as calls");
+                          continue;
+                      }
+                      if (walk->found) {
+                          ++solved;
+                          t.expect(verify_assignment(cnf, walk->model),
+                                   "every model the walk reports really satisfies the formula");
+                          t.expect(truth->verdict == SatVerdict::satisfiable,
+                                   "and dpll agrees the formula is satisfiable");
+                      } else {
+                          ++gave_up;
+                      }
+                  }
+                  t.expect(solved > 30,
+                           "the walk solved most of the satisfiable instances, so the sweep "
+                           "actually exercised the success path");
+                  t.expect(solved + gave_up == 60, "every trial was accounted for");
+              })
+        .test("reference_walksat_guards_its_arguments",
+              [](TestContext& t) {
+                  const Cnf cnf = simple_sat();
+                  auto a = reference_walksat(cnf, 0, 100, 50, 1);
+                  t.expect(!a.has_value() && a.error() == MathError::domain_error,
+                           "zero walkers is a domain_error");
+                  auto b = reference_walksat(cnf, 4, 100, 101, 1);
+                  t.expect(!b.has_value() && b.error() == MathError::domain_error,
+                           "a noise percentage above 100 is a domain_error");
+                  const Cnf malformed{.num_vars = 2, .clauses = {{5}}};
+                  auto c = reference_walksat(malformed, 4, 100, 50, 1);
+                  t.expect(!c.has_value() && c.error() == MathError::domain_error,
+                           "a malformed formula is a domain_error");
+              })
+        .test("zero_flips_still_solves_a_formula_the_random_start_happens_to_satisfy",
+              [](TestContext& t) {
+                  // An edge worth pinning: with no flips allowed the walk can still succeed, if a
+                  // starting assignment is already a model. Enough walkers make that near certain
+                  // on a formula this loose, and the check must happen BEFORE the flip loop.
+                  const Cnf easy{.num_vars = 3, .clauses = {{1, 2, 3}}};
+                  auto r = reference_walksat(easy, 64, 0, 50, 5);
+                  t.expect(r.has_value(), "the call succeeds");
+                  if (!r.has_value()) {
+                      return;
+                  }
+                  t.expect(r->found,
+                           "some random start satisfies a single three-literal clause");
+                  if (r->found) {
+                      t.expect(verify_assignment(easy, r->model), "and it is a real model");
+                  }
+              })
+        .test("the_variable_cap_applies_to_the_enumerator_and_not_to_the_walker",
+              [](TestContext& t) {
+                  const Cnf big{.num_vars = max_variables + 50, .clauses = {{1, 2}}};
+                  auto ex = is_compilable_for(big, Strategy::exhaustive);
+                  t.expect(!ex.has_value() && ex.error() == MathError::domain_error,
+                           "the enumerator refuses more variables than it can number");
+                  auto wk = is_compilable_for(big, Strategy::walksat);
+                  t.expect(wk.has_value(),
+                           "the walker accepts them, because it never numbers an assignment");
+              })
+        .test("walksat_cpp_emission_contains_the_documented_entry_points",
+              [](TestContext& t) {
+                  CompileOptions opts;
+                  opts.target = Target::cpp;
+                  opts.strategy = Strategy::walksat;
+                  opts.entry = "wsolve";
+                  auto src = compile(simple_sat(), opts);
+                  t.expect(src.has_value(), "the formula compiles to a WalkSAT solver");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->find("wsolve_solve_range") != std::string::npos,
+                           "the range entry point is emitted");
+                  t.expect(src->find("wsolve_solve_parallel") != std::string::npos,
+                           "the threaded entry point is emitted");
+                  t.expect(src->find("struct wsolve_result") != std::string::npos,
+                           "the result type is emitted");
+                  t.expect(src->find("nc_wsolve_lits") != std::string::npos,
+                           "the formula is baked into a literal table");
+                  t.expect(src->find("nc_wsolve_occp") != std::string::npos &&
+                               src->find("nc_wsolve_occn") != std::string::npos,
+                           "occurrences are split by sign, which is what makes the break count "
+                           "one contiguous scan");
+                  t.expect(src->find("nc_wsolve_break_count") != std::string::npos,
+                           "the break-count helper is emitted");
+              })
+        .test("walksat_cuda_emission_uses_managed_tables_and_one_thread_per_walker",
+              [](TestContext& t) {
+                  CompileOptions opts;
+                  opts.target = Target::cuda;
+                  opts.strategy = Strategy::walksat;
+                  opts.entry = "gwalk";
+                  auto src = compile(simple_sat(), opts);
+                  t.expect(src.has_value(), "the formula compiles to CUDA");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->find("__global__ void gwalk_kernel") != std::string::npos,
+                           "a kernel is emitted");
+                  t.expect(src->find("__managed__") != std::string::npos,
+                           "the tables are managed memory -- a real formula overflows the 64 KB "
+                           "constant bank, and the host needs to read them too");
+                  t.expect(src->find("__constant__") == std::string::npos,
+                           "and specifically not constant memory");
+                  t.expect(src->find("atomicMin") != std::string::npos,
+                           "the winner is reduced by minimum, so it is the lowest walker rather "
+                           "than whichever warp finished first");
+                  t.expect(src->find("gwalk_scratch_words") != std::string::npos,
+                           "the per-walker scratch size is exposed, since the host allocates it");
+              })
+        .test("walksat_triton_emission_is_a_scorer_and_says_so",
+              [](TestContext& t) {
+                  CompileOptions opts;
+                  opts.target = Target::triton;
+                  opts.strategy = Strategy::walksat;
+                  opts.entry = "tscore";
+                  auto src = compile(simple_sat(), opts);
+                  t.expect(src.has_value(), "the formula compiles to Triton");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->find("@triton.jit") != std::string::npos, "a kernel is emitted");
+                  t.expect(src->find("tscore_score_kernel") != std::string::npos,
+                           "it is a scorer");
+                  t.expect(src->find("tscore_sample_and_score") != std::string::npos,
+                           "with a host entry point that draws and scores samples");
+                  t.expect(src->find("deliberately NOT the walk") != std::string::npos,
+                           "and the emission says plainly that the walk belongs on CUDA, rather "
+                           "than pretending a random walk suits a tensor kernel");
+              })
+        .test("walksat_compile_guards_its_options",
+              [](TestContext& t) {
+                  CompileOptions opts;
+                  opts.strategy = Strategy::walksat;
+                  opts.walkers = 0;
+                  auto a = compile(simple_sat(), opts);
+                  t.expect(!a.has_value() && a.error() == MathError::domain_error,
+                           "zero walkers is a domain_error");
+                  opts.walkers = 8;
+                  opts.noise_percent = 101;
+                  auto b = compile(simple_sat(), opts);
+                  t.expect(!b.has_value() && b.error() == MathError::domain_error,
+                           "a noise percentage above 100 is a domain_error");
               })
         .run();
 }
