@@ -62,20 +62,30 @@ public:
         std::size_t passed = 0;
         std::size_t failed = 0;
         for (const auto& [case_name, fn] : cases_) {
+            // The name goes out, and is FLUSHED, before the case runs.
+            //
+            // A case that crashes the process — a stack overflow is the realistic one — takes
+            // the buffered output with it, so a suite that dies leaves no trace of which case
+            // did it. Announcing the case first turns "the suite crashed" into "the suite
+            // crashed in THIS case", which is the difference between a five-minute fix and an
+            // afternoon of bisecting.
+            std::print(std::cout, "  [ .. ] {}\r", case_name);
+            std::cout.flush();
             TestContext ctx;
             fn(ctx);
             if (ctx.ok()) {
                 ++passed;
-                std::println("  [PASS] {} ({} checks)", case_name, ctx.checks());
+                std::println(std::cout, "  [PASS] {} ({} checks)", case_name, ctx.checks());
             } else {
                 ++failed;
-                std::println("  [FAIL] {}", case_name);
+                std::println(std::cout, "  [FAIL] {}", case_name);
                 for (std::string_view failure : ctx.failures()) {
-                    std::println("         - {}", failure);
+                    std::println(std::cout, "         - {}", failure);
                 }
             }
         }
-        std::println("{}: {} passed, {} failed", name_, passed, failed);
+        std::println(std::cout, "{}: {} passed, {} failed", name_, passed, failed);
+        std::cout.flush();
         return failed == 0 ? 0 : 1;
     }
 

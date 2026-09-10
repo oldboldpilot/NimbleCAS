@@ -35,6 +35,17 @@ if(WIN32)
     message(WARNING "clang_rt.builtins-x86_64.lib not found; SIMD __builtin_cpu_supports "
                     "may fail to link. Set it via add_link_options manually.")
   endif()
+  # Reserve an 8 MB stack, matching the Linux and macOS default. Windows reserves only 1 MB.
+  #
+  # `nimblecas.logic` is a recursive-descent interpreter whose `max_derivation_depth` of 1000
+  # exists precisely so that a non-terminating program cannot overflow the native stack — and
+  # that guarantee is a statement about the stack it runs on. Leaving Windows at an eighth of
+  # what every other platform provides would make a DOCUMENTED INVARIANT quietly false on one
+  # platform, which is worse than not claiming it at all. Matching the others means the depth
+  # budget means the same thing everywhere, and one number can be reasoned about instead of
+  # three. Reserve is ADDRESS SPACE, not memory: the pages are committed lazily, so a query
+  # that nests three deep pays for three pages.
+  add_link_options(-Wl,/STACK:8388608)
 else()
   # clang + vendored/system libc++ on Linux/macOS.
   add_compile_options(

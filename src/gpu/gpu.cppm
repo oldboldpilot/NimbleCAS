@@ -38,6 +38,40 @@ inline constexpr int kGpuFftMaxLen = 2048;
 // Whether v is a (positive) power of two — the radix-2 FFT precondition. v <= 0 is not.
 [[nodiscard]] auto is_power_of_two(int v) -> bool { return v > 0 && (v & (v - 1)) == 0; }
 
+
+// Batched first-argument clause probe on the GPU: the mirror of nimblecas.logic_index.
+//
+// For goal `g` and clause `c`, bit `c` of row `g` of the result is set iff clause `c` is a
+// CANDIDATE for goal `g` — either key is 0 ("unknown, matches anything") or the two are equal.
+// Each row is (clause_count + 63) / 64 words.
+//
+// The CPU path is AUTHORITATIVE. This exists to be faster on a wide batch, not to be a second
+// opinion: it must produce the same bits, and the tests compare it against the CPU rather than
+// against expectations of its own. Fails with MathError::gpu_error when no device is present or
+// a CUDA call fails, and MathError::overflow when a size exceeds the int bound the kernel takes.
+[[nodiscard]] auto index_probe_batch(std::span<const std::uint64_t> clause_keys,
+                                     std::span<const std::uint64_t> goal_keys)
+    -> Result<std::vector<std::uint64_t>> {
+    if (!available()) {
+        return make_error<std::vector<std::uint64_t>>(MathError::gpu_error);
+    }
+    constexpr std::size_t int_cap = static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (clause_keys.size() > int_cap || goal_keys.size() > int_cap) {
+        return make_error<std::vector<std::uint64_t>>(MathError::overflow);
+    }
+    const std::size_t words = (clause_keys.size() + 63U) / 64U;
+    std::vector<std::uint64_t> out(goal_keys.size() * words, 0U);
+    if (out.empty()) {
+        return out;  // nothing to probe is not a failure
+    }
+    const int rc = nimblecas_gpu_index_probe_batch(
+        clause_keys.data(), static_cast<int>(clause_keys.size()), goal_keys.data(),
+        static_cast<int>(goal_keys.size()), out.data());
+    if (rc != 0) {
+        return make_error<std::vector<std::uint64_t>>(MathError::gpu_error);
+    }
+    return out;
+}
 // Evaluate the polynomial `coeffs` (low degree first) at every point in `x` on the GPU,
 // returning the vector of p(x_i). Fails with MathError::gpu_error when no device is present
 // or a CUDA call fails, and MathError::overflow when a size exceeds the int kernel bound.

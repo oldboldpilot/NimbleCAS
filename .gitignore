@@ -1,6 +1,7 @@
 # Build and Temp Directories
 build/
 build-win/
+build-frame/
 build-san-*/
 bin/
 lib/

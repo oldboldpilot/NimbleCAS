@@ -56,7 +56,6 @@ add_library(nimblecas_symbolic STATIC)
 target_sources(nimblecas_symbolic PUBLIC
   FILE_SET CXX_MODULES FILES src/symbolic/symbolic.cppm)
 target_link_libraries(nimblecas_symbolic PUBLIC nimblecas_parallel nimblecas_core std_module)
-
 # ---- nimblecas.cache : concurrent hash-consing / memoization ----
 add_library(nimblecas_cache STATIC)
 target_sources(nimblecas_cache PUBLIC
@@ -552,6 +551,62 @@ target_sources(nimblecas_logic PUBLIC
   FILE_SET CXX_MODULES FILES src/logic/logic.cppm)
 target_link_libraries(nimblecas_logic
   PUBLIC nimblecas_parallel nimblecas_core std_module)
+
+# ---- nimblecas.logic_parser : Prolog reader and writer (source text <-> terms) ----
+add_library(nimblecas_logic_parser STATIC)
+target_sources(nimblecas_logic_parser PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_parser/logic_parser.cppm)
+target_link_libraries(nimblecas_logic_parser
+  PUBLIC nimblecas_logic nimblecas_core std_module)
+
+# ---- nimblecas.logic_index : batched first-argument clause probe (CPU SIMD + TBB) ----
+add_library(nimblecas_logic_index STATIC)
+target_sources(nimblecas_logic_index PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_index/logic_index.cppm)
+target_link_libraries(nimblecas_logic_index
+  PUBLIC nimblecas_logic nimblecas_parallel nimblecas_core std_module)
+
+# ---- nimblecas.logic_compile : Prolog to C++ / CUDA / Triton source ----
+add_library(nimblecas_logic_compile STATIC)
+target_sources(nimblecas_logic_compile PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_compile/logic_compile.cppm)
+target_link_libraries(nimblecas_logic_compile
+  PUBLIC nimblecas_logic nimblecas_core std_module)
+
+# ---- nimblecas.logic_dist : SLD resolution as a task graph (serial / parallel / SGEE) ----
+add_library(nimblecas_logic_dist STATIC)
+target_sources(nimblecas_logic_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/logic_dist/logic_dist.cppm)
+target_link_libraries(nimblecas_logic_dist
+  PUBLIC nimblecas_logic nimblecas_logic_parser nimblecas_taskdag nimblecas_core std_module)
+
+# ---- nimblecas.search_dist : distributed graph search (serial / parallel / SGEE) ----
+add_library(nimblecas_search_dist STATIC)
+target_sources(nimblecas_search_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/search_dist/search_dist.cppm)
+target_link_libraries(nimblecas_search_dist
+  PUBLIC nimblecas_search nimblecas_taskdag nimblecas_core std_module)
+
+# ---- nimblecas.sat_compile : a CNF formula emitted as parallel C++, CUDA and Triton ----
+add_library(nimblecas_sat_compile STATIC)
+target_sources(nimblecas_sat_compile PUBLIC
+  FILE_SET CXX_MODULES FILES src/sat_compile/sat_compile.cppm)
+target_link_libraries(nimblecas_sat_compile
+  PUBLIC nimblecas_sat nimblecas_core std_module)
+
+# ---- nimblecas.sat_dist : distributed SAT (portfolio and cube-and-conquer) ----
+add_library(nimblecas_sat_dist STATIC)
+target_sources(nimblecas_sat_dist PUBLIC
+  FILE_SET CXX_MODULES FILES src/sat_dist/sat_dist.cppm)
+target_link_libraries(nimblecas_sat_dist
+  PUBLIC nimblecas_sat nimblecas_taskdag nimblecas_core std_module)
+
+# ---- nimblecas.planning : SAS+ tasks, delete-relaxation heuristics, heuristic search ----
+add_library(nimblecas_planning STATIC)
+target_sources(nimblecas_planning PUBLIC
+  FILE_SET CXX_MODULES FILES src/planning/planning.cppm)
+target_link_libraries(nimblecas_planning
+  PUBLIC nimblecas_core std_module)
 
 # ---- nimblecas.bandsolve : exact banded & tridiagonal linear solvers (§7.2) ----
 add_library(nimblecas_bandsolve STATIC)
@@ -1708,8 +1763,21 @@ add_test(NAME cmatrix_tests COMMAND cmatrix_tests)
 
 add_executable(logic_tests tests/logic_tests.cpp)
 target_link_libraries(logic_tests
-  PRIVATE nimblecas_logic nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+  PRIVATE nimblecas_logic nimblecas_logic_parser nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
 add_test(NAME logic_tests COMMAND logic_tests)
+
+add_executable(logic_parser_tests tests/logic_parser_tests.cpp)
+target_link_libraries(logic_parser_tests
+  PRIVATE nimblecas_logic_parser nimblecas_logic nimblecas_parallel nimblecas_core
+          nimblecas_testing std_module)
+add_test(NAME logic_parser_tests COMMAND logic_parser_tests)
+
+add_executable(logic_index_tests tests/logic_index_tests.cpp)
+target_link_libraries(logic_index_tests
+  PRIVATE nimblecas_logic_index nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_index_tests COMMAND logic_index_tests)
 
 add_executable(doubledouble_tests tests/doubledouble_tests.cpp)
 target_link_libraries(doubledouble_tests
@@ -1845,6 +1913,35 @@ add_executable(search_tests tests/search_tests.cpp)
 target_link_libraries(search_tests
   PRIVATE nimblecas_search nimblecas_parallel nimblecas_core nimblecas_testing std_module)
 add_test(NAME search_tests COMMAND search_tests)
+
+add_executable(search_dist_tests tests/search_dist_tests.cpp)
+target_link_libraries(search_dist_tests
+  PRIVATE nimblecas_search_dist nimblecas_search nimblecas_taskdag nimblecas_taskdag_sgee
+          nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME search_dist_tests COMMAND search_dist_tests)
+
+add_executable(sat_compile_tests tests/sat_compile_tests.cpp)
+target_link_libraries(sat_compile_tests
+  PRIVATE nimblecas_sat_compile nimblecas_sat nimblecas_rng nimblecas_parallel
+          nimblecas_core nimblecas_testing std_module)
+add_test(NAME sat_compile_tests COMMAND sat_compile_tests)
+
+add_executable(sat_dist_tests tests/sat_dist_tests.cpp)
+target_link_libraries(sat_dist_tests
+  PRIVATE nimblecas_sat_dist nimblecas_sat nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel
+          nimblecas_rng nimblecas_core nimblecas_testing std_module)
+add_test(NAME sat_dist_tests COMMAND sat_dist_tests)
+
+add_executable(logic_dist_tests tests/logic_dist_tests.cpp)
+target_link_libraries(logic_dist_tests
+  PRIVATE nimblecas_logic_dist nimblecas_logic_parser nimblecas_logic
+          nimblecas_taskdag nimblecas_taskdag_sgee nimblecas_parallel nimblecas_core nimblecas_testing std_module)
+add_test(NAME logic_dist_tests COMMAND logic_dist_tests)
+
+add_executable(planning_tests tests/planning_tests.cpp)
+target_link_libraries(planning_tests
+  PRIVATE nimblecas_planning nimblecas_core nimblecas_testing std_module)
+add_test(NAME planning_tests COMMAND planning_tests)
 
 add_executable(csp_tests tests/csp_tests.cpp)
 target_link_libraries(csp_tests
@@ -2232,6 +2329,14 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
       HINTS /usr/local/cuda/bin /usr/local/cuda-13.2/bin ENV CUDA_HOME ENV PATH REQUIRED)
     set(NIMBLECAS_NVCC "${NIMBLECAS_NVCC_EXE}")
   endif()
+  # The GPU architecture nvcc targets.
+  #
+  # `native` asks nvcc to detect it, which is convenient and is the default. It is NOT always
+  # right: under WSL it can leave the binary needing the PTX JIT at load time, and the WSL
+  # driver crashes inside libnvidia-ptxjitcompiler when it runs. Naming a REAL architecture
+  # (`sm_120` for Blackwell, `sm_90` for Hopper) emits SASS directly and skips the JIT entirely.
+  # Override with -DNIMBLECAS_CUDA_ARCH=sm_120.
+  set(NIMBLECAS_CUDA_ARCH "native" CACHE STRING "nvcc -arch value (native, or e.g. sm_120)")
   get_filename_component(_cuda_bin "${NIMBLECAS_NVCC}" DIRECTORY)
   find_library(NIMBLECAS_CUDART cudart
     HINTS "${_cuda_bin}/../lib64" /usr/local/cuda/lib64 /usr/local/cuda-13.2/lib64 REQUIRED)
@@ -2247,17 +2352,18 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   set(_gpu_wavelet_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_wavelet_kernels.cu")
   set(_gpu_qmc_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_qmc_kernels.cu")
   set(_gpu_lmfit_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_lmfit_kernels.cu")
+  set(_gpu_logic_src "${CMAKE_SOURCE_DIR}/src/gpu/gpu_logic_kernels.cu")
   set(_gpu_lib "${CMAKE_BINARY_DIR}/libnimblecas_gpu_kernels.a")
   add_custom_command(
     OUTPUT "${_gpu_lib}"
-    COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=native -Xcompiler -fPIC
+    COMMAND "${NIMBLECAS_NVCC}" -O3 -std=c++17 -arch=${NIMBLECAS_CUDA_ARCH} -Xcompiler -fPIC
             -I "${CMAKE_SOURCE_DIR}/src/gpu" -lib
-            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" -o "${_gpu_lib}"
-    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}"
+            "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" "${_gpu_logic_src}" -o "${_gpu_lib}"
+    DEPENDS "${_gpu_src}" "${_gpu_pricing_src}" "${_gpu_asian_src}" "${_gpu_sweep_src}" "${_gpu_barrier_src}" "${_gpu_lsm_src}" "${_gpu_control_src}" "${_gpu_wavelet_src}" "${_gpu_qmc_src}" "${_gpu_lmfit_src}" "${_gpu_logic_src}"
             "${CMAKE_SOURCE_DIR}/src/gpu/gpu_bridge.h"
 
     VERBATIM
-    COMMENT "nvcc: building CUDA GPU kernels (-arch=native)")
+    COMMENT "nvcc: building CUDA GPU kernels (-arch=${NIMBLECAS_CUDA_ARCH})")
   add_custom_target(nimblecas_gpu_kernels DEPENDS "${_gpu_lib}")
 
   add_library(nimblecas_gpu STATIC)
@@ -2272,7 +2378,7 @@ if(NIMBLECAS_CUDA AND NOT WIN32)
   add_executable(gpu_tests tests/gpu_tests.cpp)
   add_dependencies(gpu_tests nimblecas_gpu_kernels)
   target_link_libraries(gpu_tests
-    PRIVATE nimblecas_gpu nimblecas_krylov nimblecas_pricing nimblecas_optstrat nimblecas_futures
+    PRIVATE nimblecas_gpu nimblecas_krylov nimblecas_logic_index nimblecas_pricing nimblecas_optstrat nimblecas_futures
             nimblecas_control nimblecas_wavelets nimblecas_qmc nimblecas_nlsolve
             nimblecas_core nimblecas_testing std_module)
   set_target_properties(gpu_tests PROPERTIES BUILD_RPATH "${_cuda_libdir}")
@@ -2319,3 +2425,14 @@ if(NIMBLECAS_PYTHON)
   set_tests_properties(python_bindings PROPERTIES
     ENVIRONMENT "PYTHONPATH=$<TARGET_FILE_DIR:nimblecas_ext>")
 endif()
+
+# Prolog compiler driver: Prolog source in, C++ / CUDA / Triton source out.
+add_executable(prolog_compile tools/prolog_compile.cpp)
+target_link_libraries(prolog_compile
+  PRIVATE nimblecas_logic_compile nimblecas_logic_parser nimblecas_logic nimblecas_parallel
+          nimblecas_core std_module)
+
+add_executable(sat_compile tools/sat_compile.cpp)
+target_link_libraries(sat_compile
+  PRIVATE nimblecas_sat_compile nimblecas_sat nimblecas_rng nimblecas_parallel
+          nimblecas_core std_module)
