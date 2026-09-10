@@ -67,9 +67,21 @@ namespace {
 
 // The 3x3 discrete-Laplacian operator tridiag(-1, 2, -1) as (sub, diag, super) and as a dense
 // matrix, so tridiagonal results can be cross-checked against a full A*x product.
-const std::vector<Rational> kLapSub = vec({-1, -1});
-const std::vector<Rational> kLapDiag = vec({2, 2, 2});
-const std::vector<Rational> kLapSuper = vec({-1, -1});
+// Function-local statics, not namespace-scope objects: these allocate, and an allocation
+// failure during dynamic initialisation happens before main and cannot be caught. Built on
+// first use instead, which is inside main.
+[[nodiscard]] auto lap_sub() -> const std::vector<Rational>& {
+    static const std::vector<Rational> v = vec({-1, -1});
+    return v;
+}
+[[nodiscard]] auto lap_diag() -> const std::vector<Rational>& {
+    static const std::vector<Rational> v = vec({2, 2, 2});
+    return v;
+}
+[[nodiscard]] auto lap_super() -> const std::vector<Rational>& {
+    static const std::vector<Rational> v = vec({-1, -1});
+    return v;
+}
 
 [[nodiscard]] auto laplacian_dense() -> Matrix {
     return mat({{2, -1, 0}, {-1, 2, -1}, {0, -1, 2}});
@@ -85,7 +97,7 @@ auto main() -> int {
                   //   2*(3/2) - 2         = 1
                   //   -(3/2) + 2*2 - (3/2) = 1
                   //   -2 + 2*(3/2)        = 1
-                  auto x = solve_tridiagonal(kLapSub, kLapDiag, kLapSuper, vec({1, 1, 1}));
+                  auto x = solve_tridiagonal(lap_sub(), lap_diag(), lap_super(), vec({1, 1, 1}));
                   t.expect(x.has_value(), "Thomas solve succeeds");
                   if (x) {
                       t.expect(x->size() == 3, "solution has 3 entries");
@@ -96,7 +108,7 @@ auto main() -> int {
         .test("tridiagonal_substitution_check",
               [](TestContext& t) {
                   // Independently confirm A*x == b via a dense matrix product.
-                  auto x = solve_tridiagonal(kLapSub, kLapDiag, kLapSuper, vec({1, 1, 1}));
+                  auto x = solve_tridiagonal(lap_sub(), lap_diag(), lap_super(), vec({1, 1, 1}));
                   t.expect(x.has_value(), "solve succeeds");
                   if (x) {
                       std::vector<std::vector<Rational>> rows;
@@ -150,16 +162,16 @@ auto main() -> int {
         .test("tridiagonal_size_mismatches",
               [](TestContext& t) {
                   // sub must have n-1 entries (here n = 3, so 2).
-                  auto bad_sub = solve_tridiagonal(vec({-1, -1, -1}), kLapDiag, kLapSuper,
+                  auto bad_sub = solve_tridiagonal(vec({-1, -1, -1}), lap_diag(), lap_super(),
                                                    vec({1, 1, 1}));
                   t.expect(!bad_sub.has_value() && bad_sub.error() == MathError::domain_error,
                            "wrong sub length => domain_error");
                   // super must have n-1 entries.
-                  auto bad_super = solve_tridiagonal(kLapSub, kLapDiag, vec({-1}), vec({1, 1, 1}));
+                  auto bad_super = solve_tridiagonal(lap_sub(), lap_diag(), vec({-1}), vec({1, 1, 1}));
                   t.expect(!bad_super.has_value() && bad_super.error() == MathError::domain_error,
                            "wrong super length => domain_error");
                   // rhs must have n entries.
-                  auto bad_rhs = solve_tridiagonal(kLapSub, kLapDiag, kLapSuper, vec({1, 1}));
+                  auto bad_rhs = solve_tridiagonal(lap_sub(), lap_diag(), lap_super(), vec({1, 1}));
                   t.expect(!bad_rhs.has_value() && bad_rhs.error() == MathError::domain_error,
                            "wrong rhs length => domain_error");
                   // Empty diagonal (n == 0) is rejected.
@@ -187,7 +199,7 @@ auto main() -> int {
                   //   rhs [1,1,1] -> [3/2, 2, 3/2]   (verified above)
                   //   rhs [0,2,0] -> [1, 2, 1]:  2*1-2=0, -1+4-1=2, -2+2*1... = 0
                   auto rhs_cols = mat({{1, 0}, {1, 2}, {1, 0}});
-                  auto batch = solve_tridiagonal_batch(kLapSub, kLapDiag, kLapSuper, rhs_cols);
+                  auto batch = solve_tridiagonal_batch(lap_sub(), lap_diag(), lap_super(), rhs_cols);
                   t.expect(batch.has_value(), "batch solve succeeds");
                   if (batch) {
                       t.expect(batch->rows() == 3 && batch->cols() == 2, "solution is 3x2");
@@ -201,8 +213,8 @@ auto main() -> int {
                                "batch column 1 = [1, 2, 1]");
 
                       // Cross-check every column against an independent per-column Thomas solve.
-                      auto c0 = solve_tridiagonal(kLapSub, kLapDiag, kLapSuper, vec({1, 1, 1}));
-                      auto c1 = solve_tridiagonal(kLapSub, kLapDiag, kLapSuper, vec({0, 2, 0}));
+                      auto c0 = solve_tridiagonal(lap_sub(), lap_diag(), lap_super(), vec({1, 1, 1}));
+                      auto c1 = solve_tridiagonal(lap_sub(), lap_diag(), lap_super(), vec({0, 2, 0}));
                       t.expect(c0.has_value() && c1.has_value(), "per-column solves succeed");
                       if (c0 && c1) {
                           bool same = true;
@@ -217,7 +229,7 @@ auto main() -> int {
         .test("batch_size_mismatch",
               [](TestContext& t) {
                   // rhs_columns must have n (== 3) rows.
-                  auto bad = solve_tridiagonal_batch(kLapSub, kLapDiag, kLapSuper,
+                  auto bad = solve_tridiagonal_batch(lap_sub(), lap_diag(), lap_super(),
                                                      mat({{1, 0}, {1, 2}}));
                   t.expect(!bad.has_value() && bad.error() == MathError::domain_error,
                            "rhs with wrong row count => domain_error");
@@ -226,7 +238,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Bandwidth-1 band-LU on the dense Laplacian must reproduce Thomas exactly.
                   auto banded = solve_banded(laplacian_dense(), 1, 1, col({1, 1, 1}));
-                  auto thomas = solve_tridiagonal(kLapSub, kLapDiag, kLapSuper, vec({1, 1, 1}));
+                  auto thomas = solve_tridiagonal(lap_sub(), lap_diag(), lap_super(), vec({1, 1, 1}));
                   t.expect(banded.has_value(), "banded solve succeeds");
                   t.expect(thomas.has_value(), "Thomas solve succeeds");
                   if (banded && thomas) {

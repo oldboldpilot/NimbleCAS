@@ -515,9 +515,9 @@ auto Matrix::to_string() const -> std::string {
             }
             out += data_[i * cols_ + j].to_string();
         }
-        out += "]";
+        out += ']';
     }
-    out += "]";
+    out += ']';
     return out;
 }
 

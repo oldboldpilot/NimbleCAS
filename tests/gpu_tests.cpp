@@ -26,6 +26,14 @@ using nimblecas::testing::TestSuite;
 
 namespace {
 
+// Widen ONE index component to std::size_t.
+//
+// The point is the order of operations. `static_cast<std::size_t>(b * len + i)` computes
+// b * len + i in int and widens the result, so the cast cannot prevent an overflow that has
+// already happened -- it only launders it. `ix(b) * ix(len) + ix(i)` widens first and does
+// the arithmetic in std::size_t, which is what every one of these casts was written to mean.
+[[nodiscard]] constexpr auto ix(int v) -> std::size_t { return static_cast<std::size_t>(v); }
+
 // CPU reference Horner evaluation, matching the kernel's order.
 [[nodiscard]] auto cpu_poly_eval(std::span<const double> coeffs, double xi) -> double {
     double acc = 0.0;
@@ -46,7 +54,7 @@ namespace {
 [[nodiscard]] auto cpu_bs(const gpu::BsOption& o) -> double {
     const double S = o.spot, K = o.strike, r = o.rate, q = o.dividend, v = o.volatility, T = o.time;
     const bool call = o.is_call;
-    auto ncdf = [](double x) { return 0.5 * std::erfc(-x * 0.7071067811865475244); };
+    const auto ncdf = [](double x) { return 0.5 * std::erfc(-x * 0.7071067811865475244); };
     if (T == 0.0 || v == 0.0) {
         const double fwd = S * std::exp((r - q) * T);
         const double intr = call ? std::max(fwd - K, 0.0) : std::max(K - fwd, 0.0);
@@ -107,10 +115,10 @@ namespace {
             for (int j = 0; j < n; ++j) {
                 double acc = 0.0;
                 for (int l = 0; l < k; ++l) {
-                    acc += a[static_cast<std::size_t>(bi * m * k + i * k + l)] *
-                           b[static_cast<std::size_t>(bi * k * n + l * n + j)];
+                    acc += a[ix(bi) * ix(m) * ix(k) + ix(i) * ix(k) + ix(l)] *
+                           b[ix(bi) * ix(k) * ix(n) + ix(l) * ix(n) + ix(j)];
                 }
-                c[static_cast<std::size_t>(bi * m * n + i * n + j)] = acc;
+                c[ix(bi) * ix(m) * ix(n) + ix(i) * ix(n) + ix(j)] = acc;
             }
         }
     }
@@ -122,7 +130,7 @@ namespace {
 // bit-reversal. `sig` is one signal of n complex samples as 2*n interleaved doubles (re, im, ...);
 // returns the transform in the same interleaved layout.
 [[nodiscard]] auto cpu_dft(std::span<const double> sig, int n) -> std::vector<double> {
-    std::vector<double> out(static_cast<std::size_t>(2 * n), 0.0);
+    std::vector<double> out(2 * ix(n), 0.0);
     for (int k = 0; k < n; ++k) {
         double re = 0.0;
         double im = 0.0;
@@ -131,14 +139,14 @@ namespace {
                                static_cast<double>(j) / static_cast<double>(n);
             const double c = std::cos(ang);
             const double s = std::sin(ang);
-            const double xr = sig[static_cast<std::size_t>(2 * j)];
-            const double xi = sig[static_cast<std::size_t>(2 * j + 1)];
+            const double xr = sig[2 * ix(j)];
+            const double xi = sig[2 * ix(j) + 1];
             // (xr + i*xi) * (c + i*s) = (xr*c - xi*s) + i*(xr*s + xi*c)
             re += xr * c - xi * s;
             im += xr * s + xi * c;
         }
-        out[static_cast<std::size_t>(2 * k)] = re;
-        out[static_cast<std::size_t>(2 * k + 1)] = im;
+        out[2 * ix(k)] = re;
+        out[2 * ix(k) + 1] = im;
     }
     return out;
 }
@@ -336,8 +344,8 @@ auto main() -> int {
                       t.expect(got.has_value(), "batch transform computed on the device");
                       bool all = got.has_value() && got->size() == data.size();
                       for (int b = 0; b < batch && all; ++b) {
-                          const std::span<const double> block{data.data() + b * len,
-                                                              static_cast<std::size_t>(len)};
+                          const std::span<const double> block{
+                              data.data() + (static_cast<std::ptrdiff_t>(b) * len), ix(len)};
                           const auto ref = cpu_haar_level(block);
                           for (int i = 0; i < len; ++i) {
                               if (!approx((*got)[b * len + i], ref[i])) {
@@ -430,7 +438,7 @@ auto main() -> int {
                               static_cast<std::size_t>(2 * n)};
                           const auto ref = cpu_dft(sig, n);
                           for (int i = 0; i < 2 * n; ++i) {
-                              if (!approx((*got)[static_cast<std::size_t>(b * 2 * n + i)],
+                              if (!approx((*got)[ix(b) * 2 * ix(n) + ix(i)],
                                           ref[static_cast<std::size_t>(i)])) {
                                   all = false;
                               }
@@ -440,8 +448,8 @@ auto main() -> int {
                       // Hand-checkable: FFT of the impulse [1,0,0,0] is [1,1,1,1] (all ones).
                       bool impulse_ok = got.has_value();
                       for (int k = 0; k < n && impulse_ok; ++k) {
-                          impulse_ok = approx((*got)[static_cast<std::size_t>(2 * k)], 1.0) &&
-                                       approx((*got)[static_cast<std::size_t>(2 * k + 1)], 0.0);
+                          impulse_ok = approx((*got)[2 * ix(k)], 1.0) &&
+                                       approx((*got)[2 * ix(k) + 1], 0.0);
                       }
                       t.expect(impulse_ok, "FFT of [1,0,0,0] is [1,1,1,1]");
                       // Hand-checkable: FFT of the constant [1,1,1,1] is [4,0,0,0].
@@ -461,10 +469,10 @@ auto main() -> int {
                       const int n8 = 8;
                       std::vector<double> in8(static_cast<std::size_t>(2 * 2 * n8));
                       for (int j = 0; j < n8; ++j) {
-                          in8[static_cast<std::size_t>(2 * j)] = std::cos(0.7 * j) - 0.3 * j;
-                          in8[static_cast<std::size_t>(2 * j + 1)] = std::sin(1.1 * j) + 0.2;
-                          in8[static_cast<std::size_t>(2 * n8 + 2 * j)] = (j % 3 == 0) ? 2.0 : -1.0;
-                          in8[static_cast<std::size_t>(2 * n8 + 2 * j + 1)] = 0.5 * j - 1.0;
+                          in8[2 * ix(j)] = std::cos(0.7 * j) - 0.3 * j;
+                          in8[2 * ix(j) + 1] = std::sin(1.1 * j) + 0.2;
+                          in8[2 * ix(n8) + 2 * ix(j)] = (j % 3 == 0) ? 2.0 : -1.0;
+                          in8[2 * ix(n8) + 2 * ix(j) + 1] = 0.5 * j - 1.0;
                       }
                       auto got8 = gpu::fft_batch(in8, 2, n8);
                       t.expect(got8.has_value(), "n=8 batch FFT computed on the device");
@@ -475,7 +483,7 @@ auto main() -> int {
                               static_cast<std::size_t>(2 * n8)};
                           const auto ref = cpu_dft(sig, n8);
                           for (int i = 0; i < 2 * n8; ++i) {
-                              if (!approx((*got8)[static_cast<std::size_t>(b * 2 * n8 + i)],
+                              if (!approx((*got8)[ix(b) * 2 * ix(n8) + ix(i)],
                                           ref[static_cast<std::size_t>(i)])) {
                                   all8 = false;
                               }
@@ -505,7 +513,7 @@ auto main() -> int {
                   // A small option grid: calls and puts over a spot sweep at K=100, r=5%,
                   // vol=20%, T=1 (so the S=100 call is the textbook 10.4506).
                   std::vector<gpu::BsOption> opts;
-                  for (double s : {80.0, 90.0, 100.0, 110.0, 120.0}) {
+                  for (const double s : {80.0, 90.0, 100.0, 110.0, 120.0}) {
                       opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.0, 0.2, 1.0, true});
                       opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.0, 0.2, 1.0, false});
                   }
@@ -621,14 +629,14 @@ auto main() -> int {
               [](TestContext& t) {
                   namespace pr = nimblecas::pricing;
                   std::vector<gpu::BsOption> opts;
-                  for (double s : {80.0, 100.0, 120.0}) {
+                  for (const double s : {80.0, 100.0, 120.0}) {
                       opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.01, 0.2, 1.0, true});
                       opts.push_back(gpu::BsOption{s, 100.0, 0.05, 0.01, 0.2, 1.0, false});
                   }
                   opts.push_back(gpu::BsOption{100.0, 90.0, 0.05, 0.0, 0.2, 0.0, true});  // T==0 branch
                   auto got = gpu::black_scholes_greeks_batch(opts);
                   t.expect(got.has_value() && got->size() == opts.size(), "batch Greeks computed");
-                  auto near = [](double a, double b) {
+                  const auto near = [](double a, double b) {
                       return std::abs(a - b) <= 1e-9 * (1.0 + std::abs(b));
                   };
                   bool all = got.has_value();
@@ -664,7 +672,7 @@ auto main() -> int {
                       gpu::BsOption{90.0, 100.0, 0.01, 0.0, 0.15, 2.0, true}};
                   auto got = gpu::black_scholes_extended_greeks_batch(opts);
                   t.expect(got.has_value() && got->size() == opts.size(), "extended batch computed");
-                  auto near7 = [](double a, double b) {
+                  const auto near7 = [](double a, double b) {
                       return std::abs(a - b) <= 1e-7 * std::max(1.0, std::abs(b));
                   };
                   bool all = got.has_value();
@@ -737,7 +745,11 @@ auto main() -> int {
                   // against the exact CPU analytics oracle, including between and beyond strikes.
                   const auto ic = os::iron_condor(90.0, 1.0, 95.0, 2.5, 105.0, 2.6, 110.0, 1.1);
                   std::vector<double> wide;
-                  for (double s = 80.0; s <= 120.0; s += 1.0) { wide.push_back(s); }
+                  // Stepped by an integer, not by accumulating a double: `s += 1.0`
+                  // makes the number of points a property of rounding. This form gives the
+                  // same 41 values, bit for bit.
+                  wide.reserve(41);
+                  for (int i = 0; i <= 40; ++i) { wide.push_back(80.0 + i); }
                   auto sweep = gpu::strategy_pnl_grid(ic.legs(), wide);
                   t.expect(sweep.has_value() && sweep->size() == wide.size(), "condor sweep sized");
                   bool all = sweep.has_value();
@@ -762,7 +774,10 @@ auto main() -> int {
                   std::ignore =
                       book.with_leg(os::StrategyLeg{os::LegKind::underlying, 0.0, 0.1, 100.9});
                   std::vector<double> grid;
-                  for (double s = 80.3; s <= 120.0; s += 1.7) { grid.push_back(s); }
+                  // As above: 24 points from 80.3 in steps of 1.7, the last 119.4.
+                  // Multiplying is exact in the count where accumulating 1.7 is not.
+                  grid.reserve(24);
+                  for (int i = 0; i < 24; ++i) { grid.push_back(80.3 + (1.7 * i)); }
                   auto pnl = gpu::strategy_pnl_grid(book.legs(), grid);
                   auto pay = gpu::strategy_payoff_grid(book.legs(), grid);
                   t.expect(pnl.has_value() && pay.has_value() &&
@@ -894,7 +909,7 @@ auto main() -> int {
                   // path's terminal payoff between the legs; the sum counts it exactly once). The GPU
                   // sum therefore tracks the CPU sum to the tight ~1e-6 exp bound even at a barrier
                   // where an individual leg could diverge more.
-                  for (double b : {80.0, 120.0}) {
+                  for (const double b : {80.0, 120.0}) {
                       auto gin = gpu::barrier_option_mc_batch(opts, b, true, paths, steps, seed);
                       auto gout = gpu::barrier_option_mc_batch(opts, b, false, paths, steps, seed);
                       auto cin = pr::barrier_option_mc(spec_call, b, true, paths, steps, seed);
@@ -1124,7 +1139,7 @@ auto main() -> int {
                   if (!tf_res.has_value()) {
                       return;
                   }
-                  const auto tf = *tf_res;
+                  const auto& tf = *tf_res;
 
                   // Log-spaced grid of ~50 frequencies in [0.1, 100.0]
                   const auto omegas = nimblecas::logspace(0.1, 100.0, 50);
@@ -1275,7 +1290,7 @@ auto main() -> int {
 
                   // 2. SWT batch cross-check against CPU wavelets::swt (level 1)
                   auto got_swt = gpu::swt_batch(data, batch, len, fb);
-                  const std::size_t expected_swt_len = static_cast<std::size_t>(batch * 2 * len);
+                  const std::size_t expected_swt_len = ix(batch) * 2 * ix(len);
                   t.expect(got_swt.has_value() && got_swt->size() == expected_swt_len,
                            "swt_batch produced expected output size (2*len per block)");
 
@@ -1315,12 +1330,12 @@ auto main() -> int {
                       for (int b = 0; b < batch; ++b) {
                           double e_sig = 0.0;
                           for (int i = 0; i < len; ++i) {
-                              const double v = data[static_cast<std::size_t>(b * len + i)];
+                              const double v = data[ix(b) * ix(len) + ix(i)];
                               e_sig += v * v;
                           }
                           double e_coeff = 0.0;
                           for (int i = 0; i < len; ++i) {
-                              const double c = (*got_dwt)[static_cast<std::size_t>(b * len + i)];
+                              const double c = (*got_dwt)[ix(b) * ix(len) + ix(i)];
                               e_coeff += c * c;
                           }
                           if (std::abs(e_sig - e_coeff) > 1e-12 * (1.0 + e_sig)) {
@@ -1393,7 +1408,7 @@ auto main() -> int {
                   for (std::size_t i = 0; i < count; ++i) {
                       pts.push_back(qmc::halton_point(n0 + i, dim).value());
                   }
-                  auto disc_cpu = qmc::l2_star_discrepancy(pts, dim).value();
+                  const auto disc_cpu = qmc::l2_star_discrepancy(pts, dim).value();
                   auto disc_gpu = gpu::l2_star_discrepancy(pts, dim);
                   t.expect(disc_gpu.has_value(), "l2_star_discrepancy computed");
                   if (disc_gpu) {
@@ -1468,11 +1483,11 @@ auto main() -> int {
                       double b_norm2 = 0.0;
                       double res_norm2 = 0.0;
                       for (int i = 0; i < n; ++i) {
-                          double bi = b[static_cast<std::size_t>(i)];
+                          const double bi = b[static_cast<std::size_t>(i)];
                           b_norm2 += bi * bi;
                           double Ax_i = 0.0;
                           const int start = row_offsets[static_cast<std::size_t>(i)];
-                          const int end = row_offsets[static_cast<std::size_t>(i + 1)];
+                          const int end = row_offsets[ix(i) + 1];
                           for (int e = start; e < end; ++e) {
                               Ax_i += values[static_cast<std::size_t>(e)] *
                                       got->x[static_cast<std::size_t>(col_indices[static_cast<std::size_t>(e)])];
@@ -1487,7 +1502,7 @@ auto main() -> int {
                                "returned residual matches host true residual to 1e-10 relative");
 
                       // Compare with CPU oracle krylov::bicgstab
-                      auto A_cpu = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
+                      const auto A_cpu = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
                       auto cpu_res = nimblecas::bicgstab(A_cpu, b, tol, max_iters);
                       t.expect(cpu_res.has_value() && cpu_res->converged, "CPU krylov::bicgstab also converged");
                       if (cpu_res && cpu_res->converged) {
@@ -1556,7 +1571,7 @@ auto main() -> int {
                       if (z) {
                           t.expect(z->converged && z->iterations == 0, "b == 0 converges at iteration 0");
                           bool all_zero = true;
-                          for (double xv : z->x) { if (xv != 0.0) { all_zero = false; break; } }
+                          for (const double xv : z->x) { if (xv != 0.0) { all_zero = false; break; } }
                           t.expect(all_zero, "b == 0 gives x == 0");
                       }
                   }
@@ -1766,10 +1781,10 @@ auto main() -> int {
                   };
                   auto host_norm = [](const std::vector<double>& v) {
                       double s = 0.0;
-                      for (double d : v) s += d * d;
+                      for (const double d : v) s += d * d;
                       return std::sqrt(s);
                   };
-                  auto host_true_resid = [&](const std::vector<double>& vx) {
+                  const auto host_true_resid = [&](const std::vector<double>& vx) {
                       auto ax = host_spmv(vx);
                       std::vector<double> r(n, 0.0);
                       for (int i = 0; i < n; ++i) r[i] = b[i] - ax[i];
@@ -1789,7 +1804,7 @@ auto main() -> int {
                       t.expect(tr <= tol * bnorm, "true residual <= tol * ||b||");
 
                       // Compare against CPU oracle
-                      auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
+                      const auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, n);
                       auto cpu_res = nimblecas::gmres(A, b, tol, static_cast<std::size_t>(max_iters),
                                                       static_cast<std::size_t>(restart));
                       t.expect(cpu_res.has_value(), "CPU oracle computed");
@@ -1861,7 +1876,7 @@ auto main() -> int {
                       if (z_res) {
                           t.expect(z_res->converged && z_res->iterations == 0, "b == 0 converges at iteration 0");
                           bool all_zero = true;
-                          for (double xv : z_res->x) {
+                          for (const double xv : z_res->x) {
                               if (xv != 0.0) all_zero = false;
                           }
                           t.expect(all_zero, "b == 0 gives x == 0");
@@ -1918,7 +1933,7 @@ auto main() -> int {
                            "out-of-range col index yields domain_error");
               })
         .test("batched_lm_curvefit (Family I)", [](TestContext& t) {
-            auto eval_model_data = [](gpu::FitModel model, double ti, std::span<const double> theta) -> double {
+            const auto eval_model_data = [](gpu::FitModel model, double ti, std::span<const double> theta) -> double {
                 const std::size_t m = theta.size();
                 switch (model) {
                     case gpu::FitModel::polynomial: {
@@ -1929,7 +1944,7 @@ auto main() -> int {
                     case gpu::FitModel::exponential:
                         return theta[0] * std::exp(theta[1] * ti) + theta[2];
                     case gpu::FitModel::gaussian: {
-                        double u = (ti - theta[1]) / theta[2];
+                        const double u = (ti - theta[1]) / theta[2];
                         return theta[0] * std::exp(-0.5 * u * u);
                     }
                     case gpu::FitModel::logistic:
@@ -1969,7 +1984,7 @@ auto main() -> int {
                 for (const auto& c : cases) {
                     std::vector<double> t_vec(n_pts);
                     std::vector<double> y_vec(n_pts);
-                    double step = (c.t_max - c.t_min) / static_cast<double>(n_pts - 1);
+                    const double step = (c.t_max - c.t_min) / static_cast<double>(n_pts - 1);
                     for (std::size_t i = 0; i < n_pts; ++i) {
                         t_vec[i] = c.t_min + static_cast<double>(i) * step;
                         y_vec[i] = eval_model_data(c.model, t_vec[i], c.theta_true);
@@ -1978,6 +1993,7 @@ auto main() -> int {
                     y_buffers.push_back(std::move(y_vec));
                 }
 
+                problems.reserve(cases.size());
                 for (std::size_t k = 0; k < cases.size(); ++k) {
                     problems.push_back(gpu::CurveFitProblem{
                         .model = cases[k].model,
@@ -1998,7 +2014,7 @@ auto main() -> int {
                         t.expect(r.residual_norm <= 1e-8, "exact-data residual_norm <= 1e-8");
                         t.expect(r.theta.size() == c.theta_true.size(), "exact-data theta size matches");
                         for (std::size_t j = 0; j < c.theta_true.size(); ++j) {
-                            double rel_err = std::abs(r.theta[j] - c.theta_true[j]) / std::max(1.0, std::abs(c.theta_true[j]));
+                            const double rel_err = std::abs(r.theta[j] - c.theta_true[j]) / std::max(1.0, std::abs(c.theta_true[j]));
                             t.expect(rel_err <= 1e-6, "exact-data theta_j agrees with true to 1e-6 rel");
                         }
                     }
@@ -2018,13 +2034,13 @@ auto main() -> int {
                 for (std::size_t k = 0; k < K; ++k) {
                     t_bufs[k].resize(n_pts);
                     y_bufs[k].resize(n_pts);
-                    double t_min = -1.0 + 0.1 * static_cast<double>(k);
-                    double t_max = 3.0 + 0.1 * static_cast<double>(k);
-                    double step = (t_max - t_min) / static_cast<double>(n_pts - 1);
+                    const double t_min = -1.0 + 0.1 * static_cast<double>(k);
+                    const double t_max = 3.0 + 0.1 * static_cast<double>(k);
+                    const double step = (t_max - t_min) / static_cast<double>(n_pts - 1);
                     for (std::size_t i = 0; i < n_pts; ++i) {
-                        double tv = t_min + static_cast<double>(i) * step;
+                        const double tv = t_min + static_cast<double>(i) * step;
                         t_bufs[k][i] = tv;
-                        double noise = 1e-3 * std::sin(static_cast<double>(k * 100 + i));
+                        const double noise = 1e-3 * std::sin(static_cast<double>(k * 100 + i));
                         y_bufs[k][i] = eval_model_data(gpu::FitModel::gaussian, tv, theta_true) + noise;
                     }
                     th0_bufs[k] = {3.5 + 0.05 * static_cast<double>(k), 1.0 + 0.02 * static_cast<double>(k), 0.8};
@@ -2044,20 +2060,20 @@ auto main() -> int {
                         t.expect(r_gpu.converged, "noisy-data problem converged");
 
                         const auto& p = problems[k];
-                        nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
+                        const nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
                             std::vector<double> r(p.t.size());
                             for (std::size_t i = 0; i < p.t.size(); ++i) {
-                                double u = (p.t[i] - th[1]) / th[2];
+                                const double u = (p.t[i] - th[1]) / th[2];
                                 r[i] = th[0] * std::exp(-0.5 * u * u) - p.y[i];
                             }
                             return r;
                         };
-                        nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
+                        const nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
                             std::size_t n = p.t.size();
                             std::vector<double> j_flat(n * 3);
                             for (std::size_t i = 0; i < n; ++i) {
-                                double u = (p.t[i] - th[1]) / th[2];
-                                double e = std::exp(-0.5 * u * u);
+                                const double u = (p.t[i] - th[1]) / th[2];
+                                const double e = std::exp(-0.5 * u * u);
                                 j_flat[i * 3 + 0] = e;
                                 j_flat[i * 3 + 1] = th[0] * e * u / th[2];
                                 j_flat[i * 3 + 2] = th[0] * e * u * u / th[2];
@@ -2071,11 +2087,11 @@ auto main() -> int {
                         t.expect(cpu_sol.has_value(), "noisy-data CPU oracle solve succeeded");
                         if (cpu_sol) {
                             t.expect(cpu_sol->converged, "noisy-data CPU oracle converged");
-                            double cost_diff = std::abs(r_gpu.residual_norm - cpu_sol->residual_norm);
+                            const double cost_diff = std::abs(r_gpu.residual_norm - cpu_sol->residual_norm);
                             t.expect(cost_diff <= 1e-8 * std::max(1.0, cpu_sol->residual_norm),
                                      "cost agrees with CPU oracle to 1e-8 rel");
                             for (std::size_t j = 0; j < 3; ++j) {
-                                double th_diff = std::abs(r_gpu.theta[j] - cpu_sol->x[j]);
+                                const double th_diff = std::abs(r_gpu.theta[j] - cpu_sol->x[j]);
                                 t.expect(th_diff <= 1e-6 * std::max(1.0, std::abs(cpu_sol->x[j])),
                                          "theta agrees with CPU oracle to 1e-6 rel");
                             }
@@ -2236,7 +2252,7 @@ auto main() -> int {
                     .y = y_pts,
                     .theta0 = th0
                 };
-                auto opts = gpu::LmFitOptions{}.with_max_iter(2);
+                const auto opts = gpu::LmFitOptions{}.with_max_iter(2);
                 auto res = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&hard_prob, 1}, opts);
                 t.expect(res.has_value(), "max_iter=2 fit returns value");
                 if (res) {
@@ -2245,12 +2261,12 @@ auto main() -> int {
                     t.expect(r.iterations == 2, "max_iter=2 reports iterations == 2");
                     double sum_sq = 0.0;
                     for (std::size_t i = 0; i < t_pts.size(); ++i) {
-                        double fi = r.theta[0] * std::exp(r.theta[1] * t_pts[i]) + r.theta[2];
-                        double ri = fi - y_pts[i];
+                        const double fi = r.theta[0] * std::exp(r.theta[1] * t_pts[i]) + r.theta[2];
+                        const double ri = fi - y_pts[i];
                         sum_sq += ri * ri;
                     }
-                    double host_norm = std::sqrt(sum_sq);
-                    double rel_diff = std::abs(r.residual_norm - host_norm) / std::max(1.0, host_norm);
+                    const double host_norm = std::sqrt(sum_sq);
+                    const double rel_diff = std::abs(r.residual_norm - host_norm) / std::max(1.0, host_norm);
                     t.expect(rel_diff <= 1e-12, "residual_norm matches host recompute within 1e-12 rel");
                 }
             }
@@ -2323,15 +2339,15 @@ auto main() -> int {
             // 8. Overflow guards
             {
                 std::vector<double> t_buf(100, 1.0);
-                std::vector<double> y_buf(100, 1.0);
+                const std::vector<double> y_buf(100, 1.0);
                 std::vector<double> th0 = {1.0, 1.0, 1.0};
                 constexpr std::size_t int_max = static_cast<std::size_t>(std::numeric_limits<int>::max());
                 struct FakeSpan {
                     const double* data_ptr;
                     std::size_t sz;
                 };
-                FakeSpan fake_t{t_buf.data(), int_max + 5};
-                std::span<const double> huge_span(fake_t.data_ptr, fake_t.sz);
+                const FakeSpan fake_t{t_buf.data(), int_max + 5};
+                const std::span<const double> huge_span(fake_t.data_ptr, fake_t.sz);
                 gpu::CurveFitProblem p_huge{.model = gpu::FitModel::exponential, .t = huge_span, .y = huge_span, .theta0 = th0};
                 auto res_huge = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p_huge, 1});
                 t.expect(!res_huge.has_value() && res_huge.error() == MathError::overflow,
@@ -2352,7 +2368,7 @@ auto main() -> int {
                     y_bufs[k].resize(n_pts);
                     std::vector<double> th_true = {2.5 + 0.1 * static_cast<double>(k), 1.5, 0.4, 0.8};
                     for (std::size_t i = 0; i < n_pts; ++i) {
-                        double tv = 3.0 * static_cast<double>(i) / static_cast<double>(n_pts - 1);
+                        const double tv = 3.0 * static_cast<double>(i) / static_cast<double>(n_pts - 1);
                         t_bufs[k][i] = tv;
                         y_bufs[k][i] = eval_model_data(gpu::FitModel::sinusoid, tv, th_true);
                     }
@@ -2372,8 +2388,8 @@ auto main() -> int {
                     for (std::size_t k = 0; k < K; ++k) {
                         t.expect((*res_ana)[k].converged, "analytic fit converged");
                         t.expect((*res_fd)[k].converged, "FD fit converged");
-                        double cost_diff = std::abs((*res_ana)[k].residual_norm - (*res_fd)[k].residual_norm);
-                        double ref_cost = std::max(1.0, (*res_ana)[k].residual_norm);
+                        const double cost_diff = std::abs((*res_ana)[k].residual_norm - (*res_fd)[k].residual_norm);
+                        const double ref_cost = std::max(1.0, (*res_ana)[k].residual_norm);
                         t.expect(cost_diff <= 1e-6 * ref_cost, "FD and analytic final costs agree to 1e-6 relative");
                     }
                 }
@@ -2393,25 +2409,25 @@ auto main() -> int {
                 auto fallback_res = gpu::batched_curve_fit_lm(std::span<const gpu::CurveFitProblem>{&p, 1});
                 t.expect(fallback_res.has_value(), "CPU fallback returns value");
                 if (fallback_res) {
-                    nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
+                    const nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
                         std::vector<double> r(p.t.size());
                         for (std::size_t i = 0; i < p.t.size(); ++i) {
                             r[i] = th[0] / (1.0 + std::exp(-th[1] * (p.t[i] - th[2]))) - p.y[i];
                         }
                         return r;
                     };
-                    nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
+                    const nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
                         std::size_t n = p.t.size();
                         std::vector<double> j_flat(n * 3);
                         for (std::size_t i = 0; i < n; ++i) {
-                            double s = 1.0 / (1.0 + std::exp(-th[1] * (p.t[i] - th[2])));
+                            const double s = 1.0 / (1.0 + std::exp(-th[1] * (p.t[i] - th[2])));
                             j_flat[i * 3 + 0] = s;
                             j_flat[i * 3 + 1] = th[0] * s * (1.0 - s) * (p.t[i] - th[2]);
                             j_flat[i * 3 + 2] = -th[0] * s * (1.0 - s) * th[1];
                         }
                         return j_flat;
                     };
-                    nlsolve::Options o{};
+                    const nlsolve::Options o{};
                     auto oracle_res = nlsolve::levenberg_marquardt(F, J, p.theta0, o, 1e-3);
                     t.expect(oracle_res.has_value(), "CPU oracle returns value");
                     if (oracle_res) {

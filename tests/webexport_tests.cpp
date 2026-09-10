@@ -82,8 +82,8 @@ auto main() -> int {
                   auto r = plot_spec_line(xs, ys, o);
                   t.expect(r.has_value(), "plot_spec_line succeeds");
                   const std::string& s = r.value();
-                  t.expect(s.starts_with("{"), "output is a JSON object");
-                  t.expect(s.ends_with("}"), "output object is closed");
+                  t.expect(s.starts_with('{'), "output is a JSON object");
+                  t.expect(s.ends_with('}'), "output object is closed");
                   t.expect(has(s, "\"type\":\"plot\""), "type is plot");
                   t.expect(has(s, "\"title\":\"T\""), "title present");
                   t.expect(has(s, "\"xLabel\":\"X\""), "xLabel present");

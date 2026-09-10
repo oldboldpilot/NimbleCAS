@@ -12,15 +12,33 @@
 # (CUDA) and the Python bindings; nimblecas.parallel auto-selects its serial backend on wasm
 # (no TBB headers), and nimblecas.simd auto-selects its scalar-only backend on wasm (no x86
 # intrinsics -- see the portability note at the top of src/simd/simd.cppm). Run on the build
-# server (mgpu) with emsdk sourced.
+# server (mgpu), or any host with emsdk installed -- the script finds it.
 #
 # @author Olumuyiwa Oluwasanmi
 set -euo pipefail
 
 REPO="${1:-/scratch/NimbleCAS}"
 OUT="${2:-/scratch/wasm-cas}"
-source /scratch/emsdk/emsdk_env.sh >/dev/null 2>&1
-SYSROOT="$(em++ --sysroot-path 2>/dev/null || echo /scratch/emsdk/upstream/emscripten/cache/sysroot)"
+
+# Locate emsdk rather than assuming one machine's copy. $EMSDK first (set by a sourced
+# emsdk_env.sh), then an em++ already on PATH, then the usual install locations. Sourcing a
+# missing emsdk_env.sh used to be silent -- output redirected away, and `source` on an absent
+# file does not abort even under `set -e` -- so a host without /scratch/emsdk got no
+# emscripten and a bare "em++: command not found" a dozen lines later.
+if ! command -v em++ >/dev/null 2>&1; then
+  for d in "${EMSDK:-}" "${HOME}/emsdk" /scratch/emsdk /opt/emsdk /usr/local/emsdk; do
+    if [[ -n "${d}" && -f "${d}/emsdk_env.sh" ]]; then
+      # shellcheck disable=SC1091
+      source "${d}/emsdk_env.sh" >/dev/null 2>&1 || true
+      break
+    fi
+  done
+fi
+if ! command -v em++ >/dev/null 2>&1; then
+  echo "em++ not found. Install emsdk and either source its emsdk_env.sh or set EMSDK." >&2
+  exit 1
+fi
+SYSROOT="$(em++ --sysroot-path 2>/dev/null || echo "${EMSDK:-/scratch/emsdk}/upstream/emscripten/cache/sysroot")"
 
 mkdir -p "$OUT"
 cd "$OUT"

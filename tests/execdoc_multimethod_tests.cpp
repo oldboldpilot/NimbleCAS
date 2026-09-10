@@ -51,7 +51,7 @@ namespace {
     return "\\(" + to_latex(e) + "\\)";
 }
 
-const std::string pde_doc =
+constexpr std::string_view pde_doc =
     "# Reaction-diffusion: one PDE, four methods\n\n"
     "We solve u_t = u_xx + u^2 on x in [0,1], with initial datum phi(x) = x - x^2.\n\n"
     "## The linear diffusion piece has an exact closed form\n\n"
@@ -83,7 +83,7 @@ const std::string pde_doc =
     "nimblecas.pde -- only for ODEs (nimblecas.perturbation) and integral equations\n"
     "(nimblecas.inteq). This is an honest, documented gap, not a silent omission.\n";
 
-const std::string inteq_doc =
+constexpr std::string_view inteq_doc =
     "# A nonlinear Volterra equation: Neumann, ADM, HPM, HAM\n\n"
     "phi(x) = f(x) + integral_0^x phi(t)^2 dt has phi(x) = x as its exact fixed point when\n"
     "f(x) = x - x^3/3 (since integral_0^x t^2 dt = x^3/3). We verify this algebraic\n"

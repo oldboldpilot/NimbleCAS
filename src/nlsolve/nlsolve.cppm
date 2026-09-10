@@ -1135,10 +1135,17 @@ using Solver =
     std::function<Result<SolveResult>(const ResidualFn&, std::span<const double>, const Options&)>;
 
 // Default solver used when the caller does not pass one: finite-difference Newton.
-inline const Solver default_solver =
-    [](const ResidualFn& F, std::span<const double> x0, const Options& o) -> Result<SolveResult> {
-    return newton(F, x0, o);
-};
+//
+// A function-local static, not a namespace-scope object. Constructing a std::function
+// allocates, and an allocation failure during dynamic initialisation happens before main --
+// where nothing can catch it, and where this library has no way to report a MathError. On
+// first use it is at least inside the program.
+[[nodiscard]] inline auto default_solver() -> const Solver& {
+    static const Solver s =
+        [](const ResidualFn& F, std::span<const double> x0, const Options& o)
+        -> Result<SolveResult> { return newton(F, x0, o); };
+    return s;
+}
 
 // A shard's best result over its subset of starts. `start_index` is the GLOBAL index of
 // the winning start (carried so a distributed driver can reproduce the exact tie-break
@@ -1237,7 +1244,7 @@ export namespace nimblecas::nlsolve {
 [[nodiscard]] auto parallel_multistart(const ResidualFn& F,
                                        std::span<const std::vector<double>> starts,
                                        const Options& opts = {},
-                                       const Solver& solver = default_solver,
+                                       const Solver& solver = default_solver(),
                                        std::size_t grain = 1) -> Result<SolveResult> {
     std::vector<std::size_t> which(starts.size());
     std::iota(which.begin(), which.end(), std::size_t{0});
@@ -1259,7 +1266,7 @@ export namespace nimblecas::nlsolve {
                                     std::span<const std::vector<double>> starts,
                                     std::size_t shard_index, std::size_t num_shards,
                                     const Options& opts = {},
-                                    const Solver& solver = default_solver) -> MultistartResult {
+                                    const Solver& solver = default_solver()) -> MultistartResult {
     if (num_shards == 0 || shard_index >= num_shards) {
         return MultistartResult{};  // invalid: no result
     }

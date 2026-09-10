@@ -252,7 +252,7 @@ struct Frag {
         std::string den_str;
         for (std::size_t i = 0; i < den.size(); ++i) {
             if (i != 0) {
-                den_str += " ";
+                den_str += ' ';
             }
             den_str += den[i];
         }

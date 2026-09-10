@@ -1,0 +1,21 @@
+# Test suites: the repository configuration, minus one check.
+# @author Olumuyiwa Oluwasanmi
+#
+# InheritParentConfig keeps everything from the root .clang-tidy; only the lines below
+# differ, and they apply to this directory alone rather than to the whole repository.
+#
+#   bugprone-random-generator-seed   (with its cert-msc32-c / cert-msc51-cpp aliases)
+#                           8 findings here, every one a deliberately fixed seed. A test
+#                           that seeds from entropy is a test that cannot be reproduced:
+#                           the random-formula SAT, search and planning suites compare two
+#                           independent algorithms on the SAME pseudo-random inputs, and a
+#                           failure is only useful if the input that produced it comes back
+#                           on the next run. The check is right about production code, which
+#                           is why it stays ON for src/ -- and `nimblecas.pricing`'s
+#                           reproducible Monte Carlo never trips it there anyway, because it
+#                           takes its seed as a parameter instead of choosing one.
+InheritParentConfig: true
+Checks: >
+  -bugprone-random-generator-seed,
+  -cert-msc32-c,
+  -cert-msc51-cpp

@@ -58,6 +58,13 @@ for e in db:
     # "no checks enabled" -- taking every repo TU with it. That is why this filter exists.
     if not os.path.realpath(f).startswith(root):
         continue
+    # Inside the repository is not the same as ours. Enabling the Python bindings puts
+    # nanobind's own .cpp files in the compile database, under the uv-managed .venv --
+    # gitignored, never edited here, and 610 of the 1248 findings in a full sweep. Dropping
+    # them is what makes the reported number mean "findings in NimbleCAS".
+    rel = os.path.realpath(f)[len(root):].replace(os.sep, "/")
+    if rel.split("/", 1)[0] == ".venv":
+        continue
     if needle and needle not in f:
         continue
     if f in seen:

@@ -36,7 +36,9 @@ export namespace nimblecas::gpu {
 inline constexpr int kGpuFftMaxLen = 2048;
 
 // Whether v is a (positive) power of two — the radix-2 FFT precondition. v <= 0 is not.
-[[nodiscard]] auto is_power_of_two(int v) -> bool { return v > 0 && (v & (v - 1)) == 0; }
+[[nodiscard]] auto is_power_of_two(int v) -> bool {
+    return v > 0 && std::has_single_bit(static_cast<unsigned>(v));
+}
 
 
 // Batched first-argument clause probe on the GPU: the mirror of nimblecas.logic_index.
@@ -550,7 +552,7 @@ using BicgstabCsrResult = CgCsrResult;
     }
 
     if (!available()) {
-        auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, b.size());
+        const auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, b.size());
         auto res = nimblecas::bicgstab(A, b, tol, static_cast<std::size_t>(max_iters));
         if (!res) {
             return make_error<CgCsrResult>(res.error());
@@ -630,7 +632,7 @@ using GmresCsrResult = CgCsrResult;
     }
 
     if (!available()) {
-        auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, b.size());
+        const auto A = nimblecas::csr_matvec(row_offsets, col_indices, values, b.size());
         auto res = nimblecas::gmres(A, b, tol, static_cast<std::size_t>(max_iters),
                                     static_cast<std::size_t>(restart));
         if (!res) {
@@ -737,7 +739,7 @@ struct CsrSystem {
         std::vector<CgCsrResult> out;
         out.reserve(systems.size());
         for (const auto& s : systems) {
-            auto A = nimblecas::csr_matvec(s.row_offsets, s.col_indices, s.values, s.b.size());
+            const auto A = nimblecas::csr_matvec(s.row_offsets, s.col_indices, s.values, s.b.size());
             auto res = nimblecas::cg(A, s.b, tol, static_cast<std::size_t>(max_iters));
             if (!res) {
                 return make_error<std::vector<CgCsrResult>>(res.error());
@@ -1868,7 +1870,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             break;
         }
         case FitModel::exponential: {
-            double e = std::exp(theta[1] * t);
+            const double e = std::exp(theta[1] * t);
             out_f = theta[0] * e + theta[2];
             if (!out_jrow.empty()) {
                 out_jrow[0] = e;
@@ -1878,8 +1880,8 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             break;
         }
         case FitModel::gaussian: {
-            double u = (t - theta[1]) / theta[2];
-            double e = std::exp(-0.5 * u * u);
+            const double u = (t - theta[1]) / theta[2];
+            const double e = std::exp(-0.5 * u * u);
             out_f = theta[0] * e;
             if (!out_jrow.empty()) {
                 out_jrow[0] = e;
@@ -1889,7 +1891,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             break;
         }
         case FitModel::logistic: {
-            double s = 1.0 / (1.0 + std::exp(-theta[1] * (t - theta[2])));
+            const double s = 1.0 / (1.0 + std::exp(-theta[1] * (t - theta[2])));
             out_f = theta[0] * s;
             if (!out_jrow.empty()) {
                 out_jrow[0] = s;
@@ -1899,9 +1901,9 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             break;
         }
         case FitModel::sinusoid: {
-            double arg = theta[1] * t + theta[2];
-            double s = std::sin(arg);
-            double c = std::cos(arg);
+            const double arg = theta[1] * t + theta[2];
+            const double s = std::sin(arg);
+            const double c = std::cos(arg);
             out_f = theta[0] * s + theta[3];
             if (!out_jrow.empty()) {
                 out_jrow[0] = s;
@@ -1912,7 +1914,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             break;
         }
         case FitModel::power_law: {
-            double p = std::pow(t, theta[1]);
+            const double p = std::pow(t, theta[1]);
             out_f = theta[0] * p;
             if (!out_jrow.empty()) {
                 out_jrow[0] = p;
@@ -2017,24 +2019,24 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             return make_error<std::vector<LmFitResult>>(MathError::domain_error);
         }
 
-        for (double tv : p.t) {
+        for (const double tv : p.t) {
             if (!std::isfinite(tv)) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
         }
-        for (double yv : p.y) {
+        for (const double yv : p.y) {
             if (!std::isfinite(yv)) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
         }
-        for (double thv : p.theta0) {
+        for (const double thv : p.theta0) {
             if (!std::isfinite(thv)) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
         }
 
         if (p.model == FitModel::power_law) {
-            for (double tv : p.t) {
+            for (const double tv : p.t) {
                 if (tv <= 0.0) return make_error<std::vector<LmFitResult>>(MathError::domain_error);
             }
         }
 
         std::array<double, kGpuLmMaxParams> j_buf{};
-        std::span<double> j_span = opts.analytic_jacobian
+        const std::span<double> j_span = opts.analytic_jacobian
                                        ? std::span<double>{j_buf.data(), m_k}
                                        : std::span<double>{};
         std::array<double, kGpuLmMaxParams> th_pert{};
@@ -2093,7 +2095,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
         std::vector<LmFitResult> out;
         out.reserve(problems.size());
         for (const auto& p : problems) {
-            nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
+            const nlsolve::ResidualFn F = [&p](std::span<const double> th) -> std::vector<double> {
                 std::vector<double> r(p.t.size());
                 for (std::size_t i = 0; i < p.t.size(); ++i) {
                     double f_val = 0.0;
@@ -2108,7 +2110,7 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
             o.fd_step = opts.fd_step;
             Result<nlsolve::SolveResult> r;
             if (opts.analytic_jacobian) {
-                nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
+                const nlsolve::JacobianFn J = [&p](std::span<const double> th) -> std::vector<double> {
                     const std::size_t n = p.t.size();
                     const std::size_t m = p.theta0.size();
                     std::vector<double> j_flat(n * m);
@@ -2189,8 +2191,8 @@ inline auto lm_model_eval(FitModel model, double t, std::span<const double> thet
     std::vector<LmFitResult> results;
     results.reserve(num_problems);
     for (int k = 0; k < num_problems; ++k) {
-        int start_th = th_off[k];
-        int end_th = th_off[k + 1];
+        const int start_th = th_off[k];
+        const int end_th = th_off[k + 1];
         std::vector<double> th_k(theta_cat.begin() + start_th, theta_cat.begin() + end_th);
         results.push_back(LmFitResult{
             .theta = std::move(th_k),

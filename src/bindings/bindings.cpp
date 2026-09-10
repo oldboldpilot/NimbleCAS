@@ -110,7 +110,6 @@ using nimblecas::ExactOrthogonalQr;
 using nimblecas::Expr;
 using nimblecas::Laurent;
 using nimblecas::LinearStability;
-using nimblecas::MathError;
 using nimblecas::Matrix;
 using nimblecas::MleModel;
 using nimblecas::NumberField;
@@ -150,7 +149,7 @@ template <typename T>
 // A stable 64-bit hash mixer (boost::hash_combine style), so value types with a
 // structural __eq__ also get a structural __hash__ (a == b => hash(a) == hash(b)).
 [[nodiscard]] auto hash_combine(std::size_t seed, std::size_t v) -> std::size_t {
-    return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+    return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U));
 }
 
 [[nodiscard]] auto hash_rational(const Rational& r) -> std::size_t {
@@ -160,6 +159,9 @@ template <typename T>
 
 }  // namespace
 
+// The statics below are NB_MODULE's expansion, not code written here, and the macro
+// invocation is the only line a suppression can attach to.
+// NOLINTNEXTLINE(misc-use-anonymous-namespace)
 NB_MODULE(nimblecas_ext, m) {
     m.doc() =
         "NimbleCAS Python bindings: exact symbolic core (Expr) plus the numeric / linear-"
@@ -1564,7 +1566,7 @@ NB_MODULE(nimblecas_ext, m) {
     // =======================================================================
     namespace pr = nimblecas::pricing;
 
-    auto spec_of = [](double spot, double strike, double rate, double div, double vol,
+    const auto spec_of = [](double spot, double strike, double rate, double div, double vol,
                       double expiry, bool is_call) -> pr::OptionSpec {
         pr::OptionSpec s{};
         s.spot = spot; s.strike = strike; s.rate = rate; s.dividend_yield = div;
@@ -1599,7 +1601,7 @@ NB_MODULE(nimblecas_ext, m) {
     pricing.def("trinomial",
                 [spec_of](double spot, double strike, double rate, double div, double vol,
                           double expiry, bool is_call, int steps, const std::string& exercise) {
-                    auto ex = exercise == "american" ? pr::Exercise::american
+                    const auto ex = exercise == "american" ? pr::Exercise::american
                               : exercise == "bermudan" ? pr::Exercise::bermudan
                                                        : pr::Exercise::european;
                     return unwrap(pr::trinomial_price(

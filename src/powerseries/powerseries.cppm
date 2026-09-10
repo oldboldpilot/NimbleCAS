@@ -179,23 +179,23 @@ auto PowerSeries::to_string(std::string_view var) const -> std::string {
         } else {
             if (!(coeffs_[k] == Rational::from_int(1))) {
                 out += coeffs_[k].to_string();
-                out += "*";
+                out += '*';
             }
             out += std::string(var);
             if (k > 1) {
-                out += "^";
+                out += '^';
                 out += std::to_string(k);
             }
         }
     }
     if (first) {
-        out += "0";
+        out += '0';
     }
     out += " + O(";
     out += std::string(var);
-    out += "^";
+    out += '^';
     out += std::to_string(coeffs_.size());
-    out += ")";
+    out += ')';
     return out;
 }
 

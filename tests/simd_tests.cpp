@@ -80,7 +80,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // Dense sweep over the full useful exp domain, incl. ragged tails.
                   std::vector<double> in;
-                  for (double x = -40.0; x <= 40.0; x += 0.0005) in.push_back(x);
+                  in.reserve(160001);
+                  for (int i = 0; i <= 160000; ++i) { in.push_back(-40.0 + (i * 0.0005)); }
                   std::vector<double> out(in.size());
                   simd::exp_into(in, out);
                   double max_ulp = 0.0;
@@ -117,8 +118,9 @@ auto main() -> int {
                   // Sweep the positive-normal domain, weighted toward the Monte-Carlo tail range
                   // (1e-15, 0.02425) where the inverse-normal transform actually calls it.
                   std::vector<double> in;
-                  for (double x = 1e-15; x <= 0.02425; x *= 1.0009) in.push_back(x);
-                  for (double x = 0.02425; x <= 1.0e6; x *= 1.0007) in.push_back(x);
+                  in.reserve(34260 + 25059);
+                  for (int i = 0; i < 34260; ++i) { in.push_back(1e-15 * std::pow(1.0009, i)); }
+                  for (int i = 0; i < 25059; ++i) { in.push_back(0.02425 * std::pow(1.0007, i)); }
                   std::vector<double> out(in.size());
                   simd::log_into(in, out);
                   double max_ulp = 0.0;
