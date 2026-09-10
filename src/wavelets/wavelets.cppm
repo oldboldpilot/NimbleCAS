@@ -552,7 +552,7 @@ enum class Family : std::uint8_t { daubechies, symlet, coiflet };
 // Low-pass sum rule: Sum h_k should equal sqrt(2) for a normalised scaling filter.
 [[nodiscard]] auto lowpass_sum(std::span<const double> h) -> double {
     double s = 0.0;
-    for (double v : h) {
+    for (double const v : h) {
         s += v;
     }
     return s;

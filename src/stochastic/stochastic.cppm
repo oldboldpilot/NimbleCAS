@@ -479,7 +479,7 @@ using BMat = std::vector<std::vector<bool>>;
 
 [[nodiscard]] auto all_true(const BMat& m) -> bool {
     for (const auto& row : m) {
-        for (bool v : row) {
+        for (bool const v : row) {
             if (!v) {
                 return false;
             }
@@ -1611,13 +1611,13 @@ auto arma_spectral_density(std::span<const Rational> ar, std::span<const Rationa
         // Phi(x) = 1 - sum phi_k x^k ; Theta(x) = 1 + sum theta_k x^k.
         cd phi_val{1.0, 0.0};
         cd xpow{1.0, 0.0};
-        for (double c : phi) {
+        for (double const c : phi) {
             xpow *= x;
             phi_val -= c * xpow;
         }
         cd theta_val{1.0, 0.0};
         xpow = cd{1.0, 0.0};
-        for (double c : theta) {
+        for (double const c : theta) {
             xpow *= x;
             theta_val += c * xpow;
         }

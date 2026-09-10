@@ -130,8 +130,8 @@ inline constexpr std::int64_t max_expand_terms = 4096;
 // the factors are left multiplied but undistributed (product{a, b}) — still exact.
 // a and b are assumed already expanded.
 [[nodiscard]] auto expand_product(const Expr& a, const Expr& b) -> Expr {
-    std::vector<Expr> ta = as_terms(a);
-    std::vector<Expr> tb = as_terms(b);
+    std::vector<Expr> const ta = as_terms(a);
+    std::vector<Expr> const tb = as_terms(b);
     // Sizes are bounded by prior caps, so this int64 product cannot overflow.
     if (static_cast<std::int64_t>(ta.size()) * static_cast<std::int64_t>(tb.size()) >
         max_expand_terms) {

@@ -90,8 +90,8 @@ auto main() -> int {
               })
         .test("money refuses cross-currency addition",
               [](TestContext& t) {
-                  auto usd = Money::parse("10.00", "USD").value();
-                  auto eur = Money::parse("10.00", "EUR").value();
+                  auto const usd = Money::parse("10.00", "USD").value();
+                  auto const eur = Money::parse("10.00", "EUR").value();
                   t.expect(usd.add(eur).error() == MathError::domain_error,
                            "USD + EUR -> domain_error");
                   t.expect(usd.add(Money::parse("5.00", "USD").value()).value().amount() ==

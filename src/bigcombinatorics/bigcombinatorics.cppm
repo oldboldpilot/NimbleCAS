@@ -439,7 +439,7 @@ auto subfactorial(std::int64_t n) -> Result<BigInt> {
     BigInt prev = BigInt::from_u64(1);  // !0 = 1
     const BigInt one = BigInt::from_u64(1);
     for (std::int64_t i = 1; i <= n; ++i) {
-        BigInt term = BigInt::from_i64(i).multiply(prev);
+        BigInt const term = BigInt::from_i64(i).multiply(prev);
         // + (-1)^i: subtract one for odd i, add one for even i.
         prev = ((i & 1) != 0) ? term.subtract(one) : term.add(one);
     }

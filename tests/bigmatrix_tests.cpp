@@ -97,14 +97,14 @@ auto main() -> int {
               })
         .test("identity_zero_equality",
               [](TestContext& t) {
-                  auto id = BigMatrix::identity(3);
+                  auto const id = BigMatrix::identity(3);
                   t.expect(id.at(0, 0) == bi(1) && id.at(1, 1) == bi(1) && id.at(2, 2) == bi(1),
                            "diagonal is 1");
                   t.expect(id.at(0, 1) == bi(0) && id.at(2, 0) == bi(0), "off-diagonal is 0");
                   t.expect(id == bmat({{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}), "identity(3) == I_3");
                   t.expect(id.is_equal(bmat({{1, 0, 0}, {0, 1, 0}, {0, 0, 1}})), "is_equal agrees");
 
-                  auto z = BigMatrix::zero(2, 3);
+                  auto const z = BigMatrix::zero(2, 3);
                   t.expect(z.rows() == 2 && z.cols() == 3, "zero(2,3) shape");
                   t.expect(z == bmat({{0, 0, 0}, {0, 0, 0}}), "zero matrix entries");
 
@@ -120,7 +120,7 @@ auto main() -> int {
                   t.expect(b.subtract(a).value() == bmat({{4, 4}, {4, 4}}), "entrywise subtract");
                   t.expect(a.scale(bi(2)).value() == bmat({{2, 4}, {6, 8}}), "scale by 2");
                   // scaling by 1/2 stays exact
-                  auto half = a.scale(brat(1, 2)).value();
+                  auto const half = a.scale(brat(1, 2)).value();
                   t.expect(half.at(0, 0) == brat(1, 2) && half.at(1, 1) == bi(2), "scale by 1/2");
 
                   t.expect(a.add(bmat({{1, 2, 3}})).error() == MathError::domain_error,
@@ -131,11 +131,11 @@ auto main() -> int {
         .test("multiply_and_transpose",
               [](TestContext& t) {
                   // [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
-                  auto prod = bmat({{1, 2}, {3, 4}}).multiply(bmat({{5, 6}, {7, 8}})).value();
+                  auto const prod = bmat({{1, 2}, {3, 4}}).multiply(bmat({{5, 6}, {7, 8}})).value();
                   t.expect(prod == bmat({{19, 22}, {43, 50}}), "2x2 product matches hand result");
 
                   // transpose of a 2x3
-                  auto tr = bmat({{1, 2, 3}, {4, 5, 6}}).transpose().value();
+                  auto const tr = bmat({{1, 2, 3}, {4, 5, 6}}).transpose().value();
                   t.expect(tr == bmat({{1, 4}, {2, 5}, {3, 6}}), "transpose is 3x2");
 
                   // dimension-mismatch multiply -> domain_error (2x3 * 2x2)
@@ -187,12 +187,12 @@ auto main() -> int {
                   // For small entries both tiers agree: promote the int64 Matrix and compare
                   // the BigMatrix determinant against the promoted Rational determinant.
                   auto a = imat({{1, 2}, {3, 4}});
-                  auto big = BigMatrix::from_matrix(a).value();
+                  auto const big = BigMatrix::from_matrix(a).value();
                   t.expect(big.determinant().value() == promote(a.determinant().value()),
                            "2x2 det agrees with int64 Matrix");
 
                   auto b = imat({{6, 1, 1}, {4, -2, 5}, {2, 8, 7}});
-                  auto bigb = BigMatrix::from_matrix(b).value();
+                  auto const bigb = BigMatrix::from_matrix(b).value();
                   t.expect(bigb.determinant().value() == promote(b.determinant().value()),
                            "3x3 det agrees with int64 Matrix");
                   t.expect(bigb.determinant().value() == bi(-306), "cross-checked value is -306");
@@ -241,9 +241,9 @@ auto main() -> int {
                   // det(A*B) == det(A)*det(B) on a concrete pair.
                   auto a = bmat({{1, 2}, {3, 4}});     // det -2
                   auto b = bmat({{5, 6}, {7, 8}});     // det -2
-                  auto da = a.determinant().value();
-                  auto db = b.determinant().value();
-                  auto dab = a.multiply(b).value().determinant().value();
+                  auto const da = a.determinant().value();
+                  auto const db = b.determinant().value();
+                  auto const dab = a.multiply(b).value().determinant().value();
                   t.expect(dab == da.multiply(db), "det(A*B) == det(A)*det(B)");
                   t.expect(dab == bi(4), "det(A*B) == 4 (hand-checked)");
 
@@ -255,14 +255,14 @@ auto main() -> int {
         .test("determinant_rational_entries",
               [](TestContext& t) {
                   // [[1/2, 1/3],[1/4, 1/5]]: det = 1/2*1/5 - 1/3*1/4 = 1/10 - 1/12 = 1/60.
-                  auto m = BigMatrix::from_rows({{brat(1, 2), brat(1, 3)},
+                  auto const m = BigMatrix::from_rows({{brat(1, 2), brat(1, 3)},
                                                  {brat(1, 4), brat(1, 5)}})
                                .value();
                   t.expect(m.determinant().value() == brat(1, 60),
                            "det of a 1/2,1/3,1/4,1/5 matrix = 1/60");
 
                   // [[2/3, 1/6],[1/2, 3/4]]: det = 2/3*3/4 - 1/6*1/2 = 1/2 - 1/12 = 5/12.
-                  auto m2 = BigMatrix::from_rows({{brat(2, 3), brat(1, 6)},
+                  auto const m2 = BigMatrix::from_rows({{brat(2, 3), brat(1, 6)},
                                                   {brat(1, 2), brat(3, 4)}})
                                 .value();
                   t.expect(m2.determinant().value() == brat(5, 12), "det = 5/12 (exact fraction)");
@@ -270,10 +270,10 @@ auto main() -> int {
         .test("from_matrix_promotion_round_trip",
               [](TestContext& t) {
                   // Integer + fractional entries survive promotion value-for-value.
-                  auto a = Matrix::from_rows({{Rational::from_int(3), Rational::make(1, 2).value()},
+                  auto const a = Matrix::from_rows({{Rational::from_int(3), Rational::make(1, 2).value()},
                                               {Rational::make(-5, 4).value(), Rational::from_int(0)}})
                                .value();
-                  auto big = BigMatrix::from_matrix(a).value();
+                  auto const big = BigMatrix::from_matrix(a).value();
                   t.expect(big.rows() == 2 && big.cols() == 2, "promotion preserves shape");
                   t.expect(big.at(0, 0) == bi(3), "entry 3 round-trips");
                   t.expect(big.at(0, 1) == brat(1, 2), "entry 1/2 round-trips");
@@ -281,7 +281,7 @@ auto main() -> int {
                   t.expect(big.at(1, 1) == bi(0), "entry 0 round-trips");
 
                   // A non-square Matrix promotes fine (from_matrix imposes no square rule).
-                  auto wide = BigMatrix::from_matrix(imat({{1, 2, 3}})).value();
+                  auto const wide = BigMatrix::from_matrix(imat({{1, 2, 3}})).value();
                   t.expect(wide.rows() == 1 && wide.cols() == 3, "1x3 promotion shape");
               })
         .test("solve_small_exact",

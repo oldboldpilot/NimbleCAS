@@ -37,7 +37,7 @@ auto series(TestContext& t, std::vector<std::int64_t> ints, std::size_t order,
             std::string_view what) -> PowerSeries {
     std::vector<Rational> coeffs;
     coeffs.reserve(ints.size());
-    for (auto v : ints) {
+    for (auto const v : ints) {
         coeffs.push_back(Rational::from_int(v));
     }
     auto s = PowerSeries::from_coeffs(std::move(coeffs), order);

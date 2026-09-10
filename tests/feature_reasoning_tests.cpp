@@ -300,8 +300,8 @@ auto main() -> int {
                   // LCS of [1,2,3,2,1] and [2,3,1] is [2,3,1] -> length 3; memo == tabulated.
                   const std::array<std::int64_t, 5> a{1, 2, 3, 2, 1};
                   const std::array<std::int64_t, 3> b{2, 3, 1};
-                  std::span<const std::int64_t> sa{a};
-                  std::span<const std::int64_t> sb{b};
+                  std::span<const std::int64_t> const sa{a};
+                  std::span<const std::int64_t> const sb{b};
                   auto lc = longest_common_subsequence(sa, sb);
                   auto lm = longest_common_subsequence_memo(sa, sb);
                   t.expect(lc.has_value() && lm.has_value(), "both LCS forms succeed");
@@ -636,7 +636,7 @@ auto main() -> int {
                       return make_compound("ancestor", {p, c});
                   };
 
-                  Program prog{
+                  Program const prog{
                       Clause{.head = parent(tom, bob), .body = {}},
                       Clause{.head = parent(bob, ann), .body = {}},
                       Clause{.head = parent(bob, pat), .body = {}},
@@ -684,7 +684,7 @@ auto main() -> int {
                   const auto append3 = [](const Term& x, const Term& y, const Term& z) {
                       return make_compound("append", {x, y, z});
                   };
-                  Program app{
+                  Program const app{
                       Clause{.head = append3(make_nil(), L, L), .body = {}},
                       Clause{.head = append3(cons(H, T), L, cons(H, R)),
                              .body = {append3(T, L, R)}},
@@ -759,7 +759,7 @@ auto main() -> int {
                   }
 
                   // A capacity mismatch is a domain_error on the Result-returning combinators.
-                  Bitset small(64);
+                  Bitset const small(64);
                   auto mism = a.and_with(small);
                   t.expect(!mism.has_value() && mism.error() == MathError::domain_error,
                            "combining unequal capacities is a domain_error");

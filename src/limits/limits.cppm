@@ -236,7 +236,7 @@ inline constexpr std::int64_t kPolyDegreeCap = 4096;
     std::vector<Expr> nums;
     std::vector<Expr> dens;
 
-    auto handle = [&](const Expr& g) -> std::optional<MathError> {
+    auto const handle = [&](const Expr& g) -> std::optional<MathError> {
         if (auto p = as<PowerNode>(g.node().value)) {
             auto s = const_sign((*p)->exponent);
             if (s && *s < 0) {

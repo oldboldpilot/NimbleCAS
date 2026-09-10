@@ -52,7 +52,7 @@ auto main() -> int {
                   // of y, dF/dy = 0 and the whole EL equation is proportional to y'', so a
                   // straight line (y'' = 0) is an exact extremal.
                   const Expr F = Expr::power(Expr::sum({I(1), Expr::power(yp, I(2))}), R(1, 2));
-                  auto el = euler_lagrange(F, "y", "yp", "ypp", "x").value();
+                  auto const el = euler_lagrange(F, "y", "yp", "ypp", "x").value();
                   t.expect(free_of(el, y), "EL is free of y (F independent of y)");
                   t.expect(S(substitute(el, ypp, I(0))) == I(0),
                            "y'' = 0 (straight line) satisfies the EL equation exactly");
@@ -65,7 +65,7 @@ auto main() -> int {
                       Expr::product({Expr::sum({I(1), Expr::power(yp, I(2))}),
                                      Expr::power(y, I(-1))}),
                       R(1, 2));
-                  auto b = beltrami_identity(F, "y", "yp", "x").value();
+                  auto const b = beltrami_identity(F, "y", "yp", "x").value();
                   t.expect(free_of(b, x), "first integral has no explicit x");
                   t.expect(free_of(b, ypp), "first integral is first order (no y'')");
 

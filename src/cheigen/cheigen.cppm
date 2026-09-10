@@ -336,7 +336,7 @@ auto eigenvalues(const ComplexMatrix& m, double tol, std::size_t max_iter)
         }
         std::vector<cd> out;
         out.reserve(mu->size());
-        for (double e : *mu) {
+        for (double const e : *mu) {
             out.emplace_back(0.0, -e);  // λ = -i·μ : purely imaginary, real part exactly 0
         }
         return out;

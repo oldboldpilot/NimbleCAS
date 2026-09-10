@@ -121,8 +121,8 @@ auto main() -> int {
                       if (!csp) {
                           continue;
                       }
-                      auto want = backtracking_search(*csp);
-                      auto got = reference_exhaustive(w);
+                      auto const want = backtracking_search(*csp);
+                      auto const got = reference_exhaustive(w);
                       t.expect(want.has_value() && got.has_value(), "both searches succeed");
                       t.expect(want.value_or(std::nullopt) == got.value_or(std::nullopt),
                                "the exhaustive scan agrees with backtracking_search exactly");
@@ -173,8 +173,8 @@ auto main() -> int {
         .test("min_conflicts_is_reproducible_from_its_seed",
               [](TestContext& t) {
                   const auto w = wire_queens_pairwise(8);
-                  auto a = reference_min_conflicts(w, 4, 20000, 200, 0xABCDULL);
-                  auto b = reference_min_conflicts(w, 4, 20000, 200, 0xABCDULL);
+                  auto const a = reference_min_conflicts(w, 4, 20000, 200, 0xABCDULL);
+                  auto const b = reference_min_conflicts(w, 4, 20000, 200, 0xABCDULL);
                   t.expect(a.has_value() && b.has_value(), "both runs succeed");
                   t.expect(a.value_or(std::nullopt) == b.value_or(std::nullopt),
                            "the same seed gives the identical assignment");
@@ -317,8 +317,8 @@ auto main() -> int {
                   for (const auto target : {Target::cpp, Target::cuda, Target::triton}) {
                       EmitOptions opts;
                       opts.target = target;
-                      auto a = emit(w, opts);
-                      auto b = emit(w, opts);
+                      auto const a = emit(w, opts);
+                      auto const b = emit(w, opts);
                       t.expect(a.has_value() && b.has_value(), "both emissions succeed");
                       t.expect(a.value_or("x") == b.value_or("y"),
                                "the same problem emits byte-identical source");

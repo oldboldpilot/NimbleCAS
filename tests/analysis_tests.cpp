@@ -109,17 +109,17 @@ auto main() -> int {
                   // A = [[1,2],[0,1]], A^{-1} = [[1,-2],[0,1]].
                   // ||A||_1 = 3, ||A^{-1}||_1 = 3 -> kappa_1 = 9 (exact).
                   const Matrix a = mat({{1, 2}, {0, 1}});
-                  auto k1 = condition_1(a);
+                  auto const k1 = condition_1(a);
                   t.expect(k1.has_value(), "condition_1 succeeds");
                   t.expect(k1.value_or(ri(0)) == ri(9), "kappa_1([[1,2],[0,1]]) = 9 exactly");
-                  auto kinf = condition_inf(a);
+                  auto const kinf = condition_inf(a);
                   t.expect(kinf.value_or(ri(0)) == ri(9), "kappa_inf = 9 exactly");
               })
         .test("condition_1_diagonal",
               [](TestContext& t) {
                   // A = diag(2,4): ||A||_1 = 4, ||A^{-1}||_1 = 1/2 -> kappa_1 = 2.
                   const Matrix a = mat({{2, 0}, {0, 4}});
-                  auto k1 = condition_1(a);
+                  auto const k1 = condition_1(a);
                   t.expect(k1.value_or(ri(0)) == ri(2), "kappa_1(diag(2,4)) = 2 exactly");
               })
         .test("condition_singular_is_error",
@@ -158,7 +158,7 @@ auto main() -> int {
         .test("root_test_geometric_third",
               [](TestContext& t) {
                   // a_n = (1/3)^n: |a_n|^{1/n} = 1/3 -> converges (NUMERICAL).
-                  auto rr3 = root_test([](std::int64_t n) {
+                  auto const rr3 = root_test([](std::int64_t n) {
                       return std::pow(1.0 / 3.0, static_cast<double>(n));
                   });
                   t.expect(std::fabs(rr3.numeric_limit - 1.0 / 3.0) < 1e-9,
@@ -168,14 +168,14 @@ auto main() -> int {
         .test("alternating_harmonic_leibniz",
               [](TestContext& t) {
                   // b_n = 1/n, monotone decreasing to 0 -> Leibniz convergence.
-                  auto v = alternating_series_test(
+                  auto const v = alternating_series_test(
                       [](std::int64_t n) { return 1.0 / static_cast<double>(n); });
                   t.expect(v == Verdict::converges, "alternating harmonic converges (Leibniz)");
               })
         .test("comparison_test_dominated_converges",
               [](TestContext& t) {
                   // 0 <= 1/(n^2+1) <= 1/n^2, and sum 1/n^2 converges -> converges.
-                  auto v = comparison_test(
+                  auto const v = comparison_test(
                       [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n + 1.0); },
                       [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n); },
                       Verdict::converges);
@@ -197,7 +197,7 @@ auto main() -> int {
         .test("raabe_p2_series_converges_numeric",
               [](TestContext& t) {
                   // a_n = 1/n^2: n(a_n/a_{n+1}-1) = (2n+1)/n -> 2 (not constant => numeric).
-                  auto r = raabe_test([](std::int64_t n) { return rr(1, n * n); });
+                  auto const r = raabe_test([](std::int64_t n) { return rr(1, n * n); });
                   t.expect(!r.exact, "Raabe limit for 1/n^2 is not a constant rational");
                   t.expect(r.numeric_limit > 1.5, "numeric Raabe estimate approaches 2");
                   t.expect(r.verdict == Verdict::converges, "l ~ 2 > 1 => converges");
@@ -220,7 +220,7 @@ auto main() -> int {
                            "Gauss h = 1 exactly for the harmonic series");
                   t.expect(g.verdict == Verdict::diverges, "Gauss h = 1 => diverges");
                   // And 1/(n(n+1)) with h = 2 > 1 => converges.
-                  auto g2 = gauss_test([](std::int64_t n) { return rr(1, n * (n + 1)); });
+                  auto const g2 = gauss_test([](std::int64_t n) { return rr(1, n * (n + 1)); });
                   t.expect(g2.verdict == Verdict::converges, "Gauss h = 2 => converges");
               })
         .test("kummer_decides_with_auxiliary",
@@ -288,7 +288,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // a_n = 1/(n^2+1), b_n = 1/n^2: a_n/b_n = n^2/(n^2+1) -> 1 in (0, inf).
                   // Sum b_n converges => Sum a_n converges.
-                  auto lc = limit_comparison_test(
+                  auto const lc = limit_comparison_test(
                       [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n + 1.0); },
                       [](std::int64_t n) { return 1.0 / (static_cast<double>(n) * n); },
                       Verdict::converges);
@@ -303,7 +303,7 @@ auto main() -> int {
                   // positive and finite but DRIFTS TO 0, so l is not in (0, inf). The 0 < l <
                   // inf hypothesis fails => inconclusive (NOT the reference's diverges verdict;
                   // Sum a_n actually converges).
-                  auto lc = limit_comparison_test(
+                  auto const lc = limit_comparison_test(
                       [](std::int64_t n) {
                           const double l = std::log(static_cast<double>(n) + 1.0);
                           return 1.0 / (static_cast<double>(n) * l * l);
@@ -317,12 +317,12 @@ auto main() -> int {
               [](TestContext& t) {
                   // a_n = (-1)^n has partial sums in {-1, 0} (bounded); b_n = 1/n monotone
                   // -> 0. Dirichlet => Sum (-1)^n / n converges.
-                  auto v = dirichlet_test(
+                  auto const v = dirichlet_test(
                       [](std::int64_t n) { return (n % 2 == 0) ? 1.0 : -1.0; },
                       [](std::int64_t n) { return 1.0 / static_cast<double>(n); });
                   t.expect(v == Verdict::converges, "Dirichlet certifies convergence");
                   // a_n = 1 has unbounded partial sums => hypothesis fails => inconclusive.
-                  auto v2 = dirichlet_test([](std::int64_t) { return 1.0; },
+                  auto const v2 = dirichlet_test([](std::int64_t) { return 1.0; },
                                            [](std::int64_t n) { return 1.0 / static_cast<double>(n); });
                   t.expect(v2 == Verdict::inconclusive,
                            "unbounded partial sums => honestly inconclusive");
@@ -331,7 +331,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Sum a_n = Sum (-1)^n / n converges; b_n = 1 + 1/n monotone, bounded.
                   // Abel => Sum a_n b_n converges.
-                  auto v = abel_test(
+                  auto const v = abel_test(
                       [](std::int64_t n) {
                           return ((n % 2 == 0) ? 1.0 : -1.0) / static_cast<double>(n);
                       },
@@ -351,7 +351,7 @@ auto main() -> int {
                   if (p) {
                       const Matrix residual = lyap_residual(a, *p);
                       t.expect(residual == neg_q, "A^T P + P A == -Q exactly");
-                      auto pd = is_positive_definite(*p);
+                      auto const pd = is_positive_definite(*p);
                       t.expect(pd.value_or(false), "the Lyapunov solution P is positive definite");
                   }
               })
@@ -382,7 +382,7 @@ auto main() -> int {
         .test("is_positive_definite_sylvester",
               [](TestContext& t) {
                   // [[2,1],[1,2]]: minors 2 > 0, det 3 > 0 -> PD.
-                  auto pd = is_positive_definite(mat({{2, 1}, {1, 2}}));
+                  auto const pd = is_positive_definite(mat({{2, 1}, {1, 2}}));
                   t.expect(pd.value_or(false), "[[2,1],[1,2]] is positive definite");
                   // [[1,2],[2,1]]: det = -3 < 0 -> not PD.
                   auto npd = is_positive_definite(mat({{1, 2}, {2, 1}}));
@@ -393,9 +393,9 @@ auto main() -> int {
               [](TestContext& t) {
                   // A = [[-1,1],[0,-1]] Hurwitz: Lyapunov P > 0 and Routh-Hurwitz agree.
                   const Matrix a = mat({{-1, 1}, {0, -1}});
-                  auto stable = is_stable_lyapunov(a);
+                  auto const stable = is_stable_lyapunov(a);
                   t.expect(stable.value_or(false), "Lyapunov/Sylvester: A is stable");
-                  auto rh = is_asymptotically_stable(a);
+                  auto const rh = is_asymptotically_stable(a);
                   t.expect(rh.value_or(false), "Routh-Hurwitz: A is stable");
                   auto x = stability_cross_check(a);
                   t.expect(x.has_value() && x->lyapunov_stable && x->routh_hurwitz_stable && x->agree,

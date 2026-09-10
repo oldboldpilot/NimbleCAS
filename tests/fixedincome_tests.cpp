@@ -64,7 +64,7 @@ auto main() -> int {
                   t.expect(close(cf.amounts[0], 3.0) && close(cf.amounts[1], 3.0), "regular coupon == 3");
                   t.expect(close(cf.amounts.back(), 103.0), "final = coupon + redemption");
                   double sum = 0.0;
-                  for (double a : cf.amounts) { sum += a; }
+                  for (double const a : cf.amounts) { sum += a; }
                   t.expect(close(sum, 112.0), "total cashflow == 4*3 + 100");
                   // Short first stub: an issue mid-period prorates the first coupon below the regular.
                   auto stub = fi::cfamounts(s, m, 0.06, 2, fin::DayCount::thirty_360, 100.0, 100.0,
@@ -160,10 +160,10 @@ auto main() -> int {
 
                   const double eff = fi::effective_duration(times, amounts, flat).value();
                   const std::array<double, 5> keys{1, 2, 3, 4, 5};
-                  auto krd = fi::key_rate_durations(times, amounts, flat, keys).value();
+                  auto const krd = fi::key_rate_durations(times, amounts, flat, keys).value();
                   t.expect(krd.size() == 5, "one duration per key tenor");
                   double sum = 0.0;
-                  for (double k : krd) { sum += k; }
+                  for (double const k : krd) { sum += k; }
                   t.expect(close(sum, eff, 1e-6), "sum of key-rate durations == effective duration");
                   // A single key tenor (flat tent) equals the parallel effective duration.
                   const std::array<double, 1> onekey{2.5};
@@ -207,7 +207,7 @@ auto main() -> int {
                   t.expect(sched.interest.size() == 12, "12 periods");
                   t.expect(close(sched.interest[0], 100.0), "first interest == 10000*1%");
                   double prin_sum = 0.0;
-                  for (double pr : sched.principal) { prin_sum += pr; }
+                  for (double const pr : sched.principal) { prin_sum += pr; }
                   t.expect(close(prin_sum, 10000.0, 1e-6), "principal sums to the loan amount");
                   t.expect(sched.balance.back() == 0.0, "final balance is exactly zero");
                   t.expect(sched.balance.front() < 10000.0, "balance decreases");

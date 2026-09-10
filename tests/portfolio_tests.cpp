@@ -65,7 +65,7 @@ auto main() -> int {
                   auto pt = efficient_portfolio(cov2, mu2, 0.10, 0.0).value();
                   t.expect(close(pt.ret, 0.10) && close(pt.weights[0] + pt.weights[1], 1.0),
                            "frontier point hits target and sums to 1");
-                  auto ef = efficient_frontier(cov2, mu2, 5, 0.0).value();
+                  auto const ef = efficient_frontier(cov2, mu2, 5, 0.0).value();
                   t.expect(ef.size() == 5, "frontier has 5 points");
               })
         .test("integrated risk report",

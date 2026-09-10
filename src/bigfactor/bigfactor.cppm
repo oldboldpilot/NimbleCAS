@@ -261,7 +261,7 @@ using IntPoly = std::vector<BigInt>;
         return make_error<SF>(a0.error());
     }
     BigRationalPoly b = ratpoly_quotient_checked(f, *a0);   // b_1 = f / gcd(f, f')
-    BigRationalPoly c = ratpoly_quotient_checked(fp, *a0);  // c_1 = f' / gcd(f, f')
+    BigRationalPoly const c = ratpoly_quotient_checked(fp, *a0);  // c_1 = f' / gcd(f, f')
     BigRationalPoly d = c.subtract(b.derivative());         // d_1 = c_1 - b_1'
 
     SF result;
@@ -272,7 +272,7 @@ using IntPoly = std::vector<BigInt>;
             return make_error<SF>(ai.error());
         }
         BigRationalPoly b_next = ratpoly_quotient_checked(b, *ai);
-        BigRationalPoly c_next = ratpoly_quotient_checked(d, *ai);
+        BigRationalPoly const c_next = ratpoly_quotient_checked(d, *ai);
         BigRationalPoly d_next = c_next.subtract(b_next.derivative());
         if (ai->degree() >= 1) {  // skip the trivial unit factor (no factor of this mult)
             result.emplace_back(ipoly_primitive_part(to_integer_polynomial(*ai)), i);
@@ -548,7 +548,7 @@ auto factor_over_Q(const BigRationalPoly& p)
             BigRationalPoly rg = ipoly_to_bigratpoly(g);
             // Distinct square-free factors are pairwise coprime, so an irreducible cannot
             // recur across them; the merge is a defensive combine of equal factors.
-            auto it = std::ranges::find_if(
+            auto const it = std::ranges::find_if(
                 out, [&](const auto& e) { return e.first.is_equal(rg); });
             if (it != out.end()) {
                 it->second += mult;

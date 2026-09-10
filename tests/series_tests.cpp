@@ -54,7 +54,7 @@ auto main() -> int {
         .test("cubic_about_zero_coefficients",
               [&](TestContext& t) {
                   // f = x^3 about 0, order 3: c_0=c_1=c_2=0, c_3=1.
-                  auto f = Expr::power(x, three);
+                  auto const f = Expr::power(x, three);
                   auto coeffs = taylor_coefficients(f, "x", zero, 3);
                   t.expect(coeffs.has_value(), "taylor_coefficients(x^3, 0, 3) succeeds");
                   if (!coeffs) {
@@ -70,7 +70,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // f = x^2 to order 25: the derivative vanishes past k=2, so the remaining
                   // coefficients are 0 and the int64 k! ceiling is never reached.
-                  auto f = Expr::power(x, two);
+                  auto const f = Expr::power(x, two);
                   auto coeffs = taylor_coefficients(f, "x", zero, 25);
                   t.expect(coeffs.has_value(), "order 25 of x^2 does not overflow");
                   if (!coeffs) {
@@ -89,7 +89,7 @@ auto main() -> int {
         .test("general_polynomial_about_zero_coefficients",
               [&](TestContext& t) {
                   // f = x^2 + 2x + 1 about 0: c_0=1, c_1=2, c_2=1.
-                  auto f = Expr::sum({Expr::power(x, two), two.mul(x), one});
+                  auto const f = Expr::sum({Expr::power(x, two), two.mul(x), one});
                   auto coeffs = taylor_coefficients(f, "x", zero, 2);
                   t.expect(coeffs.has_value(), "taylor_coefficients(x^2+2x+1, 0, 2) succeeds");
                   if (!coeffs) {
@@ -111,7 +111,7 @@ auto main() -> int {
         .test("cubic_about_zero_polynomial_roundtrips",
               [&](TestContext& t) {
                   // taylor_polynomial(x^3, 0, 3) is_equivalent_to x^3.
-                  auto f = Expr::power(x, three);
+                  auto const f = Expr::power(x, three);
                   auto poly = taylor_polynomial(f, "x", zero, 3);
                   t.expect(poly.has_value(), "taylor_polynomial(x^3, 0, 3) succeeds");
                   if (poly) {
@@ -123,7 +123,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // f = x^2 about point 1, order 2: since x^2 = 1 + 2(x-1) + (x-1)^2,
                   // c_0=1, c_1=2, c_2=1.
-                  auto f = Expr::power(x, two);
+                  auto const f = Expr::power(x, two);
                   auto coeffs = taylor_coefficients(f, "x", one, 2);
                   t.expect(coeffs.has_value(), "taylor_coefficients(x^2, 1, 2) succeeds");
                   if (!coeffs) {

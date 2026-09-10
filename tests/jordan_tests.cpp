@@ -222,7 +222,7 @@ auto main() -> int {
                   // A = [[2,1],[0,2]] is a single 2x2 Jordan block (eigenvalue 2, defective).
                   // Its Jordan form is itself and P is the identity.
                   const auto A = mat({{ri(2), ri(1)}, {ri(0), ri(2)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(2), ri(1)}, {ri(0), ri(2)}})),
                            "J = [[2,1],[0,2]]");
                   // The correctness property, re-derived: A*P == P*J. P itself is only
@@ -239,7 +239,7 @@ auto main() -> int {
                   // eigenspace of 4 is 1-dimensional). Hand-derived chain: eigenvector
                   // [1,-1], generalized vector [0,1]. So P = [[1,0],[-1,1]], J = [[4,1],[0,4]].
                   const auto A = mat({{ri(5), ri(1)}, {ri(-1), ri(3)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(4), ri(1)}, {ri(0), ri(4)}})),
                            "J = [[4,1],[0,4]]");
                   t.expect(A.multiply(r.transform).value().is_equal(
@@ -248,7 +248,7 @@ auto main() -> int {
                   // P^{-1} A P == J (basis-independent): requires P invertible and holds for
                   // any valid Jordan basis, so it certifies correctness without pinning the
                   // (non-canonical) generalized-eigenvector representative.
-                  auto pinv = r.transform.inverse().value();
+                  auto const pinv = r.transform.inverse().value();
                   t.expect(pinv.multiply(A).value().multiply(r.transform).value().is_equal(
                                r.jordan),
                            "P^{-1} A P == J");
@@ -261,7 +261,7 @@ auto main() -> int {
                   const auto A = mat({{ri(2), ri(1), ri(0)},
                                       {ri(0), ri(2), ri(0)},
                                       {ri(0), ri(0), ri(3)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(A), "J == A (already Jordan)");
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
@@ -275,7 +275,7 @@ auto main() -> int {
                   // eigenvectors — hence P — are only defined up to a nonzero scale, so we
                   // assert J and A*P == P*J and that P is invertible, not a specific P.
                   const auto A = mat({{ri(1), ri(2)}, {ri(2), ri(1)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(-1), ri(0)}, {ri(0), ri(3)}})),
                            "J = diag(-1, 3)");
                   t.expect(A.multiply(r.transform).value().is_equal(
@@ -287,7 +287,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // I_3: eigenvalue 1 with three 1-blocks; J == I, P == I.
                   const auto I = Matrix::identity(3);
-                  auto r = nimblecas::rational_jordan_form(I).value();
+                  auto const r = nimblecas::rational_jordan_form(I).value();
                   t.expect(r.jordan.is_equal(I), "J == I_3");
                   t.expect(I.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
@@ -304,7 +304,7 @@ auto main() -> int {
                                       {ri(0), ri(0), ri(0), ri(1)},
                                       {ri(0), ri(0), ri(0), ri(0)},
                                       {ri(0), ri(0), ri(0), ri(0)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(0), ri(1), ri(0), ri(0)},
                                                   {ri(0), ri(0), ri(0), ri(0)},
                                                   {ri(0), ri(0), ri(0), ri(1)},
@@ -324,7 +324,7 @@ auto main() -> int {
                                       {ri(0), ri(0), ri(1), ri(0)},
                                       {ri(0), ri(0), ri(0), ri(0)},
                                       {ri(0), ri(0), ri(0), ri(0)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(A), "J = J_3(0) (+) J_1(0) == A");
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
@@ -340,7 +340,7 @@ auto main() -> int {
                   const auto A = mat({{ri(1), ri(-1), ri(0)},
                                       {ri(1), ri(-1), ri(0)},
                                       {ri(0), ri(0), ri(0)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(mat({{ri(0), ri(1), ri(0)},
                                                   {ri(0), ri(0), ri(0)},
                                                   {ri(0), ri(0), ri(0)}})),
@@ -357,7 +357,7 @@ auto main() -> int {
                   const auto A = mat({{ri(2), ri(1), ri(0)},
                                       {ri(0), ri(2), ri(1)},
                                       {ri(0), ri(0), ri(2)}});
-                  auto r = nimblecas::rational_jordan_form(A).value();
+                  auto const r = nimblecas::rational_jordan_form(A).value();
                   t.expect(r.jordan.is_equal(A), "J = single size-3 block == A");
                   t.expect(A.multiply(r.transform).value().is_equal(
                                r.transform.multiply(r.jordan).value()),
@@ -442,9 +442,9 @@ auto main() -> int {
                   t.expect(columns_all_nonzero(r.transform),
                            "P columns are nonzero eigenvectors (P invertible)");
                   // alpha satisfies its minimal polynomial: alpha^2 - 4 alpha + 5 == 0.
-                  auto a2 = alpha.multiply(alpha).value();
-                  auto minus4a = alpha.multiply(r.field.from_rational(ri(-4))).value();
-                  auto sum = a2.add(minus4a).value().add(r.field.from_rational(ri(5))).value();
+                  auto const a2 = alpha.multiply(alpha).value();
+                  auto const minus4a = alpha.multiply(r.field.from_rational(ri(-4))).value();
+                  auto const sum = a2.add(minus4a).value().add(r.field.from_rational(ri(5))).value();
                   t.expect(sum.is_zero(), "alpha^2 - 4 alpha + 5 == 0");
               })
         .test("defective_repeated_complex_pair_4x4",

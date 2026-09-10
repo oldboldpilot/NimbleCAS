@@ -356,7 +356,7 @@ auto main() -> int {
                   }
                   t.expect(r->plan.cost == 7, "the optimal cost is exactly 7");
                   t.expect(r->plan.length() == 7, "and the plan is exactly seven steps");
-                  auto end = validate_plan(task, r->plan);
+                  auto const end = validate_plan(task, r->plan);
                   t.expect(end.has_value(), "the plan replays cleanly to the goal");
               })
         .test("astar_finds_the_optimal_plan_where_greedy_search_need_not",
@@ -422,7 +422,7 @@ auto main() -> int {
                   auto starved = astar_plan(task, 1);
                   t.expect(!starved.has_value() && starved.error() == MathError::not_converged,
                            "a one-expansion budget is not_converged");
-                  auto ample = astar_plan(task, 500000);
+                  auto const ample = astar_plan(task, 500000);
                   t.expect(ample.has_value(),
                            "and the same task solves with a sufficient budget, so the task was "
                            "never the problem");

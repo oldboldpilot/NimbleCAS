@@ -118,17 +118,17 @@ auto main() -> int {
               })
         .test("is_nilpotent_true_cases",
               [](TestContext& t) {
-                  auto a = is_nilpotent(mat({{0, 1}, {0, 0}}));
+                  auto const a = is_nilpotent(mat({{0, 1}, {0, 0}}));
                   t.expect(a.has_value() && a.value_or(false), "[[0,1],[0,0]] is nilpotent");
-                  auto b = is_nilpotent(mat({{0, 1, 0}, {0, 0, 1}, {0, 0, 0}}));
+                  auto const b = is_nilpotent(mat({{0, 1, 0}, {0, 0, 1}, {0, 0, 0}}));
                   t.expect(b.has_value() && b.value_or(false),
                            "the 3x3 Jordan nilpotent is nilpotent");
               })
         .test("is_nilpotent_false_cases",
               [](TestContext& t) {
-                  auto a = is_nilpotent(Matrix::identity(2));
+                  auto const a = is_nilpotent(Matrix::identity(2));
                   t.expect(a.has_value() && !a.value_or(true), "identity is not nilpotent");
-                  auto b = is_nilpotent(mat({{1, 1}, {0, 1}}));
+                  auto const b = is_nilpotent(mat({{1, 1}, {0, 1}}));
                   t.expect(b.has_value() && !b.value_or(true),
                            "[[1,1],[0,1]] is not nilpotent");
               })

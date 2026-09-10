@@ -632,7 +632,7 @@ auto variation_of_constants(const Matrix& a, const Matrix& u0, const std::vector
             Rational inner = Rational::from_int(0);
             Rational binom = Rational::from_int(1);  // C(j,0)
             for (std::int64_t i = 0; i <= j; ++i) {
-                auto denom = Rational::from_int(k + i + 1);
+                auto const denom = Rational::from_int(k + i + 1);
                 auto term = binom.divide(denom);  // denom >= 1, never zero
                 if (!term) {
                     return make_error<Matrix>(term.error());

@@ -848,7 +848,7 @@ auto main() -> int {
                   public:
                       explicit SwallowingResultChannel(std::size_t swallow_first_n) : remaining_(swallow_first_n) {}
                       [[nodiscard]] auto put(std::uint64_t qid, Payload p) -> Result<void> override {
-                          std::lock_guard lock(mutex_);
+                          std::lock_guard const lock(mutex_);
                           if (remaining_ > 0) {
                               --remaining_;
                               return {};

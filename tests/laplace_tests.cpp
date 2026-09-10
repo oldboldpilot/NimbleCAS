@@ -49,7 +49,7 @@ auto main() -> int {
                   t_ctx.expect(lt.has_value() && lt.value().is_equivalent_to(lt_expected),
                                std::format("L{{t}} = {}", lt.value().to_string()));
                   // L{t^2} = 2/s^3
-                  auto t2 = Expr::power(t, Expr::integer(2));
+                  auto const t2 = Expr::power(t, Expr::integer(2));
                   auto lt2 = laplace_transform(t2, "t", "s");
                   auto lt2_expected = simp(
                       Expr::product({Expr::integer(2), Expr::power(s, Expr::integer(-3))}));
@@ -59,7 +59,7 @@ auto main() -> int {
         .test("exponential",
               [&](TestContext& t_ctx) {
                   // L{exp(2 t)} = 1/(s - 2)
-                  auto f = Expr::apply("exp", {Expr::product({Expr::integer(2), t})});
+                  auto const f = Expr::apply("exp", {Expr::product({Expr::integer(2), t})});
                   auto result = laplace_transform(f, "t", "s");
                   auto expected = simp(
                       Expr::power(Expr::sum({s, Expr::integer(-2)}), Expr::integer(-1)));
@@ -70,7 +70,7 @@ auto main() -> int {
         .test("sine_and_cosine",
               [&](TestContext& t_ctx) {
                   // L{sin(3 t)} = 3/(s^2 + 9)
-                  auto fsin = Expr::apply("sin", {Expr::product({Expr::integer(3), t})});
+                  auto const fsin = Expr::apply("sin", {Expr::product({Expr::integer(3), t})});
                   auto lsin = laplace_transform(fsin, "t", "s");
                   auto lsin_expected = simp(Expr::product(
                       {Expr::integer(3),
@@ -80,7 +80,7 @@ auto main() -> int {
                   t_ctx.expect(lsin.has_value() && lsin.value().is_equivalent_to(lsin_expected),
                                std::format("L{{sin(3t)}} = {}", lsin.value().to_string()));
                   // L{cos(t)} = s/(s^2 + 1)
-                  auto fcos = Expr::apply("cos", {t});
+                  auto const fcos = Expr::apply("cos", {t});
                   auto lcos = laplace_transform(fcos, "t", "s");
                   auto lcos_expected = simp(Expr::product(
                       {s, Expr::power(Expr::sum({Expr::power(s, Expr::integer(2)),
@@ -92,7 +92,7 @@ auto main() -> int {
         .test("linearity",
               [&](TestContext& t_ctx) {
                   // L{2 + 3 t} = 2/s + 3/s^2
-                  auto f = Expr::sum({Expr::integer(2), Expr::product({Expr::integer(3), t})});
+                  auto const f = Expr::sum({Expr::integer(2), Expr::product({Expr::integer(3), t})});
                   auto result = laplace_transform(f, "t", "s");
                   auto expected = simp(Expr::sum(
                       {Expr::product({Expr::integer(2), Expr::power(s, Expr::integer(-1))}),
@@ -104,13 +104,13 @@ auto main() -> int {
         .test("unhandled_is_not_implemented",
               [&](TestContext& t_ctx) {
                   // log(t) is not in the table.
-                  auto flog = Expr::apply("log", {t});
+                  auto const flog = Expr::apply("log", {t});
                   auto rlog = laplace_transform(flog, "t", "s");
                   t_ctx.expect(!rlog.has_value(), "L{log(t)} is rejected");
                   t_ctx.expect(rlog.error() == MathError::not_implemented,
                                "L{log(t)} yields not_implemented");
                   // A product of two t-dependent factors (t * sin(t)) is unhandled.
-                  auto prod = Expr::product({t, Expr::apply("sin", {t})});
+                  auto const prod = Expr::product({t, Expr::apply("sin", {t})});
                   auto rprod = laplace_transform(prod, "t", "s");
                   t_ctx.expect(!rprod.has_value() &&
                                    rprod.error() == MathError::not_implemented,
@@ -149,7 +149,7 @@ auto main() -> int {
         .test("inverse_exponential",
               [&](TestContext& t_ctx) {
                   // L^{-1}{1/(s-2)} = e^(2 t)
-                  auto F = Expr::power(Expr::sum({s, Expr::integer(-2)}), Expr::integer(-1));
+                  auto const F = Expr::power(Expr::sum({s, Expr::integer(-2)}), Expr::integer(-1));
                   auto f = inverse_laplace(F, "s", "t");
                   auto expected =
                       simp(Expr::apply("exp", {Expr::product({Expr::integer(2), t})}));
@@ -160,7 +160,7 @@ auto main() -> int {
         .test("inverse_sine_and_cosine",
               [&](TestContext& t_ctx) {
                   // L^{-1}{3/(s^2+9)} = sin(3 t)
-                  auto Fsin = Expr::product(
+                  auto const Fsin = Expr::product(
                       {Expr::integer(3),
                        Expr::power(Expr::sum({Expr::power(s, Expr::integer(2)),
                                               Expr::integer(9)}),
@@ -172,7 +172,7 @@ auto main() -> int {
                                    fsin.value().is_equivalent_to(sin_expected),
                                std::format("L^-1{{3/(s^2+9)}} = {}", fsin.value().to_string()));
                   // L^{-1}{s/(s^2+1)} = cos(t)
-                  auto Fcos = Expr::product(
+                  auto const Fcos = Expr::product(
                       {s, Expr::power(Expr::sum({Expr::power(s, Expr::integer(2)),
                                                  Expr::integer(1)}),
                                       Expr::integer(-1))});
@@ -185,12 +185,12 @@ auto main() -> int {
         .test("inverse_power_and_repeated_pole",
               [&](TestContext& t_ctx) {
                   // L^{-1}{1/s^2} = t
-                  auto Ft = Expr::power(s, Expr::integer(-2));
+                  auto const Ft = Expr::power(s, Expr::integer(-2));
                   auto ft = inverse_laplace(Ft, "s", "t");
                   t_ctx.expect(ft.has_value() && ft.value().is_equivalent_to(simp(t)),
                                std::format("L^-1{{1/s^2}} = {}", ft.value().to_string()));
                   // L^{-1}{1/(s-1)^2} = t e^t
-                  auto Fte = Expr::power(Expr::sum({s, Expr::integer(-1)}), Expr::integer(-2));
+                  auto const Fte = Expr::power(Expr::sum({s, Expr::integer(-1)}), Expr::integer(-2));
                   auto fte = inverse_laplace(Fte, "s", "t");
                   auto te_expected = simp(Expr::product({t, Expr::apply("exp", {t})}));
                   t_ctx.expect(fte.has_value() &&
@@ -201,7 +201,7 @@ auto main() -> int {
               [&](TestContext& t_ctx) {
                   // L^{-1}{1/(s^2-1)} = (1/2) e^t - (1/2) e^(-t)  (a square-free quadratic
                   // that factors over Q into two distinct real poles).
-                  auto F = Expr::power(
+                  auto const F = Expr::power(
                       Expr::sum({Expr::power(s, Expr::integer(2)), Expr::integer(-1)}),
                       Expr::integer(-1));
                   auto f = inverse_laplace(F, "s", "t");
@@ -247,14 +247,14 @@ auto main() -> int {
         .test("inverse_unsupported_is_not_implemented",
               [&](TestContext& t_ctx) {
                   // Irreducible cubic denominator: outside the table.
-                  auto Fcubic = Expr::power(
+                  auto const Fcubic = Expr::power(
                       Expr::sum({Expr::power(s, Expr::integer(3)), s, Expr::integer(1)}),
                       Expr::integer(-1));
                   auto rc = inverse_laplace(Fcubic, "s", "t");
                   t_ctx.expect(!rc.has_value() && rc.error() == MathError::not_implemented,
                                "L^-1{1/(s^3+s+1)} yields not_implemented");
                   // Irrational real poles (s^2 - 2): cannot stay over Q.
-                  auto Firr = Expr::power(
+                  auto const Firr = Expr::power(
                       Expr::sum({Expr::power(s, Expr::integer(2)), Expr::integer(-2)}),
                       Expr::integer(-1));
                   auto ri = inverse_laplace(Firr, "s", "t");

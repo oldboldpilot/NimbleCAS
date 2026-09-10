@@ -153,7 +153,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Nilpotent N = [[0,1],[0,0]]: T(t) = I + tN exactly, so T(s+t) = T(s)T(t).
                   const Matrix n = mat({{0, 1}, {0, 0}});
-                  auto prop = verify_semigroup_property(n, ri(1), ri(2), 4);
+                  auto const prop = verify_semigroup_property(n, ri(1), ri(2), 4);
                   t.expect(prop.has_value() && prop.value_or(false),
                            "T(1+2) = T(1)T(2) exactly for the nilpotent generator");
                   // Direct pin: T(3) = [[1,3],[0,1]].
@@ -185,29 +185,29 @@ auto main() -> int {
                   // diag(-1,-2): symmetric part diag(-2,-4) is negative semidefinite -> dissipative;
                   // eigenvalues -1,-2 -> Hurwitz. Contraction generator (Lumer-Phillips).
                   const Matrix stable = mat({{-1, 0}, {0, -2}});
-                  auto d1 = is_dissipative(stable);
+                  auto const d1 = is_dissipative(stable);
                   t.expect(d1 && d1.value_or(false), "diag(-1,-2) is dissipative");
-                  auto c1 = is_contraction_generator(stable);
+                  auto const c1 = is_contraction_generator(stable);
                   t.expect(c1 && c1.value_or(false), "diag(-1,-2) generates a contraction");
-                  auto h1 = is_hurwitz(stable);
+                  auto const h1 = is_hurwitz(stable);
                   t.expect(h1 && h1.value_or(false), "diag(-1,-2) is Hurwitz");
 
                   // Skew J = [[0,1],[-1,0]]: A + A^T = 0 -> dissipative (contraction), but the
                   // spectrum is {+/- i} on the imaginary axis, so NOT Hurwitz. Distinguishes the two.
                   const Matrix skew = mat({{0, 1}, {-1, 0}});
-                  auto d2 = is_dissipative(skew);
+                  auto const d2 = is_dissipative(skew);
                   t.expect(d2 && d2.value_or(false), "skew-symmetric is dissipative");
-                  auto c2 = is_contraction_generator(skew);
+                  auto const c2 = is_contraction_generator(skew);
                   t.expect(c2 && c2.value_or(false), "skew-symmetric generates a contraction");
-                  auto h2 = is_hurwitz(skew);
+                  auto const h2 = is_hurwitz(skew);
                   t.expect(h2.has_value() && !h2.value_or(true),
                            "skew-symmetric is NOT Hurwitz (imaginary-axis spectrum)");
 
                   // Identity: symmetric part diag(2,2) is positive definite -> NOT dissipative.
                   const Matrix id = Matrix::identity(2);
-                  auto d3 = is_dissipative(id);
+                  auto const d3 = is_dissipative(id);
                   t.expect(d3.has_value() && !d3.value_or(true), "identity is not dissipative");
-                  auto c3 = is_contraction_generator(id);
+                  auto const c3 = is_contraction_generator(id);
                   t.expect(c3.has_value() && !c3.value_or(true),
                            "identity does not generate a contraction");
               })

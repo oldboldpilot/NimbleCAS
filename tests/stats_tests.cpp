@@ -71,11 +71,11 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto x = ints({1, 2, 3});
                   const auto y = ints({1, 2, 3});
-                  std::vector<std::span<const Rational>> vars{std::span<const Rational>{x},
+                  std::vector<std::span<const Rational>> const vars{std::span<const Rational>{x},
                                                               std::span<const Rational>{y}};
-                  auto sigma = nimblecas::covariance_matrix(vars, true).value();
+                  auto const sigma = nimblecas::covariance_matrix(vars, true).value();
                   const auto one = Rational::from_int(1);
-                  auto expected = Matrix::from_rows({{one, one}, {one, one}}).value();
+                  auto const expected = Matrix::from_rows({{one, one}, {one, one}}).value();
                   t.expect(sigma.is_equal(expected), "cov matrix of X=Y={1,2,3} = [[1,1],[1,1]]");
                   t.expect(sigma.rows() == 2 && sigma.cols() == 2, "sigma is 2x2");
                   // symmetric
@@ -92,12 +92,12 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto x = ints({1, 2, 3});
                   const auto y = ints({3, 2, 1});
-                  std::vector<std::span<const Rational>> vars{std::span<const Rational>{x},
+                  std::vector<std::span<const Rational>> const vars{std::span<const Rational>{x},
                                                               std::span<const Rational>{y}};
-                  auto sigma = nimblecas::covariance_matrix(vars, true).value();
+                  auto const sigma = nimblecas::covariance_matrix(vars, true).value();
                   const auto one = Rational::from_int(1);
                   const auto neg = rat(-1, 1);
-                  auto expected = Matrix::from_rows({{one, neg}, {neg, one}}).value();
+                  auto const expected = Matrix::from_rows({{one, neg}, {neg, one}}).value();
                   t.expect(sigma.is_equal(expected),
                            "cov matrix of X={1,2,3}, Y={3,2,1} = [[1,-1],[-1,1]]");
               })
@@ -122,7 +122,7 @@ auto main() -> int {
                   // ragged variables -> domain_error
                   const auto a = ints({1, 2, 3});
                   const auto b = ints({1, 2});
-                  std::vector<std::span<const Rational>> ragged{std::span<const Rational>{a},
+                  std::vector<std::span<const Rational>> const ragged{std::span<const Rational>{a},
                                                                 std::span<const Rational>{b}};
                   t.expect(nimblecas::covariance_matrix(ragged, true).error() ==
                                MathError::domain_error,
@@ -135,7 +135,7 @@ auto main() -> int {
                            "covariance of unequal-length inputs is domain_error");
 
                   // empty variable list -> domain_error
-                  std::vector<std::span<const Rational>> no_vars;
+                  std::vector<std::span<const Rational>> const no_vars;
                   t.expect(nimblecas::covariance_matrix(no_vars, true).error() ==
                                MathError::domain_error,
                            "empty variable list is domain_error");
@@ -215,7 +215,7 @@ auto main() -> int {
                                rat(9, 4),
                            "skewness_squared {0,0,0,0,4} = 9/4");
                   // sign of skewness recoverable from central_moment(_,3) > 0
-                  auto m3 = nimblecas::central_moment(std::span<const Rational>{skew}, 3).value();
+                  auto const m3 = nimblecas::central_moment(std::span<const Rational>{skew}, 3).value();
                   t.expect(m3.numerator() > 0, "central_moment k=3 > 0 => positive skew");
                   // constant data -> zero variance -> domain_error
                   const auto constant = ints({4, 4, 4});
@@ -325,9 +325,9 @@ auto main() -> int {
                                    .value() == Rational::from_int(1),
                            "r^2 of perfectly anti-correlated data = 1");
                   // correlation_squared_matrix diagonal is exactly 1
-                  std::vector<std::span<const Rational>> vars{std::span<const Rational>{x},
+                  std::vector<std::span<const Rational>> const vars{std::span<const Rational>{x},
                                                               std::span<const Rational>{yp}};
-                  auto r2 = nimblecas::correlation_squared_matrix(vars).value();
+                  auto const r2 = nimblecas::correlation_squared_matrix(vars).value();
                   const auto one = Rational::from_int(1);
                   t.expect(r2.at(0, 0) == one && r2.at(1, 1) == one, "r^2 matrix diagonal = 1");
                   t.expect(r2.at(0, 1) == one && r2.at(0, 1) == r2.at(1, 0),

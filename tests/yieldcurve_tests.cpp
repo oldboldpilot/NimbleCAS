@@ -104,9 +104,9 @@ auto main() -> int {
                   t.expect(id, "fwd2zero . zero2fwd == identity");
                   // Flat continuous curve: every interval forward equals the flat zero.
                   const std::vector<double> flat{0.05, 0.05, 0.05, 0.05};
-                  auto ff = zero2fwd(times, flat, Compounding::continuous).value();
+                  auto const ff = zero2fwd(times, flat, Compounding::continuous).value();
                   bool allflat = true;
-                  for (double f : ff) { allflat = allflat && close(f, 0.05, 1e-10); }
+                  for (double const f : ff) { allflat = allflat && close(f, 0.05, 1e-10); }
                   t.expect(allflat, "flat curve forwards all == 5%");
               })
         .test("bootstrap zbtprice reproduces input bond prices",
@@ -123,7 +123,7 @@ auto main() -> int {
                   t.expect(curve.has_value(), "zbtprice bootstraps");
                   // Re-price each bond on the bootstrapped curve; must match the inputs.
                   const Curve& cv = curve.value();
-                  auto reprice = [&](const CouponBond& b) -> double {
+                  auto const reprice = [&](const CouponBond& b) -> double {
                       const double f = static_cast<double>(b.frequency);
                       const int np = static_cast<int>(std::llround(b.maturity * f));
                       double price = 0.0;
@@ -144,10 +144,10 @@ auto main() -> int {
                   }
                   t.expect(ok, "re-priced bonds == input prices");
                   // Discount factors strictly decrease across the bootstrapped pillars.
-                  auto df = cv.pillar_times();
+                  auto const df = cv.pillar_times();
                   bool mono = true;
                   double prev = 1.0;
-                  for (double tt : df) {
+                  for (double const tt : df) {
                       const double d = cv.discount_factor(tt).value();
                       mono = mono && (d < prev) && (d > 0.0);
                       prev = d;
@@ -198,7 +198,7 @@ auto main() -> int {
                            "NS(0) == beta0 + beta1");
                   const std::vector<double> times{0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0};
                   std::vector<double> zeros;
-                  for (double tt : times) { zeros.push_back(truth.zero_rate(tt).value()); }
+                  for (double const tt : times) { zeros.push_back(truth.zero_rate(tt).value()); }
                   auto fit = fit_nelson_siegel(times, zeros);
                   t.expect(fit.has_value(), "NS fit converges");
                   const NelsonSiegel& f = fit.value();
@@ -223,7 +223,7 @@ auto main() -> int {
                   const std::vector<double> times{0.25, 0.5, 1.0, 2.0, 3.0,
                                                   5.0,  7.0, 10.0, 15.0, 20.0};
                   std::vector<double> zeros;
-                  for (double tt : times) { zeros.push_back(truth.zero_rate(tt).value()); }
+                  for (double const tt : times) { zeros.push_back(truth.zero_rate(tt).value()); }
                   auto fit = fit_svensson(times, zeros);
                   t.expect(fit.has_value(), "Svensson fit converges");
                   const Svensson& f = fit.value();
@@ -236,13 +236,13 @@ auto main() -> int {
         .test("interpolation modes and Hull-White lattice reprices the curve",
               [](TestContext& t) {
                   // Linear-on-zero vs log-linear-on-DF at an interior point.
-                  auto lz = Curve::create({1.0, 2.0}, {0.03, 0.05}, Interp::linear_zero,
+                  auto const lz = Curve::create({1.0, 2.0}, {0.03, 0.05}, Interp::linear_zero,
                                           Compounding::continuous)
                                 .value();
                   t.expect(close(lz.zero_rate(1.5).value(), 0.04, 1e-9), "linear zero(1.5)==4%");
                   t.expect(close(lz.discount_factor(1.5).value(), std::exp(-0.04 * 1.5), 1e-9),
                            "linear DF(1.5)==exp(-0.06)");
-                  auto ld = Curve::create({1.0, 2.0}, {0.03, 0.05}, Interp::loglinear_df,
+                  auto const ld = Curve::create({1.0, 2.0}, {0.03, 0.05}, Interp::loglinear_df,
                                           Compounding::continuous)
                                 .value();
                   // ln DF at pillars are -0.03 and -0.10; midpoint is -0.065.
@@ -258,7 +258,7 @@ auto main() -> int {
                   t.expect(lat.has_value(), "Hull-White builds");
                   const HullWhiteLattice& hw = lat.value();
                   bool ok = true;
-                  for (int i : {1, 2, 4, 6, 8}) {
+                  for (int const i : {1, 2, 4, 6, 8}) {
                       const double tT = static_cast<double>(i) * 0.5;
                       ok = ok && close(hw.discount(tT).value(), std::exp(-0.05 * tT), 1e-7);
                   }
@@ -360,7 +360,7 @@ auto main() -> int {
                   t.expect(!times_from_dates(settle, bad, DayCount::actual_365).has_value(),
                            "pillar before settlement -> error");
                   // The resulting times build a valid curve.
-                  auto curve = Curve::create(times.value(), {0.02, 0.025, 0.03},
+                  auto const curve = Curve::create(times.value(), {0.02, 0.025, 0.03},
                                              Interp::loglinear_df, Compounding::annual);
                   t.expect(curve.has_value(), "curve from dated pillars ok");
               })

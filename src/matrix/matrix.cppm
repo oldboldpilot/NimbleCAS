@@ -209,8 +209,8 @@ auto Matrix::from_rows(std::vector<std::vector<Rational>> rows) -> Result<Matrix
     }
     std::vector<Rational> data;
     data.reserve(nrows * ncols);  // nrows*ncols already realised by the caller's rows
-    for (auto& row : rows) {
-        for (auto& e : row) {
+    for (auto const& row : rows) {
+        for (auto const& e : row) {
             data.push_back(e);
         }
     }

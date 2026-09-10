@@ -45,7 +45,7 @@ namespace {
 [[nodiscard]] auto wave_residual_holds(const nimblecas::SpatialOperator& l,
                                        const std::vector<RationalPoly>& c) -> bool {
     for (std::size_t n = 0; n + 2 < c.size(); ++n) {
-        auto factor = Rational::from_int(static_cast<std::int64_t>((n + 2) * (n + 1)));
+        auto const factor = Rational::from_int(static_cast<std::int64_t>((n + 2) * (n + 1)));
         auto lhs = c[n + 2].scale(factor);  // (n+2)(n+1) c_{n+2}
         auto rhs = l(c[n]);                 // L[c_n]
         if (!lhs || !rhs || !lhs->is_equal(*rhs)) {
@@ -62,7 +62,7 @@ auto main() -> int {
         .test("heat_x2_diffusivity_one",
               [](TestContext& t) {
                   // u_t = u_xx, phi = x^2  =>  u = x^2 + 2t  (c_0=x^2, c_1=2, c_2..=0).
-                  auto l = nimblecas::heat_operator(Rational::from_int(1));
+                  auto const l = nimblecas::heat_operator(Rational::from_int(1));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 1}), 3).value();
                   t.expect_eq(c.size(), std::size_t{4}, "returns c_0..c_3");
                   t.expect(c[0].is_equal(ipoly({0, 0, 1})), "c_0 = x^2");
@@ -77,7 +77,7 @@ auto main() -> int {
         .test("heat_x4_diffusivity_one",
               [](TestContext& t) {
                   // phi = x^4  =>  u = x^4 + 12 x^2 t + 12 t^2 (c_0=x^4, c_1=12x^2, c_2=12).
-                  auto l = nimblecas::heat_operator(Rational::from_int(1));
+                  auto const l = nimblecas::heat_operator(Rational::from_int(1));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 0, 0, 1}), 3).value();
                   t.expect(c[0].is_equal(ipoly({0, 0, 0, 0, 1})), "c_0 = x^4");
                   t.expect(c[1].is_equal(ipoly({0, 0, 12})), "c_1 = 12 x^2");
@@ -91,7 +91,7 @@ auto main() -> int {
         .test("transport_x2_speed_one",
               [](TestContext& t) {
                   // u_t = u_x, phi = x^2  =>  u = (x+t)^2 = x^2 + 2 x t + t^2.
-                  auto l = nimblecas::transport_operator(Rational::from_int(1));
+                  auto const l = nimblecas::transport_operator(Rational::from_int(1));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 1}), 3).value();
                   t.expect(c[0].is_equal(ipoly({0, 0, 1})), "c_0 = x^2");
                   t.expect(c[1].is_equal(ipoly({0, 2})), "c_1 = 2x");
@@ -106,7 +106,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Diffusivity 1/2 exercises rational scaling.
                   // phi = x^4  =>  u = x^4 + 6 x^2 t + 3 t^2.
-                  auto l = nimblecas::heat_operator(rat(1, 2));
+                  auto const l = nimblecas::heat_operator(rat(1, 2));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 0, 0, 1}), 3).value();
                   t.expect(c[0].is_equal(ipoly({0, 0, 0, 0, 1})), "c_0 = x^4");
                   t.expect(c[1].is_equal(ipoly({0, 0, 6})), "c_1 = 6 x^2");
@@ -121,7 +121,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Speed 1/2 exercises rational scaling.
                   // phi = x^2  =>  u = (x + t/2)^2 = x^2 + x t + (1/4) t^2.
-                  auto l = nimblecas::transport_operator(rat(1, 2));
+                  auto const l = nimblecas::transport_operator(rat(1, 2));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 1}), 3).value();
                   t.expect(c[0].is_equal(ipoly({0, 0, 1})), "c_0 = x^2");
                   t.expect(c[1].is_equal(ipoly({0, 1})), "c_1 = x");
@@ -135,7 +135,7 @@ auto main() -> int {
         .test("transport_x3_speed_three",
               [](TestContext& t) {
                   // Speed 3 != 1: u_t = 3 u_x, phi = x^2  =>  u = (x + 3t)^2.
-                  auto l = nimblecas::transport_operator(Rational::from_int(3));
+                  auto const l = nimblecas::transport_operator(Rational::from_int(3));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 1}), 3).value();
                   t.expect(c[0].is_equal(ipoly({0, 0, 1})), "c_0 = x^2");
                   t.expect(c[1].is_equal(ipoly({0, 6})), "c_1 = 6x");
@@ -152,7 +152,7 @@ auto main() -> int {
                   // L[x^2] = 2x + 2 => c_1 = 2x + 2.
                   // L[2x + 2] = 2 => c_2 = 2 * 1/2 = 1.
                   // L[1] = 0 => c_3 = 0.
-                  auto l = nimblecas::advection_diffusion(Rational::from_int(1),
+                  auto const l = nimblecas::advection_diffusion(Rational::from_int(1),
                                                           Rational::from_int(1));
                   auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 1}), 3).value();
                   t.expect(c[0].is_equal(ipoly({0, 0, 1})), "c_0 = x^2");
@@ -169,14 +169,14 @@ auto main() -> int {
                   // Independent check of evaluate at a fractional (x, t) for the heat x^4
                   // series u = x^4 + 12 x^2 t + 12 t^2 at x = 1/2, t = 1/3.
                   // = 1/16 + 12*(1/4)*(1/3) + 12*(1/9) = 1/16 + 1 + 4/3 = 115/48.
-                  auto l = nimblecas::heat_operator(Rational::from_int(1));
-                  auto c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 0, 0, 1}), 2).value();
+                  auto const l = nimblecas::heat_operator(Rational::from_int(1));
+                  auto const c = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 0, 0, 1}), 2).value();
                   auto v = nimblecas::evaluate(c, rat(1, 2), rat(1, 3));
                   t.expect(v.value() == rat(115, 48), "u(1/2, 1/3) = 115/48");
               })
         .test("error_paths",
               [](TestContext& t) {
-                  auto l = nimblecas::heat_operator(Rational::from_int(1));
+                  auto const l = nimblecas::heat_operator(Rational::from_int(1));
                   // order 0 is a domain_error.
                   auto bad = nimblecas::solve_evolution_pde(l, ipoly({0, 0, 1}), 0);
                   t.expect(!bad.has_value(), "order 0 fails");
@@ -189,7 +189,7 @@ auto main() -> int {
                   auto bad3 = nimblecas::evaluate({}, Rational::from_int(1), Rational::from_int(1));
                   t.expect(bad3.error() == MathError::domain_error, "empty evaluate is domain_error");
                   // an error raised by L propagates through solve_evolution_pde.
-                  nimblecas::SpatialOperator failing =
+                  nimblecas::SpatialOperator const failing =
                       [](const RationalPoly&) -> nimblecas::Result<RationalPoly> {
                       return nimblecas::make_error<RationalPoly>(MathError::overflow);
                   };
@@ -263,7 +263,7 @@ auto main() -> int {
                       nimblecas::TimeSeriesOperator{}, ipoly({0, 1}), 3);
                   t.expect(bad2.error() == MathError::domain_error, "null nonlinear is domain_error");
                   // an error raised by N propagates.
-                  nimblecas::TimeSeriesOperator failing =
+                  nimblecas::TimeSeriesOperator const failing =
                       [](const std::vector<RationalPoly>&)
                       -> nimblecas::Result<std::vector<RationalPoly>> {
                       return nimblecas::make_error<std::vector<RationalPoly>>(MathError::overflow);
@@ -276,7 +276,7 @@ auto main() -> int {
         .test("poisson_uxx_2_zero_dirichlet",
               [](TestContext& t) {
                   // u'' = 2 on [0,1], u(0)=0, u(1)=0  =>  u = x^2 - x (exact over Q).
-                  auto u = nimblecas::solve_poisson_bvp_1d(ipoly({2}), Rational::from_int(0),
+                  auto const u = nimblecas::solve_poisson_bvp_1d(ipoly({2}), Rational::from_int(0),
                                                            Rational::from_int(0),
                                                            Rational::from_int(1),
                                                            Rational::from_int(0))
@@ -286,7 +286,7 @@ auto main() -> int {
         .test("poisson_uxx_x_zero_dirichlet",
               [](TestContext& t) {
                   // u'' = x on [0,1], u(0)=0, u(1)=0  =>  u = x^3/6 - x/6 (exact rational).
-                  auto u = nimblecas::solve_poisson_bvp_1d(ipoly({0, 1}), Rational::from_int(0),
+                  auto const u = nimblecas::solve_poisson_bvp_1d(ipoly({0, 1}), Rational::from_int(0),
                                                            Rational::from_int(0),
                                                            Rational::from_int(1),
                                                            Rational::from_int(0))
@@ -298,7 +298,7 @@ auto main() -> int {
         .test("laplace_linear_interpolation",
               [](TestContext& t) {
                   // u'' = 0 on [0,2], u(0)=1, u(2)=5  =>  u = 1 + 2x (harmonic = linear in 1-D).
-                  auto u = nimblecas::solve_poisson_bvp_1d(RationalPoly{}, Rational::from_int(0),
+                  auto const u = nimblecas::solve_poisson_bvp_1d(RationalPoly{}, Rational::from_int(0),
                                                            Rational::from_int(1),
                                                            Rational::from_int(2),
                                                            Rational::from_int(5))
@@ -330,7 +330,7 @@ auto main() -> int {
                   t.expect(c[2].is_equal(ipoly({1})), "c_2 = 1");
                   t.expect(c[3].is_zero(), "c_3 = 0");
                   t.expect(c[4].is_zero(), "c_4 = 0 (series terminated)");
-                  auto l = nimblecas::heat_operator(Rational::from_int(1));  // L = 1 * d^2/dx^2
+                  auto const l = nimblecas::heat_operator(Rational::from_int(1));  // L = 1 * d^2/dx^2
                   t.expect(wave_residual_holds(l, c), "(n+2)(n+1) c_{n+2} == c_n''");
                   // u(2,1) = 4 + 1 = 5.
                   auto v = nimblecas::evaluate(c, Rational::from_int(2), Rational::from_int(1));

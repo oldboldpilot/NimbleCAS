@@ -224,7 +224,7 @@ auto main() -> int {
                   const std::size_t assignments = 1U << cnf.num_vars;
                   std::vector<int> covered(assignments, 0);
                   for (std::uint64_t c = 0; c < (1ULL << cube_vars); ++c) {
-                      auto cube = cube_of(cnf, cube_vars, c);
+                      auto const cube = cube_of(cnf, cube_vars, c);
                       if (!cube.has_value()) {
                           t.expect(false, "every cube is built");
                           return;
@@ -512,7 +512,7 @@ auto main() -> int {
                   t.expect(!a.has_value() && a.error() == MathError::domain_error,
                            "zero shards is a domain_error");
                   const Cnf malformed{.num_vars = 0, .clauses = {{1}}};
-                  auto b = solve_portfolio_distributed(malformed, 1, 2, *exec);
+                  auto const b = solve_portfolio_distributed(malformed, 1, 2, *exec);
                   t.expect(!b.has_value(),
                            "a malformed formula is refused rather than solved");
               })

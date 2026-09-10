@@ -59,7 +59,7 @@ auto main() -> int {
         .test("continuity_direct_substitution",
               [&](TestContext& t) {
                   // lim_{x->2} (x^2 + 1) = 5
-                  auto f = Expr::sum({powi(x, 2), intg(1)});
+                  auto const f = Expr::sum({powi(x, 2), intg(1)});
                   expect_val(t, limit(f, "x", intg(2)), intg(5), "lim x->2 (x^2+1) = 5");
               })
         .test("removable_0_over_0_via_lhopital",
@@ -76,8 +76,8 @@ auto main() -> int {
         .test("rational_at_infinity_equal_and_lower_degree",
               [&](TestContext& t) {
                   // lim_{x->inf} (2x^2 + 3)/(x^2 - 1) = 2  (equal degree -> lead ratio)
-                  auto num = Expr::sum({Expr::product({intg(2), powi(x, 2)}), intg(3)});
-                  auto den = Expr::sum({powi(x, 2), intg(-1)});
+                  auto const num = Expr::sum({Expr::product({intg(2), powi(x, 2)}), intg(3)});
+                  auto const den = Expr::sum({powi(x, 2), intg(-1)});
                   expect_val(t, limit_at_infinity(frac(num, den), "x", true), intg(2),
                              "lim x->inf (2x^2+3)/(x^2-1) = 2");
                   // lim_{x->inf} (x + 1)/x^2 = 0  (lower degree)
@@ -99,7 +99,7 @@ auto main() -> int {
         .test("honest_failures",
               [&](TestContext& t) {
                   // Oscillatory / essential singularity: sin(1/x) as x->0 is undecidable here.
-                  auto osc = Expr::apply("sin", {powi(x, -1)});
+                  auto const osc = Expr::apply("sin", {powi(x, -1)});
                   expect_err(t, limit(osc, "x", intg(0)), MathError::not_implemented,
                              "lim x->0 sin(1/x) -> not_implemented");
                   // Genuine finite pole: 1/(x - 1) as x->1 has no finite two-sided limit.
@@ -107,7 +107,7 @@ auto main() -> int {
                   expect_err(t, limit(pole, "x", intg(1)), MathError::domain_error,
                              "lim x->1 1/(x-1) -> domain_error");
                   // Non-rational behaviour at infinity is out of scope here.
-                  auto transc = Expr::apply("exp", {x});
+                  auto const transc = Expr::apply("exp", {x});
                   expect_err(t, limit_at_infinity(transc, "x", true), MathError::not_implemented,
                              "lim x->inf exp(x) -> not_implemented");
               })
@@ -130,7 +130,7 @@ auto main() -> int {
                   // Regression: sqrt(x) at 0 folds to 0 by substitution, but 0 is the
                   // boundary of sqrt's domain (undefined for x<0), so the two-sided /
                   // left limit does not exist -> honest error, never the value 0.
-                  auto sqrt_x = Expr::power(x, Expr::rational(1, 2).value());
+                  auto const sqrt_x = Expr::power(x, Expr::rational(1, 2).value());
                   auto res = limit(sqrt_x, "x", intg(0));
                   t.expect(!res.has_value(),
                            std::format("lim x->0 sqrt(x): must not return a value, got {}",
@@ -148,7 +148,7 @@ auto main() -> int {
                   // Regression: (x^256 + 1)^256 would expand to a degree-65536 dense
                   // polynomial (~1e9 nodes). The total-degree cap must reject it FAST as
                   // not_implemented rather than hang / exhaust memory.
-                  auto inner = Expr::sum({powi(x, 256), intg(1)});
+                  auto const inner = Expr::sum({powi(x, 256), intg(1)});
                   auto big = frac(Expr::power(inner, intg(256)), x);
                   expect_err(t, limit_at_infinity(big, "x", true), MathError::not_implemented,
                              "lim x->inf (x^256+1)^256/x -> not_implemented (degree-capped)");

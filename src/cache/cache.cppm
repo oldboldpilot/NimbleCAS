@@ -78,7 +78,7 @@ auto ExprMemo::get_or_compute(const Expr& key, const std::function<Result<Expr>(
     // 1. Fast path: look up under the shard lock.
     {
         const std::lock_guard<std::mutex> lock(shard.mtx);
-        if (auto it = shard.buckets.find(h); it != shard.buckets.end()) {
+        if (auto const it = shard.buckets.find(h); it != shard.buckets.end()) {
             for (const auto& [cached_key, cached_value] : it->second) {
                 if (cached_key.is_equivalent_to(key)) {
                     return cached_value;

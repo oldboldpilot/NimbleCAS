@@ -189,7 +189,7 @@ auto main() -> int {
                   for (std::size_t i = 0; i < ts.size(); ++i) {
                       ys[i] = 2.0 * std::exp(0.5 * ts[i]);
                   }
-                  auto resid = [ts, ys](std::span<const double> p) -> std::vector<double> {
+                  auto const resid = [ts, ys](std::span<const double> p) -> std::vector<double> {
                       std::vector<double> r(ts.size());
                       for (std::size_t i = 0; i < ts.size(); ++i) {
                           r[i] = p[0] * std::exp(p[1] * ts[i]) - ys[i];
@@ -242,13 +242,13 @@ auto main() -> int {
                            "non-finite x0 -> domain_error");
 
                   // Empty system.
-                  std::span<const double> empty{};
+                  std::span<const double> const empty{};
                   auto r2 = nl::newton(scalar_sq_minus_two, empty);
                   t.expect(!r2.has_value() && r2.error() == MathError::domain_error,
                            "empty x0 -> domain_error");
 
                   // Residual whose output dimension disagrees with n.
-                  auto wrong_dim = [](std::span<const double> x) -> std::vector<double> {
+                  auto const wrong_dim = [](std::span<const double> x) -> std::vector<double> {
                       return {x[0], x[0]};  // returns 2 for a 1-D system
                   };
                   const std::array<double, 1> x0{1.0};
@@ -269,7 +269,7 @@ auto main() -> int {
                   const std::vector<std::vector<double>> starts{
                       {3.0}, {-3.0}, {0.7}, {-0.4}, {5.0}};
                   const std::span<const std::vector<double>> ss{starts};
-                  nl::Solver solver = newton_solver;
+                  nl::Solver const solver = newton_solver;
                   const nl::Options o;
 
                   auto par = nl::parallel_multistart(sq_minus_one, ss, o, solver);
@@ -328,7 +328,7 @@ auto main() -> int {
                   const std::vector<std::vector<double>> starts{
                       {3.0}, {-3.0}, {0.7}, {-0.4}, {5.0}, {-2.5}};
                   const std::span<const std::vector<double>> ss{starts};
-                  nl::Solver solver = newton_solver;
+                  nl::Solver const solver = newton_solver;
                   const nl::Options o;
 
                   // One shard covering everything.

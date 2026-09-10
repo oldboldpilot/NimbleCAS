@@ -105,14 +105,14 @@ auto main() -> int {
         .test("asymptotically_stable_diagonal_negative",
               [](TestContext& t) {
                   // Eigenvalues -1, -2 (char poly lambda^2 + 3 lambda + 2): Hurwitz.
-                  auto s = is_asymptotically_stable(mat({{-1, 0}, {0, -2}}));
+                  auto const s = is_asymptotically_stable(mat({{-1, 0}, {0, -2}}));
                   t.expect(s.has_value(), "Routh array builds");
                   t.expect(s.value_or(false), "diag(-1, -2) is asymptotically stable");
               })
         .test("asymptotically_stable_diagonal_positive",
               [](TestContext& t) {
                   // Eigenvalues 1, 1 (char poly lambda^2 - 2 lambda + 1): not Hurwitz.
-                  auto s = is_asymptotically_stable(mat({{1, 0}, {0, 1}}));
+                  auto const s = is_asymptotically_stable(mat({{1, 0}, {0, 1}}));
                   t.expect(s.has_value(), "Routh array builds");
                   t.expect(!s.value_or(true), "diag(1, 1) is not asymptotically stable");
               })
@@ -121,14 +121,14 @@ auto main() -> int {
                   // Eigenvalues +/- i (char poly lambda^2 + 1): marginal. A fully-zero second
                   // Routh row -- the imaginary-axis case that rational root testing over Q
                   // could NOT decide -- must resolve to "not asymptotically stable".
-                  auto s = is_asymptotically_stable(mat({{0, -1}, {1, 0}}));
+                  auto const s = is_asymptotically_stable(mat({{0, -1}, {1, 0}}));
                   t.expect(s.has_value(), "Routh array builds for the rotation");
                   t.expect(!s.value_or(true), "rotation (eigenvalues +/- i) is not asymptotically stable");
               })
         .test("asymptotically_stable_defective_negative",
               [](TestContext& t) {
                   // Jordan block with eigenvalue -1 (char poly lambda^2 + 2 lambda + 1): Hurwitz.
-                  auto s = is_asymptotically_stable(mat({{-1, 1}, {0, -1}}));
+                  auto const s = is_asymptotically_stable(mat({{-1, 1}, {0, -1}}));
                   t.expect(s.has_value(), "Routh array builds");
                   t.expect(s.value_or(false), "[[-1,1],[0,-1]] is asymptotically stable");
               })
@@ -140,19 +140,19 @@ auto main() -> int {
               })
         .test("classify_stable_node",
               [](TestContext& t) {
-                  auto c = classify_equilibrium(mat({{-1, 0}, {0, -2}}));
+                  auto const c = classify_equilibrium(mat({{-1, 0}, {0, -2}}));
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "stable node", "diag(-1, -2) => stable node");
               })
         .test("classify_unstable_node",
               [](TestContext& t) {
-                  auto c = classify_equilibrium(mat({{1, 0}, {0, 2}}));
+                  auto const c = classify_equilibrium(mat({{1, 0}, {0, 2}}));
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "unstable node", "diag(1, 2) => unstable node");
               })
         .test("classify_saddle",
               [](TestContext& t) {
-                  auto c = classify_equilibrium(mat({{-1, 0}, {0, 2}}));
+                  auto const c = classify_equilibrium(mat({{-1, 0}, {0, 2}}));
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "saddle", "diag(-1, 2) => saddle");
               })
@@ -160,7 +160,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // diag(0, 1) grows like e^t: a positive eigenvalue makes it unstable, and
                   // must NOT be reported as merely marginal just because a zero is present.
-                  auto c = classify_equilibrium(mat({{0, 0}, {0, 1}}));
+                  auto const c = classify_equilibrium(mat({{0, 0}, {0, 1}}));
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "unstable (with marginal direction)",
                            "diag(0, 1) => unstable (with marginal direction)");
@@ -169,7 +169,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // diag(0, -1): bounded but not asymptotically stable (the zero direction
                   // neither grows nor decays) => marginally stable, not a stable node.
-                  auto c = classify_equilibrium(mat({{0, 0}, {0, -1}}));
+                  auto const c = classify_equilibrium(mat({{0, 0}, {0, -1}}));
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "marginally stable",
                            "diag(0, -1) => marginally stable");
@@ -178,7 +178,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Rotation: spectrum +/- i is not rational, so the Routh-Hurwitz fallback
                   // applies -- and it is not asymptotically stable.
-                  auto c = classify_equilibrium(mat({{0, -1}, {1, 0}}));
+                  auto const c = classify_equilibrium(mat({{0, -1}, {1, 0}}));
                   t.expect(c.has_value(), "classify succeeds");
                   t.expect(c.value_or("") == "unstable or marginal (non-rational spectrum)",
                            "rotation => non-rational marginal fallback string");

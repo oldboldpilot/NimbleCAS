@@ -144,7 +144,7 @@ namespace {
         return n;  // isqrt(0)=0, isqrt(1)=1
     }
     // x*x <= n, computed without overflow (overflow => x*x > n).
-    auto sq_le = [](std::int64_t x, std::int64_t bound) -> bool {
+    auto const sq_le = [](std::int64_t x, std::int64_t bound) -> bool {
         std::int64_t xx = 0;
         if (mul_ov(x, x, xx)) {
             return false;

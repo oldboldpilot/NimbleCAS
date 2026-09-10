@@ -182,7 +182,7 @@ auto main() -> int {
         .test("nelder_mead_bowl_no_gradient",
               [&](TestContext& t) {
                   // f = (x-3)^2 + (y+2)^2 + (z-1)^2, minimizer (3,-2,1). No gradient used.
-                  auto bowl = [](std::span<const double> v) -> double {
+                  auto const bowl = [](std::span<const double> v) -> double {
                       return (v[0] - 3.0) * (v[0] - 3.0) + (v[1] + 2.0) * (v[1] + 2.0) +
                              (v[2] - 1.0) * (v[2] - 1.0);
                   };
@@ -321,7 +321,7 @@ auto main() -> int {
         .test("implicit_filtering_domain_errors",
               [&](TestContext& t) {
                   const std::span<const double> nobound{};
-                  std::span<const double> empty{};
+                  std::span<const double> const empty{};
                   auto re = opt::implicit_filtering(quad_f, empty, nobound, nobound, opt::Options{});
                   t.expect(!re.has_value() && re.error() == MathError::domain_error,
                            "empty x0 -> domain_error");
@@ -349,7 +349,7 @@ auto main() -> int {
         // --- domain errors -----------------------------------------------------
         .test("empty_x0_domain_error",
               [&](TestContext& t) {
-                  std::span<const double> empty{};
+                  std::span<const double> const empty{};
                   auto r = opt::bfgs(quad_f, empty, quad_grad, opt::Options{});
                   t.expect(!r.has_value() && r.error() == MathError::domain_error,
                            "empty x0 -> domain_error");
@@ -375,7 +375,7 @@ auto main() -> int {
                   // deeper LEFT (global) well, some into the shallower right well.
                   const std::vector<std::vector<double>> starts{
                       {2.5}, {1.8}, {-0.5}, {-2.5}, {0.5}, {3.0}, {-1.0}};
-                  auto local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
+                  auto const local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
                                                          multiwell_grad);
 
                   auto par = opt::parallel_multistart(local, starts, /*parallel=*/true);
@@ -413,7 +413,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   const std::vector<std::vector<double>> starts{
                       {2.5}, {1.8}, {-0.5}, {-2.5}, {0.5}, {3.0}, {-1.0}};
-                  auto local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
+                  auto const local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
                                                          multiwell_grad);
 
                   // num_shards = 1: a single shard covers every start.
@@ -458,7 +458,7 @@ auto main() -> int {
                   // A synthetic local optimizer with EXACT fx ties: fx = x0^2, x = start.
                   // Starts {3, -1, 1, -3} -> fx {9, 1, 1, 9}: the minimum fx = 1 is hit by
                   // BOTH index 1 and index 2, so the canonical tie-break must pick index 1.
-                  opt::LocalOptimizer square_opt =
+                  opt::LocalOptimizer const square_opt =
                       [](std::span<const double> x0) -> nimblecas::Result<opt::OptimizeResult> {
                       opt::OptimizeResult r;
                       r.x.assign(x0.begin(), x0.end());
@@ -493,7 +493,7 @@ auto main() -> int {
         // --- empty starts -> domain_error; all-invalid starts -> error ---------
         .test("multistart_domain_errors",
               [&](TestContext& t) {
-                  auto local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
+                  auto const local = opt::make_local_optimizer(opt::Method::bfgs, multiwell_f,
                                                          multiwell_grad);
                   const std::span<const std::vector<double>> no_starts{};
                   auto e = opt::parallel_multistart(local, no_starts);
@@ -520,7 +520,7 @@ auto main() -> int {
         .test("golden_section_parabola",
               [&](TestContext& t) {
                   // (x - 2)^2 on [0, 5]: unimodal, minimizer x* = 2, f* = 0.
-                  auto f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
+                  auto const f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
                   auto r = opt::golden_section(f, 0.0, 5.0, 1e-8, 1000);
                   t.expect(r.has_value(), "golden_section: returns a value");
                   t.expect(r.has_value() && close(r->x, 2.0, 1e-5), "golden_section: x* ~ 2");
@@ -528,7 +528,7 @@ auto main() -> int {
               })
         .test("brent_minimize_parabola",
               [&](TestContext& t) {
-                  auto f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
+                  auto const f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
                   auto r = opt::brent_minimize(f, 0.0, 5.0, 1e-10, 200);
                   t.expect(r.has_value(), "brent_minimize: returns a value");
                   t.expect(r.has_value() && close(r->x, 2.0, 1e-6), "brent_minimize: x* ~ 2");
@@ -538,7 +538,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // x^4 - 3x^2 + 2 on [0, 2]: unimodal with the minimum at x = sqrt(1.5),
                   // where f = -0.25 (the other stationary point x = 0 is a local maximum).
-                  auto quartic = [](double x) -> double {
+                  auto const quartic = [](double x) -> double {
                       return x * x * x * x - 3.0 * x * x + 2.0;
                   };
                   const double xstar = std::sqrt(1.5);  // ~1.2247449
@@ -553,7 +553,7 @@ auto main() -> int {
               })
         .test("univariate_minimizers_domain_and_nonconvergence",
               [&](TestContext& t) {
-                  auto f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
+                  auto const f = [](double x) -> double { return (x - 2.0) * (x - 2.0); };
                   // Non-finite bound / non-positive tol -> domain_error.
                   const double nan = std::numeric_limits<double>::quiet_NaN();
                   auto dn = opt::golden_section(f, nan, 5.0, 1e-8, 1000);

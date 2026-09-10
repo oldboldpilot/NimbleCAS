@@ -853,7 +853,7 @@ auto solve_portfolio(const Cnf& cnf, std::uint64_t base_seed, std::size_t worker
     // Each worker is a pure function of (cnf, index, base_seed): no shared mutable state, so
     // the fan-out is safe and the merged verdict is independent of scheduling (grain 1: one
     // task per worker, the backend auto-chunks).
-    auto results = parallel::transform_index(
+    auto const results = parallel::transform_index(
         workers, [&](std::size_t i) -> Result<SatResult> { return solve_worker(cnf, i, base_seed); },
         std::size_t{1});
 

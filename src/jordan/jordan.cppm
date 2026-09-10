@@ -985,7 +985,7 @@ auto jordan_form_bignum(const Matrix& a, std::int64_t max_field_degree)
 
     // Rational -> BigRational lift (a valid Rational has a positive denominator, so make
     // never actually fires division_by_zero; the Result is threaded for a uniform surface).
-    auto to_big = [](const Rational& q) -> Result<BigRational> {
+    auto const to_big = [](const Rational& q) -> Result<BigRational> {
         return BigRational::make(BigInt::from_i64(q.numerator()), BigInt::from_i64(q.denominator()));
     };
 

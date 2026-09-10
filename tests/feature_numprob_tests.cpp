@@ -172,7 +172,7 @@ auto main() -> int {
                   t.expect(equal_streams, "equal seeds give bit-identical streams");
 
                   // split() yields independent children and does not advance the parent.
-                  auto parent = Rng::seeded(42);
+                  auto const parent = Rng::seeded(42);
                   auto c0 = parent.split(0);
                   auto c1 = parent.split(1);
                   t.expect_ne(c0.key(), c1.key(), "distinct split indices give distinct keys");
@@ -239,7 +239,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Rejection sampling of the triangular density pdf(x) = x on [0,1] (ceiling
                   // m = 1): every accepted point must lie in the support, and the mean ~ 2/3.
-                  auto pdf = [](double x) { return x; };
+                  auto const pdf = [](double x) { return x; };
                   auto r = rejection_sample(pdf, 0.0, 1.0, 1.0, 4000, 2024, 10000000);
                   t.expect(r.has_value(), "rejection_sample succeeds");
                   if (r) {
@@ -258,7 +258,7 @@ auto main() -> int {
 
                   // Exact statistics on a fixed dataset (mean 5, pop var 4, sample var 32/7).
                   const std::array<double, 8> data{2, 4, 4, 4, 5, 5, 7, 9};
-                  std::span<const double> s{data};
+                  std::span<const double> const s{data};
                   auto mean = sample_mean(s);
                   auto pop = sample_variance(s, false);
                   auto var = sample_variance(s, true);
@@ -276,7 +276,7 @@ auto main() -> int {
                   // BIT-FOR-BIT. This ties montecarlo to the exact substrate contract.
                   const std::uint64_t seed = 424242;
                   constexpr std::uint64_t samples = 4096;
-                  auto f = [](double x) { return x * x; };
+                  auto const f = [](double x) { return x * x; };
                   auto mc = integrate(f, 0.0, 1.0, samples, seed);
                   t.expect(mc.has_value(), "integrate() succeeds");
 
@@ -299,7 +299,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Random-walk Metropolis against log N(0,1) = -x^2/2 (unnormalised). A long
                   // seeded chain must recover mean ~ 0 and variance ~ 1.
-                  auto log_density = [](double x) { return -0.5 * x * x; };
+                  auto const log_density = [](double x) { return -0.5 * x * x; };
                   auto run = metropolis_hastings(log_density, 0.0, 2.5, 200000, 20000, 24680);
                   t.expect(run.has_value(), "metropolis_hastings succeeds");
                   if (run) {
@@ -315,7 +315,7 @@ auto main() -> int {
               })
         .test("mcmc_chain_is_bit_reproducible",
               [](TestContext& t) {
-                  auto log_density = [](double x) { return -0.5 * x * x; };
+                  auto const log_density = [](double x) { return -0.5 * x * x; };
                   auto a = metropolis_hastings(log_density, 0.3, 1.7, 5000, 500, 13579);
                   auto b = metropolis_hastings(log_density, 0.3, 1.7, 5000, 500, 13579);
                   t.expect(a.has_value() && b.has_value(), "both chains run");
@@ -331,7 +331,7 @@ auto main() -> int {
                   // run_parallel_chains seeds chain c with splitmix64(seed ^ c). Verify that
                   // contract directly: chain c must equal a standalone metropolis_hastings run
                   // with exactly that derived seed, regardless of chain count / ordering.
-                  auto log_density = [](double x) { return -0.5 * x * x; };
+                  auto const log_density = [](double x) { return -0.5 * x * x; };
                   const std::uint64_t seed = 8642;
                   const std::uint64_t chains = 3;
                   auto par = run_parallel_chains(log_density, 0.0, 2.0, 400, 100, seed, chains);
@@ -356,7 +356,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // p(x) = x^2 - 2, ascending coefficients {-2, 0, 1}; the positive root is √2.
                   const std::array<double, 3> c{-2.0, 0.0, 1.0};
-                  std::span<const double> p{c};
+                  std::span<const double> const p{c};
                   const double tol = 1e-12;
                   const double root = std::numbers::sqrt2;
 
@@ -382,21 +382,21 @@ auto main() -> int {
                   // Root exactly on the lower bracket endpoint: p(x) = x^2 - 1 on [1, 3],
                   // f(1) == 0, so bisection must return the endpoint 1 directly.
                   const std::array<double, 3> pm1{-1.0, 0.0, 1.0};
-                  std::span<const double> q{pm1};
+                  std::span<const double> const q{pm1};
                   auto endpoint = num::bisection(q, 1.0, 3.0, 1e-12);
                   t.expect(endpoint.has_value() && *endpoint == 1.0,
                            "bisection returns an exact endpoint root");
 
                   // No sign change on [2, 3] (both values positive) => domain_error.
                   const std::array<double, 3> c{-2.0, 0.0, 1.0};
-                  std::span<const double> p{c};
+                  std::span<const double> const p{c};
                   auto no_bracket = num::bisection(p, 2.0, 3.0, 1e-12);
                   t.expect(!no_bracket.has_value() &&
                                no_bracket.error() == MathError::domain_error,
                            "bisection without a sign change yields domain_error");
 
                   // Empty coefficient span => domain_error for every solver.
-                  std::span<const double> empty{};
+                  std::span<const double> const empty{};
                   auto be = num::bisection(empty, 0.0, 1.0, 1e-12);
                   auto ne = num::newton(empty, 1.0, 1e-12, 50);
                   auto se = num::secant(empty, 0.0, 1.0, 1e-12, 50);

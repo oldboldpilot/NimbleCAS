@@ -284,8 +284,8 @@ auto main() -> int {
                   t.expect(spec.has_value(), "inner plot spec built");
 
                   // A math block sourced from an Expr via to_latex (wires nimblecas.latex).
-                  auto x = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   std::vector<Block> blocks;
                   blocks.push_back(prose_block("Hello, world."));
                   blocks.push_back(math_block(x.add(y)));

@@ -73,8 +73,8 @@ auto main() -> int {
               })
         .test("canonical_ordering",
               [&](TestContext& t) {
-                  auto lhs = simplify(x.add(y)).value();
-                  auto rhs = simplify(y.add(x)).value();
+                  auto const lhs = simplify(x.add(y)).value();
+                  auto const rhs = simplify(y.add(x)).value();
                   t.expect(lhs.is_equivalent_to(rhs), "x + y and y + x canonicalise equal");
               })
         .test("combine_like_terms",
@@ -82,7 +82,7 @@ auto main() -> int {
                   // x + x -> 2*x
                   simplifies_to(t, x.add(x), Expr::integer(2).mul(x), "x + x -> 2*x");
                   // 2*x + 3*x -> 5*x
-                  auto lhs = Expr::integer(2).mul(x).add(Expr::integer(3).mul(x));
+                  auto const lhs = Expr::integer(2).mul(x).add(Expr::integer(3).mul(x));
                   simplifies_to(t, lhs, Expr::integer(5).mul(x), "2x + 3x -> 5x");
               })
         .test("combine_like_bases",
@@ -90,13 +90,13 @@ auto main() -> int {
                   // x * x -> x^2
                   simplifies_to(t, x.mul(x), x.pow(Expr::integer(2)), "x * x -> x^2");
                   // x^2 * x^3 -> x^5
-                  auto lhs = x.pow(Expr::integer(2)).mul(x.pow(Expr::integer(3)));
+                  auto const lhs = x.pow(Expr::integer(2)).mul(x.pow(Expr::integer(3)));
                   simplifies_to(t, lhs, x.pow(Expr::integer(5)), "x^2 * x^3 -> x^5");
               })
         .test("reconstructed_terms_stay_flat",
               [&](TestContext& t) {
                   // 2*x*y + 3*x*y -> 5*x*y  (must be a flat product, not Mul{Mul{x,y},5})
-                  auto lhs = Expr::product({Expr::integer(2), x, y})
+                  auto const lhs = Expr::product({Expr::integer(2), x, y})
                                  .add(Expr::product({Expr::integer(3), x, y}));
                   simplifies_to(t, lhs, Expr::product({Expr::integer(5), x, y}),
                                 "2xy + 3xy -> 5xy (flat)");
@@ -123,8 +123,8 @@ auto main() -> int {
               [&](TestContext& t) {
                   // A symbol literally named "f(x)" must NOT be fused with the call f(x):
                   // they are structurally distinct despite identical to_string().
-                  auto sym = Expr::symbol("f(x)");
-                  auto call = Expr::apply("f", {x});
+                  auto const sym = Expr::symbol("f(x)");
+                  auto const call = Expr::apply("f", {x});
                   auto s = simplify(sym.add(call));
                   t.expect(!s.value().is_equivalent_to(Expr::integer(2).mul(call)),
                            "sym 'f(x)' + call f(x) is not fused into 2*f(x)");

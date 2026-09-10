@@ -96,13 +96,13 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto p = mat({{rat(3, 4), rat(1, 4)}, {rat(1, 2), rat(1, 2)}});
                   // P^0 == identity.
-                  auto p0 = nimblecas::n_step_transition(p, 0).value();
+                  auto const p0 = nimblecas::n_step_transition(p, 0).value();
                   t.expect(p0.is_equal(Matrix::identity(2)), "P^0 == I");
                   // P^1 == P.
-                  auto p1 = nimblecas::n_step_transition(p, 1).value();
+                  auto const p1 = nimblecas::n_step_transition(p, 1).value();
                   t.expect(p1.is_equal(p), "P^1 == P");
                   // P^3 stays row-stochastic exactly.
-                  auto p3 = nimblecas::n_step_transition(p, 3).value();
+                  auto const p3 = nimblecas::n_step_transition(p, 3).value();
                   t.expect(nimblecas::is_stochastic(p3).value(), "P^3 is row-stochastic");
               })
         .test("is_stochastic_true_and_false",
@@ -134,7 +134,7 @@ auto main() -> int {
         .test("mean_first_passage_and_recurrence",
               [](TestContext& t) {
                   const auto p = mat({{rat(3, 4), rat(1, 4)}, {rat(1, 2), rat(1, 2)}});
-                  auto m = nimblecas::mean_first_passage_times(p).value();
+                  auto const m = nimblecas::mean_first_passage_times(p).value();
                   // Mean recurrence times are 1/pi_i: 1/(2/3)=3/2, 1/(1/3)=3.
                   t.expect(m.at(0, 0) == rat(3, 2), "mean recurrence of state 0 == 3/2");
                   t.expect(m.at(1, 1) == Rational::from_int(3), "mean recurrence of state 1 == 3");
@@ -147,7 +147,7 @@ auto main() -> int {
                   const auto p = mat({{rat(3, 4), rat(1, 4)}, {rat(1, 2), rat(1, 2)}});
                   // f(state) = [3, 0]; stationary mean = 2/3*3 + 1/3*0 = 2.
                   const auto f = ints({3, 0});
-                  auto em = nimblecas::ergodic_mean(p, std::span<const Rational>{f}).value();
+                  auto const em = nimblecas::ergodic_mean(p, std::span<const Rational>{f}).value();
                   t.expect(em == Rational::from_int(2), "ergodic (space) mean == 2");
               })
         .test("ctmc_stationary_exact",
@@ -167,7 +167,7 @@ auto main() -> int {
                   const auto x = ints({1, 2, 3});
                   const std::span<const Rational> sx{x};
                   // Biased R(0) equals the population variance 2/3.
-                  auto r0 = nimblecas::autocovariance_at(sx, 0, true).value();
+                  auto const r0 = nimblecas::autocovariance_at(sx, 0, true).value();
                   t.expect(r0 == rat(2, 3), "biased R(0) == 2/3");
                   t.expect(r0 == nimblecas::variance(sx, false).value(),
                            "R(0) == population variance");
@@ -184,12 +184,12 @@ auto main() -> int {
                   const auto x = ints({1, 2, 3});
                   const auto y = ints({3, 2, 1});
                   // Biased lag-0 cross-covariance == population covariance == -2/3.
-                  auto c0 = nimblecas::cross_covariance_at(std::span<const Rational>{x},
+                  auto const c0 = nimblecas::cross_covariance_at(std::span<const Rational>{x},
                                                            std::span<const Rational>{y}, 0, true)
                                 .value();
                   t.expect(c0 == rat(-2, 3), "cross-cov at lag 0 == -2/3");
                   // Self cross-covariance at lag 0 equals the biased autocovariance.
-                  auto self = nimblecas::cross_covariance_at(std::span<const Rational>{x},
+                  auto const self = nimblecas::cross_covariance_at(std::span<const Rational>{x},
                                                              std::span<const Rational>{x}, 0, true)
                                   .value();
                   t.expect(self == nimblecas::autocovariance_at(std::span<const Rational>{x}, 0, true)
@@ -263,21 +263,21 @@ auto main() -> int {
               [](TestContext& t) {
                   // White-noise autocovariance R = [1, 0, 0]: S(f) is flat at 1.
                   const auto acov = ints({1, 0, 0});
-                  auto spec = nimblecas::power_spectral_density(std::span<const Rational>{acov}, 5)
+                  auto const spec = nimblecas::power_spectral_density(std::span<const Rational>{acov}, 5)
                                   .value();
                   t.expect(spec.values.size() == 5, "spectrum has 5 samples");
                   bool flat = true;
-                  for (double v : spec.values) {
+                  for (double const v : spec.values) {
                       flat = flat && close(v, 1.0);
                   }
                   t.expect(flat, "white-noise PSD is flat at 1.0");
                   // ARMA closed form with no AR/MA terms and sigma^2 = 2 is flat at 2.
                   const std::vector<Rational> none;
-                  auto aspec = nimblecas::arma_spectral_density(std::span<const Rational>{none},
+                  auto const aspec = nimblecas::arma_spectral_density(std::span<const Rational>{none},
                                                                 std::span<const Rational>{none}, 2.0, 4)
                                    .value();
                   bool flat2 = true;
-                  for (double v : aspec.values) {
+                  for (double const v : aspec.values) {
                       flat2 = flat2 && close(v, 2.0);
                   }
                   t.expect(flat2, "white-noise ARMA PSD is flat at sigma^2 = 2");
@@ -341,7 +341,7 @@ auto main() -> int {
                   // Q = [[-1, 1], [2, -2]], s = 1: (sI - Q) = [[2,-1],[-2,3]], det 4,
                   // inverse [[3/4,1/4],[1/2,1/2]].
                   const auto q = mat({{rat(-1, 1), rat(1, 1)}, {rat(2, 1), rat(-2, 1)}});
-                  auto rv = nimblecas::resolvent(q, Rational::from_int(1)).value();
+                  auto const rv = nimblecas::resolvent(q, Rational::from_int(1)).value();
                   t.expect(rv.at(0, 0) == rat(3, 4) && rv.at(0, 1) == rat(1, 4), "resolvent row 0");
                   t.expect(rv.at(1, 0) == rat(1, 2) && rv.at(1, 1) == rat(1, 2), "resolvent row 1");
                   // s = 0 is an eigenvalue of a generator (rows sum to 0) -> singular.
@@ -419,7 +419,7 @@ auto main() -> int {
                            "nabla^1 {1,4,9,16} == {3,5,7}");
                   // Round-trip: integrate back with the dropped leading value x_0 = 1.
                   const auto c1 = ints({1});
-                  auto back = nimblecas::integrate(std::span<const Rational>{d1},
+                  auto const back = nimblecas::integrate(std::span<const Rational>{d1},
                                                    std::span<const Rational>{c1})
                                   .value();
                   t.expect(back == x, "integrate(nabla x, {x_0}) == x");
@@ -429,7 +429,7 @@ auto main() -> int {
                                d2[1] == Rational::from_int(2),
                            "nabla^2 {1,4,9,16} == {2,2}");
                   const auto c2 = ints({1, 3});
-                  auto back2 = nimblecas::integrate(std::span<const Rational>{d2},
+                  auto const back2 = nimblecas::integrate(std::span<const Rational>{d2},
                                                     std::span<const Rational>{c2})
                                    .value();
                   t.expect(back2 == x, "integrate(nabla^2 x, {x_0, (nabla x)_0}) == x");

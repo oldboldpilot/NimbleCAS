@@ -566,7 +566,7 @@ auto black_scholes_price(const OptionSpec& spec) -> Result<double> {
 
 auto implied_volatility(const OptionSpec& spec, double market_price) -> Result<double> {
     if (market_price <= 0.0) { return make_error<double>(MathError::domain_error); }
-    auto f = [&](double vol) -> double {
+    auto const f = [&](double vol) -> double {
         auto p = black_scholes_price(spec.with_volatility(vol));
         return p ? (*p - market_price) : std::numeric_limits<double>::quiet_NaN();
     };
@@ -574,7 +574,7 @@ auto implied_volatility(const OptionSpec& spec, double market_price) -> Result<d
     double lo = 1e-6;
     double hi = 5.0;
     double flo = f(lo);
-    double fhi = f(hi);
+    double const fhi = f(hi);
     if (!std::isfinite(flo) || !std::isfinite(fhi) || (flo > 0.0) == (fhi > 0.0)) {
         return make_error<double>(MathError::not_converged);
     }
@@ -781,7 +781,7 @@ auto trinomial_price(const OptionSpec& spec, int steps, Exercise exercise,
     if (exercise == Exercise::american) {
         std::ranges::fill(can_exercise, static_cast<char>(1));
     } else if (exercise == Exercise::bermudan) {
-        for (double t : exercise_times) {
+        for (double const t : exercise_times) {
             const int idx = static_cast<int>(std::lround(t / dt));
             if (idx >= 0 && idx <= steps) { can_exercise[static_cast<std::size_t>(idx)] = 1; }
         }
@@ -1178,7 +1178,7 @@ auto terminal_density_svg(const OptionSpec& spec, double s_min, double s_max, in
     const double mu = std::log(spec.spot) +
                       (spec.rate - spec.dividend_yield - 0.5 * spec.volatility * spec.volatility) * T;
     const double sd = spec.volatility * std::sqrt(T);
-    auto density = [=](double s) -> double {
+    auto const density = [=](double s) -> double {
         if (s <= 0.0) { return 0.0; }
         const double z = (std::log(s) - mu) / sd;
         return norm_pdf(z) / (s * sd);
@@ -1188,7 +1188,7 @@ auto terminal_density_svg(const OptionSpec& spec, double s_min, double s_max, in
 
 auto payoff_diagram_svg(const OptionSpec& spec, double s_min, double s_max, int samples,
                         const PlotOptions& opt, double premium) -> Result<std::string> {
-    auto f = [=](double s) -> double { return spec.payoff(s) - premium; };
+    auto const f = [=](double s) -> double { return spec.payoff(s) - premium; };
     return plot_function(f, s_min, s_max, samples, opt);
 }
 
@@ -1197,13 +1197,13 @@ auto portfolio_pnl_svg(const Portfolio& book, double s_min, double s_max, int sa
     auto cost = book.value();
     if (!cost) { return make_error<std::string>(cost.error()); }
     const double c = *cost;
-    auto f = [&book, c](double s) -> double { return book.payoff_at(s) - c; };
+    auto const f = [&book, c](double s) -> double { return book.payoff_at(s) - c; };
     return plot_function(f, s_min, s_max, samples, opt);
 }
 
 auto price_vs_spot_svg(const OptionSpec& spec, double s_min, double s_max, int samples,
                        const PlotOptions& opt) -> Result<std::string> {
-    auto f = [spec](double s) -> double {
+    auto const f = [spec](double s) -> double {
         auto p = black_scholes_price(spec.with_spot(s));
         return p ? *p : std::numeric_limits<double>::quiet_NaN();
     };

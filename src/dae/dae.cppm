@@ -210,7 +210,7 @@ using SeriesVec = std::vector<PowerSeries>;
 // Retruncate a power series to exactly `order` coefficients: zero-pads a shorter forcing
 // (e.g. a low-degree polynomial) or truncates a longer one to the working ring Q[[x]]/(x^order).
 [[nodiscard]] auto retruncate(const PowerSeries& s, std::size_t order) -> Result<PowerSeries> {
-    auto c = s.coefficients();
+    auto const c = s.coefficients();
     return PowerSeries::from_coeffs(std::vector<Rational>(c.begin(), c.end()), order);
 }
 
@@ -394,7 +394,7 @@ using RatRows = std::vector<std::vector<Rational>>;
         return make_error<RatRows>(pivots.error());
     }
     std::vector<bool> is_pivot(n, false);
-    for (auto c : *pivots) {
+    for (auto const c : *pivots) {
         is_pivot[c] = true;
     }
     RatRows basis;
@@ -780,8 +780,8 @@ auto solve_linear_index1_dae(const Matrix& A, const Matrix& B, const Matrix& C, 
 
     // Solve the reduced linear ODE x' = M x + r, x(0) = x0, exactly as truncated series.
     // The vector field is autonomous in the series ring: r is a fixed series vector.
-    Matrix Mmat = std::move(*M);
-    SeriesVec rvec = std::move(*r);
+    Matrix const Mmat = std::move(*M);
+    SeriesVec const rvec = std::move(*r);
     SystemOperator field = [Mmat, rvec, order](const SeriesVec& u) -> Result<SeriesVec> {
         auto mx = mat_series_vec(Mmat, u, order);
         if (!mx) {
@@ -930,8 +930,8 @@ auto solve_linear_dae(const Matrix& E, const Matrix& A, const SeriesVec& f,
         return make_error<LinearDaeSolution>(rforce.error());
     }
 
-    Matrix Mmat = std::move(*M);
-    SeriesVec rvec = std::move(*rforce);
+    Matrix const Mmat = std::move(*M);
+    SeriesVec const rvec = std::move(*rforce);
     SystemOperator field = [Mmat, rvec, order](const SeriesVec& u) -> Result<SeriesVec> {
         auto mx = mat_series_vec(Mmat, u, order);
         if (!mx) {

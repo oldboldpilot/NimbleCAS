@@ -78,7 +78,7 @@ auto main() -> int {
                   // slot.
                   const std::vector<double> w{0.0, 0.0, 1.0, 0.0};
                   const std::size_t hot = 2;
-                  auto check_all_hot = [&](const std::vector<std::size_t>& p) -> bool {
+                  auto const check_all_hot = [&](const std::vector<std::size_t>& p) -> bool {
                       if (p.size() != w.size()) {
                           return false;
                       }
@@ -179,11 +179,11 @@ auto main() -> int {
                   }
 
                   // Particle filter over the same observations.
-                  auto init = [&](Rng& rng) -> double { return m0 + std::sqrt(P0) * gaussian(rng); };
-                  auto propagate = [&](double x, Rng& rng) -> double {
+                  auto const init = [&](Rng& rng) -> double { return m0 + std::sqrt(P0) * gaussian(rng); };
+                  auto const propagate = [&](double x, Rng& rng) -> double {
                       return A * x + std::sqrt(Q) * gaussian(rng);
                   };
-                  auto loglik = [&](double x, double y) -> double {
+                  auto const loglik = [&](double x, double y) -> double {
                       const double d = y - x;
                       return -0.5 * d * d / R;  // + const (drops out under normalisation)
                   };
@@ -228,9 +228,9 @@ auto main() -> int {
               })
         .test("bootstrap_filter_domain_errors",
               [](TestContext& t) {
-                  auto init = [](Rng&) -> double { return 0.0; };
-                  auto prop = [](double x, Rng&) -> double { return x; };
-                  auto ll = [](double, double) -> double { return 0.0; };
+                  auto const init = [](Rng&) -> double { return 0.0; };
+                  auto const prop = [](double x, Rng&) -> double { return x; };
+                  auto const ll = [](double, double) -> double { return 0.0; };
                   const std::vector<double> ys{1.0, 2.0};
 
                   auto no_particles = bootstrap_particle_filter(init, prop, ll, ys, 0, 1);
@@ -243,7 +243,7 @@ auto main() -> int {
                            "empty observations => domain_error");
 
                   // A log-likelihood that is -inf everywhere makes a step non-normalizable.
-                  auto ll_dead = [](double, double) -> double {
+                  auto const ll_dead = [](double, double) -> double {
                       return -std::numeric_limits<double>::infinity();
                   };
                   auto dead = bootstrap_particle_filter(init, prop, ll_dead, ys, 100, 1);
@@ -255,7 +255,7 @@ auto main() -> int {
                   // Integrate f(x) = x on [0, 1]; exact value 1/2. Monotone integrand, so the
                   // antithetic pair is negatively correlated and its std_error must beat plain
                   // Monte Carlo at the SAME sample count (2 * pairs).
-                  auto f = [](double x) -> double { return x; };
+                  auto const f = [](double x) -> double { return x; };
                   const std::uint64_t pairs = 50000;
                   auto anti = antithetic_estimate(f, 0.0, 1.0, pairs, 7);
                   auto plain = plain_estimate(f, 0.0, 1.0, 2 * pairs, 7);
@@ -272,8 +272,8 @@ auto main() -> int {
                   // Integrate f(x) = x^2 on [0, 1]; exact value 1/3. Control h(x) = x has known
                   // mean 1/2 over Uniform[0,1] and is strongly correlated with x^2, so the
                   // std_error must fall below plain MC at the same sample count.
-                  auto f = [](double x) -> double { return x * x; };
-                  auto h = [](double x) -> double { return x; };
+                  auto const f = [](double x) -> double { return x * x; };
+                  auto const h = [](double x) -> double { return x; };
                   const std::uint64_t samples = 100000;
                   auto cv = control_variate_estimate(f, h, 0.5, 0.0, 1.0, samples, 99);
                   auto plain = plain_estimate(f, 0.0, 1.0, samples, 99);
@@ -290,7 +290,7 @@ auto main() -> int {
                   // Integrate f(x) = x on [0, 1]; exact 1/2. Stratification removes the
                   // between-stratum variance, so the reported std_error is below plain MC at
                   // the same strata * per_stratum sample count.
-                  auto f = [](double x) -> double { return x; };
+                  auto const f = [](double x) -> double { return x; };
                   const std::uint64_t strata = 100;
                   const std::uint64_t per = 500;
                   auto strat = stratified_estimate(f, 0.0, 1.0, strata, per, 3);
@@ -305,7 +305,7 @@ auto main() -> int {
               })
         .test("estimator_domain_errors",
               [](TestContext& t) {
-                  auto f = [](double x) -> double { return x; };
+                  auto const f = [](double x) -> double { return x; };
                   auto bad_a = plain_estimate(f, 1.0, 0.0, 100, 1);  // b < a
                   t.expect(!bad_a && bad_a.error() == MathError::domain_error,
                            "plain: b < a => domain_error");

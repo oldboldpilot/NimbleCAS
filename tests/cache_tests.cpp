@@ -25,13 +25,13 @@ auto main() -> int {
               [](TestContext& t) {
                   ExprMemo memo;
                   std::atomic<int> calls{0};
-                  auto compute = [&]() -> Result<Expr> {
+                  auto const compute = [&]() -> Result<Expr> {
                       calls.fetch_add(1, std::memory_order_relaxed);
                       return Expr::symbol("result");
                   };
                   // two distinct objects, structurally equal
-                  auto k1 = Expr::symbol("x").add(Expr::integer(1));
-                  auto k2 = Expr::symbol("x").add(Expr::integer(1));
+                  auto const k1 = Expr::symbol("x").add(Expr::integer(1));
+                  auto const k2 = Expr::symbol("x").add(Expr::integer(1));
                   auto r1 = memo.get_or_compute(k1, compute);
                   auto r2 = memo.get_or_compute(k2, compute);
                   t.expect(calls.load() == 1, "compute ran once for equivalent keys");
@@ -50,14 +50,14 @@ auto main() -> int {
         .test("error_results_are_cached",
               [](TestContext& t) {
                   ExprMemo memo;
-                  auto key = Expr::symbol("z");
+                  auto const key = Expr::symbol("z");
                   auto r = memo.get_or_compute(key, []() -> Result<Expr> {
                       return nimblecas::make_error<Expr>(nimblecas::MathError::overflow);
                   });
                   t.expect(!r.has_value() && r.error() == nimblecas::MathError::overflow,
                            "error propagated and cached");
                   // second lookup returns the cached error without recomputing
-                  auto r2 = memo.get_or_compute(key, constant_fn(Expr::integer(0)));
+                  auto const r2 = memo.get_or_compute(key, constant_fn(Expr::integer(0)));
                   t.expect(!r2.has_value(), "cached error returned on hit");
               })
         .test("concurrent_same_key_is_race_free_and_consistent",

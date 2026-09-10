@@ -397,7 +397,7 @@ auto main() -> int {
                   x[13] = -2.0;
                   x[20] = 0.5;
                   std::vector<double> scales{1.0, 2.0, 3.0, 4.0, 8.0};
-                  auto psi = [](double tt) { return std::complex<double>{wl::ricker(tt), 0.0}; };
+                  auto const psi = [](double tt) { return std::complex<double>{wl::ricker(tt), 0.0}; };
                   auto serial = wl::cwt(x, scales, psi);
                   auto par = wl::parallel_cwt(x, scales, psi);
                   t.expect(serial.has_value() && par.has_value(), "both cwt paths succeed");

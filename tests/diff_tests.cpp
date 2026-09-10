@@ -63,14 +63,14 @@ auto main() -> int {
         .test("sum_rule",
               [&](TestContext& t) {
                   // d/dx (x^2 + 3x) = 2x + 3
-                  auto u = x.pow(two).add(three.mul(x));
+                  auto const u = x.pow(two).add(three.mul(x));
                   diffs_to(t, u, "x", two.mul(x).add(three), "d/dx (x^2 + 3x) = 2x + 3");
               })
         .test("product_rule",
               [&](TestContext& t) {
                   // d/dx (x * sin(x)) = sin(x) + x*cos(x)
-                  auto u = x.mul(fn("sin", x));
-                  auto expected = fn("sin", x).add(x.mul(fn("cos", x)));
+                  auto const u = x.mul(fn("sin", x));
+                  auto const expected = fn("sin", x).add(x.mul(fn("cos", x)));
                   diffs_to(t, u, "x", expected, "d/dx (x sin x) = sin x + x cos x");
               })
         .test("elementary_functions",
@@ -83,7 +83,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // d/dx sin(x^2) = 2x*cos(x^2)
                   auto u = fn("sin", x.pow(two));
-                  auto expected = Expr::product({two, x, fn("cos", x.pow(two))});
+                  auto const expected = Expr::product({two, x, fn("cos", x.pow(two))});
                   diffs_to(t, u, "x", expected, "d/dx sin(x^2) = 2x cos(x^2)");
               })
         .test("inverse_trig_and_hyperbolic",
@@ -99,7 +99,7 @@ auto main() -> int {
         .test("special_functions",
               [&](TestContext& t) {
                   // d/dx erf(x) = (2/sqrt(pi)) exp(-x^2)
-                  auto erf_d = Expr::product(
+                  auto const erf_d = Expr::product(
                       {Expr::integer(2), rc(fn("sqrt", Expr::symbol("pi"))), fn("exp", ng(sq(x)))});
                   diffs_to(t, fn("erf", x), "x", erf_d, "d/dx erf x = (2/sqrt(pi)) exp(-x^2)");
                   // d/dx gamma(x) = gamma(x) digamma(x)
@@ -110,7 +110,7 @@ auto main() -> int {
                   diffs_to(t, w, "x", Expr::product({w, rc(Expr::product({x, opl(w)}))}),
                            "d/dx lambertW x = W/(x(1+W))");
                   // chain rule through a special function: d/dx erf(x^2) = erf'(x^2) * 2x
-                  auto chained = Expr::product(
+                  auto const chained = Expr::product(
                       {Expr::integer(2), rc(fn("sqrt", Expr::symbol("pi"))),
                        fn("exp", ng(sq(sq(x)))), Expr::integer(2), x});
                   diffs_to(t, fn("erf", sq(x)), "x", chained, "d/dx erf(x^2) chain rule");
@@ -138,7 +138,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   auto u = fn("f", x);  // unknown function
                   auto d = differentiate(u, "x");
-                  auto expected = Expr::apply("Derivative", {u, Expr::symbol("x")});
+                  auto const expected = Expr::apply("Derivative", {u, Expr::symbol("x")});
                   t.expect(d.has_value() && d->is_equivalent_to(expected),
                            "d/dx f(x) = Derivative(f(x), x)");
               })

@@ -289,7 +289,7 @@ auto main() -> int {
                   auto r = encode_slice(g, 4, 9);
                   t.expect(!r.has_value() && r.error() == MathError::domain_error,
                            "a slice running past the last node is a domain_error");
-                  auto ok = encode_slice(g, 4, 2);
+                  auto const ok = encode_slice(g, 4, 2);
                   t.expect(ok.has_value(), "a slice ending exactly at the last node is accepted");
               })
         .test("distributed_sssp_matches_dijkstra_on_every_node_of_the_diamond",
@@ -747,7 +747,7 @@ auto main() -> int {
                            "+ one 16-byte entry");
                   WireGraph g;
                   g.adjacency = {{Edge{.target = 0, .cost = 0}}};
-                  auto s = encode_slice(g, 0, 1);
+                  auto const s = encode_slice(g, 0, 1);
                   t.expect(s.has_value(), "a one-node slice encodes");
               })
         .test("distributed_bfs_finds_the_fewest_hop_path_and_matches_bfs_hop_count",
@@ -848,7 +848,7 @@ auto main() -> int {
                   // by bfs, and no node outside it is.
                   for (std::int64_t v = 0; v < 8; ++v) {
                       const bool in_set = std::ranges::find(*r, v) != r->end();
-                      auto path = bfs(0, [v](std::int64_t u) { return u == v; },
+                      auto const path = bfs(0, [v](std::int64_t u) { return u == v; },
                                       nimblecas::search_dist::successors_of(g));
                       t.expect(in_set == path.has_value(),
                                "membership of the reachable set matches what bfs can reach");
@@ -1136,10 +1136,10 @@ auto main() -> int {
         .test("distributed_connected_components_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_connected_components;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(12);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                       };
@@ -1187,10 +1187,10 @@ auto main() -> int {
         .test("distributed_strongly_connected_components_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_strongly_connected_components;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(8);
-                      auto add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                       };
                       add_directed(0, 1);
@@ -1234,10 +1234,10 @@ auto main() -> int {
         .test("distributed_topological_order_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_topological_order;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(7);
-                      auto add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_directed = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                       };
                       add_directed(0, 2);
@@ -1275,10 +1275,10 @@ auto main() -> int {
         .test("distributed_k_core_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_k_core;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(10);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                       };
@@ -1322,10 +1322,10 @@ auto main() -> int {
         .test("distributed_triangle_counts_is_identical_for_all_shard_counts_and_executors",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_triangle_counts;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(8);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                       };
@@ -1396,10 +1396,10 @@ auto main() -> int {
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_minimum_spanning_forest;
                   using nimblecas::search_dist::MstEdge;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
                       };
@@ -1438,10 +1438,10 @@ auto main() -> int {
         .test("connected_components_on_two_disjoint_triangles_has_exact_labels",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_connected_components;
-                  [[nodiscard]] auto make_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                       };
@@ -1472,10 +1472,10 @@ auto main() -> int {
         .test("connected_components_cross_checked_against_serial_path_reachability",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_connected_components;
-                  [[nodiscard]] auto make_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                       };
@@ -1543,7 +1543,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_strongly_connected_components;
                   WireGraph g;
                   g.adjacency.resize(6);
-                  auto add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
+                  auto const add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                   };
                   add_edge(0, 1);
@@ -1575,7 +1575,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_topological_order;
                   WireGraph g;
                   g.adjacency.resize(5);
-                  auto add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
+                  auto const add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                   };
                   add_edge(1, 0);
@@ -1624,7 +1624,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_topological_order;
                   WireGraph g;
                   g.adjacency.resize(6);
-                  auto add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
+                  auto const add_edge = [&g](std::int64_t u, std::int64_t v) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                   };
                   add_edge(0, 1);
@@ -1699,7 +1699,7 @@ auto main() -> int {
 
                   WireGraph tri_g;
                   tri_g.adjacency.resize(3);
-                  auto add_undirected = [](WireGraph& gr, std::int64_t u, std::int64_t v) -> void {
+                  auto const add_undirected = [](WireGraph& gr, std::int64_t u, std::int64_t v) -> void {
                       gr.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                       gr.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                   };
@@ -1739,7 +1739,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_triangle_counts;
                   WireGraph g;
                   g.adjacency.resize(5);
-                  auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                  auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                       g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                   };
@@ -1784,7 +1784,7 @@ auto main() -> int {
         .test("k_core_clique_survives_and_pendant_node_peels",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_k_core;
-                  auto add_undirected = [](WireGraph& gr, std::int64_t u, std::int64_t v) -> void {
+                  auto const add_undirected = [](WireGraph& gr, std::int64_t u, std::int64_t v) -> void {
                       gr.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                       gr.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                   };
@@ -1828,7 +1828,7 @@ auto main() -> int {
 
                   WireGraph g;
                   g.adjacency.resize(6);
-                  auto add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
+                  auto const add_undirected = [&g](std::int64_t u, std::int64_t v) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = 1});
                       g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = 1});
                   };
@@ -1865,7 +1865,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_widest_path;
                   WireGraph g;
                   g.adjacency.resize(4);
-                  auto add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                  auto const add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                   };
                   add_edge(0, 1, 1);
@@ -1893,10 +1893,10 @@ auto main() -> int {
         .test("widest_path_width_agrees_with_minimum_edge_on_returned_path",
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_widest_path;
-                  [[nodiscard]] auto make_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
-                      auto add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      auto const add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                       };
                       add_edge(0, 1, 15);
@@ -1961,7 +1961,7 @@ auto main() -> int {
                   using nimblecas::search_dist::MstEdge;
                   WireGraph g;
                   g.adjacency.resize(4);
-                  auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                  auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                       g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
                   };
@@ -1996,7 +1996,7 @@ auto main() -> int {
                   using nimblecas::search_dist::MstEdge;
                   WireGraph g;
                   g.adjacency.resize(4);
-                  auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                  auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                       g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
                   };
@@ -2027,10 +2027,10 @@ auto main() -> int {
               [](TestContext& t) -> void {
                   using nimblecas::search_dist::distributed_minimum_spanning_forest;
                   using nimblecas::search_dist::MstEdge;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(6);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
                       };
@@ -2065,10 +2065,10 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_connected_components;
                   using nimblecas::search_dist::distributed_minimum_spanning_forest;
                   using nimblecas::search_dist::MstEdge;
-                  [[nodiscard]] auto make_test_graph = []() -> WireGraph {
+                  [[nodiscard]] auto const make_test_graph = []() -> WireGraph {
                       WireGraph g;
                       g.adjacency.resize(9);
-                      auto add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                      auto const add_undirected = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                           g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                           g.adjacency[static_cast<std::size_t>(v)].push_back(Edge{.target = u, .cost = w});
                       };
@@ -2097,7 +2097,7 @@ auto main() -> int {
                       return;
                   }
 
-                  std::set<std::int64_t> unique_components(components->begin(), components->end());
+                  std::set<std::int64_t> const unique_components(components->begin(), components->end());
                   const std::size_t c = unique_components.size();
                   const std::size_t n = g.adjacency.size();
                   t.expect(c == 2, "graph has exactly 2 components");
@@ -2292,7 +2292,7 @@ auto main() -> int {
                   using nimblecas::search_dist::distributed_widest_path;
                   WireGraph g;
                   g.adjacency.resize(6);
-                  auto add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
+                  auto const add_edge = [&g](std::int64_t u, std::int64_t v, std::int64_t w) -> void {
                       g.adjacency[static_cast<std::size_t>(u)].push_back(Edge{.target = v, .cost = w});
                   };
                   add_edge(0, 1, 10);

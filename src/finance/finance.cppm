@@ -608,7 +608,7 @@ auto year_fraction(const Date& start, const Date& end, DayCount basis) -> Result
     if (end.serial < start.serial) { return make_error<BigRational>(MathError::domain_error); }
     const auto [y1, m1, d1raw] = start.ymd();
     const auto [y2, m2, d2raw] = end.ymd();
-    auto rat = [](std::int64_t num, std::int64_t den) -> Result<BigRational> {
+    auto const rat = [](std::int64_t num, std::int64_t den) -> Result<BigRational> {
         return BigRational::make(BigInt::from_i64(num), BigInt::from_i64(den));
     };
     switch (basis) {
@@ -625,7 +625,7 @@ auto year_fraction(const Date& start, const Date& end, DayCount basis) -> Result
             return rat(days * 4, 1461);
         }
         case DayCount::thirty_360: {
-            int d1 = std::min(d1raw, 30);
+            int const d1 = std::min(d1raw, 30);
             int d2 = d2raw;
             if (d2 == 31 && d1 == 30) { d2 = 30; }
             const std::int64_t num =
@@ -785,7 +785,7 @@ auto rate(std::int64_t nper_, double pmt_, double pv_, double fv_, PaymentTiming
           double guess) -> Result<double> {
     const double t = timing == PaymentTiming::begin ? 1.0 : 0.0;
     const auto n = static_cast<double>(nper_);
-    auto f = [=](double r) -> double {
+    auto const f = [=](double r) -> double {
         if (r == 0.0) { return pv_ + pmt_ * n + fv_; }
         const double g = std::pow(1.0 + r, n);
         return pv_ * g + pmt_ * (1.0 + r * t) * (g - 1.0) / r + fv_;
@@ -795,11 +795,11 @@ auto rate(std::int64_t nper_, double pmt_, double pv_, double fv_, PaymentTiming
 
 auto irr(std::span<const double> values, double guess) -> Result<double> {
     if (values.size() < 2) { return make_error<double>(MathError::domain_error); }
-    auto f = [=](double r) -> double {
+    auto const f = [=](double r) -> double {
         const double base = 1.0 + r;
         double acc = 0.0;
         double disc = 1.0;
-        for (double v : values) { acc += v / disc; disc *= base; }
+        for (double const v : values) { acc += v / disc; disc *= base; }
         return acc;
     };
     return bracket_and_solve(f, guess);
@@ -824,7 +824,7 @@ auto xirr(std::span<const double> values, std::span<const Date> dates, double gu
     if (values.size() != dates.size() || values.size() < 2) {
         return make_error<double>(MathError::domain_error);
     }
-    auto f = [=](double r) -> double {
+    auto const f = [=](double r) -> double {
         auto v = xnpv(r, values, dates);
         return v ? *v : std::numeric_limits<double>::quiet_NaN();
     };
@@ -973,7 +973,7 @@ auto db(double cost, double salvage, std::int64_t life, std::int64_t period, std
     const double rate3 = rate_bd->to_bigrational().to_double();
     const double m = static_cast<double>(month);
     // First (partial) year, then full years, then a partial final year — Excel's schedule.
-    double dep = cost * rate3 * m / 12.0;
+    double const dep = cost * rate3 * m / 12.0;
     if (period == 1) { return dep; }
     double total = dep;
     double result = 0.0;
@@ -1080,7 +1080,7 @@ auto bond_price(const Date& settlement, const Date& maturity, double coupon_rate
 auto bond_yield(const Date& settlement, const Date& maturity, double coupon_rate,
                 double clean_price, double redemption, int frequency, DayCount basis)
     -> Result<double> {
-    auto f = [&](double y) -> double {
+    auto const f = [&](double y) -> double {
         auto p = bond_price(settlement, maturity, coupon_rate, y, redemption, frequency, basis);
         return p ? (*p - clean_price) : std::numeric_limits<double>::quiet_NaN();
     };
@@ -1194,7 +1194,7 @@ namespace {
 // Add `months` (can be negative) to a date, clamping the day to the target month length.
 [[nodiscard]] auto add_months(const Date& d, int months) -> Date {
     const auto [y, m, day] = d.ymd();
-    int total = (y * 12 + (m - 1)) + months;
+    int const total = (y * 12 + (m - 1)) + months;
     int ny = total / 12;
     int nm = total % 12;
     if (nm < 0) { nm += 12; --ny; }

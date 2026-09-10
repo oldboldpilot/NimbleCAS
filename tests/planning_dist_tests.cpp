@@ -237,7 +237,7 @@ auto main() -> int {
                       if (!r) {
                           continue;
                       }
-                      auto replay = validate_plan(task, r->plan);
+                      auto const replay = validate_plan(task, r->plan);
                       t.expect(replay.has_value(),
                                "the plan replays from the initial state and reaches the goal");
                       t.expect(r->plan.cost ==
@@ -430,7 +430,7 @@ auto main() -> int {
                       if (!r || !want) {
                           continue;
                       }
-                      auto replay = validate_plan(task, r->plan);
+                      auto const replay = validate_plan(task, r->plan);
                       t.expect(replay.has_value(), "and its plan really reaches the goal");
                       // The only claim available: no plan can be CHEAPER than the optimum.
                       t.expect(r->plan.cost >= want->plan.cost,
@@ -514,7 +514,7 @@ auto main() -> int {
                   t.expect(!bm.has_value() && bm.error() == MathError::syntax_error,
                            "so is a payload that is not one of ours");
 
-                  auto empty_batch = encode_states(std::span<const State>{}, Heuristic::h_max);
+                  auto const empty_batch = encode_states(std::span<const State>{}, Heuristic::h_max);
                   t.expect(!empty_batch.has_value(), "an empty state batch is refused");
               })
         .test("shape_faults_are_refused_before_any_task_is_built",

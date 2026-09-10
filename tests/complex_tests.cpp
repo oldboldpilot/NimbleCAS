@@ -40,7 +40,7 @@ auto main() -> int {
         .test("multiplication",
               [](TestContext& t) {
                   // (1 + i)(1 - i) = 2, a real result
-                  auto p = cx(1, 1).multiply(cx(1, -1)).value();
+                  auto const p = cx(1, 1).multiply(cx(1, -1)).value();
                   t.expect(p == cx(2, 0), "(1+i)(1-i) = 2");
                   t.expect(p.is_real(), "the product is real");
                   // i * i = -1
@@ -65,7 +65,7 @@ auto main() -> int {
         .test("reciprocal",
               [](TestContext& t) {
                   // 1/i = -i
-                  auto r = Complex::i().reciprocal().value();
+                  auto const r = Complex::i().reciprocal().value();
                   t.expect(r == cx(0, -1), "reciprocal(i) = -i");
                   t.expect(r == Complex::i().negate().value(), "reciprocal(i) = -i (via negate)");
                   // reciprocal of zero fails
@@ -86,10 +86,10 @@ auto main() -> int {
                   const auto half = rat(1, 2);
                   const auto z = Complex::make(half, half);
                   // z + conj(z) = 2*Re(z) = 1
-                  auto sum = z.add(z.conjugate().value()).value();
+                  auto const sum = z.add(z.conjugate().value()).value();
                   t.expect(sum == Complex::from_int(1), "z + conj(z) = 1");
                   // z * conj(z) = |z|^2 = 1/4 + 1/4 = 1/2
-                  auto prod = z.multiply(z.conjugate().value()).value();
+                  auto const prod = z.multiply(z.conjugate().value()).value();
                   t.expect(prod == Complex::from_real(rat(1, 2)), "z * conj(z) = 1/2");
                   t.expect(z.norm_squared().value() == rat(1, 2), "norm_squared(z) = 1/2");
                   // (1/2 + 1/2 i) / (1/2 + 1/2 i) = 1

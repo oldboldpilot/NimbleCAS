@@ -54,20 +54,20 @@ auto main() -> int {
               })
         .test("sum",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   t.expect_eq(to_latex(x.add(y)), std::string("x + y"), "x + y");
                   // x + (-3) y  ->  x - 3 y  (negative term folds into a minus)
-                  auto neg_term = Expr::product({Expr::integer(-3), y});
+                  auto const neg_term = Expr::product({Expr::integer(-3), y});
                   t.expect_eq(to_latex(Expr::sum({x, neg_term})), std::string("x - 3 y"),
                               "negative product term renders as subtraction");
               })
         .test("product",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   // 2 x^2
-                  auto two_x_sq =
+                  auto const two_x_sq =
                       Expr::product({Expr::integer(2), Expr::power(x, Expr::integer(2))});
                   t.expect_eq(to_latex(two_x_sq), std::string("2 x^{2}"), "2 x^{2}");
                   // (1/2) x  ->  \frac{x}{2}
@@ -75,7 +75,7 @@ auto main() -> int {
                               std::string("\\frac{x}{2}"),
                               "rational coefficient forms a fraction");
                   // x y^{-1}  ->  \frac{x}{y}
-                  auto x_over_y = Expr::product({x, Expr::power(y, Expr::integer(-1))});
+                  auto const x_over_y = Expr::product({x, Expr::power(y, Expr::integer(-1))});
                   t.expect_eq(to_latex(x_over_y), std::string("\\frac{x}{y}"),
                               "negative-power factor moves to the denominator");
                   // -x  (product of -1 and x)
@@ -84,7 +84,7 @@ auto main() -> int {
               })
         .test("power",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
+                  auto const x = Expr::symbol("x");
                   t.expect_eq(to_latex(Expr::power(x, Expr::integer(2))),
                               std::string("x^{2}"), "x^{2}");
                   // x^(1/2) -> \sqrt{x}
@@ -101,22 +101,22 @@ auto main() -> int {
               })
         .test("parenthesisation",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   // (x + 1)^2 : a sum base must be parenthesised under a power
-                  auto x_plus_1 = Expr::sum({x, Expr::integer(1)});
+                  auto const x_plus_1 = Expr::sum({x, Expr::integer(1)});
                   t.expect_eq(to_latex(Expr::power(x_plus_1, Expr::integer(2))),
                               std::string("\\left(x + 1\\right)^{2}"),
                               "sum base is wrapped under exponentiation");
                   // (x y)^2 : a product base must be parenthesised under a power
-                  auto xy = Expr::product({x, y});
+                  auto const xy = Expr::product({x, y});
                   t.expect_eq(to_latex(Expr::power(xy, Expr::integer(2))),
                               std::string("\\left(x y\\right)^{2}"),
                               "product base is wrapped under exponentiation");
               })
         .test("functions",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
+                  auto const x = Expr::symbol("x");
                   t.expect_eq(to_latex(Expr::apply("sin", {x})),
                               std::string("\\sin\\left(x\\right)"), "sin -> \\sin");
                   t.expect_eq(to_latex(Expr::apply("exp", {x})),
@@ -129,10 +129,10 @@ auto main() -> int {
               })
         .test("nested_expression",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
+                  auto const x = Expr::symbol("x");
                   // sin(x^2) + 2 x  ->  \sin\left(x^{2}\right) + 2 x
-                  auto term1 = Expr::apply("sin", {Expr::power(x, Expr::integer(2))});
-                  auto term2 = Expr::product({Expr::integer(2), x});
+                  auto const term1 = Expr::apply("sin", {Expr::power(x, Expr::integer(2))});
+                  auto const term2 = Expr::product({Expr::integer(2), x});
                   t.expect_eq(to_latex(Expr::sum({term1, term2})),
                               std::string("\\sin\\left(x^{2}\\right) + 2 x"),
                               "nested function, power and product compose correctly");

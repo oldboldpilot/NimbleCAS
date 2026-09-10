@@ -110,7 +110,7 @@ namespace {
 // Dot product / vector sum helpers.
 [[nodiscard]] auto vsum(std::span<const double> v) -> double {
     double s = 0.0;
-    for (double x : v) { s += x; }
+    for (double const x : v) { s += x; }
     return s;
 }
 [[nodiscard]] auto vdot(std::span<const double> a, std::span<const double> b) -> double {
@@ -180,7 +180,7 @@ auto lu_solve_ridge(std::span<const std::vector<double>> matrix, std::span<const
     // Reject a non-finite rhs too: tangency_weights passes caller-supplied mean_returns here, so
     // a NaN/Inf expected-return entry would otherwise flow through elimination into a silently-NaN
     // weight vector returned as a valid optional — the same honesty violation as a NaN matrix.
-    for (double v : rhs) {
+    for (double const v : rhs) {
         if (!std::isfinite(v)) { return std::nullopt; }
     }
     std::vector<double> b(rhs.begin(), rhs.end());
@@ -242,7 +242,7 @@ auto analyze(std::span<const double> returns, std::span<const double> market,
     equity.reserve(returns.size() + 1);
     double level = 1.0;
     equity.push_back(level);
-    for (double rr : returns) { level *= (1.0 + rr); equity.push_back(level); }
+    for (double const rr : returns) { level *= (1.0 + rr); equity.push_back(level); }
     auto mdd = analytics::max_drawdown(equity);
     if (!var_p || !cvar_p || !mdd) {
         for (const auto& e : {var_p, cvar_p, mdd}) {

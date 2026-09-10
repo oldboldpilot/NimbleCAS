@@ -304,7 +304,7 @@ auto BigAlgebraicNumber::multiply(const BigAlgebraicNumber& o) const
     if (!field_.is_same(o.field_)) {
         return make_error<BigAlgebraicNumber>(MathError::domain_error);
     }
-    BigRationalPoly prod = value_.multiply(o.value_);   // degree up to 2d-2 (infallible)
+    BigRationalPoly const prod = value_.multiply(o.value_);   // degree up to 2d-2 (infallible)
     auto dm = prod.divide(field_.modulus());            // reduce mod m
     if (!dm) {
         return make_error<BigAlgebraicNumber>(dm.error());
@@ -388,7 +388,7 @@ auto BigAlgebraicNumber::mult_matrix() const
             rows[i][j] = current.coefficient(i);  // coordinate of alpha^i in current
         }
         if (j + 1 < dd) {
-            BigRationalPoly prod = current.multiply(x);  // multiply by alpha (infallible)
+            BigRationalPoly const prod = current.multiply(x);  // multiply by alpha (infallible)
             auto dm = prod.divide(field_.modulus());     // then reduce mod m
             if (!dm) {
                 return make_error<std::vector<std::vector<BigRational>>>(dm.error());

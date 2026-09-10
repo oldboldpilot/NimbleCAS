@@ -137,7 +137,7 @@ namespace {
     const std::vector<std::pair<Rational, std::int64_t>>& spectrum) -> Rational {
     Rational total;  // 0/1
     for (const auto& [value, mult] : spectrum) {
-        auto contribution = value.multiply(ri(mult)).value();
+        auto const contribution = value.multiply(ri(mult)).value();
         total = total.add(contribution).value();
     }
     return total;
@@ -161,14 +161,14 @@ auto main() -> int {
               [](TestContext& t) {
                   // A concrete invertible 3x3 (from the unit suite's solvable system).
                   auto a = mat({{2, 1, -1}, {-3, -1, 2}, {-2, 1, 2}});
-                  auto inv = a.inverse().value();
+                  auto const inv = a.inverse().value();
                   t.expect(a.multiply(inv).value() == Matrix::identity(3), "A * A^-1 == I");
                   t.expect(inv.multiply(a).value() == Matrix::identity(3), "A^-1 * A == I");
 
                   // Solving A x = b then re-multiplying must return b bit-for-bit; the
                   // solution here is the exact integer vector (2, 3, -1).
                   auto b = col({ri(8), ri(-11), ri(-3)});
-                  auto x = a.solve(b).value();
+                  auto const x = a.solve(b).value();
                   t.expect(x == col({ri(2), ri(3), ri(-1)}), "solve yields (2,3,-1)");
                   t.expect(a.multiply(x).value() == b, "A * solve(A,b) == b exactly");
 
@@ -181,7 +181,7 @@ auto main() -> int {
                   // 3x + y = 1, x - y = 1  =>  x = 1/2, y = -1/2 (needs exact fractions).
                   auto a = mat({{3, 1}, {1, -1}});
                   auto b = col({ri(1), ri(1)});
-                  auto x = a.solve(b).value();
+                  auto const x = a.solve(b).value();
                   t.expect(x == col({rat(1, 2), rat(-1, 2)}), "solution is (1/2, -1/2)");
                   t.expect(a.multiply(x).value() == b, "A * x == b over Q");
               })
@@ -198,17 +198,17 @@ auto main() -> int {
               [](TestContext& t) {
                   auto a = mat({{1, 2, 3}, {4, 5, 6}});   // 2x3
                   auto b = mat({{1, 0}, {0, 1}, {1, 1}});  // 3x2
-                  auto lhs = a.multiply(b).value().transpose().value();     // (A*B)^T
-                  auto rhs = b.transpose().value().multiply(a.transpose().value()).value();  // B^T*A^T
+                  auto const lhs = a.multiply(b).value().transpose().value();     // (A*B)^T
+                  auto const rhs = b.transpose().value().multiply(a.transpose().value()).value();  // B^T*A^T
                   t.expect(lhs == rhs, "(A*B)^T == B^T * A^T");
               })
         .test("determinant_is_multiplicative",
               [](TestContext& t) {
                   auto a = mat({{1, 2}, {3, 4}});   // det -2
                   auto b = mat({{2, 0}, {1, 3}});   // det  6
-                  auto det_a = a.determinant().value();
-                  auto det_b = b.determinant().value();
-                  auto det_ab = a.multiply(b).value().determinant().value();
+                  auto const det_a = a.determinant().value();
+                  auto const det_b = b.determinant().value();
+                  auto const det_ab = a.multiply(b).value().determinant().value();
                   t.expect(det_a == ri(-2) && det_b == ri(6), "det A, det B by hand");
                   t.expect(det_ab == det_a.multiply(det_b).value(), "det(A*B) == det A * det B");
                   t.expect(det_ab == ri(-12), "det(A*B) == -12");
@@ -218,8 +218,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // [[1,2],[2,1]] has characteristic polynomial (lambda-3)(lambda+1).
                   auto a = mat({{1, 2}, {2, 1}});
-                  auto poly = characteristic_polynomial(a).value();
-                  auto spectrum = rational_eigenvalues(a).value();
+                  auto const poly = characteristic_polynomial(a).value();
+                  auto const spectrum = rational_eigenvalues(a).value();
                   t.expect(spectrum.size() == 2, "two distinct rational eigenvalues");
                   for (const auto& [value, mult] : spectrum) {
                       t.expect(poly_eval(poly, value) == ri(0),
@@ -231,7 +231,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // A non-triangular matrix whose whole spectrum is rational: {3, -1}.
                   auto a = mat({{1, 2}, {2, 1}});
-                  auto spectrum = rational_eigenvalues(a).value();
+                  auto const spectrum = rational_eigenvalues(a).value();
                   t.expect(eigenvalue_product(spectrum) == a.determinant().value(),
                            "prod(eigenvalues) == det(A) == -3");
                   t.expect(eigenvalue_product(spectrum) == ri(-3), "product is -3");
@@ -246,8 +246,8 @@ auto main() -> int {
                   auto basis = eigenvectors_for(a, lambda).value();
                   t.expect(basis.size() == 1, "eigenspace of 3 is one-dimensional");
                   auto v = col(basis.front());              // the (1,1) eigenvector
-                  auto av = a.multiply(v).value();          // A v
-                  auto lv = v.scale(lambda).value();        // lambda v
+                  auto const av = a.multiply(v).value();          // A v
+                  auto const lv = v.scale(lambda).value();        // lambda v
                   t.expect(av == lv, "A v == lambda v exactly");
                   t.expect(av == col({ri(3), ri(3)}), "A v == (3,3)");
               })
@@ -256,10 +256,10 @@ auto main() -> int {
               [](TestContext& t) {
                   // A zero (0,0) entry forces a row swap, exercising the permutation.
                   auto a = mat({{0, 2, 1}, {1, 1, 1}, {2, 1, 0}});
-                  auto lu = lu_decompose(a).value();
+                  auto const lu = lu_decompose(a).value();
                   auto p = perm_matrix(lu.permutation);
-                  auto pa = p.multiply(a).value();
-                  auto lu_prod = lu.l.multiply(lu.u).value();
+                  auto const pa = p.multiply(a).value();
+                  auto const lu_prod = lu.l.multiply(lu.u).value();
                   t.expect(pa == lu_prod, "P*A == L*U exactly");
                   t.expect(is_upper_triangular(lu.u), "U is upper-triangular");
                   t.expect(lu.sign == -1, "a single swap gives sign -1");
@@ -267,8 +267,8 @@ auto main() -> int {
         .test("determinant_equals_sign_times_pivot_product",
               [](TestContext& t) {
                   auto a = mat({{2, 1, 1}, {4, 3, 3}, {8, 7, 9}});
-                  auto lu = lu_decompose(a).value();
-                  auto from_lu = ri(lu.sign).multiply(diagonal_product(lu.u)).value();
+                  auto const lu = lu_decompose(a).value();
+                  auto const from_lu = ri(lu.sign).multiply(diagonal_product(lu.u)).value();
                   t.expect(from_lu == a.determinant().value(),
                            "sign * prod(diag U) == Matrix::determinant");
                   t.expect(from_lu == ri(4), "determinant is 4");
@@ -294,14 +294,14 @@ auto main() -> int {
                   const std::vector<Rational> super{ri(-1), ri(-1), ri(-1)};
                   const std::vector<Rational> rhs{ri(1), ri(1), ri(1), ri(1)};
 
-                  auto thomas = solve_tridiagonal(sub, diag, super, rhs).value();
-                  auto expected = std::vector<Rational>{ri(2), ri(3), ri(3), ri(2)};
+                  auto const thomas = solve_tridiagonal(sub, diag, super, rhs).value();
+                  auto const expected = std::vector<Rational>{ri(2), ri(3), ri(3), ri(2)};
                   t.expect(thomas == expected, "Thomas solution is (2,3,3,2)");
 
                   // Same system solved densely; the two exact solutions must coincide.
                   auto dense_a = mat({{2, -1, 0, 0}, {-1, 2, -1, 0}, {0, -1, 2, -1}, {0, 0, -1, 2}});
                   auto b = col({ri(1), ri(1), ri(1), ri(1)});
-                  auto dense_x = dense_a.solve(b).value();
+                  auto const dense_x = dense_a.solve(b).value();
                   t.expect(col(thomas) == dense_x, "Thomas == Matrix::solve");
                   t.expect(dense_a.multiply(dense_x).value() == b, "A * x == b");
               })
@@ -312,10 +312,10 @@ auto main() -> int {
                   const std::vector<Rational> super{ri(-1), ri(-1), ri(-1)};
                   const std::vector<Rational> rhs{ri(1), ri(1), ri(1), ri(1)};
 
-                  auto thomas = solve_tridiagonal(sub, diag, super, rhs).value();
+                  auto const thomas = solve_tridiagonal(sub, diag, super, rhs).value();
                   auto dense_a = mat({{2, -1, 0, 0}, {-1, 2, -1, 0}, {0, -1, 2, -1}, {0, 0, -1, 2}});
                   auto b = col({ri(1), ri(1), ri(1), ri(1)});
-                  auto banded = solve_banded(dense_a, 1, 1, b).value();  // bandwidth-1 LU
+                  auto const banded = solve_banded(dense_a, 1, 1, b).value();  // bandwidth-1 LU
                   t.expect(banded == col(thomas), "solve_banded(bw 1) == Thomas");
                   t.expect(banded == col({ri(2), ri(3), ri(3), ri(2)}), "band solution (2,3,3,2)");
               })
@@ -339,8 +339,8 @@ auto main() -> int {
                   auto x = cmat({{ci(0), ci(1)}, {ci(1), ci(0)}});
                   auto y = cmat({{ci(0), neg_i}, {i, ci(0)}});
                   auto z = cmat({{ci(1), ci(0)}, {ci(0), ci(-1)}});
-                  auto xy = x.multiply(y).value();
-                  auto iz = z.scale(i).value();
+                  auto const xy = x.multiply(y).value();
+                  auto const iz = z.scale(i).value();
                   t.expect(xy == iz, "X*Y == i*Z");
                   t.expect(xy == cmat({{i, ci(0)}, {ci(0), neg_i}}), "X*Y == diag(i, -i)");
               })
@@ -353,7 +353,7 @@ auto main() -> int {
 
                   // The real 90-degree rotation: unitary but NOT Hermitian, hence normal.
                   auto u = cmat({{ci(0), ci(-1)}, {ci(1), ci(0)}});
-                  auto uh_u = u.adjoint().value().multiply(u).value();
+                  auto const uh_u = u.adjoint().value().multiply(u).value();
                   t.expect(uh_u == ComplexMatrix::identity(2), "U^H * U == I");
                   t.expect(u.is_unitary().value(), "U is unitary");
                   t.expect(!u.is_hermitian().value(), "U is not Hermitian");
@@ -365,8 +365,8 @@ auto main() -> int {
                   // 3x3 Jordan block N (nilpotency index 3): e^N = I + N + N^2/2 exactly.
                   auto n = mat({{0, 1, 0}, {0, 0, 1}, {0, 0, 0}});
                   t.expect(is_nilpotent(n).value(), "N is nilpotent");
-                  auto exp_n = matrix_exp_taylor(n, 5).value();  // terms >= index 3 => exact
-                  auto expected = Matrix::from_rows({{ri(1), ri(1), rat(1, 2)},
+                  auto const exp_n = matrix_exp_taylor(n, 5).value();  // terms >= index 3 => exact
+                  auto const expected = Matrix::from_rows({{ri(1), ri(1), rat(1, 2)},
                                                      {ri(0), ri(1), ri(1)},
                                                      {ri(0), ri(0), ri(1)}})
                                       .value();
@@ -382,9 +382,9 @@ auto main() -> int {
                   // 2q+1 >= 4 (q >= 2); q = 1 (2q+1 = 3 < 4) is a genuine approximation.
                   auto j = mat({{0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}, {0, 0, 0, 0}});
                   t.expect(is_nilpotent(j).value(), "4x4 Jordan block is nilpotent");
-                  auto taylor = matrix_exp_taylor(j, 4).value();  // exact e^J
-                  auto pade_hi = matrix_exp_pade(j, 2).value();   // 2q+1 = 5 >= 4: exact
-                  auto pade_lo = matrix_exp_pade(j, 1).value();   // 2q+1 = 3 <  4: not exact
+                  auto const taylor = matrix_exp_taylor(j, 4).value();  // exact e^J
+                  auto const pade_hi = matrix_exp_pade(j, 2).value();   // 2q+1 = 5 >= 4: exact
+                  auto const pade_lo = matrix_exp_pade(j, 1).value();   // 2q+1 = 3 <  4: not exact
                   t.expect(taylor == pade_hi, "Taylor == Pade(q=2) at exactness boundary");
                   t.expect_ne(taylor, pade_lo, "Pade(q=1) differs (J^3/4 vs J^3/6)");
               })
@@ -395,7 +395,7 @@ auto main() -> int {
                   const std::vector<std::vector<Rational>> a{{ri(1), ri(1)}, {ri(1), ri(3)}};
                   const std::vector<Rational> b{ri(4), ri(6)};
                   const std::vector<Rational> c{ri(3), ri(2)};
-                  auto sol = maximize(a, b, c).value();
+                  auto const sol = maximize(a, b, c).value();
                   t.expect(sol.status == LpStatus::optimal, "program is bounded/optimal");
                   t.expect(sol.value == ri(12), "optimum value is 12");
                   t.expect(sol.solution == std::vector<Rational>{ri(4), ri(0)},
@@ -404,7 +404,7 @@ auto main() -> int {
         .test("simplex_reports_unbounded_and_domain_errors",
               [](TestContext& t) {
                   // maximize x s.t. -x <= 0 (i.e. x >= 0): objective grows without bound.
-                  auto unb = maximize({{ri(-1)}}, {ri(0)}, {ri(1)}).value();
+                  auto const unb = maximize({{ri(-1)}}, {ri(0)}, {ri(1)}).value();
                   t.expect(unb.status == LpStatus::unbounded, "feasible cone is unbounded");
                   t.expect(unb.solution.empty(), "unbounded solution vector is empty");
 
@@ -425,9 +425,9 @@ auto main() -> int {
                   // x = (1,2,3), y = 2x = (2,4,6): a perfectly linear relation.
                   const std::vector<Rational> x{ri(1), ri(2), ri(3)};
                   const std::vector<Rational> y{ri(2), ri(4), ri(6)};
-                  std::vector<std::span<const Rational>> vars{std::span<const Rational>(x),
+                  std::vector<std::span<const Rational>> const vars{std::span<const Rational>(x),
                                                               std::span<const Rational>(y)};
-                  auto sigma = covariance_matrix(vars, true).value();
+                  auto const sigma = covariance_matrix(vars, true).value();
                   t.expect(is_symmetric(sigma), "covariance matrix is symmetric");
                   // Sigma = [[var(x), cov], [cov, var(y)]] = [[1, 2], [2, 4]] by hand.
                   t.expect(sigma == mat({{1, 2}, {2, 4}}), "Sigma == [[1,2],[2,4]]");
@@ -437,19 +437,19 @@ auto main() -> int {
                   // Perfect linearity <=> correlation == 1, i.e. cov^2 == var(x)*var(y)
                   // exactly (correlation itself needs an irrational sqrt, so we test the
                   // exact squared identity that a rational CAS can certify).
-                  auto cov = covariance(x, y, true).value();
-                  auto cov_sq = cov.multiply(cov).value();
-                  auto var_prod = variance(x, true).value().multiply(variance(y, true).value()).value();
+                  auto const cov = covariance(x, y, true).value();
+                  auto const cov_sq = cov.multiply(cov).value();
+                  auto const var_prod = variance(x, true).value().multiply(variance(y, true).value()).value();
                   t.expect(cov_sq == var_prod, "cov^2 == var(x)*var(y): correlation is 1");
               })
         // === CROSS: three independent routes to the same determinant ================
         .test("determinant_agrees_across_eigen_lu_and_gauss",
               [](TestContext& t) {
                   auto a = mat({{1, 2}, {2, 1}});  // spectrum {3, -1}, det -3
-                  auto from_gauss = a.determinant().value();
+                  auto const from_gauss = a.determinant().value();
                   auto from_eigen = eigenvalue_product(rational_eigenvalues(a).value());
-                  auto lu = lu_decompose(a).value();
-                  auto from_lu = ri(lu.sign).multiply(diagonal_product(lu.u)).value();
+                  auto const lu = lu_decompose(a).value();
+                  auto const from_lu = ri(lu.sign).multiply(diagonal_product(lu.u)).value();
                   t.expect(from_gauss == ri(-3), "Gauss determinant is -3");
                   t.expect(from_eigen == from_gauss, "eigenvalue product == Gauss determinant");
                   t.expect(from_lu == from_gauss, "LU pivot product == Gauss determinant");

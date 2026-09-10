@@ -77,11 +77,11 @@ auto main() -> int {
         .test("flat_metric_is_curvature_free",
               [&](TestContext& t) {
                   // Euclidean 3-space in Cartesian coordinates: g = I_3.
-                  auto m = make_metric({"x", "y", "z"}, identity_components(3)).value();
+                  auto const m = make_metric({"x", "y", "z"}, identity_components(3)).value();
                   t.expect(metric_determinant(m).value() == I(1), "det(I) = 1");
 
                   // All Christoffel symbols vanish (metric components are constant).
-                  auto gamma = christoffel(m).value();
+                  auto const gamma = christoffel(m).value();
                   bool gamma_zero = true;
                   for (const auto& gk : gamma)
                       for (const auto& gki : gk)
@@ -89,7 +89,7 @@ auto main() -> int {
                   t.expect(gamma_zero, "all Gamma^k_{ij} = 0 for flat space");
 
                   // Riemann, Ricci, scalar curvature all vanish.
-                  auto riem = riemann_tensor(m).value();
+                  auto const riem = riemann_tensor(m).value();
                   bool riem_zero = true;
                   for (const auto& r0 : riem)
                       for (const auto& r1 : r0)
@@ -97,7 +97,7 @@ auto main() -> int {
                               for (const auto& e : r2) riem_zero = riem_zero && (e == I(0));
                   t.expect(riem_zero, "Riemann tensor is identically zero");
 
-                  auto ric = ricci_tensor(m).value();
+                  auto const ric = ricci_tensor(m).value();
                   bool ricci_zero = true;
                   for (const auto& row : ric)
                       for (const auto& e : row) ricci_zero = ricci_zero && (e == I(0));
@@ -112,7 +112,7 @@ auto main() -> int {
                   ExprMatrix g = {{Expr::power(a, I(2)), I(0)},
                                   {I(0), Expr::product({Expr::power(a, I(2)),
                                                         Expr::power(sin_t, I(2))})}};
-                  auto m = make_metric({"theta", "phi"}, g).value();
+                  auto const m = make_metric({"theta", "phi"}, g).value();
                   auto gamma = christoffel(m).value();  // gamma[k][i][j]
 
                   // Gamma^theta_{phi phi} = -sin(theta) cos(theta).
@@ -133,7 +133,7 @@ auto main() -> int {
                   ExprMatrix g = {{Expr::power(a, I(2)), I(0)},
                                   {I(0), Expr::product({Expr::power(a, I(2)),
                                                         Expr::power(sin_t, I(2))})}};
-                  auto m = make_metric({"theta", "phi"}, g).value();
+                  auto const m = make_metric({"theta", "phi"}, g).value();
 
                   // det(g) = a^4 sin(theta)^2.
                   t.expect(metric_determinant(m).value() ==
@@ -158,7 +158,7 @@ auto main() -> int {
                            "scalar curvature R = 2/a^2");
 
                   // In two dimensions the Einstein tensor vanishes identically.
-                  auto ein = einstein_tensor(m).value();
+                  auto const ein = einstein_tensor(m).value();
                   bool einstein_zero = true;
                   for (const auto& row : ein)
                       for (const auto& e : row) einstein_zero = einstein_zero && (e == I(0));
@@ -168,7 +168,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // Flat plane in polar coordinates (r, theta): g = diag(1, r^2).
                   ExprMatrix g = {{I(1), I(0)}, {I(0), Expr::power(r, I(2))}};
-                  auto m = make_metric({"r", "theta"}, g).value();
+                  auto const m = make_metric({"r", "theta"}, g).value();
 
                   // Test function f = r^2 cos(theta).
                   const Expr f = Expr::product({Expr::power(r, I(2)), cos_t});
@@ -181,7 +181,7 @@ auto main() -> int {
                            "Laplace-Beltrami of r^2 cos(theta) is 3 cos(theta)");
 
                   // Cross-check against the polar Laplacian assembled directly from partials.
-                  auto d = [](const Expr& e, std::string_view v) {
+                  auto const d = [](const Expr& e, std::string_view v) {
                       return differentiate(e, v).value();
                   };
                   const Expr f_r = d(f, "r");
@@ -206,14 +206,14 @@ auto main() -> int {
                            "non-square metric rejected");
 
                   // Singular metric (det = 0) has no inverse.
-                  auto singular = make_metric({"u", "v"}, {{I(1), I(1)}, {I(1), I(1)}}).value();
+                  auto const singular = make_metric({"u", "v"}, {{I(1), I(1)}, {I(1), I(1)}}).value();
                   t.expect(inverse_metric(singular).error() == MathError::domain_error,
                            "singular metric -> domain_error");
                   t.expect(scalar_curvature(singular).error() == MathError::domain_error,
                            "curvature of singular metric fails on the railway");
 
                   // Dimension beyond the cofactor cap (n > 5) is not implemented.
-                  auto big = make_metric({"a", "b", "c", "d", "e", "f"},
+                  auto const big = make_metric({"a", "b", "c", "d", "e", "f"},
                                          identity_components(6))
                                  .value();
                   t.expect(inverse_metric(big).error() == MathError::not_implemented,
@@ -222,7 +222,7 @@ auto main() -> int {
                            "det for n > 5 -> not_implemented");
 
                   // Vector-length mismatch in the covariant derivative is a domain error.
-                  auto flat2 = make_metric({"x", "y"}, identity_components(2)).value();
+                  auto const flat2 = make_metric({"x", "y"}, identity_components(2)).value();
                   t.expect(covariant_derivative_vector(flat2, {I(1)}).error() ==
                                MathError::domain_error,
                            "covariant derivative rejects wrong-length field");

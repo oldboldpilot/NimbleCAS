@@ -129,7 +129,7 @@ auto main() -> int {
         .test("quadratic_irrational_radicals",
               [](TestContext& t) {
                   // x^2 - 2 -> +/- sqrt(2), kept as power(2, 1/2). No rational roots.
-                  auto roots = solve_poly(ipoly({-2, 0, 1})).value();
+                  auto const roots = solve_poly(ipoly({-2, 0, 1})).value();
                   t.expect(roots.size() == 2, "two roots");
                   const Expr sqrt2 = Expr::power(Expr::integer(2), rexpr(1, 2));
                   t.expect(has_value(roots, sqrt2, true), "+sqrt(2) as power(2,1/2), exact");
@@ -140,7 +140,7 @@ auto main() -> int {
         .test("quadratic_imaginary_radical",
               [](TestContext& t) {
                   // x^2 + 1 -> +/- i, kept as the imaginary radical power(-1, 1/2).
-                  auto roots = solve_poly(ipoly({1, 0, 1})).value();
+                  auto const roots = solve_poly(ipoly({1, 0, 1})).value();
                   t.expect(roots.size() == 2, "two roots");
                   const Expr i_unit = Expr::power(Expr::integer(-1), rexpr(1, 2));
                   t.expect(has_value(roots, i_unit, true), "power(-1,1/2), exact");
@@ -164,7 +164,7 @@ auto main() -> int {
         .test("linear_rational_root",
               [](TestContext& t) {
                   // 2x - 1 -> 1/2 (rational, exact).
-                  auto roots = solve_poly(ipoly({-1, 2})).value();
+                  auto const roots = solve_poly(ipoly({-1, 2})).value();
                   t.expect(roots.size() == 1, "one root");
                   t.expect(has_value(roots, rexpr(1, 2), true), "root 1/2 exact");
               })
@@ -172,7 +172,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // (x-1)(x^2-2) = x^3 - x^2 - 2x + 2. Peel rational 1, then quadratic radicals.
                   const RationalPoly p = ipoly({2, -2, -1, 1});
-                  auto roots = solve_poly(p).value();
+                  auto const roots = solve_poly(p).value();
                   t.expect(roots.size() == 3, "three roots");
                   t.expect(has_value(roots, Expr::integer(1), true), "rational root 1 exact");
                   t.expect(has_value(roots, Expr::power(Expr::integer(2), rexpr(1, 2)), true),
@@ -183,7 +183,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // x^3 - 2 -> cube roots of 2; the real one is power(2, 1/3).
                   const RationalPoly p = ipoly({-2, 0, 0, 1});
-                  auto roots = solve_poly(p).value();
+                  auto const roots = solve_poly(p).value();
                   t.expect(roots.size() == 3, "three roots");
                   t.expect(has_value(roots, Expr::power(Expr::integer(2), rexpr(1, 3)), true),
                            "real cube root power(2,1/3), exact");
@@ -205,7 +205,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // x^4 - 2 -> real quart root power(2, 1/4) plus i-multiples.
                   const RationalPoly p = ipoly({-2, 0, 0, 0, 1});
-                  auto roots = solve_poly(p).value();
+                  auto const roots = solve_poly(p).value();
                   t.expect(roots.size() == 4, "four roots");
                   t.expect(has_value(roots, Expr::power(Expr::integer(2), rexpr(1, 4)), true),
                            "real fourth root power(2,1/4), exact");

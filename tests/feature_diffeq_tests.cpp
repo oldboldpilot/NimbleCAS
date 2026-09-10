@@ -114,7 +114,7 @@ auto main() -> int {
                   // y' = y, y(0) = 1 as a first-order system: f(u) = u. Component 0 must be the
                   // exp series, coefficient k == 1/k! EXACTLY over Q.
                   constexpr std::size_t order = 9;
-                  SystemOperator id = [](const SeriesVec& u) -> Result<SeriesVec> {
+                  SystemOperator const id = [](const SeriesVec& u) -> Result<SeriesVec> {
                       return SeriesVec{u[0]};
                   };
                   auto sol = solve_first_order_system(id, {Rational::from_int(1)}, order);
@@ -130,7 +130,7 @@ auto main() -> int {
                   // y'' = -y via companion reduction. [y(0), y'(0)] = [0, 1] -> sin;
                   // [1, 0] -> cos. Exact rational Taylor coefficients.
                   constexpr std::size_t order = 9;
-                  HigherOrderOperator f = [](const SeriesVec& y) -> Result<PowerSeries> {
+                  HigherOrderOperator const f = [](const SeriesVec& y) -> Result<PowerSeries> {
                       return y[0].scale(Rational::from_int(-1));  // u'' = -u
                   };
                   auto s = solve_higher_order(f, {Rational::from_int(0), Rational::from_int(1)},
@@ -164,7 +164,7 @@ auto main() -> int {
                   // Rotation u1' = -u2, u2' = u1, u(0) = (1, 0): u1 -> cos, u2 -> sin.
                   // (Note u1'=u2, u2'=-u1 would instead give u2 -> -sin; this standard
                   // orientation is the one matching the cos/sin expectations below.)
-                  SystemOperator rot = [](const SeriesVec& u) -> Result<SeriesVec> {
+                  SystemOperator const rot = [](const SeriesVec& u) -> Result<SeriesVec> {
                       auto neg = u[1].scale(Rational::from_int(-1));  // -u2
                       if (!neg) {
                           return make_error<SeriesVec>(neg.error());
@@ -174,7 +174,7 @@ auto main() -> int {
                   auto rsol = solve_first_order_system(
                       rot, {Rational::from_int(1), Rational::from_int(0)}, order);
                   // Hyperbolic u1' = u2, u2' = u1, u(0) = (1, 0): u1 -> cosh, u2 -> sinh.
-                  SystemOperator hyp = [](const SeriesVec& u) -> Result<SeriesVec> {
+                  SystemOperator const hyp = [](const SeriesVec& u) -> Result<SeriesVec> {
                       return SeriesVec{u[1], u[0]};
                   };
                   auto hsol = solve_first_order_system(
@@ -211,7 +211,7 @@ auto main() -> int {
 
                   // CROSS-METHOD: the rotation system's components must equal the companion
                   // second-order cos/sin solutions bit-for-bit (two routes to the same series).
-                  HigherOrderOperator f = [](const SeriesVec& y) -> Result<PowerSeries> {
+                  HigherOrderOperator const f = [](const SeriesVec& y) -> Result<PowerSeries> {
                       return y[0].scale(Rational::from_int(-1));
                   };
                   auto sin2 = solve_higher_order(f, {Rational::from_int(0), Rational::from_int(1)},
@@ -228,10 +228,10 @@ auto main() -> int {
                   // CROSS-MODULE: the exp series must be identical whether obtained from the ODE
                   // engine (y'=y), the perturbation ADM solver (u'=u), or the powerseries exp of x.
                   constexpr std::size_t order = 8;
-                  SystemOperator id_sys = [](const SeriesVec& u) -> Result<SeriesVec> {
+                  SystemOperator const id_sys = [](const SeriesVec& u) -> Result<SeriesVec> {
                       return SeriesVec{u[0]};
                   };
-                  SeriesOperator id_scalar = [](const PowerSeries& u) -> Result<PowerSeries> {
+                  SeriesOperator const id_scalar = [](const PowerSeries& u) -> Result<PowerSeries> {
                       return u;
                   };
                   auto ode_sol = solve_first_order_system(id_sys, {Rational::from_int(1)}, order);
@@ -254,10 +254,10 @@ auto main() -> int {
                   // u'(t) = u(t-1), history u == 1 on [-1,0], tau = 1. Hand solution:
                   //   [0,1]: 1 + s ; [1,2]: 2 + s + s^2/2 ; [2,3]: 7/2 + 2s + s^2/2 + s^3/6.
                   constexpr std::size_t order = 6;
-                  DdeOperator f =
+                  DdeOperator const f =
                       [](const PowerSeries&, const PowerSeries& ud, const PowerSeries&)
                       -> Result<PowerSeries> { return ud; };
-                  auto history = PowerSeries::constant(Rational::from_int(1), order).value();
+                  auto const history = PowerSeries::constant(Rational::from_int(1), order).value();
                   auto sol = solve_method_of_steps(f, history, Rational::from_int(1), 3, order);
                   t.expect(sol.has_value(), "method of steps (u'=u(t-1)) succeeds");
                   if (sol) {
@@ -297,10 +297,10 @@ auto main() -> int {
               [](TestContext& t) {
                   // u'(t) = -u(t-1), history 1, tau = 1: [0,1]: 1 - s ; [1,2]: -s + s^2/2.
                   constexpr std::size_t order = 5;
-                  DdeOperator f =
+                  DdeOperator const f =
                       [](const PowerSeries&, const PowerSeries& ud, const PowerSeries&)
                       -> Result<PowerSeries> { return ud.scale(Rational::from_int(-1)); };
-                  auto history = PowerSeries::constant(Rational::from_int(1), order).value();
+                  auto const history = PowerSeries::constant(Rational::from_int(1), order).value();
                   auto sol = solve_method_of_steps(f, history, Rational::from_int(1), 2, order);
                   t.expect(sol.has_value(), "method of steps (u'=-u(t-1)) succeeds");
                   if (sol) {
@@ -351,7 +351,7 @@ auto main() -> int {
 
                       // CROSS: the DAE's underlying reduction x' = 2x must match a DIRECT ode
                       // solve on that equivalent scalar system.
-                      SystemOperator twice = [](const SeriesVec& u) -> Result<SeriesVec> {
+                      SystemOperator const twice = [](const SeriesVec& u) -> Result<SeriesVec> {
                           auto d = u[0].scale(Rational::from_int(2));
                           if (!d) {
                               return make_error<SeriesVec>(d.error());
@@ -495,7 +495,7 @@ auto main() -> int {
                   // u' = u^2, u(0) = 1. Exact solution 1/(1-t) = 1 + t + t^2 + ... (all-ones).
                   // ADM == HPM identically; HAM at hbar = -1 recovers them.
                   constexpr std::size_t order = 8;
-                  SeriesOperator sq = [](const PowerSeries& u) -> Result<PowerSeries> {
+                  SeriesOperator const sq = [](const PowerSeries& u) -> Result<PowerSeries> {
                       return u.multiply(u);
                   };
                   auto adm = adm_solve(sq, Rational::from_int(1), order);
@@ -504,7 +504,7 @@ auto main() -> int {
                   t.expect(adm.has_value() && hpm.has_value() && ham.has_value(),
                            "ADM, HPM, HAM all solve u'=u^2");
                   if (adm) {
-                      std::vector<Rational> ones(order, Rational::from_int(1));
+                      std::vector<Rational> const ones(order, Rational::from_int(1));
                       t.expect(series_matches(*adm, ones),
                                "ADM u'=u^2 == 1/(1-t) (every coefficient == 1) exactly");
                   }
@@ -519,7 +519,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // u' = u, u(0) = 1 -> exp. ADM matches 1/k! and HAM(hbar=-1) matches ADM.
                   constexpr std::size_t order = 8;
-                  SeriesOperator id = [](const PowerSeries& u) -> Result<PowerSeries> {
+                  SeriesOperator const id = [](const PowerSeries& u) -> Result<PowerSeries> {
                       return u;
                   };
                   auto adm = adm_solve(id, Rational::from_int(1), order);
@@ -540,7 +540,7 @@ auto main() -> int {
                   // 1 + 2t + 3t^2 + ...  => A_0 = 1, A_1 = 2t, A_2 = 3t^2. Each A_m must be
                   // HOMOGENEOUS of degree m (only its x^m coefficient nonzero).
                   constexpr std::size_t order = 6;
-                  SeriesOperator sq = [](const PowerSeries& u) -> Result<PowerSeries> {
+                  SeriesOperator const sq = [](const PowerSeries& u) -> Result<PowerSeries> {
                       return u.multiply(u);
                   };
                   const SeriesVec comps{PowerSeries::constant(Rational::from_int(1), order).value(),
@@ -580,9 +580,9 @@ auto main() -> int {
                   const std::uint64_t paths = 20000;
                   const std::uint64_t seed = 20260703;
                   const double ito_mean = x0 * std::exp(mu * T);  // == 1
-                  auto a = [mu](double x) { return mu * x; };
-                  auto b = [sigma](double x) { return sigma * x; };
-                  auto bp = [sigma](double) { return sigma; };
+                  auto const a = [mu](double x) { return mu * x; };
+                  auto const b = [sigma](double x) { return sigma * x; };
+                  auto const bp = [sigma](double) { return sigma; };
 
                   auto em = terminal_moments_scheme(a, b, {}, x0, T, steps, paths, seed,
                                                     Scheme::euler_maruyama);
@@ -625,8 +625,8 @@ auto main() -> int {
                   const std::uint64_t seed = 20260703;
                   const double ito_mean = x0 * std::exp(mu * T);                        // 1
                   const double strat_mean = x0 * std::exp((mu + 0.5 * sigma * sigma) * T);  // e^0.125
-                  auto a = [mu](double x) { return mu * x; };
-                  auto b = [sigma](double x) { return sigma * x; };
+                  auto const a = [mu](double x) { return mu * x; };
+                  auto const b = [sigma](double x) { return sigma * x; };
 
                   auto he = terminal_moments_scheme(a, b, {}, x0, T, steps, paths, seed,
                                                     Scheme::stochastic_heun);
@@ -648,9 +648,9 @@ auto main() -> int {
         .test("sde_paths_are_bit_reproducible_and_ito_schemes_coincide_without_noise",
               [](TestContext& t) {
                   // Determinism: equal (seed, path) reproduce a bit-identical trajectory.
-                  auto a = [](double x) { return -x; };
-                  auto b = [](double x) { return 0.3 * x; };
-                  auto bp = [](double) { return 0.3; };
+                  auto const a = [](double x) { return -x; };
+                  auto const b = [](double x) { return 0.3 * x; };
+                  auto const bp = [](double) { return 0.3; };
                   auto p1 = euler_maruyama(a, b, 1.0, 1.0, 64, 4242);
                   auto p2 = euler_maruyama(a, b, 1.0, 1.0, 64, 4242);
                   t.expect(p1.has_value() && p2.has_value(), "two seeded Euler paths run");
@@ -661,7 +661,7 @@ auto main() -> int {
 
                   // With b == 0 every Itô scheme reduces to Euler-Maruyama bit-for-bit (the
                   // diffusion corrections vanish identically); they share one Brownian stream.
-                  auto zero_b = [](double) { return 0.0; };
+                  auto const zero_b = [](double) { return 0.0; };
                   auto e0 = euler_maruyama(a, zero_b, 1.0, 1.0, 64, 99);
                   auto s0 = srk(a, zero_b, 1.0, 1.0, 64, 99);
                   auto m0 = milstein(a, zero_b, zero_b, 1.0, 1.0, 64, 99);
@@ -680,8 +680,8 @@ auto main() -> int {
                   // seeded splitmix64(seed ^ p). So the ensemble vector must equal, element for
                   // element, standalone single-path runs at those derived seeds — regardless of
                   // how 0..paths-1 would be split across workers.
-                  auto a = [](double x) { return 0.1 * x; };
-                  auto b = [](double x) { return 0.2 * x; };
+                  auto const a = [](double x) { return 0.1 * x; };
+                  auto const b = [](double x) { return 0.2 * x; };
                   const double x0 = 1.0;
                   const double T = 1.0;
                   const std::uint64_t steps = 32;
@@ -709,9 +709,9 @@ auto main() -> int {
                   // The legacy use_milstein bool driver must equal the Scheme-enum driver exactly
                   // for both euler_maruyama (false) and milstein (true) — same seeding, same
                   // Brownian stream, same reduction — not merely statistically.
-                  auto a = [](double x) { return 0.15 * x; };
-                  auto b = [](double x) { return 0.25 * x; };
-                  auto bp = [](double) { return 0.25; };
+                  auto const a = [](double x) { return 0.15 * x; };
+                  auto const b = [](double x) { return 0.25 * x; };
+                  auto const bp = [](double) { return 0.25; };
                   const double x0 = 1.0;
                   const double T = 1.0;
                   const std::uint64_t steps = 40;

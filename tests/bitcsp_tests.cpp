@@ -70,7 +70,7 @@ auto main() -> int {
                   const std::pair<int, std::uint64_t> cases[] = {
                       {4, 2}, {6, 4}, {8, 92}, {10, 724}};
                   for (const auto& [n, expected] : cases) {
-                      auto c = count_nqueens(n, false);
+                      auto const c = count_nqueens(n, false);
                       t.expect(c.has_value(), "serial count succeeds");
                       t.expect(c.value_or(0) == expected, "serial N-queens count matches");
                   }
@@ -80,8 +80,8 @@ auto main() -> int {
                   const std::pair<int, std::uint64_t> cases[] = {
                       {4, 2}, {6, 4}, {8, 92}, {10, 724}};
                   for (const auto& [n, expected] : cases) {
-                      auto serial = count_nqueens(n, false);
-                      auto parallel = count_nqueens(n, true);
+                      auto const serial = count_nqueens(n, false);
+                      auto const parallel = count_nqueens(n, true);
                       t.expect(serial.has_value() && parallel.has_value(), "both modes succeed");
                       t.expect(parallel.value_or(0) == expected, "parallel N-queens count matches");
                       t.expect(serial.value_or(0) == parallel.value_or(1),
@@ -90,11 +90,11 @@ auto main() -> int {
               })
         .test("nqueens_small_and_domain_error",
               [](TestContext& t) {
-                  auto one = count_nqueens(1, false);
+                  auto const one = count_nqueens(1, false);
                   t.expect(one.value_or(0) == 1, "1-queens has exactly 1 solution");
-                  auto two = count_nqueens(2, false);
+                  auto const two = count_nqueens(2, false);
                   t.expect(two.value_or(9) == 0, "2-queens has no solution");
-                  auto three = count_nqueens(3, true);
+                  auto const three = count_nqueens(3, true);
                   t.expect(three.value_or(9) == 0, "3-queens has no solution (parallel too)");
 
                   auto zero = count_nqueens(0, false);
@@ -133,7 +133,7 @@ auto main() -> int {
                   csp.domains = {full_domain(1), full_domain(1)};
                   csp.constraints.push_back(make_bit_constraint(
                       0, 1, 1, 1, [](int a, int b) { return a < b; }));
-                  auto r = ac3_bitset(csp);
+                  auto const r = ac3_bitset(csp);
                   t.expect(r.has_value(), "ac3_bitset returns a value (empty domain is not error)");
                   t.expect(!r.value_or(std::nullopt).has_value(),
                            "arc-inconsistent CSP yields nullopt");
@@ -199,9 +199,9 @@ auto main() -> int {
               [](TestContext& t) {
                   // The branchless bitmask engine must agree with the independent value-branching
                   // reference solver (nimblecas.csp) on the number of 8-queens solutions.
-                  auto bit8 = count_nqueens(8, false);
-                  auto bit8p = count_nqueens(8, true);
-                  auto ref8 = solution_count(queens_csp(8), 0);
+                  auto const bit8 = count_nqueens(8, false);
+                  auto const bit8p = count_nqueens(8, true);
+                  auto const ref8 = solution_count(queens_csp(8), 0);
                   t.expect(bit8.has_value() && ref8.has_value(), "both engines succeed");
                   t.expect(bit8.value_or(0) == 92, "bitmask 8-queens count is 92");
                   t.expect(ref8.value_or(0) == 92, "reference CSP 8-queens count is 92");

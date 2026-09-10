@@ -50,9 +50,9 @@ auto main() -> int {
         .test("divergence_and_laplacian",
               [&](TestContext& t) {
                   // div(x^2, y^2, z^2) = 2x + 2y + 2z.
-                  std::vector<Expr> field = {Expr::power(x, I(2)), Expr::power(y, I(2)),
+                  std::vector<Expr> const field = {Expr::power(x, I(2)), Expr::power(y, I(2)),
                                              Expr::power(z, I(2))};
-                  auto d = divergence(field, {"x", "y", "z"}).value();
+                  auto const d = divergence(field, {"x", "y", "z"}).value();
                   t.expect(d == S(Expr::sum({Expr::product({I(2), x}), Expr::product({I(2), y}),
                                              Expr::product({I(2), z})})),
                            "divergence is 2x + 2y + 2z");
@@ -64,7 +64,7 @@ auto main() -> int {
         .test("curl",
               [&](TestContext& t) {
                   // curl(-y, x, 0) = (0, 0, 2).
-                  std::vector<Expr> field = {Expr::product({I(-1), y}), x, I(0)};
+                  std::vector<Expr> const field = {Expr::product({I(-1), y}), x, I(0)};
                   auto c = curl(field, {"x", "y", "z"}).value();
                   t.expect(c[0] == I(0) && c[1] == I(0), "first two components vanish");
                   t.expect(c[2] == I(2), "third component is 2");
@@ -78,7 +78,7 @@ auto main() -> int {
                   const Expr f = Expr::sum({Expr::product({Expr::power(x, I(2)), y}),
                                             Expr::product({Expr::power(y, I(2)), z}),
                                             Expr::product({Expr::power(z, I(2)), x})});
-                  auto g = gradient(f, {"x", "y", "z"}).value();
+                  auto const g = gradient(f, {"x", "y", "z"}).value();
                   auto c = curl(g, {"x", "y", "z"}).value();
                   t.expect(c[0] == I(0) && c[1] == I(0) && c[2] == I(0),
                            "curl(grad f) == (0, 0, 0)");
@@ -86,17 +86,17 @@ auto main() -> int {
         .test("div_of_curl_is_zero",
               [&](TestContext& t) {
                   // div(curl F) = 0 for any vector field.
-                  std::vector<Expr> field = {Expr::product({Expr::power(x, I(2)), y}),
+                  std::vector<Expr> const field = {Expr::product({Expr::power(x, I(2)), y}),
                                              Expr::product({Expr::power(y, I(2)), z}),
                                              Expr::product({Expr::power(z, I(2)), x})};
-                  auto c = curl(field, {"x", "y", "z"}).value();
+                  auto const c = curl(field, {"x", "y", "z"}).value();
                   t.expect(divergence(c, {"x", "y", "z"}).value() == I(0),
                            "div(curl F) == 0");
               })
         .test("jacobian_and_hessian",
               [&](TestContext& t) {
                   // J of (xy, yz) wrt (x,y,z) = [[y, x, 0], [0, z, y]].
-                  std::vector<Expr> field = {Expr::product({x, y}), Expr::product({y, z})};
+                  std::vector<Expr> const field = {Expr::product({x, y}), Expr::product({y, z})};
                   auto j = jacobian(field, {"x", "y", "z"}).value();
                   t.expect(j.size() == 2 && j[0].size() == 3, "2x3 Jacobian");
                   t.expect(j[0][0] == y && j[0][1] == x && j[0][2] == I(0), "row 1 = (y, x, 0)");
@@ -113,12 +113,12 @@ auto main() -> int {
               [&](TestContext& t) {
                   // Directional derivative of x^2 + y^2 along (1, 0) is 2x.
                   const Expr f = Expr::sum({Expr::power(x, I(2)), Expr::power(y, I(2))});
-                  auto dd = directional_derivative(f, {"x", "y"}, {I(1), I(0)}).value();
+                  auto const dd = directional_derivative(f, {"x", "y"}, {I(1), I(0)}).value();
                   t.expect(dd == S(Expr::product({I(2), x})), "directional derivative is 2x");
                   // Total derivative of f = x y with x=x(t), y=y(t): df/dt = y x' + x y'.
                   const Expr u = sym("u");  // x'(t)
                   const Expr v = sym("v");  // y'(t)
-                  auto td = total_derivative(Expr::product({x, y}), "t", {"x", "y"}, {u, v})
+                  auto const td = total_derivative(Expr::product({x, y}), "t", {"x", "y"}, {u, v})
                                 .value();
                   t.expect(td == S(Expr::sum({Expr::product({y, u}), Expr::product({x, v})})),
                            "df/dt = y*x' + x*y'");

@@ -181,7 +181,7 @@ auto main() -> int {
                   // - 1.0 for id0 -> [0]
                   // - unknown (0.0) for id4 -> [4]
 
-                  auto build_t1_graph = []() -> TaskGraph {
+                  auto const build_t1_graph = []() -> TaskGraph {
                       TaskGraph g;
                       (void)g.add_task(const_task(0), {}, CostHint{1.0, 0.0});  // id 0
                       (void)g.add_task(const_task(1), {}, CostHint{5.0, 0.0});  // id 1
@@ -261,7 +261,7 @@ auto main() -> int {
                   constexpr double qnan = std::numeric_limits<double>::quiet_NaN();
                   constexpr double inf = std::numeric_limits<double>::infinity();
 
-                  auto build_t6_graph = [&]() -> TaskGraph {
+                  auto const build_t6_graph = [&]() -> TaskGraph {
                       TaskGraph g;
                       (void)g.add_task(const_task(0), {}, CostHint{-1.0, 0.0});   // id 0: negative
                       (void)g.add_task(const_task(1), {}, CostHint{0.0, 0.0});    // id 1: zero

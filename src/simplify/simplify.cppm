@@ -232,7 +232,7 @@ inline constexpr std::size_t memo_threshold = 32;
     if (auto m = as<MulNode>(term.node().value)) {
         const MulNode& mul = **m;
         if (!mul.factors.empty() && is_constant(mul.factors.front())) {
-            Expr coeff = mul.factors.front();
+            Expr const coeff = mul.factors.front();
             if (mul.factors.size() == 2) {
                 return {coeff, mul.factors[1]};
             }
@@ -357,7 +357,7 @@ auto simplify_sum(std::vector<Expr> terms) -> Result<Expr> {
             continue;
         }
         auto [coeff, rest] = split_coefficient(term);
-        auto it = std::ranges::find_if(
+        auto const it = std::ranges::find_if(
             groups, [&rest](const auto& g) { return g.second.is_equivalent_to(rest); });
         if (it == groups.end()) {
             groups.emplace_back(std::move(coeff), std::move(rest));
@@ -418,7 +418,7 @@ auto simplify_product(std::vector<Expr> factors) -> Result<Expr> {
             continue;
         }
         auto [base, exponent] = split_base_exponent(factor);
-        auto it = std::ranges::find_if(
+        auto const it = std::ranges::find_if(
             groups, [&base](const auto& g) { return g.first.is_equivalent_to(base); });
         if (it == groups.end()) {
             groups.emplace_back(std::move(base), std::move(exponent));

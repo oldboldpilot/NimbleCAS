@@ -101,7 +101,7 @@ auto main() -> int {
                       std::vector<double> xa(n, 0.0);
                       std::vector<double> ya(n, -1.0);
                       simd::exp_into(xa, ya);
-                      bool ones = std::ranges::all_of(ya, [](double v) { return v == 1.0; });
+                      bool const ones = std::ranges::all_of(ya, [](double v) { return v == 1.0; });
                       t.expect(ones, std::format("exp(0)==1 over n={}", n));
                   }
                   // Deterministic: identical input twice -> bit-identical output.

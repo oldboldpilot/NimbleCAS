@@ -750,14 +750,14 @@ auto volterra_convolution_laplace(const Expr& f, const Expr& kernel, const Ratio
     }
     // denom = 1 − lambda·k̂(s); simplify it first so its canonical form is the base that the
     // inverse power reuses (a consumer can then cancel Φ·denom == F exactly).
-    Expr raw_denom =
+    Expr const raw_denom =
         Expr::sum({Expr::integer(1), Expr::product({Expr::integer(-1), *lam, *K})});
     auto denom = simplify(raw_denom);
     if (!denom) {
         return denom;
     }
     // Φ(s) = F(s) · denom^{-1}.
-    Expr phi = Expr::product({*F, Expr::power(*denom, Expr::integer(-1))});
+    Expr const phi = Expr::product({*F, Expr::power(*denom, Expr::integer(-1))});
     return simplify(phi);
 }
 

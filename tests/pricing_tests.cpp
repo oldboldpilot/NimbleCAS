@@ -128,7 +128,7 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto call = atm();
                   const auto put = atm().with_type(OptionType::put);
-                  auto straddle = Portfolio::create().add(call, 1.0).add(put, 1.0);
+                  auto const straddle = Portfolio::create().add(call, 1.0).add(put, 1.0);
                   const double c = black_scholes_price(call).value();
                   const double p = black_scholes_price(put).value();
                   t.expect(close(straddle.value().value(), c + p, 1e-9), "straddle value == C + P");
@@ -230,7 +230,7 @@ auto main() -> int {
                   auto dens = terminal_density_svg(atm(), 40.0, 200.0, 128, opt);
                   t.expect(dens.has_value() && dens->find("<svg") != std::string::npos,
                            "terminal density is SVG");
-                  auto curve = price_vs_spot_svg(atm(), 50.0, 150.0, 64, opt);
+                  auto const curve = price_vs_spot_svg(atm(), 50.0, 150.0, 64, opt);
                   t.expect(curve.has_value(), "price-vs-spot curve renders");
               })
         .run();

@@ -131,7 +131,7 @@ auto main() -> int {
                   // R^2 = 1 - (2/3)/(8/3) = 1 - 1/4 = 3/4.
                   const auto X = mat({{ri(1), ri(0)}, {ri(1), ri(1)}, {ri(1), ri(2)}});
                   const auto y = ints({0, 0, 2});
-                  auto beta = nimblecas::ols(X, sp(y)).value();
+                  auto const beta = nimblecas::ols(X, sp(y)).value();
                   t.expect(nimblecas::r_squared(X, sp(y), sp(beta)).value() == rat(3, 4),
                            "R^2 = 3/4 exactly");
               })
@@ -139,7 +139,7 @@ auto main() -> int {
               [](TestContext& t) {
                   const auto X = mat({{ri(1), ri(0)}, {ri(1), ri(1)}, {ri(1), ri(2)}});
                   const auto y = ints({4, 4, 4});  // SS_tot = 0
-                  auto beta = nimblecas::ols(X, sp(y)).value();
+                  auto const beta = nimblecas::ols(X, sp(y)).value();
                   t.expect(nimblecas::r_squared(X, sp(y), sp(beta)).error() ==
                                MathError::domain_error,
                            "constant response => R^2 undefined => domain_error");
@@ -167,7 +167,7 @@ auto main() -> int {
                   //     = [[5/9, -1/3], [-1/3, 1/3]].
                   const auto X = mat({{ri(1), ri(0)}, {ri(1), ri(1)}, {ri(1), ri(2)}});
                   const auto y = ints({0, 0, 2});
-                  auto cov = nimblecas::coefficient_covariance(X, sp(y)).value();
+                  auto const cov = nimblecas::coefficient_covariance(X, sp(y)).value();
                   auto expected = mat({{rat(5, 9), rat(-1, 3)}, {rat(-1, 3), rat(1, 3)}});
                   t.expect(cov.is_equal(expected), "Cov(beta) = [[5/9,-1/3],[-1/3,1/3]] exactly");
                   t.expect(cov.at(0, 1) == cov.at(1, 0), "covariance matrix is symmetric");

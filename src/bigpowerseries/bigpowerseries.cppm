@@ -304,7 +304,7 @@ auto BigPowerSeries::derivative() const -> Result<BigPowerSeries> {
     const std::size_t n = coeffs_.size();
     std::vector<BigRational> d(n);  // all zero; d_{n-1} stays 0 by convention
     for (std::size_t k = 0; k + 1 < n; ++k) {
-        auto factor = BigRational::from_int(static_cast<std::int64_t>(k + 1));
+        auto const factor = BigRational::from_int(static_cast<std::int64_t>(k + 1));
         d[k] = coeffs_[k + 1].multiply(factor);
     }
     return BigPowerSeries(std::move(d));
@@ -314,7 +314,7 @@ auto BigPowerSeries::integrate() const -> Result<BigPowerSeries> {
     const std::size_t n = coeffs_.size();
     std::vector<BigRational> g(n);  // g_0 = 0
     for (std::size_t k = 1; k < n; ++k) {
-        auto denom = BigRational::from_int(static_cast<std::int64_t>(k));
+        auto const denom = BigRational::from_int(static_cast<std::int64_t>(k));
         auto q = coeffs_[k - 1].divide(denom);
         if (!q) {
             return make_error<BigPowerSeries>(q.error());
@@ -367,7 +367,7 @@ auto BigPowerSeries::exp() const -> Result<BigPowerSeries> {
         // s = sum_{i=1..k} i * f_i * e_{k-i}.
         BigRational s;  // 0
         for (std::size_t i = 1; i <= k; ++i) {
-            auto scaled = coeffs_[i].multiply(BigRational::from_int(static_cast<std::int64_t>(i)));
+            auto const scaled = coeffs_[i].multiply(BigRational::from_int(static_cast<std::int64_t>(i)));
             s = s.add(scaled.multiply(e[k - i]));
         }
         // e_k = s / k.

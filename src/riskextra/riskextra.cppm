@@ -270,7 +270,7 @@ constexpr std::int64_t kMaxPeriods = 100'000; // amortisation period cap
     if (n == 0 || n > kMaxMatrixDim) { return false; }
     for (const auto& row : m) {
         if (row.size() != n) { return false; }
-        for (double v : row) {
+        for (double const v : row) {
             if (!std::isfinite(v)) { return false; }
         }
     }
@@ -286,7 +286,7 @@ constexpr std::int64_t kMaxPeriods = 100'000; // amortisation period cap
     if (n == 0 || b.size() != n) { return std::nullopt; }
     for (std::size_t i = 0; i < n; ++i) {
         if (a[i].size() != n) { return std::nullopt; }
-        for (double v : a[i]) {
+        for (double const v : a[i]) {
             if (!std::isfinite(v)) { return std::nullopt; }
         }
         if (!std::isfinite(b[i])) { return std::nullopt; }
@@ -402,7 +402,7 @@ struct Con {
     // No constraints: the feasible region is just x >= 0. Any strictly-negative objective
     // coefficient lets that variable grow without bound; otherwise the optimum is x = 0.
     if (m == 0) {
-        for (double v : c) {
+        for (double const v : c) {
             if (v < -1e-12) { return LinProgResult{LinProgStatus::unbounded, 0.0, {}}; }
         }
         return LinProgResult{LinProgStatus::optimal, 0.0, std::vector<double>(n, 0.0)};
@@ -438,7 +438,7 @@ struct Con {
     // Phase 1: minimise the sum of artificials.
     std::vector<double> cost1(total, 0.0);
     for (std::size_t j = 0; j < total; ++j) { if (is_art[j]) { cost1[j] = 1.0; } }
-    std::vector<bool> none(total, false);
+    std::vector<bool> const none(total, false);
     const int budget = static_cast<int>(20 * (m + total) + 1000);
     if (simplex_run(tab, rhs, basis, cost1, none, budget) == 2) {
         return make_error<LinProgResult>(MathError::not_converged);
@@ -553,7 +553,7 @@ struct LinCon {
         if (!sol) { return std::nullopt; }
         std::vector<double> p((*sol).begin(), (*sol).begin() + static_cast<std::ptrdiff_t>(n));
         double pnorm = 0.0;
-        for (double v : p) { pnorm += v * v; }
+        for (double const v : p) { pnorm += v * v; }
         pnorm = std::sqrt(pnorm);
 
         if (pnorm < 1e-11) {
@@ -645,7 +645,7 @@ struct LinCon {
         return make_error<std::vector<double>>(MathError::domain_error);  // infeasible box/target
     }
     const std::vector<std::vector<double>> G(cov.begin(), cov.end());
-    std::vector<LinCon> eq_copy = eqs;
+    std::vector<LinCon> const eq_copy = eqs;
     auto w = active_set_box_qp(G, eq_copy, lo, hi, feas->x);
     if (!w) { return make_error<std::vector<double>>(MathError::not_converged); }
     // Clamp tiny box excursions from round-off back into [lo, hi].
@@ -701,7 +701,7 @@ auto corr2cov(std::span<const std::vector<double>> corr, std::span<const double>
     if (stddevs.size() != n) {
         return make_error<std::vector<std::vector<double>>>(MathError::domain_error);
     }
-    for (double s : stddevs) {
+    for (double const s : stddevs) {
         if (!std::isfinite(s) || s < 0.0) {
             return make_error<std::vector<std::vector<double>>>(MathError::domain_error);
         }
@@ -741,7 +741,7 @@ auto lower_partial_moment(std::span<const double> returns, double order, double 
         return make_error<double>(MathError::domain_error);
     }
     double acc = 0.0;
-    for (double r : returns) {
+    for (double const r : returns) {
         if (!std::isfinite(r)) { return make_error<double>(MathError::domain_error); }
         const double shortfall = threshold - r;
         if (shortfall > 0.0) { acc += std::pow(shortfall, order); }
@@ -850,7 +850,7 @@ auto simulate_correlated_returns(std::span<const double> mean,
     if (mean.size() != d || n == 0 || n > 100'000 || (d != 0 && n > kMaxSimCells / d)) {
         return make_error<std::vector<std::vector<double>>>(MathError::domain_error);
     }
-    for (double v : mean) {
+    for (double const v : mean) {
         if (!std::isfinite(v)) {
             return make_error<std::vector<std::vector<double>>>(MathError::domain_error);
         }
@@ -878,7 +878,7 @@ auto linprog(std::span<const double> c, std::span<const std::vector<double>> A_l
              std::span<const double> b_eq) -> Result<LinProgResult> {
     const std::size_t n = c.size();
     if (n == 0 || n > kMaxLpDim) { return make_error<LinProgResult>(MathError::domain_error); }
-    for (double v : c) {
+    for (double const v : c) {
         if (!std::isfinite(v)) { return make_error<LinProgResult>(MathError::domain_error); }
     }
     if (A_le.size() != b_le.size() || A_eq.size() != b_eq.size()) {
@@ -903,7 +903,7 @@ auto linprog(std::span<const double> c, std::span<const std::vector<double>> A_l
             std::vector<double> a = A[i];
             double r = b[i];
             int rel = eq ? 1 : 0;
-            for (double v : a) { if (!std::isfinite(v)) { return false; } }
+            for (double const v : a) { if (!std::isfinite(v)) { return false; } }
             if (r < 0.0) {                         // normalise rhs >= 0
                 for (double& v : a) { v = -v; }
                 r = -r;
@@ -940,7 +940,7 @@ auto constrained_efficient_portfolio(std::span<const std::vector<double>> cov,
     if (mean_returns.size() != n || !std::isfinite(target_return)) {
         return make_error<FrontierPoint>(MathError::domain_error);
     }
-    for (double v : mean_returns) {
+    for (double const v : mean_returns) {
         if (!std::isfinite(v)) { return make_error<FrontierPoint>(MathError::domain_error); }
     }
     std::vector<LinCon> eqs;
@@ -1016,7 +1016,7 @@ auto cvar_optimal_weights(std::span<const std::vector<double>> scenarios, double
     if (N == 0 || N > kMaxCvarAssets) { return make_error<CVaRResult>(MathError::domain_error); }
     for (const auto& row : scenarios) {
         if (row.size() != N) { return make_error<CVaRResult>(MathError::domain_error); }
-        for (double v : row) {
+        for (double const v : row) {
             if (!std::isfinite(v)) { return make_error<CVaRResult>(MathError::domain_error); }
         }
     }

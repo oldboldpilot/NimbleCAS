@@ -43,7 +43,7 @@ auto main() -> int {
               [&](TestContext& t) {
                   // A cell that binds x = 2 then evaluates x^2 + 1 -> 5.
                   Session s;
-                  auto r1 = s.execute_cell("x = 2");
+                  auto const r1 = s.execute_cell("x = 2");
                   auto r2 = s.execute_cell("x^2 + 1");
                   t.expect(r1.has_value() && r2.has_value(), "cells execute without hard failure");
                   if (r2.has_value()) {
@@ -66,7 +66,7 @@ auto main() -> int {
         .test("cross_cell_bindings_persist",
               [&](TestContext& t) {
                   Session s;
-                  auto r1 = s.execute_cell("a = 3");
+                  auto const r1 = s.execute_cell("a = 3");
                   auto r2 = s.execute_cell("a + 4");
                   t.expect(r1.has_value() && r2.has_value(), "cells execute");
                   if (r2.has_value()) {

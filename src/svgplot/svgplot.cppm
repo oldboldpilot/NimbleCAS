@@ -96,7 +96,7 @@ struct Mapper {
 [[nodiscard]] auto escape_xml(std::string_view in) -> std::string {
     std::string out;
     out.reserve(in.size());
-    for (char c : in) {
+    for (char const c : in) {
         switch (c) {
             case '&': out += "&amp;"; break;
             case '<': out += "&lt;"; break;

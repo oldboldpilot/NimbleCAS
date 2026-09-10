@@ -235,8 +235,8 @@ struct TaskSpec {
     std::ranges::sort(vals);
     const std::size_t n = vals.size();
     const std::size_t half = n / 2;
-    std::vector<double> lower(vals.begin(), vals.begin() + static_cast<std::ptrdiff_t>(half));
-    std::vector<double> upper(
+    std::vector<double> const lower(vals.begin(), vals.begin() + static_cast<std::ptrdiff_t>(half));
+    std::vector<double> const upper(
         vals.begin() + static_cast<std::ptrdiff_t>((n % 2 == 0) ? half : (half + 1)),
         vals.end());
     return compute_median(upper) - compute_median(lower);
@@ -542,7 +542,7 @@ struct CliOptions {
     bool show_help{false};
 };
 
-[[nodiscard]] auto parse_cli(int argc, char** argv) -> Result<CliOptions> {
+[[nodiscard]] auto parse_cli(int argc, char* const* argv) -> Result<CliOptions> {
     CliOptions opts;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
@@ -649,12 +649,12 @@ auto main(int argc, char** argv) -> int {
         const TaskGraph& g = *g_res;
 
         for (const std::size_t w : k_sgee_workers) {
-            RunConfig base_cfg{
+            RunConfig const base_cfg{
                 .backend = ExecutorBackendKind::sgee_fake,
                 .num_workers = w,
                 .risk_lambda = 0.0,
                 .is_ordered = false};
-            RunConfig ord_cfg{
+            RunConfig const ord_cfg{
                 .backend = ExecutorBackendKind::sgee_fake,
                 .num_workers = w,
                 .risk_lambda = 0.0,
@@ -676,12 +676,12 @@ auto main(int argc, char** argv) -> int {
         if (!g_res.has_value()) { return 1; }
         const TaskGraph& g = *g_res;
 
-        RunConfig base_cfg{
+        RunConfig const base_cfg{
             .backend = ExecutorBackendKind::sgee_fake,
             .num_workers = 4,
             .risk_lambda = 0.0,
             .is_ordered = false};
-        RunConfig ord_cfg{
+        RunConfig const ord_cfg{
             .backend = ExecutorBackendKind::sgee_fake,
             .num_workers = 4,
             .risk_lambda = 0.0,
@@ -702,12 +702,12 @@ auto main(int argc, char** argv) -> int {
         const TaskGraph& g = *g_res;
 
         for (const std::size_t w : k_sgee_workers) {
-            RunConfig base_cfg{
+            RunConfig const base_cfg{
                 .backend = ExecutorBackendKind::sgee_fake,
                 .num_workers = w,
                 .risk_lambda = 0.0,
                 .is_ordered = false};
-            RunConfig ord_cfg{
+            RunConfig const ord_cfg{
                 .backend = ExecutorBackendKind::sgee_fake,
                 .num_workers = w,
                 .risk_lambda = 0.0,
@@ -729,12 +729,12 @@ auto main(int argc, char** argv) -> int {
         const TaskGraph& g = *g_res;
 
         for (const double lambda : {0.0, 0.5, 1.0}) {
-            RunConfig base_cfg{
+            RunConfig const base_cfg{
                 .backend = ExecutorBackendKind::sgee_fake,
                 .num_workers = 4,
                 .risk_lambda = 0.0,
                 .is_ordered = false};
-            RunConfig ord_cfg{
+            RunConfig const ord_cfg{
                 .backend = ExecutorBackendKind::sgee_fake,
                 .num_workers = 4,
                 .risk_lambda = lambda,
@@ -755,12 +755,12 @@ auto main(int argc, char** argv) -> int {
         if (!g_res.has_value()) { return 1; }
         const TaskGraph& g = *g_res;
 
-        RunConfig base_cfg{
+        RunConfig const base_cfg{
             .backend = ExecutorBackendKind::sgee_fake,
             .num_workers = 33,
             .risk_lambda = 0.0,
             .is_ordered = false};
-        RunConfig ord_cfg{
+        RunConfig const ord_cfg{
             .backend = ExecutorBackendKind::sgee_fake,
             .num_workers = 33,
             .risk_lambda = 0.0,
@@ -780,12 +780,12 @@ auto main(int argc, char** argv) -> int {
         if (!g_res.has_value()) { return 1; }
         const TaskGraph& g = *g_res;
 
-        RunConfig base_cfg{
+        RunConfig const base_cfg{
             .backend = ExecutorBackendKind::local_parallel,
             .num_workers = 0,
             .risk_lambda = 0.0,
             .is_ordered = false};
-        RunConfig ord_cfg{
+        RunConfig const ord_cfg{
             .backend = ExecutorBackendKind::local_parallel,
             .num_workers = 0,
             .risk_lambda = 0.0,

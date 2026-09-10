@@ -492,7 +492,7 @@ auto main() -> int {
 
         // A long straddle as a composable Portfolio: value/Greeks/payoff aggregate legs.
         auto book = pr::Portfolio::create();
-        auto& straddle = book.add(call, 1.0).add(put, 1.0);
+        auto const& straddle = book.add(call, 1.0).add(put, 1.0);
         std::println("straddle value           = {:.4f}", straddle.value().value());
                                                      // expect ~ 16.0242 (10.4506 + 5.5735)
         const pr::Greeks sg = straddle.greeks().value();

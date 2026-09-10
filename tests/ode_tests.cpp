@@ -197,7 +197,7 @@ auto main() -> int {
                   // u''(0) = -1. Here u' satisfies w'' = -w with w(0) = 0, w'(0) = -1, so
                   // u' = -sin(x) and u = cos(x). Coefficients to order 8:
                   //   cos(x) = 1 - x^2/2 + x^4/24 - x^6/720.
-                  auto f_third = [](const std::vector<PowerSeries>& y)
+                  auto const f_third = [](const std::vector<PowerSeries>& y)
                       -> nimblecas::Result<PowerSeries> {
                       return y[1].scale(Rational::from_int(-1));  // u''' = -u'
                   };
@@ -252,7 +252,7 @@ auto main() -> int {
                            "empty u0 yields domain_error");
 
                   // A vector field whose output length differs from n = |u0| is a mismatch.
-                  auto wrong_size =
+                  auto const wrong_size =
                       [](const std::vector<PowerSeries>& u)
                       -> nimblecas::Result<std::vector<PowerSeries>> {
                       return std::vector<PowerSeries>{u[0]};  // returns 1, expected 2

@@ -137,7 +137,7 @@ auto main() -> int {
                   t.expect(before.has_value() && !before->has_value(),
                            "an unpublished key is a miss, and a miss is not an error");
 
-                  auto pub = (*memo)->publish(key, full, value);
+                  auto const pub = (*memo)->publish(key, full, value);
                   t.expect(pub.has_value(), "publishing succeeds");
 
                   auto after = (*memo)->lookup(key, full);

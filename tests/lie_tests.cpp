@@ -82,8 +82,8 @@ auto main() -> int {
               [](TestContext& t) {
                   auto a = mat({{1, 2}, {3, 4}});
                   auto b = mat({{0, -1}, {5, 2}});
-                  auto ab = lie_bracket(a, b).value();
-                  auto ba = lie_bracket(b, a).value();
+                  auto const ab = lie_bracket(a, b).value();
+                  auto const ba = lie_bracket(b, a).value();
                   // [A,B] = -[B,A]  <=>  [A,B] + [B,A] = 0.
                   t.expect(ab.add(ba).value() == Matrix::zero(2, 2), "[A,B] = -[B,A]");
               })
@@ -96,10 +96,10 @@ auto main() -> int {
                   const Rational sa = Rational::make(2, 1).value();
                   const Rational sb = Rational::make(-3, 1).value();
 
-                  auto lhs_arg = a.scale(sa).value().add(b.scale(sb).value()).value();
-                  auto lhs = lie_bracket(lhs_arg, c).value();
+                  auto const lhs_arg = a.scale(sa).value().add(b.scale(sb).value()).value();
+                  auto const lhs = lie_bracket(lhs_arg, c).value();
 
-                  auto rhs = lie_bracket(a, c).value().scale(sa).value()
+                  auto const rhs = lie_bracket(a, c).value().scale(sa).value()
                                  .add(lie_bracket(b, c).value().scale(sb).value())
                                  .value();
                   t.expect(lhs == rhs, "[aA+bB, C] = a[A,C] + b[B,C]");
@@ -113,13 +113,13 @@ auto main() -> int {
                        mat({{0, 1, 0}, {1, 0, 2}, {0, 0, 1}}),
                        mat({{1, 1, 1}, {0, 2, 0}, {1, 0, 3}})}};
                   for (const auto& [a, b, c] : triples) {
-                      auto bc = lie_bracket(b, c).value();
-                      auto ca = lie_bracket(c, a).value();
-                      auto ab = lie_bracket(a, b).value();
-                      auto t1 = lie_bracket(a, bc).value();
-                      auto t2 = lie_bracket(b, ca).value();
-                      auto t3 = lie_bracket(c, ab).value();
-                      auto sum = t1.add(t2).value().add(t3).value();
+                      auto const bc = lie_bracket(b, c).value();
+                      auto const ca = lie_bracket(c, a).value();
+                      auto const ab = lie_bracket(a, b).value();
+                      auto const t1 = lie_bracket(a, bc).value();
+                      auto const t2 = lie_bracket(b, ca).value();
+                      auto const t3 = lie_bracket(c, ab).value();
+                      auto const sum = t1.add(t2).value().add(t3).value();
                       t.expect(sum == Matrix::zero(a.rows(), a.cols()), "Jacobi identity holds");
                   }
               })
@@ -131,7 +131,7 @@ auto main() -> int {
                   t.expect(c.dimension() == 3, "so(3) has dimension 3");
 
                   // c^k_ij must equal the Levi-Civita symbol epsilon_{ijk}.
-                  auto epsilon = [](std::size_t i, std::size_t j, std::size_t k) -> std::int64_t {
+                  auto const epsilon = [](std::size_t i, std::size_t j, std::size_t k) -> std::int64_t {
                       if (i == j || j == k || i == k) {
                           return 0;
                       }
@@ -162,7 +162,7 @@ auto main() -> int {
         .test("structure_constants_not_closed",
               [](TestContext& t) {
                   // {L_x, L_y} alone is NOT closed: [L_x,L_y] = L_z leaves the span.
-                  std::vector<Matrix> partial{so3_x(), so3_y()};
+                  std::vector<Matrix> const partial{so3_x(), so3_y()};
                   t.expect(structure_constants(partial).error() == MathError::domain_error,
                            "non-closed basis -> domain_error");
               })
@@ -180,9 +180,9 @@ auto main() -> int {
 
                   // ad_X acts as a linear operator: (ad_{L_x}) applied to the coordinate
                   // vector of L_y (= e_1) yields the coordinates of [L_x,L_y] = L_z (= e_2).
-                  auto ad_x = adjoint_matrix(so3_x(), basis).value();
+                  auto const ad_x = adjoint_matrix(so3_x(), basis).value();
                   auto e1 = mat({{0}, {1}, {0}});
-                  auto image = ad_x.multiply(e1).value();
+                  auto const image = ad_x.multiply(e1).value();
                   t.expect(image == mat({{0}, {0}, {1}}), "ad_{L_x}(L_y) = L_z in coordinates");
               })
         .test("killing_form_so3",
@@ -230,9 +230,9 @@ auto main() -> int {
                   // (I+L) f (I-L) once `order` clears ad_L's nilpotency index.
                   auto l = mat({{0, 1}, {0, 0}});
                   auto f = mat({{1, 2}, {3, 4}});
-                  auto exp_l = Matrix::identity(2).add(l).value();          // I + L
-                  auto exp_neg = Matrix::identity(2).subtract(l).value();   // I - L
-                  auto conj = exp_l.multiply(f).value().multiply(exp_neg).value();
+                  auto const exp_l = Matrix::identity(2).add(l).value();          // I + L
+                  auto const exp_neg = Matrix::identity(2).subtract(l).value();   // I - L
+                  auto const conj = exp_l.multiply(f).value().multiply(exp_neg).value();
 
                   t.expect(adjoint_action_series(l, f, 6).value() == conj,
                            "Ad_{exp L} f series = exp(L) f exp(-L)");

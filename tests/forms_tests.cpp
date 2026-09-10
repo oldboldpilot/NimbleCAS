@@ -148,7 +148,7 @@ auto main() -> int {
                   t.expect(hodge_star(dx, scaled).error() == MathError::not_implemented,
                            "non-Euclidean metric returns not_implemented, never a wrong dual");
                   // Wrong-sized metric is a domain error.
-                  std::vector<std::vector<Expr>> small{{I(1), I(0)}, {I(0), I(1)}};
+                  std::vector<std::vector<Expr>> const small{{I(1), I(0)}, {I(0), I(1)}};
                   t.expect(hodge_star(dx, small).error() == MathError::domain_error,
                            "metric of wrong dimension fails");
               })

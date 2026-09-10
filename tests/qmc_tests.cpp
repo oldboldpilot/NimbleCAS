@@ -260,7 +260,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Extensible/iterative refinement: increasing N reduces the QMC error
                   // (monotonically-ish; here strictly across a wide N gap for the smooth ∫x).
-                  auto f = [](std::span<const double> x) { return x[0]; };
+                  auto const f = [](std::span<const double> x) { return x[0]; };
                   auto coarse = qmc_integrate(f, 1, 64);
                   auto fine = qmc_integrate(f, 1, 4096);
                   t.expect(coarse.has_value() && fine.has_value(), "both refinements succeed");
@@ -296,7 +296,7 @@ auto main() -> int {
                   // The parallel point-batch integrator sums the SAME point evaluations in the
                   // SAME index order as the serial one, so the result is bit-identical (not merely
                   // close) for any thread count.
-                  auto f = [](std::span<const double> p) { return p[0] * p[1] + std::sin(p[0]); };
+                  auto const f = [](std::span<const double> p) { return p[0] * p[1] + std::sin(p[0]); };
                   const std::array<std::uint64_t, 3> Ns{1, 64, 1000};
                   for (const std::uint64_t N : Ns) {
                       auto s = qmc_integrate(f, 2, N);
@@ -323,7 +323,7 @@ auto main() -> int {
                   // Determinism: each replication is a pure function of base.split(r) and the fixed
                   // Halton points, and the mean/variance reduction runs in fixed index order — so
                   // the parallel result is bit-identical to the serial rqmc_integrate.
-                  auto f = [](std::span<const double> p) { return p[0] * p[1]; };
+                  auto const f = [](std::span<const double> p) { return p[0] * p[1]; };
                   const std::uint64_t N = 256;
                   const std::uint64_t reps = 8;
                   const std::uint64_t seed = 12345;
@@ -352,7 +352,7 @@ auto main() -> int {
                   // reducing gives the SAME global estimate as the serial run, bit-for-bit, for
                   // num_shards = 1, 2, 4 — replication i is seeded from base.split(i) independent
                   // of the partition, and the driver reassembles in canonical index order.
-                  auto f = [](std::span<const double> p) { return std::exp(p[0]) * p[1]; };
+                  auto const f = [](std::span<const double> p) { return std::exp(p[0]) * p[1]; };
                   const std::uint64_t N = 128;
                   const std::uint64_t reps = 8;
                   const std::uint64_t seed = 777;
@@ -405,7 +405,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // Adaptive refinement of ∫x. With a tiny budget it stops without converging;
                   // it always terminates and reports a finite estimate near the truth.
-                  auto f = [](std::span<const double> x) { return x[0]; };
+                  auto const f = [](std::span<const double> x) { return x[0]; };
                   auto r = adaptive_qmc(f, 1, 1e-4, 200000, 8, 99);
                   t.expect(r.has_value(), "adaptive_qmc succeeds");
                   if (r) {
@@ -456,7 +456,7 @@ auto main() -> int {
               })
         .test("integrate_domain_errors",
               [](TestContext& t) {
-                  auto f = [](std::span<const double> x) { return x[0]; };
+                  auto const f = [](std::span<const double> x) { return x[0]; };
                   auto d0 = qmc_integrate(f, 0, 100);
                   t.expect(!d0.has_value() && d0.error() == nimblecas::MathError::domain_error,
                            "qmc_integrate(dimension 0) yields domain_error");

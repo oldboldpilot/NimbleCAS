@@ -63,7 +63,7 @@ auto main() -> int {
                   // Two calls with identical (f, a, b, samples, seed) must produce
                   // BIT-IDENTICAL results — the estimator is a deterministic function of
                   // its arguments with no hidden state.
-                  auto f = [](double x) { return x * x * x; };
+                  auto const f = [](double x) { return x * x * x; };
                   auto a = integrate(f, -1.0, 2.0, 50000, 99);
                   auto b = integrate(f, -1.0, 2.0, 50000, 99);
                   t.expect(a.has_value() && b.has_value(), "both integrate() calls succeed");
@@ -131,7 +131,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // pdf(x) = x on [0,1] (unnormalised triangular density), ceiling m=1.
                   // Accepted samples must lie in [0,1] and their mean ~ 2/3.
-                  auto pdf = [](double x) { return x; };
+                  auto const pdf = [](double x) { return x; };
                   auto r = rejection_sample(pdf, 0.0, 1.0, 1.0, 5000, 2024, 10000000);
                   t.expect(r.has_value(), "rejection_sample(pdf=x) succeeds");
                   if (r) {
@@ -152,7 +152,7 @@ auto main() -> int {
               })
         .test("rejection_sample_domain_errors",
               [](TestContext& t) {
-                  auto pdf = [](double x) { return x; };
+                  auto const pdf = [](double x) { return x; };
 
                   auto bad_m = rejection_sample(pdf, 0.0, 1.0, 0.0, 10, 1, 1000);
                   t.expect(!bad_m.has_value(), "rejection_sample(m_bound<=0) fails");
@@ -178,7 +178,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // A tiny trial budget must return promptly with at most `max_trials`
                   // samples and never hang, even though `want` is huge.
-                  auto pdf = [](double x) { return x; };
+                  auto const pdf = [](double x) { return x; };
                   auto r = rejection_sample(pdf, 0.0, 1.0, 1.0, 1000000, 5, 8);
                   t.expect(r.has_value(), "capped rejection_sample succeeds");
                   if (r) {
@@ -193,7 +193,7 @@ auto main() -> int {
                   // "standard deviation 2" set): population variance 32/8 = 4, and the
                   // Bessel-corrected sample variance 32/7 = 4.5714285...
                   const std::array<double, 8> data{2, 4, 4, 4, 5, 5, 7, 9};
-                  std::span<const double> s{data};
+                  std::span<const double> const s{data};
 
                   auto m = sample_mean(s);
                   t.expect(m.has_value(), "sample_mean succeeds");
@@ -218,7 +218,7 @@ auto main() -> int {
               })
         .test("statistics_domain_errors",
               [](TestContext& t) {
-                  std::span<const double> empty{};
+                  std::span<const double> const empty{};
                   auto m = sample_mean(empty);
                   t.expect(!m.has_value() && m.error() == nimblecas::MathError::domain_error,
                            "sample_mean(empty) yields domain_error");
@@ -228,7 +228,7 @@ auto main() -> int {
 
                   // A single element has no unbiased (n-1) variance.
                   const std::array<double, 1> one{42.0};
-                  std::span<const double> single{one};
+                  std::span<const double> const single{one};
                   auto sv = sample_variance(single, true);
                   t.expect(!sv.has_value() && sv.error() == nimblecas::MathError::domain_error,
                            "single-element sample variance yields domain_error");

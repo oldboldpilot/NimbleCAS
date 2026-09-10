@@ -63,7 +63,7 @@ auto main() -> int {
                   // Points on y = 3x - 1: natural cubic spline is that line exactly.
                   auto xs = rats({0, 1, 2, 3});
                   auto ys = rats({-1, 2, 5, 8});
-                  auto sp = CubicSpline::natural(xs, ys).value();
+                  auto const sp = CubicSpline::natural(xs, ys).value();
                   // All moments zero (S'' == 0 everywhere for a line).
                   for (const auto& m : sp.moments()) {
                       t.expect(m == ri(0), "natural line has zero moments");
@@ -71,7 +71,7 @@ auto main() -> int {
                   // Exact line values at several probe points.
                   const std::vector<Rational> probes{ri(0), rat(1, 2), rat(3, 2), rat(5, 2), ri(3)};
                   for (const auto& x : probes) {
-                      auto expected = x.multiply(ri(3)).value().subtract(ri(1)).value();  // 3x - 1
+                      auto const expected = x.multiply(ri(3)).value().subtract(ri(1)).value();  // 3x - 1
                       t.expect(sp.evaluate(x).value() == expected, "spline == line at probe");
                   }
                   // Each piece is literally the line 3x - 1.
@@ -91,7 +91,7 @@ auto main() -> int {
                   }
                   const RationalPoly qp = pfirst(q);   // 6x^2 - 1
                   const RationalPoly qpp = psecond(q); // 12x
-                  auto sp = CubicSpline::clamped(xs, ys, peval(qp, xs.front()),
+                  auto const sp = CubicSpline::clamped(xs, ys, peval(qp, xs.front()),
                                                  peval(qp, xs.back()))
                                 .value();
                   // Every piece equals q exactly (a cubic is its own clamped spline).
@@ -116,7 +116,7 @@ auto main() -> int {
                   // y_0 == y_n required. Periodic spline matches S, S', S'' at the ends.
                   auto xs = rats({0, 1, 2, 3});
                   auto ys = rats({0, 2, -1, 0});  // y_0 == y_3 == 0
-                  auto sp = CubicSpline::periodic(xs, ys).value();
+                  auto const sp = CubicSpline::periodic(xs, ys).value();
                   // Passes through the data.
                   for (std::size_t i = 0; i < xs.size(); ++i) {
                       t.expect(sp.evaluate(xs[i]).value() == ys[i], "periodic passes through node");
@@ -147,7 +147,7 @@ auto main() -> int {
                       ys.push_back(peval(q, x));
                       slopes.push_back(peval(qp, x));
                   }
-                  auto hs = HermiteSpline::from_slopes(xs, ys, slopes).value();
+                  auto const hs = HermiteSpline::from_slopes(xs, ys, slopes).value();
                   for (std::size_t i = 0; i < xs.size(); ++i) {
                       t.expect(hs.evaluate(xs[i]).value() == ys[i], "Hermite hits value");
                       const std::size_t seg = (i == xs.size() - 1) ? hs.piece_count() - 1 : i;
@@ -159,7 +159,7 @@ auto main() -> int {
                   // passes through every value exactly (all over Q).
                   auto px = rats({0, 1, 2});
                   auto py = rats({0, 1, 0});  // peak at x = 1
-                  auto pc = HermiteSpline::pchip(px, py).value();
+                  auto const pc = HermiteSpline::pchip(px, py).value();
                   for (std::size_t i = 0; i < px.size(); ++i) {
                       t.expect(pc.evaluate(px[i]).value() == py[i], "PCHIP passes through node");
                   }
@@ -167,7 +167,7 @@ auto main() -> int {
               })
         .test("bezier_de_casteljau_bernstein_and_subdivision",
               [](TestContext& t) {
-                  auto bez = BezierCurve::make(rats({1, 3, 2, 5})).value();
+                  auto const bez = BezierCurve::make(rats({1, 3, 2, 5})).value();
                   const Rational half = rat(1, 2);
                   // De Casteljau == Bernstein-sum == 21/8 at t = 1/2.
                   const Rational v = bez.evaluate(half).value();
@@ -175,7 +175,7 @@ auto main() -> int {
                   t.expect(bez.evaluate_bernstein(half).value() == v,
                            "Bernstein-sum == de Casteljau");
                   // Subdivision midpoint: left end and right start meet at the curve point.
-                  auto split = nimblecas::bezier_subdivide(bez, half).value();
+                  auto const split = nimblecas::bezier_subdivide(bez, half).value();
                   t.expect(split.left.control_points().back() == v,
                            "left half ends at the split point");
                   t.expect(split.right.control_points().front() == v,
@@ -187,7 +187,7 @@ auto main() -> int {
               })
         .test("bezier_degree_one_is_lerp",
               [](TestContext& t) {
-                  auto bez = BezierCurve::make(rats({2, 8})).value();
+                  auto const bez = BezierCurve::make(rats({2, 8})).value();
                   // (1-t)*2 + t*8 at t = 1/3 is 4.
                   t.expect(bez.evaluate(rat(1, 3)).value() == ri(4), "degree-1 Bezier is the lerp");
                   t.expect(bez.evaluate(ri(0)).value() == ri(2), "lerp at 0 is P0");
@@ -195,9 +195,9 @@ auto main() -> int {
               })
         .test("bezier_power_basis_roundtrip",
               [](TestContext& t) {
-                  auto bez = BezierCurve::make(rats({1, 3, 2, 5})).value();
-                  auto power = bez.to_power_basis().value();
-                  auto back = BezierCurve::from_power_basis(power, bez.degree()).value();
+                  auto const bez = BezierCurve::make(rats({1, 3, 2, 5})).value();
+                  auto const power = bez.to_power_basis().value();
+                  auto const back = BezierCurve::from_power_basis(power, bez.degree()).value();
                   const auto orig = bez.control_points();
                   const auto rec = back.control_points();
                   t.expect(orig.size() == rec.size(), "roundtrip preserves control count");
@@ -211,12 +211,12 @@ auto main() -> int {
               })
         .test("bezier2_two_dimensional",
               [](TestContext& t) {
-                  std::vector<Point2> cps{Point2{.x = ri(0), .y = ri(0)},
+                  std::vector<Point2> const cps{Point2{.x = ri(0), .y = ri(0)},
                                           Point2{.x = ri(2), .y = ri(4)}};
-                  auto bez = nimblecas::BezierCurve2::make(cps).value();
-                  auto p = bez.evaluate(rat(1, 2)).value();
+                  auto const bez = nimblecas::BezierCurve2::make(cps).value();
+                  auto const p = bez.evaluate(rat(1, 2)).value();
                   t.expect(p == (Point2{.x = ri(1), .y = ri(2)}), "2-D Bezier midpoint exact");
-                  auto elevated = bez.elevate().value();
+                  auto const elevated = bez.elevate().value();
                   t.expect(elevated.degree() == 2, "elevation raises degree");
                   t.expect(elevated.evaluate(rat(1, 3)).value() == bez.evaluate(rat(1, 3)).value(),
                            "elevation preserves the curve");
@@ -224,9 +224,9 @@ auto main() -> int {
         .test("bspline_partition_of_unity_and_endpoint_interpolation",
               [](TestContext& t) {
                   // Clamped quadratic knot vector; 5 control points.
-                  auto knots = rats({0, 0, 0, 1, 2, 3, 3, 3});
+                  auto const knots = rats({0, 0, 0, 1, 2, 3, 3, 3});
                   auto ctrl = rats({1, 2, 0, 3, 1});
-                  auto bs = BSpline::make(knots, ctrl, 2).value();
+                  auto const bs = BSpline::make(knots, ctrl, 2).value();
                   // Partition of unity at an interior rational u: sum_i N_{i,2}(u) == 1.
                   const Rational u = rat(3, 2);
                   Rational sum{};
@@ -247,9 +247,9 @@ auto main() -> int {
                   // case that used to short-circuit N to 1 at U[0]/U[m] even when the end is
                   // not clamped. Here N_{0,1}(0) is exactly 0, NOT 1: the (u-U0)/(U1-U0)
                   // factor vanishes at u=U[0]=0.
-                  auto knots = rats({0, 1, 2, 3, 4});
-                  auto ctrl = rats({1, 2, 3});
-                  auto bs = BSpline::make(knots, ctrl, 1).value();
+                  auto const knots = rats({0, 1, 2, 3, 4});
+                  auto const ctrl = rats({1, 2, 3});
+                  auto const bs = BSpline::make(knots, ctrl, 1).value();
                   t.expect(bs.basis_function(0, ri(0)).value() == ri(0),
                            "open-vector N_{0,1}(0) is 0, not a clamped 1");
                   t.expect(bs.basis_function(2, ri(4)).value() == ri(0),
@@ -265,10 +265,10 @@ auto main() -> int {
         .test("nurbs_rational_weights_exact",
               [](TestContext& t) {
                   // Degree-1 clamped NURBS with weights {1, 3}: C(1/2) = 3/2 exactly.
-                  auto knots = rats({0, 0, 1, 1});
-                  auto ctrl = rats({0, 2});
-                  auto weights = rats({1, 3});
-                  auto nb = NurbsCurve::make(knots, ctrl, weights, 1).value();
+                  auto const knots = rats({0, 0, 1, 1});
+                  auto const ctrl = rats({0, 2});
+                  auto const weights = rats({1, 3});
+                  auto const nb = NurbsCurve::make(knots, ctrl, weights, 1).value();
                   t.expect(nb.evaluate(rat(1, 2)).value() == rat(3, 2),
                            "rational-weight NURBS evaluates exactly");
                   // Endpoints are the control points regardless of weight.
@@ -293,7 +293,7 @@ auto main() -> int {
                   t.expect(CubicSpline::periodic(px, py).error() == MathError::domain_error,
                            "periodic spline requires y_0 == y_n");
                   // Bezier t outside [0, 1].
-                  auto bez = BezierCurve::make(rats({1, 2, 3})).value();
+                  auto const bez = BezierCurve::make(rats({1, 2, 3})).value();
                   t.expect(bez.evaluate(ri(2)).error() == MathError::domain_error,
                            "Bezier rejects t > 1");
                   t.expect(bez.evaluate(ri(-1)).error() == MathError::domain_error,
@@ -302,14 +302,14 @@ auto main() -> int {
                   t.expect(BezierCurve::make({}).error() == MathError::domain_error,
                            "Bezier rejects empty control set");
                   // B-spline knot/size-relation violation.
-                  auto knots = rats({0, 0, 1, 1});
-                  auto ctrl = rats({0, 1, 2});  // wrong count for degree 1 (needs 2)
+                  auto const knots = rats({0, 0, 1, 1});
+                  auto const ctrl = rats({0, 1, 2});  // wrong count for degree 1 (needs 2)
                   t.expect(BSpline::make(knots, ctrl, 1).error() == MathError::domain_error,
                            "B-spline rejects a bad size relation");
                   // NURBS weight/control mismatch.
-                  auto nk = rats({0, 0, 1, 1});
-                  auto nc = rats({0, 2});
-                  auto nw = rats({1});  // wrong weight count
+                  auto const nk = rats({0, 0, 1, 1});
+                  auto const nc = rats({0, 2});
+                  auto const nw = rats({1});  // wrong weight count
                   t.expect(NurbsCurve::make(nk, nc, nw, 1).error() == MathError::domain_error,
                            "NURBS rejects weight/control mismatch");
               })

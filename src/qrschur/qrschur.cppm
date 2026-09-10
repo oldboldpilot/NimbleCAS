@@ -176,13 +176,13 @@ void hessenberg_orthes(std::vector<double>& H, std::vector<double>& V, std::ptrd
     const std::ptrdiff_t low = 0;
     const std::ptrdiff_t high = N - 1;
     std::vector<double> ort(static_cast<std::size_t>(N), 0.0);
-    auto Hx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
+    auto const Hx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
         return H[static_cast<std::size_t>(i * N + j)];
     };
-    auto Vx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
+    auto const Vx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
         return V[static_cast<std::size_t>(i * N + j)];
     };
-    auto O = [&](std::ptrdiff_t i) -> double& { return ort[static_cast<std::size_t>(i)]; };
+    auto const O = [&](std::ptrdiff_t i) -> double& { return ort[static_cast<std::size_t>(i)]; };
 
     for (std::ptrdiff_t m = low + 1; m <= high - 1; ++m) {
         // Scale the column below the diagonal to avoid under/overflow.
@@ -266,10 +266,10 @@ void hessenberg_orthes(std::vector<double>& H, std::vector<double>& V, std::ptrd
 // eigenvector back-substitution of hqr2 is deliberately NOT performed).
 [[nodiscard]] auto schur_qr(std::vector<double>& H, std::vector<double>& V, std::ptrdiff_t N,
                             double tol, std::size_t max_iter) -> std::optional<MathError> {
-    auto Hx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
+    auto const Hx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
         return H[static_cast<std::size_t>(i * N + j)];
     };
-    auto Vx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
+    auto const Vx = [&](std::ptrdiff_t i, std::ptrdiff_t j) -> double& {
         return V[static_cast<std::size_t>(i * N + j)];
     };
     const std::ptrdiff_t low = 0;

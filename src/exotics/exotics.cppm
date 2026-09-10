@@ -641,7 +641,7 @@ auto bivariate_normal_cdf(double a, double b, double rho) -> double {
     constexpr int steps = 2000;  // even
     const double h = rho / static_cast<double>(steps);
     const double two_pi = 2.0 * std::numbers::pi;
-    auto integrand = [&](double t) -> double {
+    auto const integrand = [&](double t) -> double {
         const double omt = 1.0 - t * t;
         return std::exp(-(a * a - 2.0 * t * a * b + b * b) / (2.0 * omt)) /
                (two_pi * std::sqrt(omt));
@@ -676,14 +676,14 @@ auto geske_compound(const OptionSpec& spec, double strike1, double strike2, doub
     }
     // Critical spot S* at t1 where the (T2 - t1)-maturity call is worth exactly strike1.
     const double tau = T2 - t1;
-    auto call_at = [&](double s) -> double {
+    auto const call_at = [&](double s) -> double {
         auto c = bs_call(s, strike2, r, qd, sig, tau);
         return c ? *c : std::numeric_limits<double>::quiet_NaN();
     };
     double lo = 1e-8;
     double hi = std::max(S, strike2) * 100.0;
     double flo = call_at(lo) - strike1;
-    double fhi = call_at(hi) - strike1;
+    double const fhi = call_at(hi) - strike1;
     if (!std::isfinite(flo) || !std::isfinite(fhi) || (flo > 0.0) == (fhi > 0.0)) {
         // The call value is monotone in spot from 0 to unbounded, so a sign change must
         // exist; failing to bracket it means the sub-problem is degenerate.
@@ -753,7 +753,7 @@ auto basket_mc(std::span<const BasketAsset> assets, std::span<const double> corr
     // A non-finite correlation entry must be rejected up front: a NaN reaching the Cholesky
     // pivot test (s <= 0.0) would slip through (NaN<=0 is false), giving sqrt(NaN) and a NaN
     // McResult returned as a value — an honesty violation. Same for a non-finite asset field.
-    for (double c : correlation) {
+    for (double const c : correlation) {
         if (!std::isfinite(c)) { return make_error<McResult>(MathError::domain_error); }
     }
     for (const auto& a : assets) {

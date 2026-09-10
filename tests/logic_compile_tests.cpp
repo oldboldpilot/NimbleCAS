@@ -141,7 +141,7 @@ auto main() -> int {
                   };
 
                   for (const Target target : {Target::cpp, Target::cuda, Target::triton}) {
-                      auto comp = is_compilable(p, sig, target);
+                      auto const comp = is_compilable(p, sig, target);
                       t.expect(comp.has_value(),
                                "is_compilable succeeds for valid predicate on target");
                       auto src = compile(p, sig, target);

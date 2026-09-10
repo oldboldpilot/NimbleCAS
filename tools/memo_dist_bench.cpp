@@ -179,8 +179,8 @@ inline constexpr std::uint64_t k_spin_init = 1ULL;
     std::ranges::sort(vals);
     const std::size_t n = vals.size();
     const std::size_t half = n / 2;
-    std::vector<double> lower(vals.begin(), vals.begin() + static_cast<std::ptrdiff_t>(half));
-    std::vector<double> upper(
+    std::vector<double> const lower(vals.begin(), vals.begin() + static_cast<std::ptrdiff_t>(half));
+    std::vector<double> const upper(
         vals.begin() + static_cast<std::ptrdiff_t>((n % 2 == 0) ? half : (half + 1)),
         vals.end());
     return compute_median(upper) - compute_median(lower);
@@ -292,7 +292,7 @@ struct CliOptions {
     return result;
 }
 
-[[nodiscard]] auto parse_cli(int argc, char** argv) -> Result<CliOptions> {
+[[nodiscard]] auto parse_cli(int argc, char* const* argv) -> Result<CliOptions> {
     CliOptions opts;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];

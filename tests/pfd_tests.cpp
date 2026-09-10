@@ -110,7 +110,7 @@ auto main() -> int {
                   // coprime linear factors are NOT separated (that needs factoring).
                   auto a = ipoly({1});
                   auto b = ipoly({0, -1, 1});  // x^2 - x = x (x - 1)
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   t.expect(pf.terms.size() == 1, "one merged square-free term");
                   auto whole = find_num(pf, ipoly({0, -1, 1}), 1);
@@ -122,7 +122,7 @@ auto main() -> int {
                   // (x + 1) / x^2 = 1/x + 1/x^2.
                   auto a = ipoly({1, 1});
                   auto b = ipoly({0, 0, 1});  // x^2
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   auto c1 = find_num(pf, ipoly({0, 1}), 1);
                   auto c2 = find_num(pf, ipoly({0, 1}), 2);
@@ -136,7 +136,7 @@ auto main() -> int {
                   // polynomial part x; the square-free remainder stays over x^2 - 1.
                   auto a = ipoly({0, 0, 0, 1});
                   auto b = ipoly({-1, 0, 1});  // x^2 - 1
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_equal(ipoly({0, 1})), "polynomial part is x");
                   t.expect(pf.terms.size() == 1, "one square-free proper term");
                   auto n = find_num(pf, ipoly({-1, 0, 1}), 1);  // over x^2 - 1
@@ -148,7 +148,7 @@ auto main() -> int {
                   // 1 / (2x - 2) = (1/2)/(x - 1): the leading 2 folds into the numerator.
                   auto a = ipoly({1});
                   auto b = ipoly({-2, 2});  // 2x - 2
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   auto n = find_num(pf, ipoly({-1, 1}), 1);
                   t.expect(n && n->is_equal(cpoly(1, 2)), "numerator over (x-1) is 1/2");
@@ -159,7 +159,7 @@ auto main() -> int {
                   // 1 / (x^2 (x - 1)) = -1/x - 1/x^2 + 1/(x - 1).
                   auto a = ipoly({1});
                   auto b = ipoly({0, 0, -1, 1});  // x^3 - x^2 = x^2 (x - 1)
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   auto x1 = find_num(pf, ipoly({0, 1}), 1);
                   auto x2 = find_num(pf, ipoly({0, 1}), 2);
@@ -177,7 +177,7 @@ auto main() -> int {
                   // to the input; x and x^2+1 are NOT separated (that needs factoring).
                   auto a = ipoly({1, 3});
                   auto b = ipoly({0, 1, 0, 1});  // x^3 + x = x (x^2 + 1), square-free
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   t.expect(pf.terms.size() == 1, "one square-free term (not split further)");
                   auto whole = find_num(pf, ipoly({0, 1, 0, 1}), 1);
@@ -191,7 +191,7 @@ auto main() -> int {
                   // x^3 / (x^2 + 1)^2 = x/(x^2 + 1) - x/(x^2 + 1)^2.
                   auto a = ipoly({0, 0, 0, 1});
                   auto b = ipoly({1, 0, 2, 0, 1});  // (x^2 + 1)^2 = x^4 + 2x^2 + 1
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   auto c1 = find_num(pf, ipoly({1, 0, 1}), 1);  // over (x^2 + 1)
                   auto c2 = find_num(pf, ipoly({1, 0, 1}), 2);  // over (x^2 + 1)^2
@@ -205,8 +205,8 @@ auto main() -> int {
                   // suffix-product Bezout chain (m = 3): B = x (x-1)^2 (x+1)^3.
                   // x (x-1)^2 = x^3 - 2x^2 + x; (x+1)^3 = x^3 + 3x^2 + 3x + 1.
                   auto a = ipoly({1});
-                  auto b = ipoly({0, 1, -2, 1}).multiply(ipoly({1, 3, 3, 1})).value();
-                  auto pf = partial_fractions(a, b).value();
+                  auto const b = ipoly({0, 1, -2, 1}).multiply(ipoly({1, 3, 3, 1})).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   // The split must reach the highest power of each repeated base.
                   t.expect(find_num(pf, ipoly({-1, 1}), 2).has_value(),
@@ -223,7 +223,7 @@ auto main() -> int {
                   // x^2 / (x - 1)^3 = 1/(x-1) + 2/(x-1)^2 + 1/(x-1)^3.
                   auto a = ipoly({0, 0, 1});
                   auto b = ipoly({-1, 3, -3, 1});  // (x - 1)^3
-                  auto pf = partial_fractions(a, b).value();
+                  auto const pf = partial_fractions(a, b).value();
                   t.expect(pf.polynomial_part.is_zero(), "proper: no polynomial part");
                   auto c1 = find_num(pf, ipoly({-1, 1}), 1);
                   auto c2 = find_num(pf, ipoly({-1, 1}), 2);
@@ -240,11 +240,11 @@ auto main() -> int {
                                MathError::division_by_zero,
                            "zero denominator fails");
                   // A/B with B a constant is purely polynomial: (2x)/2 = x.
-                  auto pf = partial_fractions(ipoly({0, 2}), ipoly({2})).value();
+                  auto const pf = partial_fractions(ipoly({0, 2}), ipoly({2})).value();
                   t.expect(pf.terms.empty(), "constant denominator: no proper terms");
                   t.expect(pf.polynomial_part.is_equal(ipoly({0, 1})), "polynomial part is x");
                   // Non-reduced input still decomposes correctly: x / x^2 = 1/x.
-                  auto pf2 = partial_fractions(ipoly({0, 1}), ipoly({0, 0, 1})).value();
+                  auto const pf2 = partial_fractions(ipoly({0, 1}), ipoly({0, 0, 1})).value();
                   auto c1 = find_num(pf2, ipoly({0, 1}), 1);
                   t.expect(c1 && c1->is_equal(cpoly(1, 1)), "x/x^2 reduces to 1/x");
                   t.expect(reconstructs(ipoly({0, 1}), ipoly({0, 0, 1}), pf2),

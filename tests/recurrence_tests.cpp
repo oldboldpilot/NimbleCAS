@@ -86,10 +86,10 @@ auto main() -> int {
                   // a_n = 5 a_{n-1} - 6 a_{n-2}  =>  x^2 - 5x + 6 = (x-2)(x-3).
                   const auto c = coeffs({5, -6});
                   const std::span<const Rational> s{c};
-                  auto poly = nimblecas::characteristic_polynomial(s).value();
+                  auto const poly = nimblecas::characteristic_polynomial(s).value();
                   t.expect(poly.is_equal(ipoly({6, -5, 1})), "char poly is x^2 - 5x + 6");
 
-                  auto roots = nimblecas::characteristic_roots(s).value();
+                  auto const roots = nimblecas::characteristic_roots(s).value();
                   t.expect(roots_equal(roots, {ratroot(2, 1), ratroot(3, 1)}),
                            "characteristic roots are {2:1, 3:1}");
                   t.expect(nimblecas::all_roots_rational(s).value(),
@@ -100,10 +100,10 @@ auto main() -> int {
                   // a_n = 2 a_{n-1} - a_{n-2}  =>  x^2 - 2x + 1 = (x-1)^2.
                   const auto c = coeffs({2, -1});
                   const std::span<const Rational> s{c};
-                  auto poly = nimblecas::characteristic_polynomial(s).value();
+                  auto const poly = nimblecas::characteristic_polynomial(s).value();
                   t.expect(poly.is_equal(ipoly({1, -2, 1})), "char poly is (x-1)^2");
 
-                  auto roots = nimblecas::characteristic_roots(s).value();
+                  auto const roots = nimblecas::characteristic_roots(s).value();
                   t.expect(roots_equal(roots, {ratroot(1, 2)}),
                            "characteristic root is {1:2}");
                   t.expect(nimblecas::all_roots_rational(s).value(),
@@ -114,10 +114,10 @@ auto main() -> int {
                   // Fibonacci a_n = a_{n-1} + a_{n-2}  =>  x^2 - x - 1 (golden ratio roots).
                   const auto c = coeffs({1, 1});
                   const std::span<const Rational> s{c};
-                  auto poly = nimblecas::characteristic_polynomial(s).value();
+                  auto const poly = nimblecas::characteristic_polynomial(s).value();
                   t.expect(poly.is_equal(ipoly({-1, -1, 1})), "char poly is x^2 - x - 1");
 
-                  auto roots = nimblecas::characteristic_roots(s).value();
+                  auto const roots = nimblecas::characteristic_roots(s).value();
                   t.expect(roots.empty(), "no rational characteristic roots");
                   t.expect(!nimblecas::all_roots_rational(s).value(),
                            "does not split over Q (irrational roots)");
@@ -128,11 +128,11 @@ auto main() -> int {
                   //   =>  x^3 - 6x^2 + 11x - 6 = (x-1)(x-2)(x-3).
                   const auto c = coeffs({6, -11, 6});
                   const std::span<const Rational> s{c};
-                  auto poly = nimblecas::characteristic_polynomial(s).value();
+                  auto const poly = nimblecas::characteristic_polynomial(s).value();
                   t.expect(poly.is_equal(ipoly({-6, 11, -6, 1})),
                            "char poly is x^3 - 6x^2 + 11x - 6");
 
-                  auto roots = nimblecas::characteristic_roots(s).value();
+                  auto const roots = nimblecas::characteristic_roots(s).value();
                   t.expect(roots_equal(roots, {ratroot(1, 1), ratroot(2, 1), ratroot(3, 1)}),
                            "characteristic roots are {1:1, 2:1, 3:1}");
                   t.expect(nimblecas::all_roots_rational(s).value(),
@@ -158,7 +158,7 @@ auto main() -> int {
                   //   general A*2^n + B*3^n; A = -1, B = 1  =>  a_n = 3^n - 2^n.
                   const auto c = coeffs({5, -6});
                   const auto init = coeffs({0, 1});
-                  auto cf = nimblecas::closed_form(c, init).value();
+                  auto const cf = nimblecas::closed_form(c, init).value();
                   reproduces(t, cf, {0, 1, 5, 19, 65, 211});
               })
         .test("closed_form_negative_root",
@@ -167,7 +167,7 @@ auto main() -> int {
                   //   A*2^n + B*(-1)^n with A = 1, B = 1  =>  a_n = 2^n + (-1)^n.
                   const auto c = coeffs({1, 2});
                   const auto init = coeffs({2, 1});
-                  auto cf = nimblecas::closed_form(c, init).value();
+                  auto const cf = nimblecas::closed_form(c, init).value();
                   reproduces(t, cf, {2, 1, 5, 7, 17, 31});
               })
         .test("closed_form_repeated_root",
@@ -176,7 +176,7 @@ auto main() -> int {
                   //   (A + B n) 2^n with A = 1, B = 1  =>  a_n = (n + 1) 2^n.
                   const auto c = coeffs({4, -4});
                   const auto init = coeffs({1, 4});
-                  auto cf = nimblecas::closed_form(c, init).value();
+                  auto const cf = nimblecas::closed_form(c, init).value();
                   reproduces(t, cf, {1, 4, 12, 32, 80, 192});
               })
         .test("closed_form_cubic_three_roots",
@@ -186,7 +186,7 @@ auto main() -> int {
                   //   matching the sequence the recurrence itself generates.
                   const auto c = coeffs({6, -11, 6});
                   const auto init = coeffs({0, 1, 5});
-                  auto cf = nimblecas::closed_form(c, init).value();
+                  auto const cf = nimblecas::closed_form(c, init).value();
                   // 0,1,5 then a_n = 6 a_{n-1} - 11 a_{n-2} + 6 a_{n-3}:
                   //   a_3 = 6*5 - 11*1 + 6*0 = 19; a_4 = 6*19 - 11*5 + 6*1 = 65;
                   //   a_5 = 6*65 - 11*19 + 6*5 = 211.
@@ -219,7 +219,7 @@ auto main() -> int {
                   // irrational (its advantage over the closed form).
                   const auto c = coeffs({1, 1});
                   const auto init = coeffs({0, 1});
-                  auto gf = nimblecas::generating_function(c, init).value();
+                  auto const gf = nimblecas::generating_function(c, init).value();
                   t.expect(gf.numerator.is_equal(ipoly({0, 1})), "numerator is x");
                   t.expect(gf.denominator.is_equal(ipoly({1, -1, -1})),
                            "denominator is 1 - x - x^2");
@@ -230,7 +230,7 @@ auto main() -> int {
                   //   (= 1/(1-3x) - 1/(1-2x), the GF of 3^n - 2^n).
                   const auto c = coeffs({5, -6});
                   const auto init = coeffs({0, 1});
-                  auto gf = nimblecas::generating_function(c, init).value();
+                  auto const gf = nimblecas::generating_function(c, init).value();
                   t.expect(gf.numerator.is_equal(ipoly({0, 1})), "numerator is x");
                   t.expect(gf.denominator.is_equal(ipoly({1, -5, 6})),
                            "denominator is 1 - 5x + 6x^2");

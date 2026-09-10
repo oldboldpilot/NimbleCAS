@@ -127,7 +127,7 @@ auto main() -> int {
                   // Classic SPD example; its exact LDL^T has L unit-lower and D = diag(4,1,9),
                   // all perfect-square pivots (so it is genuinely positive definite over Q).
                   auto a = mat({{4, 12, -16}, {12, 37, -43}, {-16, -43, 98}});
-                  auto ldlt = ldlt_decompose(a).value();
+                  auto const ldlt = ldlt_decompose(a).value();
 
                   auto expected_l = mat({{1, 0, 0}, {3, 1, 0}, {-4, 5, 1}});
                   auto expected_d = diag({ri(4), ri(1), ri(9)});
@@ -150,10 +150,10 @@ auto main() -> int {
                   // An indefinite symmetric matrix: LDL^T exists (no zero pivot) but a pivot is
                   // negative, and the predicate agrees by returning false.
                   auto indef = mat({{1, 2}, {2, 1}});  // eigenvalues 3, -1
-                  auto ldlt2 = ldlt_decompose(indef).value();
+                  auto const ldlt2 = ldlt_decompose(indef).value();
                   t.expect(ldlt2.d.at(0, 0) == ri(1) && ldlt2.d.at(1, 1) == ri(-3),
                            "indefinite pivots are (1, -3)");
-                  bool all_pos2 = ldlt2.d.at(0, 0).numerator() > 0 && ldlt2.d.at(1, 1).numerator() > 0;
+                  bool const all_pos2 = ldlt2.d.at(0, 0).numerator() > 0 && ldlt2.d.at(1, 1).numerator() > 0;
                   t.expect(!all_pos2, "a pivot is non-positive for the indefinite matrix");
                   t.expect(is_symmetric_positive_definite(indef) == all_pos2,
                            "predicate agrees: indefinite matrix is not positive definite");
@@ -167,8 +167,8 @@ auto main() -> int {
                   auto a = mat({{2, -1, 0}, {-1, 2, -1}, {0, -1, 2}});
                   auto b = col({ri(1), ri(1), ri(1)});
 
-                  auto cg = conjugate_gradient_steps(a, b).value();
-                  auto dense = a.solve(b).value();
+                  auto const cg = conjugate_gradient_steps(a, b).value();
+                  auto const dense = a.solve(b).value();
 
                   // The exact rational solution is (3/2, 2, 3/2).
                   auto expected = col({rat(3, 2), ri(2), rat(3, 2)});
@@ -187,24 +187,24 @@ auto main() -> int {
                   // A Hurwitz companion matrix (eigenvalues -1, -2). The unique P of
                   // A^T P + P A = -I is exactly [[5/4, 1/4], [1/4, 1/4]] (positive definite).
                   auto a = mat({{0, 1}, {-2, -3}});
-                  auto at = a.transpose().value();
+                  auto const at = a.transpose().value();
                   auto neg_i = neg_identity(2);
 
                   // control::lyapunov_solve(A) solves A^T P + P A = -I directly (1-arg overload).
-                  auto p_control = nimblecas::lyapunov_solve(a).value();
+                  auto const p_control = nimblecas::lyapunov_solve(a).value();
                   // semigroup::lyapunov_equation(a, c) solves a X + X a^T = c; with a = A^T, c = -I
                   // this is A^T X + X A = -I — the SAME equation, via an independent Kronecker
                   // vectorization / Sylvester code path.
-                  auto p_semigroup = nimblecas::lyapunov_equation(at, neg_i).value();
+                  auto const p_semigroup = nimblecas::lyapunov_equation(at, neg_i).value();
                   // A third exact route: semigroup::sylvester_solve(A^T, A, -I) is A^T X + X A = -I.
-                  auto p_sylvester = nimblecas::sylvester_solve(at, a, neg_i).value();
+                  auto const p_sylvester = nimblecas::sylvester_solve(at, a, neg_i).value();
                   // A fourth: analysis owns the canonical lyapunov_solve(A, Q) solving
                   // A^T P + P A = -Q; with Q = I it matches the others. (This co-links analysis
                   // with semigroup and control — previously impossible due to a duplicate-symbol
                   // collision on these names, now resolved by renaming the semigroup/control copies.)
-                  auto p_analysis = nimblecas::lyapunov_solve(a, Matrix::identity(2)).value();
+                  auto const p_analysis = nimblecas::lyapunov_solve(a, Matrix::identity(2)).value();
 
-                  auto expected_p = Matrix::from_rows({{rat(5, 4), rat(1, 4)},
+                  auto const expected_p = Matrix::from_rows({{rat(5, 4), rat(1, 4)},
                                                        {rat(1, 4), rat(1, 4)}})
                                         .value();
                   t.expect(p_control == expected_p, "control Lyapunov P == [[5/4,1/4],[1/4,1/4]]");
@@ -213,7 +213,7 @@ auto main() -> int {
                   t.expect(p_control == p_analysis, "control P == analysis P exactly over Q (4-way agreement)");
 
                   // Residual check: A^T P + P A must equal -I on the nose.
-                  auto residual = at.multiply(p_control).value().add(p_control.multiply(a).value()).value();
+                  auto const residual = at.multiply(p_control).value().add(p_control.multiply(a).value()).value();
                   t.expect(residual == neg_i, "A^T P + P A == -I exactly");
 
                   // P is positive definite, cross-certified by two independent predicates.
@@ -226,25 +226,25 @@ auto main() -> int {
               [](TestContext& t) {
                   // Stable (Hurwitz) A: every exact stability route must return true.
                   auto stable = mat({{0, 1}, {-2, -3}});
-                  bool s_lyap = nimblecas::is_lyapunov_stable(stable).value();   // control, Lyapunov/Sylvester
-                  bool s_hurwitz = nimblecas::is_hurwitz(stable).value();         // semigroup, Routh-Hurwitz
-                  bool s_routh = is_asymptotically_stable(stable).value();        // dynamics, Routh-Hurwitz
+                  bool const s_lyap = nimblecas::is_lyapunov_stable(stable).value();   // control, Lyapunov/Sylvester
+                  bool const s_hurwitz = nimblecas::is_hurwitz(stable).value();         // semigroup, Routh-Hurwitz
+                  bool const s_routh = is_asymptotically_stable(stable).value();        // dynamics, Routh-Hurwitz
                   t.expect(s_lyap && s_hurwitz && s_routh, "stable A: all three verdicts are true");
                   t.expect(s_lyap == s_hurwitz && s_hurwitz == s_routh,
                            "stable A: Lyapunov and Routh-Hurwitz verdicts agree");
 
                   // Unstable A (eigenvalues +1, +2 in the right half-plane).
                   auto unstable = mat({{1, 0}, {0, 2}});
-                  bool u_lyap = nimblecas::is_lyapunov_stable(unstable).value();
-                  bool u_hurwitz = nimblecas::is_hurwitz(unstable).value();
-                  bool u_routh = is_asymptotically_stable(unstable).value();
+                  bool const u_lyap = nimblecas::is_lyapunov_stable(unstable).value();
+                  bool const u_hurwitz = nimblecas::is_hurwitz(unstable).value();
+                  bool const u_routh = is_asymptotically_stable(unstable).value();
                   t.expect(!u_lyap && !u_hurwitz && !u_routh, "unstable A: all three verdicts are false");
                   t.expect(u_lyap == u_hurwitz && u_hurwitz == u_routh,
                            "unstable A: Lyapunov and Routh-Hurwitz verdicts agree");
 
                   // The unstable Lyapunov solution exists but is NOT positive definite, and both
                   // definiteness predicates agree on that.
-                  auto p_u = nimblecas::lyapunov_solve(unstable).value();
+                  auto const p_u = nimblecas::lyapunov_solve(unstable).value();
                   t.expect(!is_symmetric_positive_definite(p_u),
                            "matstruct: unstable Lyapunov P is not positive definite");
                   t.expect(!nimblecas::is_spd(p_u).value(),
@@ -265,8 +265,8 @@ auto main() -> int {
 
                   // Structure constants c^k_ij with [X_i,X_j] = sum_k c^k_ij X_k, basis order
                   // {L_x, L_y, L_z} = {0,1,2}. These must be the Levi-Civita symbol epsilon_ijk.
-                  std::vector<Matrix> basis{lx, ly, lz};
-                  auto sc = structure_constants(basis).value();
+                  std::vector<Matrix> const basis{lx, ly, lz};
+                  auto const sc = structure_constants(basis).value();
                   t.expect(sc.dimension() == 3, "so(3) has a 3-dimensional basis");
                   t.expect(sc.at(0, 1, 2) == ri(1), "c^z_{xy} == +1 (epsilon_{012})");
                   t.expect(sc.at(1, 2, 0) == ri(1), "c^x_{yz} == +1 (epsilon_{120})");
@@ -284,10 +284,10 @@ auto main() -> int {
                   t.expect(killing_form(ly, lz, basis).value() == ri(0), "K(L_y, L_z) == 0 (orthogonal)");
 
                   // Jacobi identity [X,[Y,Z]] + [Y,[Z,X]] + [Z,[X,Y]] == 0 exactly.
-                  auto j1 = lie_bracket(lx, lie_bracket(ly, lz).value()).value();
-                  auto j2 = lie_bracket(ly, lie_bracket(lz, lx).value()).value();
-                  auto j3 = lie_bracket(lz, lie_bracket(lx, ly).value()).value();
-                  auto jac = j1.add(j2).value().add(j3).value();
+                  auto const j1 = lie_bracket(lx, lie_bracket(ly, lz).value()).value();
+                  auto const j2 = lie_bracket(ly, lie_bracket(lz, lx).value()).value();
+                  auto const j3 = lie_bracket(lz, lie_bracket(lx, ly).value()).value();
+                  auto const jac = j1.add(j2).value().add(j3).value();
                   t.expect(jac == Matrix::zero(3, 3), "Jacobi identity holds identically over Q");
               })
         // === SEMIGROUP: resolvent, spectrum vs eigen, and nilpotent semigroup laws =====
@@ -296,8 +296,8 @@ auto main() -> int {
                   auto a = mat({{0, 1}, {-2, -3}});  // eigenvalues -1, -2
 
                   // Resolvent R(lambda,A) = (lambda I - A)^{-1}; 5 is not in the spectrum.
-                  auto r = nimblecas::resolvent(a, ri(5)).value();
-                  auto shifted = Matrix::identity(2).scale(ri(5)).value().subtract(a).value();
+                  auto const r = nimblecas::resolvent(a, ri(5)).value();
+                  auto const shifted = Matrix::identity(2).scale(ri(5)).value().subtract(a).value();
                   t.expect(r == shifted.inverse().value(), "resolvent == (lambda I - A)^{-1}");
                   t.expect(shifted.multiply(r).value() == Matrix::identity(2),
                            "(lambda I - A) * R == I exactly");
@@ -306,8 +306,8 @@ auto main() -> int {
 
                   // spectrum() must reproduce eigen's rational eigenvalues exactly.
                   auto diag_a = mat({{2, 0}, {0, 3}});  // rational spectrum {2, 3}
-                  auto spec = nimblecas::spectrum(diag_a).value();
-                  auto eig = rational_eigenvalues(diag_a).value();
+                  auto const spec = nimblecas::spectrum(diag_a).value();
+                  auto const eig = rational_eigenvalues(diag_a).value();
                   t.expect(spec.fully_extracted, "spectrum of a rational matrix is fully extracted");
                   t.expect(spec.rational_count == 2, "two rational eigenvalues counted");
                   t.expect(spec.rational_values == eig, "semigroup spectrum == eigen rational_eigenvalues");
@@ -318,7 +318,7 @@ auto main() -> int {
                   t.expect(nimblecas::semigroup(n, ri(0), 4).value() == Matrix::identity(3),
                            "T(0) == I exactly");
                   // e^{1*N} = I + N + N^2/2 (the tail N^3, N^4, ... vanish).
-                  auto expected_t1 = Matrix::from_rows({{ri(1), ri(1), rat(1, 2)},
+                  auto const expected_t1 = Matrix::from_rows({{ri(1), ri(1), rat(1, 2)},
                                                         {ri(0), ri(1), ri(1)},
                                                         {ri(0), ri(0), ri(1)}})
                                          .value();
@@ -332,14 +332,14 @@ auto main() -> int {
               [](TestContext& t) {
                   // A general (non-Hessenberg) 4x4 with entries below the subdiagonal.
                   auto a = mat({{4, 1, -2, 2}, {1, 2, 0, 1}, {-2, 0, 3, -2}, {2, 1, -2, -1}});
-                  auto h = hessenberg_form(a).value();
+                  auto const h = hessenberg_form(a).value();
 
                   t.expect(is_upper_hessenberg(h), "reduced matrix is upper-Hessenberg");
 
                   // Similarity invariant: identical characteristic polynomial (hence identical
                   // eigenvalues, determinant and trace), computed via eigen's Faddeev-LeVerrier.
-                  auto pa = characteristic_polynomial(a).value();
-                  auto ph = characteristic_polynomial(h).value();
+                  auto const pa = characteristic_polynomial(a).value();
+                  auto const ph = characteristic_polynomial(h).value();
                   t.expect(pa.is_equal(ph), "char poly of H == char poly of A (similarity invariant)");
                   t.expect(a.determinant().value() == h.determinant().value(),
                            "det(H) == det(A) (similarity invariant)");

@@ -321,7 +321,7 @@ namespace {
 // Euclidean norm of a vector.
 [[nodiscard]] auto norm2(std::span<const double> v) noexcept -> double {
     double acc = 0.0;
-    for (double e : v) {
+    for (double const e : v) {
         acc = std::fma(e, e, acc);
     }
     return std::sqrt(acc);
@@ -756,7 +756,7 @@ auto cosamp(std::span<const double> A, std::size_t rows, std::size_t cols, std::
         for (std::size_t j = 0; j < cols; ++j) {
             proxy[j] = col_dot_vec(A, rows, cols, j, r);
         }
-        auto add = largest_magnitude(proxy, 2 * k);
+        auto const add = largest_magnitude(proxy, 2 * k);
 
         // Merge with the current support.
         std::vector<char> in_set(cols, 0);
@@ -784,7 +784,7 @@ auto cosamp(std::span<const double> A, std::size_t rows, std::size_t cols, std::
         for (std::size_t t = 0; t < merged.size(); ++t) {
             full[merged[t]] = (*coeffs)[t];
         }
-        auto keep = largest_magnitude(full, k);
+        auto const keep = largest_magnitude(full, k);
         std::ranges::fill(x, 0.0);
         for (std::size_t j : keep) {
             x[j] = full[j];
@@ -815,7 +815,7 @@ auto iterative_hard_thresholding(std::span<const double> A, std::size_t rows, st
             g[j] = std::fma(step, col_dot_vec(A, rows, cols, j, r), x[j]);
         }
         // Hard threshold to the k largest-magnitude coordinates.
-        auto keep = largest_magnitude(g, k);
+        auto const keep = largest_magnitude(g, k);
         std::vector<double> next(cols, 0.0);
         for (std::size_t j : keep) {
             next[j] = g[j];

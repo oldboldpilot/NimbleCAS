@@ -57,7 +57,7 @@ auto main() -> int {
               })
         .test("multiply_overflow_reported",
               [](TestContext& t) {
-                  auto big = Polynomial::constant(std::numeric_limits<std::int64_t>::max());
+                  auto const big = Polynomial::constant(std::numeric_limits<std::int64_t>::max());
                   auto r = big.multiply(poly({0, 2}));  // max * 2x -> overflow
                   t.expect(!r.has_value() && r.error() == MathError::overflow,
                            "int64 overflow in multiply is reported");
@@ -114,7 +114,7 @@ auto main() -> int {
               })
         .test("square_free_factorization",
               [](TestContext& t) {
-                  auto has = [](const auto& fs, const Polynomial& p, std::int64_t m) {
+                  auto const has = [](const auto& fs, const Polynomial& p, std::int64_t m) {
                       return std::ranges::any_of(fs, [&](const auto& f) {
                           return f.second == m && f.first.is_equal(p);
                       });

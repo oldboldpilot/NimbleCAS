@@ -72,7 +72,7 @@ auto main() -> int {
         .test("double_round_trips",
               [](TestContext& t) {
                   // Exact doubles survive from_double -> to_double unchanged.
-                  for (double d : {0.0, 1.0, -2.5, 0.125, 12345.75, -0.03125}) {
+                  for (double const d : {0.0, 1.0, -2.5, 0.125, 12345.75, -0.03125}) {
                       t.expect(bfd(d, 53).to_double() == d, "double round-trips exactly");
                   }
                   // to_string reflects the stored dyadic value precisely.

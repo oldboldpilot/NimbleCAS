@@ -413,7 +413,7 @@ namespace {
     const auto deg = static_cast<std::size_t>(p.degree());
     std::vector<Rational> out(deg + 2);  // out[0] = 0 (constant of integration)
     for (std::size_t i = 0; i <= deg; ++i) {
-        auto denom = Rational::from_int(static_cast<std::int64_t>(i + 1));
+        auto const denom = Rational::from_int(static_cast<std::int64_t>(i + 1));
         auto q = p.coefficient(i).divide(denom);  // denom >= 1, never zero
         if (!q) {
             return make_error<RationalPoly>(q.error());

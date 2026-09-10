@@ -64,7 +64,7 @@ auto main() -> int {
         .test("difference_of_squares_two_linear",
               [](TestContext& t) {
                   // x^2 - 1 = (x - 1)(x + 1)
-                  auto f = factor_over_Q(ipoly({-1, 0, 1})).value();
+                  auto const f = factor_over_Q(ipoly({-1, 0, 1})).value();
                   t.expect(f.size() == 2, "two irreducible factors");
                   t.expect(has_factor(f, ipoly({-1, 1}), 1), "(x - 1) with multiplicity 1");
                   t.expect(has_factor(f, ipoly({1, 1}), 1), "(x + 1) with multiplicity 1");
@@ -73,7 +73,7 @@ auto main() -> int {
         .test("irreducible_quadratic",
               [](TestContext& t) {
                   // x^2 - 2: no rational roots, irreducible over Q
-                  auto f = factor_over_Q(ipoly({-2, 0, 1})).value();
+                  auto const f = factor_over_Q(ipoly({-2, 0, 1})).value();
                   t.expect(f.size() == 1, "a single irreducible factor");
                   t.expect(has_factor(f, ipoly({-2, 0, 1}), 1), "{x^2 - 2} itself");
                   t.expect(product_of(f).is_equal(primitive({-2, 0, 1})), "product == input");
@@ -82,7 +82,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // (x^2 - 2)(x^3 - 2) = x^5 - 2x^3 - 2x^2 + 4  (the headline case):
                   // no rational roots, yet splits into a quadratic and a cubic.
-                  auto f = factor_over_Q(ipoly({4, 0, -2, -2, 0, 1})).value();
+                  auto const f = factor_over_Q(ipoly({4, 0, -2, -2, 0, 1})).value();
                   t.expect(f.size() == 2, "two irreducible factors");
                   t.expect(count_degree(f, 2) == 1, "one degree-2 factor");
                   t.expect(count_degree(f, 3) == 1, "one degree-3 factor");
@@ -94,7 +94,7 @@ auto main() -> int {
         .test("repeated_linear_multiplicity",
               [](TestContext& t) {
                   // (x - 1)^2 (x + 2) = x^3 - 3x + 2
-                  auto f = factor_over_Q(ipoly({2, -3, 0, 1})).value();
+                  auto const f = factor_over_Q(ipoly({2, -3, 0, 1})).value();
                   t.expect(f.size() == 2, "two distinct irreducible factors");
                   t.expect(has_factor(f, ipoly({-1, 1}), 2), "(x - 1) with multiplicity 2");
                   t.expect(has_factor(f, ipoly({2, 1}), 1), "(x + 2) with multiplicity 1");
@@ -103,7 +103,7 @@ auto main() -> int {
         .test("irreducible_quartic",
               [](TestContext& t) {
                   // x^4 + 1: irreducible over Q
-                  auto f = factor_over_Q(ipoly({1, 0, 0, 0, 1})).value();
+                  auto const f = factor_over_Q(ipoly({1, 0, 0, 0, 1})).value();
                   t.expect(f.size() == 1, "a single irreducible factor");
                   t.expect(has_factor(f, ipoly({1, 0, 0, 0, 1}), 1), "{x^4 + 1} itself");
                   t.expect(product_of(f).is_equal(primitive({1, 0, 0, 0, 1})), "product == input");
@@ -111,7 +111,7 @@ auto main() -> int {
         .test("quartic_three_irreducibles",
               [](TestContext& t) {
                   // x^4 - 1 = (x - 1)(x + 1)(x^2 + 1)
-                  auto f = factor_over_Q(ipoly({-1, 0, 0, 0, 1})).value();
+                  auto const f = factor_over_Q(ipoly({-1, 0, 0, 0, 1})).value();
                   t.expect(f.size() == 3, "three irreducible factors");
                   t.expect(count_degree(f, 1) == 2, "two linear factors");
                   t.expect(count_degree(f, 2) == 1, "one quadratic factor");
@@ -124,7 +124,7 @@ auto main() -> int {
               [](TestContext& t) {
                   // (x^2 + 1)(x^2 + x + 1)(x^2 - 2)
                   //   = x^6 + x^5 - x^3 - 3x^2 - 2x - 2
-                  auto f = factor_over_Q(ipoly({-2, -2, -3, -1, 0, 1, 1})).value();
+                  auto const f = factor_over_Q(ipoly({-2, -2, -3, -1, 0, 1, 1})).value();
                   t.expect(f.size() == 3, "three irreducible factors");
                   t.expect(count_degree(f, 2) == 3, "all three factors are degree 2");
                   t.expect(has_factor(f, ipoly({1, 0, 1}), 1), "(x^2 + 1)");
@@ -139,7 +139,7 @@ auto main() -> int {
                   t.expect(factor_over_Q(RationalPoly{}).error() == MathError::domain_error,
                            "zero polynomial is a domain error");
                   // nonzero constant: no non-unit factors -> empty list
-                  auto f = factor_over_Q(ipoly({5})).value();
+                  auto const f = factor_over_Q(ipoly({5})).value();
                   t.expect(f.empty(), "nonzero constant factors into an empty list");
               })
         .run();

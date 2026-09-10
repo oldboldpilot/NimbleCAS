@@ -26,7 +26,7 @@ auto main() -> int {
     return TestSuite("nimblecas.core")
         .test("cow_shares_payload_until_write",
               [](TestContext& t) {
-                  auto original = CowPtr<std::vector<int>>::make(std::vector<int>{1, 2, 3});
+                  auto const original = CowPtr<std::vector<int>>::make(std::vector<int>{1, 2, 3});
                   auto shared = original;  // O(1) refcount bump, shares payload
                   t.expect_eq(original.use_count(), 2L, "two handles share one payload");
 

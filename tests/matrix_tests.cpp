@@ -57,7 +57,7 @@ auto main() -> int {
               })
         .test("identity_and_equality",
               [](TestContext& t) {
-                  auto id = Matrix::identity(3);
+                  auto const id = Matrix::identity(3);
                   t.expect(id.at(0, 0) == ri(1) && id.at(1, 1) == ri(1) && id.at(2, 2) == ri(1),
                            "diagonal is 1");
                   t.expect(id.at(0, 1) == ri(0) && id.at(2, 0) == ri(0), "off-diagonal is 0");
@@ -70,11 +70,11 @@ auto main() -> int {
         .test("multiply_and_transpose",
               [](TestContext& t) {
                   // [[1,2],[3,4]] * [[5,6],[7,8]] = [[19,22],[43,50]]
-                  auto prod = mat({{1, 2}, {3, 4}}).multiply(mat({{5, 6}, {7, 8}})).value();
+                  auto const prod = mat({{1, 2}, {3, 4}}).multiply(mat({{5, 6}, {7, 8}})).value();
                   t.expect(prod == mat({{19, 22}, {43, 50}}), "2x2 product matches hand result");
 
                   // transpose of a 2x3
-                  auto tr = mat({{1, 2, 3}, {4, 5, 6}}).transpose().value();
+                  auto const tr = mat({{1, 2, 3}, {4, 5, 6}}).transpose().value();
                   t.expect(tr == mat({{1, 4}, {2, 5}, {3, 6}}), "transpose is 3x2");
 
                   // dimension-mismatch multiply -> domain_error (2x3 * 2x2)
@@ -120,14 +120,14 @@ auto main() -> int {
                   // 2x2: 2x + y = 3, x - y = 0  => x = y = 1
                   auto a2 = mat({{2, 1}, {1, -1}});
                   auto b2 = mat({{3}, {0}});
-                  auto x2 = a2.solve(b2).value();
+                  auto const x2 = a2.solve(b2).value();
                   t.expect(x2 == mat({{1}, {1}}), "2x2 solution is (1,1)");
                   t.expect(a2.multiply(x2).value() == b2, "A*x == b (2x2)");
 
                   // 3x3 classic system with solution (2, 3, -1)
                   auto a3 = mat({{2, 1, -1}, {-3, -1, 2}, {-2, 1, 2}});
                   auto b3 = mat({{8}, {-11}, {-3}});
-                  auto x3 = a3.solve(b3).value();
+                  auto const x3 = a3.solve(b3).value();
                   t.expect(x3 == mat({{2}, {3}, {-1}}), "3x3 solution is (2,3,-1)");
                   t.expect(a3.multiply(x3).value() == b3, "A*x == b (3x3)");
 
@@ -143,8 +143,8 @@ auto main() -> int {
               [](TestContext& t) {
                   // inverse of [[1,2],[3,4]] is [[-2,1],[3/2,-1/2]]
                   auto a = mat({{1, 2}, {3, 4}});
-                  auto inv = a.inverse().value();
-                  auto expected = Matrix::from_rows(
+                  auto const inv = a.inverse().value();
+                  auto const expected = Matrix::from_rows(
                                       {{rat(-2, 1), rat(1, 1)}, {rat(3, 2), rat(-1, 2)}})
                                       .value();
                   t.expect(inv == expected, "explicit 2x2 inverse");
@@ -174,7 +174,7 @@ auto main() -> int {
         .test("overflow_is_reported",
               [](TestContext& t) {
                   const std::int64_t big = std::numeric_limits<std::int64_t>::max();
-                  auto a = Matrix::from_rows({{ri(big), ri(big)}, {ri(big), ri(big)}}).value();
+                  auto const a = Matrix::from_rows({{ri(big), ri(big)}, {ri(big), ri(big)}}).value();
                   // big + big overflows int64 during the entrywise sum.
                   t.expect(a.add(a).error() == MathError::overflow,
                            "int64 overflow surfaces as MathError::overflow");

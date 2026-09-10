@@ -17,9 +17,9 @@ auto main() -> int {
     return TestSuite("nimblecas.symbolic")
         .test("structural_equality",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto x2 = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const x2 = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   t.expect(x.is_equivalent_to(x2), "x == x");
                   t.expect(!x.is_equivalent_to(y), "x != y");
                   // x + y and x + y are structurally equal; x + y != y + x (no simplify yet)
@@ -54,15 +54,15 @@ auto main() -> int {
               })
         .test("hash_matches_equality",
               [](TestContext& t) {
-                  auto a = Expr::symbol("x").add(Expr::integer(1));
-                  auto b = Expr::symbol("x").add(Expr::integer(1));
+                  auto const a = Expr::symbol("x").add(Expr::integer(1));
+                  auto const b = Expr::symbol("x").add(Expr::integer(1));
                   t.expect(a.is_equivalent_to(b), "a == b structurally");
                   t.expect_eq(nimblecas::hash_value(a), nimblecas::hash_value(b),
                               "equal expressions hash equal");
               })
         .test("nan_leaf_is_equivalent_to_itself",
               [](TestContext& t) {
-                  auto nan_expr = Expr::real(std::numeric_limits<double>::quiet_NaN());
+                  auto const nan_expr = Expr::real(std::numeric_limits<double>::quiet_NaN());
                   // structural identity must be syntactic, not IEEE (NaN != NaN)
                   t.expect(nan_expr.is_equivalent_to(nan_expr), "NaN leaf equals itself");
                   t.expect(!nimblecas::free_of(nan_expr, nan_expr),
@@ -70,22 +70,22 @@ auto main() -> int {
               })
         .test("free_of",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   // u = x^2 + y
-                  auto u = Expr::power(x, Expr::integer(2)).add(y);
+                  auto const u = Expr::power(x, Expr::integer(2)).add(y);
                   t.expect(!free_of(u, x), "x^2 + y contains x");
                   t.expect(free_of(u, Expr::symbol("z")), "x^2 + y is free of z");
                   t.expect(!free_of(u, y), "x^2 + y contains y");
               })
         .test("substitute_replaces_subexpression",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto y = Expr::symbol("y");
+                  auto const x = Expr::symbol("x");
+                  auto const y = Expr::symbol("y");
                   // u = x^2 + x ; substitute x -> y  =>  y^2 + y
-                  auto u = Expr::power(x, Expr::integer(2)).add(x);
-                  auto expected = Expr::power(y, Expr::integer(2)).add(y);
-                  auto result = substitute(u, x, y);
+                  auto const u = Expr::power(x, Expr::integer(2)).add(x);
+                  auto const expected = Expr::power(y, Expr::integer(2)).add(y);
+                  auto const result = substitute(u, x, y);
                   t.expect(result.is_equivalent_to(expected),
                            std::format("subst x->y in x^2+x gives {}", result.to_string()));
                   // original is untouched (immutability)
@@ -94,9 +94,9 @@ auto main() -> int {
               })
         .test("substitute_whole_expression",
               [](TestContext& t) {
-                  auto x = Expr::symbol("x");
-                  auto expr = Expr::power(x, Expr::integer(2));
-                  auto r = substitute(expr, expr, Expr::integer(7));
+                  auto const x = Expr::symbol("x");
+                  auto const expr = Expr::power(x, Expr::integer(2));
+                  auto const r = substitute(expr, expr, Expr::integer(7));
                   t.expect(r.is_equivalent_to(Expr::integer(7)),
                            "substituting the whole expression replaces it");
               })

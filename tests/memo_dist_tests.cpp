@@ -453,7 +453,7 @@ auto main() -> int {
                   const auto pub_over = memo.publish(ck_over, as_bytes(over_key), as_bytes(over_val));
                   t.expect(pub_over.has_value(), "oversize publish returns success Result");
 
-                  auto stats = memo.stats();
+                  auto const stats = memo.stats();
                   t.expect_eq(stats.rejected, std::uint64_t{1}, "stats.rejected incremented for oversize value");
 
                   const auto r_over = memo.lookup(ck_over, as_bytes(over_key));

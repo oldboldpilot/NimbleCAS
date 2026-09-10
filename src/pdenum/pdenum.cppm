@@ -1150,7 +1150,7 @@ auto fem_p1_load(const Mesh1D& mesh, const RationalPoly& f) -> Result<std::vecto
         if (!x1h) {
             return make_error<std::vector<Rational>>(x1h.error());
         }
-        auto phi0 = RationalPoly::from_coeffs({*x1h, *ninvh});
+        auto const phi0 = RationalPoly::from_coeffs({*x1h, *ninvh});
         // phi1 = (x - x0)/h_e = -x0/h_e + (1/h_e) x.
         auto x0h = x0.divide(*he);
         if (!x0h) {
@@ -1160,7 +1160,7 @@ auto fem_p1_load(const Mesh1D& mesh, const RationalPoly& f) -> Result<std::vecto
         if (!nx0h) {
             return make_error<std::vector<Rational>>(nx0h.error());
         }
-        auto phi1 = RationalPoly::from_coeffs({*nx0h, *invh});
+        auto const phi1 = RationalPoly::from_coeffs({*nx0h, *invh});
 
         auto f0 = f.multiply(phi0);
         if (!f0) {
