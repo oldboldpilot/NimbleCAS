@@ -43,13 +43,21 @@ if ! command -v "${NIMBLECAS_CLANG_TIDY}" >/dev/null 2>&1; then
 fi
 
 mapfile -t FILES < <(
-  python3 - "${BUILD_DIR}/compile_commands.json" "${FILTER}" <<'PY'
-import json, sys
+  python3 - "${BUILD_DIR}/compile_commands.json" "${REPO_ROOT}" "${FILTER}" <<'PY'
+import json, os, sys
 db = json.load(open(sys.argv[1]))
-needle = sys.argv[2]
+root = os.path.realpath(sys.argv[2]) + os.sep
+needle = sys.argv[3]
 seen = set()
 for e in db:
     f = e["file"]
+    # Translation units OUTSIDE the repository are dropped. The compile database names one:
+    # libc++'s own std.cppm, pulled in because `import std` builds the standard library module
+    # as a project target. Nothing above /usr/lib/llvm-NN provides a .clang-tidy, so clang-tidy
+    # resolves an empty check list for that file and aborts the WHOLE invocation with
+    # "no checks enabled" -- taking every repo TU with it. That is why this filter exists.
+    if not os.path.realpath(f).startswith(root):
+        continue
     if needle and needle not in f:
         continue
     if f in seen:

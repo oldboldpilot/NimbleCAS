@@ -157,7 +157,7 @@ private:
 
     std::size_t max_entries_{100'000};
     std::size_t max_value_bytes_{std::size_t{16} * 1024 * 1024};
-    std::vector<std::unique_ptr<Shard>> shards_{};
+    std::vector<std::unique_ptr<Shard>> shards_;
     std::atomic<std::size_t> total_entries_{0};
 
     mutable std::atomic<std::uint64_t> hits_{0};
@@ -276,7 +276,7 @@ class FileMemo final : public DistributedMemo {
     [[nodiscard]] auto read_record_at(std::uintmax_t offset, ContentKey& out_fp, Payload& out_key,
                                       Payload& out_value) -> ReadOutcome;
 
-    std::filesystem::path path_{};
+    std::filesystem::path path_;
     std::size_t max_value_bytes_{std::size_t{16} * 1024 * 1024};
     std::uintmax_t good_prefix_{0};
     bool damaged_{false};
@@ -514,40 +514,49 @@ inline constexpr std::size_t k_header_bytes = 32;
 inline constexpr std::size_t k_checksum_bytes = 8;
 inline constexpr std::size_t k_min_record_bytes = k_header_bytes + k_checksum_bytes;
 
+// The six little-endian pack/unpack helpers below keep every operand of every shift and mask
+// UNSIGNED, and shift by an unsigned amount. That is not pedantry about a lint. `std::uint16_t`
+// promotes to `int` before any arithmetic, so the obvious spelling of these functions --
+// `v >> 8`, or `static_cast<std::uint16_t>(b[off + 1]) << 8` -- is signed arithmetic on what is
+// purely a bit pattern, and the reader has to reconstruct the promotion rules to convince
+// themselves the sign bit can never be reached. Doing the work in `std::uint32_t`/`std::uint64_t`
+// with `U`-suffixed shift counts removes the question rather than answering it.
 inline auto put_u16(std::uint16_t v, Payload& out) -> void {
-    out.push_back(static_cast<std::byte>(v & 0xFFu));
-    out.push_back(static_cast<std::byte>((v >> 8) & 0xFFu));
+    const auto wide = static_cast<std::uint32_t>(v);
+    out.push_back(static_cast<std::byte>(wide & 0xFFU));
+    out.push_back(static_cast<std::byte>((wide >> 8U) & 0xFFU));
 }
 
 inline auto put_u32(std::uint32_t v, Payload& out) -> void {
-    for (int i = 0; i < 4; ++i) {
-        out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xFFu));
+    for (std::size_t i = 0; i < 4; ++i) {
+        out.push_back(static_cast<std::byte>((v >> (8U * i)) & 0xFFU));
     }
 }
 
 inline auto put_u64(std::uint64_t v, Payload& out) -> void {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xFFu));
+    for (std::size_t i = 0; i < 8; ++i) {
+        out.push_back(static_cast<std::byte>((v >> (8U * i)) & 0xFFU));
     }
 }
 
 [[nodiscard]] inline auto get_u16(std::span<const std::byte> b, std::size_t off) -> std::uint16_t {
-    return static_cast<std::uint16_t>(static_cast<std::uint16_t>(b[off]) |
-                                      (static_cast<std::uint16_t>(b[off + 1]) << 8));
+    const auto lo = static_cast<std::uint32_t>(b[off]);
+    const auto hi = static_cast<std::uint32_t>(b[off + 1]);
+    return static_cast<std::uint16_t>(lo | (hi << 8U));
 }
 
 [[nodiscard]] inline auto get_u32(std::span<const std::byte> b, std::size_t off) -> std::uint32_t {
     std::uint32_t v = 0;
-    for (int i = 0; i < 4; ++i) {
-        v |= static_cast<std::uint32_t>(b[off + static_cast<std::size_t>(i)]) << (8 * i);
+    for (std::size_t i = 0; i < 4; ++i) {
+        v |= static_cast<std::uint32_t>(b[off + i]) << (8U * i);
     }
     return v;
 }
 
 [[nodiscard]] inline auto get_u64(std::span<const std::byte> b, std::size_t off) -> std::uint64_t {
     std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i) {
-        v |= static_cast<std::uint64_t>(b[off + static_cast<std::size_t>(i)]) << (8 * i);
+    for (std::size_t i = 0; i < 8; ++i) {
+        v |= static_cast<std::uint64_t>(b[off + i]) << (8U * i);
     }
     return v;
 }
