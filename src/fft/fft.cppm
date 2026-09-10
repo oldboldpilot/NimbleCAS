@@ -101,7 +101,7 @@ namespace {
         if (p > (std::numeric_limits<std::size_t>::max() >> 1U)) {
             return make_error<std::size_t>(MathError::overflow);
         }
-        p <<= 1;
+        p <<= 1U;
     }
     return p;
 }
@@ -118,7 +118,7 @@ auto fft_radix2_inplace(std::vector<std::complex<double>>& a, bool invert) -> vo
     // Bit-reversal permutation.
     for (std::size_t i = 1, j = 0; i < n; ++i) {
         std::size_t bit = n >> 1U;
-        for (; (j & bit) != 0; bit >>= 1) {
+        for (; (j & bit) != 0; bit >>= 1U) {
             j ^= bit;
         }
         j ^= bit;
@@ -128,7 +128,7 @@ auto fft_radix2_inplace(std::vector<std::complex<double>>& a, bool invert) -> vo
     }
     // Butterfly stages. Twiddles come from std::polar (unit-modulus roots of unity).
     const double sign = invert ? 1.0 : -1.0;
-    for (std::size_t len = 2; len <= n; len <<= 1) {
+    for (std::size_t len = 2; len <= n; len <<= 1U) {
         const double angle = sign * 2.0 * std::numbers::pi / static_cast<double>(len);
         const std::complex<double> wlen = std::polar(1.0, angle);
         for (std::size_t start = 0; start < n; start += len) {

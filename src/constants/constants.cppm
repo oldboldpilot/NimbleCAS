@@ -198,7 +198,7 @@ namespace {
             return term;
         }
         // (-1)^n: subtract on odd n, add on even n.
-        if ((n & 1) != 0) {
+        if (n % 2 != 0) {
             auto s = sum->subtract(*term, work);
             if (!s) {
                 return s;

@@ -537,7 +537,7 @@ auto BigFloat::to_double() const -> double {
         value = std::numeric_limits<double>::infinity();
         return neg ? -value : value;
     }
-    constexpr std::int64_t clamp = 1 << 20U;  // ldexp takes int; clamp far past double's range
+    constexpr std::int64_t clamp = 1U << 20U;  // ldexp takes int; clamp far past double's range
     if (expo > clamp) {
         value = std::numeric_limits<double>::infinity();
     } else if (expo < -clamp) {
@@ -667,7 +667,7 @@ auto BigFloat::sqrt(std::int64_t prec) const -> Result<BigFloat> {
     if (sub_ov(exp_, shift, half_exp)) {
         return make_error<BigFloat>(MathError::overflow);
     }
-    if ((half_exp & 1LL) != 0) {  // make (exp_ - shift) even so the halving is exact
+    if (half_exp % 2 != 0) {  // make (exp_ - shift) even so the halving is exact
         ++shift;
         if (sub_ov(exp_, shift, half_exp)) {
             return make_error<BigFloat>(MathError::overflow);

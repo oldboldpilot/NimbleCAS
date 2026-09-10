@@ -60,19 +60,19 @@ public:
     // True iff bit i is set. Branchless: (word >> b) & 1. Precondition: i < capacity.
     [[nodiscard]] auto test(std::size_t i) const noexcept -> bool {
         assert(i < capacity_ && "Bitset::test index out of range");
-        return ((words_[i >> 6U] >> (i & 63)) & std::uint64_t{1}) != 0;
+        return ((words_[i >> 6U] >> (i & 63U)) & std::uint64_t{1}) != 0;
     }
 
     // Sets bit i (idempotent). Precondition: i < capacity.
     auto set(std::size_t i) noexcept -> void {
         assert(i < capacity_ && "Bitset::set index out of range");
-        words_[i >> 6U] |= (std::uint64_t{1} << (i & 63));
+        words_[i >> 6U] |= (std::uint64_t{1} << (i & 63U));
     }
 
     // Clears bit i (idempotent). Precondition: i < capacity.
     auto reset(std::size_t i) noexcept -> void {
         assert(i < capacity_ && "Bitset::reset index out of range");
-        words_[i >> 6U] &= ~(std::uint64_t{1} << (i & 63));
+        words_[i >> 6U] &= ~(std::uint64_t{1} << (i & 63U));
     }
 
     // Sets every bit in [0, capacity). Writes ~0 into every word word-parallel, then masks

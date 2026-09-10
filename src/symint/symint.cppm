@@ -244,10 +244,9 @@ namespace {
 // (denominator exponent), else nullopt. INT64_MIN is rejected (its negation overflows).
 [[nodiscard]] auto negative_integer_magnitude(const Expr& exp) -> std::optional<std::int64_t> {
     if (const auto* c = std::get_if<ConstantNode>(&exp.node().value)) {
-        if (const auto* v = std::get_if<std::int64_t>(&c->value)) {
-            if (*v < 0 && *v != std::numeric_limits<std::int64_t>::min()) {
-                return -*v;
-            }
+        const auto* v = std::get_if<std::int64_t>(&c->value);
+        if (v != nullptr && *v < 0 && *v != std::numeric_limits<std::int64_t>::min()) {
+            return -*v;
         }
     }
     return std::nullopt;

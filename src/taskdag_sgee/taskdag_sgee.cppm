@@ -909,26 +909,31 @@ namespace nimblecas {
 namespace {
 
 inline auto write_u16_le(std::uint16_t val, std::vector<std::byte>& out) -> void {
-    out.push_back(static_cast<std::byte>(val & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFF));
+    // Widened first: uint16 promotes to int, so `val >> 8U` would be a signed shift of what
+    // is only ever a byte pattern.
+    const auto wide = static_cast<std::uint32_t>(val);
+    out.push_back(static_cast<std::byte>(wide & 0xFFU));
+    out.push_back(static_cast<std::byte>((wide >> 8U) & 0xFFU));
 }
 
 inline auto write_u32_le(std::uint32_t val, std::vector<std::byte>& out) -> void {
-    out.push_back(static_cast<std::byte>(val & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 16U) & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 24U) & 0xFF));
+    out.push_back(static_cast<std::byte>(val & 0xFFU));
+    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFFU));
+    out.push_back(static_cast<std::byte>((val >> 16U) & 0xFFU));
+    out.push_back(static_cast<std::byte>((val >> 24U) & 0xFFU));
 }
 
 inline auto write_u64_le(std::uint64_t val, std::vector<std::byte>& out) -> void {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<std::byte>((val >> (i * 8)) & 0xFF));
+    for (unsigned i = 0; i < 8; ++i) {
+        out.push_back(static_cast<std::byte>((val >> (i * 8U)) & 0xFFU));
     }
 }
 
 inline auto read_u16_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint16_t {
-    return static_cast<std::uint16_t>(bytes[offset]) |
-           (static_cast<std::uint16_t>(bytes[offset + 1]) << 8U);
+    // Assembled in uint32: uint16 promotes to int before any shift, which would make
+    // this signed arithmetic on a byte pattern.
+    return static_cast<std::uint16_t>(static_cast<std::uint32_t>(bytes[offset]) |
+                                      (static_cast<std::uint32_t>(bytes[offset + 1]) << 8U));
 }
 
 inline auto read_u32_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint32_t {
@@ -940,8 +945,8 @@ inline auto read_u32_le(std::span<const std::byte> bytes, std::size_t offset) ->
 
 inline auto read_u64_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint64_t {
     std::uint64_t val = 0;
-    for (int i = 0; i < 8; ++i) {
-        val |= (static_cast<std::uint64_t>(bytes[offset + i]) << (i * 8));
+    for (unsigned i = 0; i < 8; ++i) {
+        val |= (static_cast<std::uint64_t>(bytes[offset + i]) << (i * 8U));
     }
     return val;
 }

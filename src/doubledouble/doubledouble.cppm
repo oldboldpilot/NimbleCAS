@@ -484,7 +484,7 @@ constexpr std::size_t kLanes = 4;
         if ((m & 1u) != 0u) {
             result = mul_dd_dd(result, base);
         }
-        m >>= 1;
+        m >>= 1U;
         if (m > 0) {
             base = mul_dd_dd(base, base);
         }

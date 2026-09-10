@@ -61,7 +61,7 @@ namespace {
 
 // True when both degrees are odd, i.e. when (-1)^{deg a * deg b} == -1.
 [[nodiscard]] auto sign_is_negative(std::int64_t deg_a, std::int64_t deg_b) -> bool {
-    return (deg_a & 1) != 0 && (deg_b & 1) != 0;
+    return deg_a % 2 != 0 && deg_b % 2 != 0;
 }
 
 }  // namespace
@@ -121,9 +121,9 @@ auto discriminant(const BigRationalPoly& a) -> Result<BigRational> {
     if (!quotient) {
         return quotient;
     }
-    // n(n-1)/2 is odd exactly when n === 2 or 3 (mod 4), i.e. (n & 2) != 0. Computing the
-    // parity directly avoids forming n(n-1), so no overflow guard is needed.
-    if ((n & 2) != 0) {
+    // n(n-1)/2 is odd exactly when n === 2 or 3 (mod 4). Computing the parity directly
+    // avoids forming n(n-1), so no overflow guard is needed.
+    if (n % 4 >= 2) {
         return quotient->negate();  // infallible over BigRational
     }
     return *quotient;

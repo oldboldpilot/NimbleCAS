@@ -90,6 +90,14 @@ export namespace nimblecas {
 #define TRY(var, ...)                                                    \
     auto var##__r = (__VA_ARGS__);                                       \
     if (!(var##__r)) return make_error<RetType>((var##__r).error());     \
+    const auto var = std::move(*var##__r)
+
+// As TRY, but binds the unwrapped value mutably. Use it only where the value is moved
+// onward or modified afterwards: TRY's binding is const, which would turn such a move into
+// a silent copy of a Matrix or a polynomial.
+#define TRY_MUT(var, ...)                                                \
+    auto var##__r = (__VA_ARGS__);                                       \
+    if (!(var##__r)) return make_error<RetType>((var##__r).error());     \
     auto var = std::move(*var##__r)
 
 namespace nimblecas {

@@ -258,7 +258,8 @@ auto count_nqueens(int n, bool parallel) -> Result<std::uint64_t> {
     if (n < 1 || n > 32) {
         return make_error<std::uint64_t>(MathError::domain_error);
     }
-    const std::uint64_t all = (std::uint64_t{1} << n) - 1;  // n-bit board mask (n <= 32)
+    const std::uint64_t all =
+        (std::uint64_t{1} << static_cast<unsigned>(n)) - 1;  // n-bit board mask (n <= 32)
 
     if (!parallel) {
         return nqueens_count(all, 0, 0, 0);

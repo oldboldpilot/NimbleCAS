@@ -191,7 +191,8 @@ namespace {
                                ? Expr::integer(1)
                                : Expr::apply("exp", {Expr::product({*c, s})});
         if (fn.name == "dirac") {
-            return shift;
+            // NOLINTNEXTLINE(performance-no-automatic-move)
+            return shift;  // Expr holds a CowPtr: the "prevented" move is a refcount bump
         }
         return Expr::product({shift, Expr::power(s, Expr::integer(-1))});
     }

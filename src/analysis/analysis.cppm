@@ -1055,7 +1055,8 @@ auto cauchy_condensation_test(const RealSequence& a, std::int64_t samples) -> Re
     // The window is asymptotic (k in [k_lo, k_hi]) so small-index transients don't mislead;
     // 2^k stays inside int64 for k <= 50. This is a NUMERICAL (sampled) determination.
     const auto condensed_term = [&a](std::int64_t k) -> double {
-        const std::int64_t idx = static_cast<std::int64_t>(1) << k;  // 2^k
+        const auto idx =
+            static_cast<std::int64_t>(std::uint64_t{1} << static_cast<unsigned>(k));  // 2^k
         return static_cast<double>(idx) * a(idx);
     };
     constexpr std::int64_t k_lo = 16;

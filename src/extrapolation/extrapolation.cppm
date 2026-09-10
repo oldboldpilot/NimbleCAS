@@ -455,8 +455,9 @@ auto romberg(const RealFunction& f, double a, double b, std::size_t levels)
         if (i >= 63) {  // guard BOTH shifts below: 1<<(i-1) and 1<<i (the latter needs i<=62)
             return make_error<DoubleTableau>(MathError::overflow);
         }
-        const std::int64_t new_pts = std::int64_t{1} << (i - 1);  // new midpoints added
-        const double h = span / static_cast<double>(std::int64_t{1} << i);  // h_i = span/2^i
+        const auto new_pts = static_cast<std::int64_t>(std::uint64_t{1} << (i - 1));
+        const double h =
+            span / static_cast<double>(std::uint64_t{1} << i);  // h_i = span/2^i
         double s = 0.0;
         for (std::int64_t k = 1; k <= new_pts; ++k) {
             s += f(a + static_cast<double>(2 * k - 1) * h);
@@ -510,7 +511,7 @@ auto romberg_exact(const ExactFunction& f, const Rational& a, const Rational& b,
         if (i - 1 >= 62) {  // 2*new_pts-1 must stay within int64
             return make_error<RationalTableau>(MathError::overflow);
         }
-        const std::int64_t new_pts = std::int64_t{1} << (i - 1);
+        const auto new_pts = static_cast<std::int64_t>(std::uint64_t{1} << (i - 1));
         // h_i = span / 2^i.
         auto pow2 = rat_int_pow(2, static_cast<std::int64_t>(i));
         if (!pow2) {

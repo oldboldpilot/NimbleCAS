@@ -1132,8 +1132,13 @@ struct Canonicaliser {
     return xs;
 }
 
+// Every call site passes an element of the vector being sorted and feeds the result
+// straight into compare_terms within the same full-expression, so there is no temporary
+// whose lifetime could end first. Returning by value instead would copy a Term per
+// comparison, which is the cost this function exists to avoid.
 [[nodiscard]] auto ord_get_key(const Term& t, std::size_t key) -> const Term& {
     if (key == 0) {
+        // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter)
         return t;
     }
     return compound_of(t).args[key - 1];
@@ -1215,12 +1220,12 @@ struct Canonicaliser {
     // Software binary search determines the index of the highest set bit without external headers.
     auto u = static_cast<std::uint64_t>(x);
     std::int64_t bit = 0;
-    if (u >= (1ULL << 32U)) { u >>= 32; bit += 32; }
-    if (u >= (1ULL << 16U)) { u >>= 16; bit += 16; }
-    if (u >= (1ULL << 8U))  { u >>= 8;  bit += 8; }
-    if (u >= (1ULL << 4U))  { u >>= 4;  bit += 4; }
-    if (u >= (1ULL << 2U))  { u >>= 2;  bit += 2; }
-    if (u >= (1ULL << 1U))  { u >>= 1;  bit += 1; }
+    if (u >= (1ULL << 32U)) { u >>= 32U; bit += 32; }
+    if (u >= (1ULL << 16U)) { u >>= 16U; bit += 16; }
+    if (u >= (1ULL << 8U))  { u >>= 8U;  bit += 8; }
+    if (u >= (1ULL << 4U))  { u >>= 4U;  bit += 4; }
+    if (u >= (1ULL << 2U))  { u >>= 2U;  bit += 2; }
+    if (u >= (1ULL << 1U))  { u >>= 1U;  bit += 1; }
     return bit;
 }
 
@@ -1401,6 +1406,10 @@ struct Canonicaliser {
     if (y == 0) {
         return x;
     }
+    // ISO Prolog integers are signed and >>/2 is defined on them, so the arithmetic
+    // shift IS the specified behaviour here; the same holds for the four functors
+    // below. Prolog has no unsigned integer for these to be written in.
+    // NOLINTNEXTLINE(bugprone-signed-bitwise)
     return x >> y;
 }
 
@@ -1414,10 +1423,12 @@ struct Canonicaliser {
     constexpr auto max_val = std::numeric_limits<std::int64_t>::max();
     constexpr auto min_val = std::numeric_limits<std::int64_t>::min();
     if (x > 0) {
+        // NOLINTNEXTLINE(bugprone-signed-bitwise)
         if (x > (max_val >> y)) {
             return make_error<std::int64_t>(MathError::overflow);
         }
     } else {
+        // NOLINTNEXTLINE(bugprone-signed-bitwise)
         if (x < (min_val >> y)) {
             return make_error<std::int64_t>(MathError::overflow);
         }
@@ -1556,6 +1567,7 @@ struct Canonicaliser {
                 return arith_msb(val);
             }
             if (name == "\\") {
+                // NOLINTNEXTLINE(bugprone-signed-bitwise)
                 return ~val;
             }
             return make_error<std::int64_t>(MathError::domain_error);
@@ -1633,12 +1645,15 @@ struct Canonicaliser {
                 return arith_shl(a, b);
             }
             if (name == "/\\") {
+                // NOLINTNEXTLINE(bugprone-signed-bitwise)
                 return a & b;
             }
             if (name == "\\/") {
+                // NOLINTNEXTLINE(bugprone-signed-bitwise)
                 return a | b;
             }
             if (name == "xor") {
+                // NOLINTNEXTLINE(bugprone-signed-bitwise)
                 return a ^ b;
             }
             return make_error<std::int64_t>(MathError::domain_error);

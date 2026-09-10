@@ -354,16 +354,18 @@ auto AlgebraicNumber::pow(std::int64_t exponent) const -> Result<AlgebraicNumber
     }
     AlgebraicNumber result = field_.one();
     AlgebraicNumber base = *this;
-    std::int64_t e = exponent;
+    // `exponent < 0` is refused above, so the exponent is a non-negative quantity;
+    // holding it as one keeps the halving loop free of signed bit operations.
+    auto e = static_cast<std::uint64_t>(exponent);
     while (e > 0) {
-        if ((e & 1) != 0) {
+        if ((e & 1U) != 0) {
             auto r = result.multiply(base);
             if (!r) {
                 return make_error<AlgebraicNumber>(r.error());
             }
             result = std::move(*r);
         }
-        e >>= 1;
+        e >>= 1U;
         if (e > 0) {
             auto b = base.multiply(base);
             if (!b) {

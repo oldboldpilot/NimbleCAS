@@ -435,7 +435,7 @@ auto factor_over_field(const NumberField& l, const AlgebraicPoly& f)
                 err = nx0.error();
                 break;
             }
-            values.push_back(std::move(*nx0));
+            values.push_back(*nx0);
         }
         if (arith_error) {
             return make_error<Out>(err);

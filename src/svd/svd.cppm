@@ -138,6 +138,14 @@ struct NumericPolar {
 #define TRY(var, ...)                                                \
     auto var##__r = (__VA_ARGS__);                                   \
     if (!(var##__r)) return make_error<RetType>((var##__r).error()); \
+    const auto var = std::move(*var##__r)
+
+// As TRY, but binds the unwrapped value mutably. Use it only where the value is moved
+// onward or modified afterwards: TRY's binding is const, which would turn such a move into
+// a silent copy of a Matrix or a polynomial.
+#define TRY_MUT(var, ...)                                                \
+    auto var##__r = (__VA_ARGS__);                                       \
+    if (!(var##__r)) return make_error<RetType>((var##__r).error());     \
     auto var = std::move(*var##__r)
 
 namespace nimblecas {
@@ -537,7 +545,7 @@ auto polar_residual(const NumericPolar& d, std::span<const double> a) -> Result<
 auto gram_matrix(const Matrix& a) -> Result<Matrix> {
     using RetType = Matrix;
     TRY(at, a.transpose());
-    TRY(g, at.multiply(a));
+    TRY_MUT(g, at.multiply(a));  // moved out by the return below
     return g;
 }
 
@@ -545,7 +553,7 @@ auto exact_singular_value_squares(const Matrix& a)
     -> Result<std::vector<std::pair<Rational, std::int64_t>>> {
     using RetType = std::vector<std::pair<Rational, std::int64_t>>;
     TRY(g, gram_matrix(a));
-    TRY(eigs, rational_eigenvalues(g));
+    TRY_MUT(eigs, rational_eigenvalues(g));  // sorted in place below
     std::sort(eigs.begin(), eigs.end(), [](const auto& lhs, const auto& rhs) {
         return rational_less(rhs.first, lhs.first);  // descending
     });

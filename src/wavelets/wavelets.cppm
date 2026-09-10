@@ -674,7 +674,7 @@ struct SwtLevel {
     if (n == 0 || level == 0 || level >= 31) {
         return make_error<SwtLevel>(MathError::domain_error);
     }
-    const std::int64_t dilation = std::int64_t{1} << (level - 1);
+    const auto dilation = static_cast<std::int64_t>(std::uint64_t{1} << (level - 1));
     const std::size_t L = fb.analysis_lo.size();
     SwtLevel out;
     out.approx.assign(n, 0.0);

@@ -294,7 +294,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
 
     // D1. Normalise: left-shift so the divisor's top limb has its high bit set. This
     // shrinks the quotient-digit estimate error to at most 2 (Knuth's Theorem B).
-    const int shift = std::countl_zero(v[n - 1]);
+    const auto shift = static_cast<unsigned>(std::countl_zero(v[n - 1]));
 
     std::vector<std::uint32_t> vn(n);
     if (shift == 0) {
@@ -303,7 +303,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
         std::uint32_t carry = 0;
         for (std::size_t i = 0; i < n; ++i) {
             vn[i] = (v[i] << shift) | carry;
-            carry = v[i] >> (32 - shift);
+            carry = v[i] >> (32U - shift);
         }
         // carry is 0: shift == countl_zero(v[n-1]) shifts out only zero bits at the top.
     }
@@ -318,7 +318,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
         std::uint32_t carry = 0;
         for (std::size_t i = 0; i < u.size(); ++i) {
             un[i] = (u[i] << shift) | carry;
-            carry = u[i] >> (32 - shift);
+            carry = u[i] >> (32U - shift);
         }
         un[u.size()] = carry;
     }
@@ -350,6 +350,10 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
             const std::int64_t sub = static_cast<std::int64_t>(un[j + i]) - k -
                                      static_cast<std::int64_t>(static_cast<std::uint32_t>(p));
             un[j + i] = static_cast<std::uint32_t>(sub);
+            // `sub` is negative exactly when qhat was one too large, and the arithmetic
+            // shift is what carries that borrow into the next limb (see the identity noted
+            // above). An unsigned shift would zero-extend and lose it.
+            // NOLINTNEXTLINE(bugprone-signed-bitwise)
             k = static_cast<std::int64_t>(p >> 32U) - (sub >> 32U);
         }
         const std::int64_t sub_top = static_cast<std::int64_t>(un[j + n]) - k;
@@ -380,7 +384,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
         }
     } else {
         for (std::size_t i = 0; i < n; ++i) {
-            r[i] = (un[i] >> shift) | (un[i + 1] << (32 - shift));
+            r[i] = (un[i] >> shift) | (un[i + 1] << (32U - shift));
         }
     }
     trim(r);
@@ -580,7 +584,7 @@ auto BigInt::pow(std::uint64_t exp) const -> BigInt {
         if ((exp & 1U) != 0) {
             result = result.multiply(base);
         }
-        exp >>= 1;
+        exp >>= 1U;
         if (exp > 0) {
             base = base.multiply(base);
         }
@@ -635,7 +639,7 @@ auto BigInt::modpow(const BigInt& exp, const BigInt& modulus) const -> Result<Bi
         const int start = (li == em.size() - 1) ? top_bits - 1 : 31;
         for (int bit = start; bit >= 0; --bit) {
             result = reduce_mod(result.multiply(result), modulus);
-            if (((em[li] >> bit) & 1U) != 0) {
+            if (((em[li] >> static_cast<unsigned>(bit)) & 1U) != 0) {
                 result = reduce_mod(result.multiply(base), modulus);
             }
         }

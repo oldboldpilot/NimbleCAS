@@ -92,7 +92,7 @@ export namespace nimblecas {
 
 // The qualitative type of a 2x2 equilibrium at the origin, read off the trace-determinant
 // plane. Let T = tr(A), D = det(A), delta = T^2 - 4D (all exact rationals):
-enum class PhaseType {
+enum class PhaseType : std::uint8_t {
     saddle,           // D < 0: real eigenvalues of opposite sign
     node,             // D > 0, delta > 0: real distinct eigenvalues of one common sign
     spiral,           // D > 0, delta < 0, T != 0: complex pair with nonzero real part (focus)
@@ -103,7 +103,7 @@ enum class PhaseType {
 };
 
 // The stability verdict attached to a classification.
-enum class Stability {
+enum class Stability : std::uint8_t {
     stable,            // asymptotically stable: every eigenvalue has negative real part
     unstable,          // at least one eigenvalue has positive real part
     neutrally_stable,  // a center: purely imaginary pair, orbits neither grow nor decay
@@ -141,7 +141,7 @@ struct PhasePortrait {
 
 // The coarse nD (n >= 1) stability class of dx/dt = A x, from the characteristic
 // polynomial's Routh-Hurwitz first-column sign-change count.
-enum class LinearStability {
+enum class LinearStability : std::uint8_t {
     sink,        // every eigenvalue has Re < 0 (asymptotically stable)
     source,      // every eigenvalue has Re > 0
     saddle,      // mixed: some Re > 0 and some Re < 0, none on the imaginary axis

@@ -395,7 +395,7 @@ inline constexpr std::size_t sobol_max_dim = 1 + sobol_table.size();  // 8
         if ((gray & 1U) != 0) {
             x ^= (*v)[bit];
         }
-        gray >>= 1;
+        gray >>= 1U;
         ++bit;
     }
     return x;

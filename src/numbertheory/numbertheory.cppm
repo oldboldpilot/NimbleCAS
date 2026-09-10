@@ -342,7 +342,7 @@ auto is_probable_prime(const BigInt& n, std::uint64_t seed) -> Result<bool> {
 auto next_prime(const BigInt& n, std::uint64_t seed) -> Result<BigInt> {
     const BigInt two = bi_u64(2);
     if (n < two) {
-        return two;  // the smallest prime
+        return bi_u64(2);  // the smallest prime; built here so the const local is not copied
     }
     // Start just above n and settle on an odd candidate (2 is already excluded since n >= 2).
     BigInt cand = n.add(bi_u64(1));

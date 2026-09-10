@@ -1544,10 +1544,9 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                             if (cand < mu) {
                                 mu = cand;
                                 best_meeting_node = v;
-                            } else if (cand == mu) {
-                                if (best_meeting_node == -1 || v < best_meeting_node) {
-                                    best_meeting_node = v;
-                                }
+                            } else if (cand == mu &&
+                                       (best_meeting_node == -1 || v < best_meeting_node)) {
+                                best_meeting_node = v;
                             }
                         }
                     }
@@ -1592,10 +1591,9 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                             if (cand < mu) {
                                 mu = cand;
                                 best_meeting_node = p;
-                            } else if (cand == mu) {
-                                if (best_meeting_node == -1 || p < best_meeting_node) {
-                                    best_meeting_node = p;
-                                }
+                            } else if (cand == mu &&
+                                       (best_meeting_node == -1 || p < best_meeting_node)) {
+                                best_meeting_node = p;
                             }
                         }
                     }

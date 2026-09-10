@@ -173,12 +173,15 @@ struct ConstVal {
 [[nodiscard]] auto ipow_checked(std::int64_t base, std::int64_t exp, std::int64_t& out) -> bool {
     std::int64_t result = 1;
     std::int64_t b = base;
-    while (exp > 0) {
-        if ((exp & 1) != 0 && mul_ov(result, b, result)) {
+    // The caller's contract is exp >= 0 (the loop below simply does nothing otherwise), so
+    // the walk over its bits is unsigned; `base` stays signed because its sign is the point.
+    auto e = exp < 0 ? 0ULL : static_cast<std::uint64_t>(exp);
+    while (e > 0) {
+        if ((e & 1U) != 0 && mul_ov(result, b, result)) {
             return true;
         }
-        exp >>= 1;
-        if (exp > 0 && mul_ov(b, b, b)) {
+        e >>= 1U;
+        if (e > 0 && mul_ov(b, b, b)) {
             return true;
         }
     }

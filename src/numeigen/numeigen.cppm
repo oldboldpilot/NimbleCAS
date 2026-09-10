@@ -65,7 +65,7 @@ namespace {
 // eigen-algorithm. For a REAL matrix, "symmetric" is the Hermitian case and
 // "skew_symmetric" the skew-Hermitian case; genuinely complex-Hermitian input (a complex
 // matrix) is a future extension, not handled here.
-enum class MatrixKind { diagonal, triangular, symmetric, skew_symmetric, general };
+enum class MatrixKind : std::uint8_t { diagonal, triangular, symmetric, skew_symmetric, general };
 
 // Classify `a` (n x n, row-major) up to a relative tolerance. Detection is order-sensitive:
 // diagonal is a special triangular, and both are checked before symmetry, so a diagonal

@@ -274,7 +274,7 @@ auto fibonacci(std::int64_t n) -> Result<BigInt> {
         const BigInt c = a.multiply(two_b_minus_a);
         // F(2k+1) = F(k+1)^2 + F(k)^2
         const BigInt d = a.multiply(a).add(b.multiply(b));
-        if (((un >> i) & 1U) != 0) {
+        if (((un >> static_cast<unsigned>(i)) & 1U) != 0) {
             a = d;             // F(2k+1)
             b = c.add(d);      // F(2k+2) = F(2k) + F(2k+1)
         } else {
@@ -386,7 +386,7 @@ auto partition_count(std::int64_t n) -> Result<BigInt> {
             }
             const std::int64_t g2 = j * (3 * j + 1) / 2;
             // (-1)^{j-1}: add the pair for odd j, subtract it for even j.
-            if ((j & 1) != 0) {
+            if (j % 2 != 0) {
                 sum = sum.add(p[static_cast<std::size_t>(m - g1)]);
                 if (g2 <= m) {
                     sum = sum.add(p[static_cast<std::size_t>(m - g2)]);
@@ -407,7 +407,7 @@ auto euler_number(std::int64_t n) -> Result<BigInt> {
     if (n < 0) {
         return make_error<BigInt>(MathError::domain_error);
     }
-    if ((n & 1) != 0) {
+    if (n % 2 != 0) {
         return BigInt{};  // every odd-index Euler (secant) number is 0
     }
     // Boustrophedon (Seidel/Entringer) triangle: E(0,0) = 1, E(i,0) = 0 for i >= 1, and
@@ -425,7 +425,7 @@ auto euler_number(std::int64_t n) -> Result<BigInt> {
         prev = std::move(cur);
     }
     BigInt zig = std::move(prev[static_cast<std::size_t>(n)]);  // A_n = E(n,n)
-    if (((n / 2) & 1) != 0) {
+    if ((n / 2) % 2 != 0) {
         return zig.negate();  // (-1)^{n/2} == -1
     }
     return zig;
@@ -441,7 +441,7 @@ auto subfactorial(std::int64_t n) -> Result<BigInt> {
     for (std::int64_t i = 1; i <= n; ++i) {
         const BigInt term = BigInt::from_i64(i).multiply(prev);
         // + (-1)^i: subtract one for odd i, add one for even i.
-        prev = ((i & 1) != 0) ? term.subtract(one) : term.add(one);
+        prev = (i % 2 != 0) ? term.subtract(one) : term.add(one);
     }
     return prev;
 }
