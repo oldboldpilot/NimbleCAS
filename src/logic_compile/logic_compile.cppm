@@ -799,7 +799,12 @@ struct CompileCtx {
                 mangle_var(VarKey{.name = var_of(head_args[i]).name,
                                   .generation = var_of(head_args[i]).generation});
             if (is_anonymous_var(var_of(head_args[i]).name)) {
-                continue;
+                // An anonymous variable in an OUTPUT position binds nothing, so there is no
+                // value to hand back. Skipping it would leave the output argument untouched and
+                // skipping it in continuation-passing style would reference an identifier that
+                // was never declared. Both are the plausible-looking wrong answer Rule 32
+                // forbids, so this is refused instead.
+                return make_error<std::string>(MathError::domain_error);
             }
             if (!bound.contains(v)) {
                 // No goal ever gives this output a value, so the clause cannot honestly claim
@@ -1123,6 +1128,14 @@ struct CompileCtx {
             if (!is_var(head_args[i])) {
                 return make_error<std::string>(MathError::not_implemented);
             }
+            if (is_anonymous_var(var_of(head_args[i]).name)) {
+                // An anonymous variable in an OUTPUT position binds nothing, so there is no
+                // value to hand back. Skipping it would leave the output argument untouched and
+                // skipping it in continuation-passing style would reference an identifier that
+                // was never declared. Both are the plausible-looking wrong answer Rule 32
+                // forbids, so this is refused instead.
+                return make_error<std::string>(MathError::domain_error);
+            }
             k_args += mangle_var(VarKey{.name = var_of(head_args[i]).name,
                                         .generation = var_of(head_args[i]).generation});
         }
@@ -1309,9 +1322,16 @@ struct TritonEmitter {
     } else if (c.functor == "*") {
         // Division by the operand is the only overflow test that never itself overflows, and a
         // zero operand has to be excluded from it before it is used as a divisor.
+        // The round-trip test (a*b)//b == a detects ordinary overflow, but NOT INT64_MIN * -1:
+        // the division that would reveal it is itself unrepresentable and wraps back to
+        // INT64_MIN, so the check passes for an operation that overflowed. That pair is
+        // excluded explicitly.
         *e.body += std::format(
-            "    {}_ok = ({} == 0) | ({} == 0) | ((({} * {}) // tl.where({} == 0, 1, {})) == {})\n",
-            n, lhs->expr, rhs->expr, lhs->expr, rhs->expr, rhs->expr, rhs->expr, lhs->expr);
+            "    {}_ok = (({} == 0) | ({} == 0) | ((({} * {}) // tl.where({} == 0, 1, {})) == "
+            "{})) & (({} != -9223372036854775808) | ({} != -1)) & (({} != "
+            "-9223372036854775808) | ({} != -1))\n",
+            n, lhs->expr, rhs->expr, lhs->expr, rhs->expr, rhs->expr, rhs->expr, lhs->expr,
+            lhs->expr, rhs->expr, rhs->expr, lhs->expr);
         *e.body += std::format("    {} = {} * {}\n", n, lhs->expr, rhs->expr);
     } else if (c.functor == "min" || c.functor == "max") {
         const std::string cmp = c.functor == "min" ? "<" : ">";
@@ -1320,7 +1340,13 @@ struct TritonEmitter {
                                rhs->expr, lhs->expr, rhs->expr);
     } else if (c.functor == "//" || c.functor == "mod" || c.functor == "rem" ||
                c.functor == "div") {
-        *e.body += std::format("    {}_ok = ({} != 0)\n", n, rhs->expr);
+        // Division by zero is not the only unrepresentable case: INT64_MIN / -1 has no
+        // int64 quotient, and on a GPU it wraps silently instead of trapping. Excluding it
+        // here keeps the `ok` mask honest rather than letting a wrapped value through under a
+        // mask that says the operation succeeded.
+        *e.body += std::format(
+            "    {}_ok = ({} != 0) & (({} != -9223372036854775808) | ({} != -1))\n", n,
+            rhs->expr, lhs->expr, rhs->expr);
         const std::string safe = std::format("tl.where({} == 0, 1, {})", rhs->expr, rhs->expr);
         if (c.functor == "//" || c.functor == "div") {
             *e.body += std::format("    {} = {} // {}\n", n, lhs->expr, safe);
@@ -1448,7 +1474,10 @@ struct TritonEmitter {
                 mangle_var(VarKey{.name = var_of(head_args[i]).name,
                                   .generation = var_of(head_args[i]).generation});
             if (is_anonymous_var(var_of(head_args[i]).name)) {
-                continue;
+                // As on the other targets: an anonymous variable in an OUTPUT position binds
+                // nothing, so there is no value to write into the output lane. Leaving the lane
+                // untouched would silently hand back whatever was there before.
+                return make_error<std::string>(MathError::domain_error);
             }
             if (!bound.contains(v)) {
                 return make_error<std::string>(MathError::domain_error);

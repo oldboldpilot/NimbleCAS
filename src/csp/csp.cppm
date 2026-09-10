@@ -592,7 +592,7 @@ auto parallel_search(const Csp& csp) -> Result<std::optional<std::vector<std::in
     // Each worker is a pure function of its first-variable value: it copies the CSP (sharing
     // nothing mutable — the constraint functors are read-only) and solves the subtree with
     // variable 0 fixed. Distinct indices touch disjoint copies, so the map is data-race free.
-    std::vector<Ret> results = nimblecas::parallel::transform_index(
+    const std::vector<Ret> results = nimblecas::parallel::transform_index(
         m, [&csp, &d0](std::size_t j) -> Ret {
             Csp sub = csp;
             sub.domains[0] = {d0[j]};
@@ -602,12 +602,12 @@ auto parallel_search(const Csp& csp) -> Result<std::optional<std::vector<std::in
     // Combine in index order: the smallest j with a solution yields the lexicographically-
     // first assignment overall (variable 0 is the primary key, d0 is ascending, and each
     // worker already returned the lexicographically-first extension for its fixed value).
-    for (std::size_t j = 0; j < m; ++j) {
-        if (results[j]) {
-            if (!satisfies_all(csp, *results[j])) {
+    for (const auto& candidate : results) {
+        if (candidate.has_value()) {
+            if (!satisfies_all(csp, *candidate)) {
                 return make_error<Ret>(MathError::undefined_value);
             }
-            return results[j];
+            return candidate;
         }
     }
     return Ret{std::nullopt};
@@ -652,6 +652,32 @@ namespace {
         return std::nullopt;
     }
     return abs_coef * max_abs_value;
+}
+
+// Whether `a - b` is representable for every a in `x` and b in `y`, AND whether the negation
+// of that difference is too.
+//
+// The second half matters as much as the first: `abs_diff_ne` takes the magnitude of the
+// difference by negating it when it is negative, and INT64_MIN has no positive counterpart, so
+// a difference of exactly INT64_MIN would be undefined behaviour at the point it is negated
+// rather than at the point it is computed.
+[[nodiscard]] auto difference_fits(const std::vector<std::int64_t>& x,
+                                   const std::vector<std::int64_t>& y) -> bool {
+    const auto [x_lo, x_hi] = std::ranges::minmax(x);
+    const auto [y_lo, y_hi] = std::ranges::minmax(y);
+    // The extremes of the difference are (max x - min y) and (min x - max y); if both are
+    // representable then every difference between them is. Each is tested without performing
+    // the subtraction that might overflow.
+    if (y_lo < 0 && x_hi > std::numeric_limits<std::int64_t>::max() + y_lo) {
+        return false;  // max x - min y overflows upward
+    }
+    if (y_hi > 0 && x_lo < std::numeric_limits<std::int64_t>::min() + y_hi) {
+        return false;  // min x - max y overflows downward
+    }
+    // Both extremes are now known representable, so this subtraction is itself safe. Exclude a
+    // smallest difference of exactly INT64_MIN, which has no positive counterpart to negate --
+    // and since INT64_MIN is the least value there is, no other difference can reach it either.
+    return (x_lo - y_hi) != std::numeric_limits<std::int64_t>::min();
 }
 
 }  // namespace
@@ -710,11 +736,24 @@ auto validate(const WireCsp& w) -> Result<void> {
                 }
                 break;
             case ConstraintKind::less_equal:
-            case ConstraintKind::abs_diff_ne:
+            case ConstraintKind::abs_diff_ne: {
                 if (c.params.size() != 1) {
                     return make_error<void>(MathError::domain_error);  // takes exactly one
                 }
+                // Both kinds evaluate `values[0] - values[1]`, and both negate: `less_equal`
+                // compares against -k, and `abs_diff_ne` negates the difference to take its
+                // magnitude. Signed overflow in any of those is undefined behaviour in the
+                // evaluator and a wrong answer in emitted code, where there is nowhere to
+                // report it. As with the linear kinds, the check happens ONCE here so that
+                // evaluation -- in a search inner loop, and in generated CUDA -- never has to.
+                if (c.params[0] == std::numeric_limits<std::int64_t>::min()) {
+                    return make_error<void>(MathError::overflow);  // -k is not representable
+                }
+                if (!difference_fits(w.domains[c.scope[0]], w.domains[c.scope[1]])) {
+                    return make_error<void>(MathError::overflow);
+                }
                 break;
+            }
             case ConstraintKind::linear_eq:
             case ConstraintKind::linear_le: {
                 if (c.params.size() != c.scope.size() + 1) {
@@ -729,12 +768,15 @@ auto validate(const WireCsp& w) -> Result<void> {
                     }
                     bound = add_bound(bound, *t);
                 }
-                // The comparison against the right-hand side must not overflow either.
-                const std::int64_t rhs = c.params.back();
-                const std::int64_t rhs_abs = rhs == std::numeric_limits<std::int64_t>::min()
-                                                 ? std::numeric_limits<std::int64_t>::max()
-                                                 : (rhs < 0 ? -rhs : rhs);
-                if (add_bound(bound, rhs_abs) == std::numeric_limits<std::int64_t>::max()) {
+                // Saturation means the accumulator itself could leave int64's range.
+                //
+                // The right-hand side deliberately does NOT enter this bound. `holds` compares
+                // the finished sum against it with `==` or `<=` and never forms `sum - rhs`, so
+                // an rhs of any magnitude is harmless. Folding |rhs| in here would refuse
+                // perfectly safe constraints -- a weighted sum bounded by 20 tested against an
+                // rhs near INT64_MAX is trivially decidable, and rejecting it would be a false
+                // refusal rather than a conservative one.
+                if (bound == std::numeric_limits<std::int64_t>::max()) {
                     return make_error<void>(MathError::overflow);
                 }
                 break;

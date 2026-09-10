@@ -696,6 +696,30 @@ auto main() -> int {
                   t.expect(src->find("if (a1 != v_X) { return false; }") != std::string::npos,
                            "subsequent input occurrence checks argument equality against bound variable");
               })
+        .test("an_anonymous_variable_in_an_output_position_is_refused",
+              [](TestContext& t) {
+                  // `_` binds nothing, so an output holding it has no value to hand back.
+                  // Skipping it would leave the output argument untouched -- and in
+                  // continuation-passing style would reference an identifier that was never
+                  // declared, emitting source that cannot compile. Refusing is the only
+                  // honest answer.
+                  const Program p = prog("unbound_out(X, _) :- X > 0.\n");
+                  const PredicateSignature sig{
+                      .name = "unbound_out",
+                      .modes = {ArgMode::input, ArgMode::output},
+                  };
+                  auto direct = compile(p, sig, Target::cpp);
+                  t.expect(!direct.has_value() && direct.error() == MathError::domain_error,
+                           "an anonymous output is a domain_error, not an untouched argument");
+
+                  CompileOptions cps;
+                  cps.target = Target::cpp;
+                  cps.style = Style::continuation;
+                  auto k = compile(p, sig, cps);
+                  t.expect(!k.has_value() && k.error() == MathError::domain_error,
+                           "and the continuation-passing path refuses it too, rather than "
+                           "passing an undeclared identifier to the continuation");
+              })
         .test("anonymous_variables_in_head_arguments_are_ignored",
               [](TestContext& t) {
                   const Program p = prog("ignore_first(_, Y, Y).\n");

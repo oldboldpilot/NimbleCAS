@@ -460,6 +460,51 @@ auto main() -> int {
                   bad(short_linear, MathError::domain_error,
                       "a linear constraint needs one coefficient per variable plus a rhs");
               })
+        .test("a_difference_constraint_that_could_overflow_is_refused_not_evaluated",
+              [](TestContext& t) {
+                  // less_equal and abs_diff_ne both evaluate values[0] - values[1], and both
+                  // negate. Signed overflow there is undefined behaviour in the evaluator and
+                  // silently wrong in emitted code, so the domains are bounded ONCE at
+                  // validation rather than checked on every evaluation.
+                  constexpr std::int64_t lo = std::numeric_limits<std::int64_t>::min();
+                  constexpr std::int64_t hi = std::numeric_limits<std::int64_t>::max();
+
+                  WireCsp wide;
+                  wide.domains = {{hi - 1, hi}, {lo, lo + 1}};
+                  wide.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {1}});
+                  auto r = validate(wide);
+                  t.expect(!r.has_value() && r.error() == MathError::overflow,
+                           "a difference that cannot fit in int64 is an honest overflow");
+
+                  // A parameter of INT64_MIN cannot be negated, which less_equal must do.
+                  WireCsp bad_param;
+                  bad_param.domains = {range_domain(3), range_domain(3)};
+                  bad_param.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::less_equal, .scope = {0, 1}, .params = {lo}});
+                  auto p = validate(bad_param);
+                  t.expect(!p.has_value() && p.error() == MathError::overflow,
+                           "a parameter whose negation is unrepresentable is refused");
+
+                  // The case the first version of this guard missed: a difference of exactly
+                  // INT64_MIN, reached with a non-positive upper bound on the second domain,
+                  // so the "cannot be negated" test must not depend on that bound being
+                  // positive.
+                  WireCsp exact_min;
+                  exact_min.domains = {{lo, lo + 1}, {0, 1}};
+                  exact_min.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {1}});
+                  auto m = validate(exact_min);
+                  t.expect(!m.has_value() && m.error() == MathError::overflow,
+                           "a difference of exactly INT64_MIN is refused, having no negation");
+
+                  // Ordinary domains are of course accepted, and evaluate correctly.
+                  WireCsp ok;
+                  ok.domains = {range_domain(5), range_domain(5)};
+                  ok.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::abs_diff_ne, .scope = {0, 1}, .params = {2}});
+                  t.expect(validate(ok).has_value(), "a bounded difference constraint is accepted");
+              })
         .test("a_linear_constraint_that_could_overflow_is_refused_not_evaluated",
               [](TestContext& t) {
                   // The evaluator adds coef*value with plain int64. Rather than check for
@@ -475,6 +520,18 @@ auto main() -> int {
                   auto r = validate(w);
                   t.expect(!r.has_value() && r.error() == MathError::overflow,
                            "a weighted sum that cannot fit in int64 is an honest overflow");
+
+                  // A large right-hand side is NOT a reason to refuse. `holds` compares the
+                  // finished sum against it and never forms `sum - rhs`, so the rhs cannot
+                  // overflow anything; refusing here would be a false refusal.
+                  WireCsp big_rhs;
+                  big_rhs.domains = {range_domain(4), range_domain(4)};
+                  big_rhs.constraints.push_back(
+                      WireConstraint{.kind = ConstraintKind::linear_le,
+                                     .scope = {0, 1},
+                                     .params = {1, 1, std::numeric_limits<std::int64_t>::max()}});
+                  t.expect(validate(big_rhs).has_value(),
+                           "a bounded sum against a huge rhs is accepted, not refused");
 
                   // The same shape with domains that fit is accepted.
                   WireCsp ok;

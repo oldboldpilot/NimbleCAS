@@ -28,6 +28,7 @@ using nimblecas::csp_compile::emit;
 using nimblecas::csp_compile::EmitOptions;
 using nimblecas::csp_compile::entry_point_name;
 using nimblecas::csp_compile::is_compilable_for;
+using nimblecas::csp_compile::max_parallelism;
 using nimblecas::csp_compile::max_search_space;
 using nimblecas::csp_compile::reference_exhaustive;
 using nimblecas::csp_compile::reference_min_conflicts;
@@ -225,6 +226,18 @@ auto main() -> int {
                            "and is a real Triton kernel");
                   t.expect(ts.has_value() && ts->find("conflicts_ptr") != std::string::npos,
                            "that writes a conflict count rather than a solution");
+
+                  // The per-walker result buffers must be SIZED. An empty vector here would
+                  // make the emitted walk write through a null data() pointer -- a defect that
+                  // no amount of reading the emitter would reveal, since the size arrives as a
+                  // format argument.
+                  EmitOptions mc;
+                  mc.target = Target::cpp;
+                  mc.strategy = Strategy::min_conflicts;
+                  auto ms = emit(wire_queens(5), mc);
+                  t.expect(ms.has_value() &&
+                               ms->find("std::vector<long long>(5)") != std::string::npos,
+                           "each walker's result buffer is sized to the variable count");
               })
         .test("the_emitted_text_states_which_guarantee_it_carries",
               [](TestContext& t) {
@@ -248,6 +261,55 @@ auto main() -> int {
                            "the local-search output says it is incomplete");
                   t.expect(b.has_value() && b->find("UNKNOWN") != std::string::npos,
                            "and that a false return means unknown, not unsatisfiable");
+              })
+        .test("the_emitted_text_is_well_formed_for_the_language_it_targets",
+              [](TestContext& t) {
+                  // Three defects an adversarial review found, each of which produced text that
+                  // looked plausible and could not have been compiled. They are regression
+                  // tested here because "it emitted something" is not the property that matters.
+                  const auto w = wire_queens(5);  // uses abs_diff_ne, the diagonal constraint
+
+                  // 1. Triton is PYTHON. A C-style ternary would not parse.
+                  EmitOptions tri;
+                  tri.target = Target::triton;
+                  auto ts = emit(w, tri);
+                  t.expect(ts.has_value(), "the Triton scorer emits");
+                  t.expect(ts.has_value() && ts->find(" ? ") == std::string::npos,
+                           "and contains no C-style ternary, which Python cannot parse");
+                  t.expect(ts.has_value() && ts->find("tl.abs") != std::string::npos,
+                           "using tl.abs for the magnitude instead");
+
+                  // 2. The CUDA min_conflicts path must define the symbol entry_point_name
+                  //    promises, not only a kernel whose name merely resembles it.
+                  EmitOptions cu;
+                  cu.target = Target::cuda;
+                  cu.strategy = Strategy::min_conflicts;
+                  auto cs = emit(w, cu);
+                  t.expect(cs.has_value(), "the CUDA local search emits");
+                  t.expect(cs.has_value() &&
+                               cs->find("bool " + entry_point_name(cu) + "(long long* out)") !=
+                                   std::string::npos,
+                           "and defines a host launcher with exactly the promised name");
+                  t.expect(cs.has_value() && cs->find("cudaMemcpy") != std::string::npos,
+                           "which actually copies the results back");
+
+                  // 3. INT64_MIN cannot be written as a plain decimal literal in C or C++:
+                  //    -9223372036854775808 is unary minus applied to a value that does not fit.
+                  WireCsp extreme;
+                  extreme.domains = {{std::numeric_limits<std::int64_t>::min(), 0},
+                                     {std::numeric_limits<std::int64_t>::min(), 1}};
+                  extreme.constraints.push_back(WireConstraint{
+                      .kind = ConstraintKind::not_equal, .scope = {0, 1}, .params = {}});
+                  EmitOptions ex;
+                  ex.target = Target::cpp;
+                  auto es = emit(extreme, ex);
+                  t.expect(es.has_value(), "a domain containing INT64_MIN emits");
+                  t.expect(es.has_value() &&
+                               es->find("-9223372036854775808") == std::string::npos,
+                           "without the decimal spelling of INT64_MIN, which is ill-formed");
+                  t.expect(es.has_value() &&
+                               es->find("(-9223372036854775807LL - 1)") != std::string::npos,
+                           "spelling it as a representable expression instead");
               })
         .test("emission_is_deterministic",
               [](TestContext& t) {
@@ -314,6 +376,19 @@ auto main() -> int {
                   bad_noise.noise_per_1024 = 2000;
                   t.expect(!is_compilable_for(w, bad_noise).has_value(),
                            "a noise probability above 1024/1024 is refused");
+
+                  // An absurd shard count would overflow the emitted range arithmetic
+                  // (`space * s / shards`) and emit code creating that many threads.
+                  EmitOptions too_many;
+                  too_many.strategy = Strategy::exhaustive;
+                  too_many.shards = max_parallelism + 1;
+                  t.expect(!is_compilable_for(w, too_many).has_value(),
+                           "a shard count past max_parallelism is refused");
+                  EmitOptions too_many_walkers;
+                  too_many_walkers.strategy = Strategy::min_conflicts;
+                  too_many_walkers.walkers = max_parallelism + 1;
+                  t.expect(!is_compilable_for(w, too_many_walkers).has_value(),
+                           "and so is a walker count past it");
 
                   EmitOptions no_prefix;
                   no_prefix.name_prefix = "";

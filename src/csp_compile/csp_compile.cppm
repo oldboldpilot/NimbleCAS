@@ -98,6 +98,14 @@ enum class Strategy : std::uint8_t {
 // it anyway would be promising something the generated code cannot deliver.
 inline constexpr std::uint64_t max_search_space = 1ULL << 32U;
 
+// The largest shard or walker count that may be requested. Two reasons, both real. The emitted
+// exhaustive scan computes a shard's range as `space * s / shards`, and with `space` bounded by
+// `max_search_space` this cap keeps that product inside std::uint64_t -- an unbounded shard
+// count would wrap it and hand a thread the wrong range, silently. And each shard or walker
+// becomes a thread in the emitted program, so an unbounded count would emit code that tries to
+// create arbitrarily many of them.
+inline constexpr std::size_t max_parallelism = 1U << 16U;
+
 // Knobs for the emitted program. The defaults are the ones the tests use.
 struct EmitOptions {
     Target target{Target::cpp};
@@ -230,8 +238,25 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
     return "unknown";
 }
 
-// Emits the C or CUDA expression deciding one constraint, reading values out of `arr`.
-[[nodiscard]] auto emit_constraint_expr(const WireConstraint& c, std::string_view arr)
+// One integer, spelled so the target actually accepts it.
+//
+// INT64_MIN is the trap. Written as plain decimal it is `-9223372036854775808`, which in C and
+// C++ is unary minus applied to the literal `9223372036854775808` -- a value too large for
+// `long long`, so the emitted table or expression would be ill-formed. It is spelled as
+// `(-9223372036854775807LL - 1)` instead. Python has arbitrary-precision integers and no
+// suffix, so it takes the plain decimal and must NOT be given the `LL`.
+[[nodiscard]] auto emit_int(std::int64_t v, bool python) -> std::string {
+    if (python) {
+        return std::to_string(v);
+    }
+    if (v == std::numeric_limits<std::int64_t>::min()) {
+        return "(-9223372036854775807LL - 1)";
+    }
+    return std::format("{}LL", v);
+}
+
+// Emits the expression deciding one constraint, reading values out of `arr`.
+[[nodiscard]] auto emit_constraint_expr(const WireConstraint& c, std::string_view arr, bool python)
     -> std::string {
     const auto v = [&](std::size_t k) { return std::format("{}[{}]", arr, c.scope[k]); };
     switch (c.kind) {
@@ -240,10 +265,18 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
         case ConstraintKind::equal:
             return std::format("({} == {})", v(0), v(1));
         case ConstraintKind::less_equal:
-            return std::format("(({} - {}) <= {})", v(0), v(1), -c.params[0]);
+            // x + k <= y, rearranged as x - y <= -k. `validate` has already refused a k of
+            // INT64_MIN, whose negation is not representable.
+            return std::format("(({} - {}) <= {})", v(0), v(1), emit_int(-c.params[0], python));
         case ConstraintKind::abs_diff_ne: {
+            if (python) {
+                // Triton is Python: it has no `?:`, so the C spelling below would not even
+                // parse. `tl.abs` is the elementwise magnitude the walk wants anyway.
+                return std::format("(tl.abs({} - {}) != {})", v(0), v(1),
+                                   emit_int(c.params[0], python));
+            }
             return std::format("((({} - {}) < 0 ? -({} - {}) : ({} - {})) != {})", v(0), v(1),
-                               v(0), v(1), v(0), v(1), c.params[0]);
+                               v(0), v(1), v(0), v(1), emit_int(c.params[0], python));
         }
         case ConstraintKind::all_different: {
             std::string out = "(";
@@ -257,7 +290,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
                     out += std::format("({} != {})", v(i), v(j));
                 }
             }
-            out += ")";
+            out += ')';
             return out;
         }
         case ConstraintKind::linear_eq:
@@ -267,10 +300,10 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
                 if (i != 0) {
                     sum += " + ";
                 }
-                sum += std::format("({} * {})", c.params[i], v(i));
+                sum += std::format("({} * {})", emit_int(c.params[i], python), v(i));
             }
             const char* op = c.kind == ConstraintKind::linear_eq ? "==" : "<=";
-            return std::format("(({}) {} {})", sum, op, c.params.back());
+            return std::format("(({}) {} {})", sum, op, emit_int(c.params.back(), python));
         }
         case ConstraintKind::table_allowed: {
             const std::size_t width = c.scope.size();
@@ -281,16 +314,16 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
                     out += " || ";
                 }
                 first = false;
-                out += "(";
+                out += '(';
                 for (const auto k : std::views::iota(std::size_t{0}, width)) {
                     if (k != 0) {
                         out += " && ";
                     }
-                    out += std::format("({} == {})", v(k), c.params[row + k]);
+                    out += std::format("({} == {})", v(k), emit_int(c.params[row + k], python));
                 }
-                out += ")";
+                out += ')';
             }
-            out += ")";
+            out += ')';
             return out;
         }
     }
@@ -316,7 +349,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
             if (!flat.empty()) {
                 flat += ", ";
             }
-            flat += std::to_string(v);
+            flat += emit_int(v, /*python=*/false);
             ++running;
         }
     }
@@ -344,7 +377,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
             if (!flat.empty()) {
                 flat += ", ";
             }
-            flat += std::to_string(v);
+            flat += emit_int(v, /*python=*/false);
             ++running;
         }
     }
@@ -364,7 +397,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
     out += std::format("{}bool {}_satisfies(const long long* a) {{\n", qual, p);
     for (const auto& c : w.constraints) {
         out += std::format("    if (!{}) {{ return false; }}  // {}\n",
-                           emit_constraint_expr(c, "a"), kind_name(c.kind));
+                           emit_constraint_expr(c, "a", /*python=*/false), kind_name(c.kind));
     }
     out += "    return true;\n}\n\n";
 
@@ -372,7 +405,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
     out += std::format("{}unsigned long long {}_conflicts(const long long* a) {{\n", qual, p);
     out += "    unsigned long long n = 0;\n";
     for (const auto& c : w.constraints) {
-        out += std::format("    if (!{}) {{ ++n; }}  // {}\n", emit_constraint_expr(c, "a"),
+        out += std::format("    if (!{}) {{ ++n; }}  // {}\n", emit_constraint_expr(c, "a", /*python=*/false),
                            kind_name(c.kind));
     }
     out += "    return n;\n}\n\n";
@@ -393,7 +426,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
         for (const std::size_t idx : c.scope) {
             marks += std::format(" m[{}] = true;", idx);
         }
-        out += std::format("    if (!{}) {{{} }}  // {}\n", emit_constraint_expr(c, "a"), marks,
+        out += std::format("    if (!{}) {{{} }}  // {}\n", emit_constraint_expr(c, "a", /*python=*/false), marks,
                            kind_name(c.kind));
     }
     out += "    unsigned long long k = 0;\n";
@@ -453,7 +486,7 @@ auto is_compilable_for(const WireCsp& w, const EmitOptions& opts) -> Result<void
     }
     switch (opts.strategy) {
         case Strategy::exhaustive: {
-            if (opts.shards == 0) {
+            if (opts.shards == 0 || opts.shards > max_parallelism) {
                 return make_error<void>(MathError::domain_error);
             }
             const auto space = search_space(w);
@@ -466,7 +499,7 @@ auto is_compilable_for(const WireCsp& w, const EmitOptions& opts) -> Result<void
             break;
         }
         case Strategy::min_conflicts: {
-            if (opts.walkers == 0 || opts.max_steps == 0) {
+            if (opts.walkers == 0 || opts.walkers > max_parallelism || opts.max_steps == 0) {
                 return make_error<void>(MathError::domain_error);
             }
             if (opts.noise_per_1024 > 1024) {
@@ -509,7 +542,7 @@ namespace {
     out += "#include <algorithm>\n#include <cstdint>\n#include <thread>\n#include <vector>\n\n";
     out += "namespace {\n\n";
     out += emit_domains(w, p, "constexpr ");
-    out += "\n";
+    out += '\n';
     out += emit_check_fn(w, p, "inline ");
     out += emit_decode_fn(w, p, "inline ");
 
@@ -649,9 +682,9 @@ namespace {
     out += "//\n";
     out += "// A CUDA kernel plus a host launcher. Nothing here has been compiled or run by the\n";
     out += "// emitter, which produces text only.\n";
-    out += "#include <cstdint>\n\n";
+    out += "#include <cstdint>\n#include <vector>\n\n";
     out += emit_domains(w, p, "__device__ __constant__ ");
-    out += "\n";
+    out += '\n';
     out += emit_check_fn(w, p, "__device__ inline ");
     out += emit_decode_fn(w, p, "__device__ inline ");
 
@@ -679,7 +712,7 @@ namespace {
         // Emitted here, before the launcher that reads them.
         out += "\n// Host-side copies of the tables; the device ones are not host-addressable.\n";
         out += emit_host_domains(w, p);
-        out += "\n";
+        out += '\n';
         out += std::format(
             "// Host launcher. Returns true and fills `out` with the lexicographically-first\n"
             "// solution; false is a PROOF of unsatisfiability, the scan being exhaustive.\n"
@@ -751,9 +784,50 @@ namespace {
             "        a[var] = best;\n"
             "    }}\n"
             "    ok[wi] = ({}_conflicts(a) == 0) ? 1 : 0;\n"
+            "}}\n\n",
+            std::format("{}_kernel", entry_point_name(opts)), opts.walkers, n, n, p, opts.seed, p,
+            p, p, opts.max_steps, p, p, n, p, p, p, opts.noise_per_1024, p, p, p, p);
+        // The host launcher. Without it `entry_point_name` would name a symbol that does not
+        // exist, and the LOWEST-INDEXED-walker determinism the header promises would have
+        // nowhere to be enforced -- the kernel alone leaves every successful walker equally
+        // eligible.
+        out += std::format(
+            "// Host launcher. Returns true and fills `out` on success. FALSE MEANS UNKNOWN:\n"
+            "// local search cannot prove that no solution exists.\n"
+            "// The answer is the LOWEST-INDEXED walker that succeeded, chosen here on the\n"
+            "// host, so it does not depend on which thread finished first.\n"
+            "inline bool {}(long long* out) {{\n"
+            "    const unsigned long long walkers = {}ULL;\n"
+            "    const unsigned long long nvars = {}ULL;\n"
+            "    int* d_ok = nullptr;\n"
+            "    long long* d_res = nullptr;\n"
+            "    if (cudaMalloc(&d_ok, walkers * sizeof(int)) != cudaSuccess) {{ return false; }}\n"
+            "    if (cudaMalloc(&d_res, walkers * nvars * sizeof(long long)) != cudaSuccess) {{\n"
+            "        cudaFree(d_ok);\n"
+            "        return false;\n"
+            "    }}\n"
+            "    cudaMemset(d_ok, 0, walkers * sizeof(int));\n"
+            "    const unsigned long long block = 128ULL;\n"
+            "    const unsigned long long grid = (walkers + block - 1ULL) / block;\n"
+            "    {}_kernel<<<(unsigned)grid, (unsigned)block>>>(d_ok, d_res);\n"
+            "    std::vector<int> ok(walkers, 0);\n"
+            "    std::vector<long long> res(walkers * nvars, 0);\n"
+            "    cudaMemcpy(ok.data(), d_ok, walkers * sizeof(int), cudaMemcpyDeviceToHost);\n"
+            "    cudaMemcpy(res.data(), d_res, walkers * nvars * sizeof(long long),\n"
+            "               cudaMemcpyDeviceToHost);\n"
+            "    cudaFree(d_ok);\n"
+            "    cudaFree(d_res);\n"
+            "    for (unsigned long long wi = 0; wi < walkers; ++wi) {{\n"
+            "        if (ok[wi] != 0) {{\n"
+            "            for (unsigned long long v = 0; v < nvars; ++v) {{\n"
+            "                out[v] = res[wi * nvars + v];\n"
+            "            }}\n"
+            "            return true;\n"
+            "        }}\n"
+            "    }}\n"
+            "    return false;\n"
             "}}\n",
-            entry_point_name(opts), opts.walkers, n, n, p, opts.seed, p, p, p, opts.max_steps, p,
-            p, n, p, p, p, opts.noise_per_1024, p, p, p, p);
+            entry_point_name(opts), opts.walkers, n, entry_point_name(opts));
     }
     return out;
 }
@@ -788,7 +862,7 @@ namespace {
     }
     out += "    conflicts = tl.zeros((BLOCK,), dtype=tl.int64)\n";
     for (const auto& c : w.constraints) {
-        std::string expr = emit_constraint_expr(c, "v");
+        std::string expr = emit_constraint_expr(c, "v", /*python=*/true);
         // The emitted expression indexes as `v[k]`; in Triton each variable is its own tensor.
         expr = std::regex_replace(expr, std::regex(R"(v\[(\d+)\])"), "v$1");
         expr = std::regex_replace(expr, std::regex(R"(&&)"), "&");

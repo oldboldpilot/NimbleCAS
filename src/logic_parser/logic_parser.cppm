@@ -282,8 +282,9 @@ struct PToken {
 // accidental default-initialised enum -- so it lives here, once, with the reason attached,
 // instead of being repeated at every call site.
 [[nodiscard]] auto chars_ok(std::errc ec) noexcept -> bool {
-    // NOLINTNEXTLINE(bugprone-invalid-enum-default-initialization) -- see above: this is what
-    // the standard defines from_chars success to be.
+    // See above: this is what the standard defines from_chars success to be. NOLINTNEXTLINE
+    // must sit on the line IMMEDIATELY before the code, so the explanation goes first.
+    // NOLINTNEXTLINE(bugprone-invalid-enum-default-initialization)
     return ec == std::errc{};
 }
 
