@@ -27,7 +27,7 @@ auto fill(std::vector<double>& v, std::uint64_t seed) -> void {
     std::uint64_t s = seed;
     for (double& x : v) {
         s = s * 6364136223846793005ull + 1442695040888963407ull;  // LCG
-        x = static_cast<double>(static_cast<std::int64_t>(s)) / static_cast<double>(1ull << 62);
+        x = static_cast<double>(static_cast<std::int64_t>(s)) / static_cast<double>(1ull << 62U);
     }
 }
 

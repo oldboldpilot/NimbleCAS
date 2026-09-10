@@ -1375,10 +1375,11 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
                 if (visited.contains(v)) {
                     continue;
                 }
+                // No parent yet, or a lower-numbered one: either way this is the parent.
+                // Ties break toward the smaller id, which is what makes the beam
+                // deterministic regardless of the order successors are produced in.
                 const auto it = cand_parents.find(v);
-                if (it == cand_parents.end()) {
-                    cand_parents[v] = u;
-                } else if (u < it->second) {
+                if (it == cand_parents.end() || u < it->second) {
                     cand_parents[v] = u;
                 }
             }

@@ -205,7 +205,7 @@ auto main(int argc, char** argv) -> int {
     // The reference answer, so a caller can check the emitted solver against it without writing
     // their own oracle. Bounded, because a large formula's enumeration is not worth waiting for
     // just to print a line.
-    auto answer = reference_solve(*cnf, 1ULL << 22);
+    auto answer = reference_solve(*cnf, 1ULL << 22U);
     if (!answer) {
         std::println(std::cerr, "sat_compile: reference solver declined (too large to enumerate)");
         return 0;

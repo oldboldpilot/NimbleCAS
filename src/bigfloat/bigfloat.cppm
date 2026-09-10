@@ -537,7 +537,7 @@ auto BigFloat::to_double() const -> double {
         value = std::numeric_limits<double>::infinity();
         return neg ? -value : value;
     }
-    constexpr std::int64_t clamp = 1 << 20;  // ldexp takes int; clamp far past double's range
+    constexpr std::int64_t clamp = 1 << 20U;  // ldexp takes int; clamp far past double's range
     if (expo > clamp) {
         value = std::numeric_limits<double>::infinity();
     } else if (expo < -clamp) {

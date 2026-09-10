@@ -166,7 +166,7 @@ inline constexpr bool always_false = false;
 }
 
 [[nodiscard]] auto hash_combine(std::size_t seed, std::size_t value) -> std::size_t {
-    return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+    return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U));
 }
 
 // Hash of a constant, consistent with constant_equal (doubles hashed bitwise).

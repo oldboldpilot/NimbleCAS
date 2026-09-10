@@ -63,7 +63,7 @@ namespace {
     return cnf;
 }
 
-constexpr std::uint64_t plenty = 1ULL << 20;
+constexpr std::uint64_t plenty = 1ULL << 20U;
 
 }  // namespace
 

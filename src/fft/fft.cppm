@@ -98,7 +98,7 @@ namespace {
 [[nodiscard]] auto next_power_of_two(std::size_t n) -> Result<std::size_t> {
     std::size_t p = 1;
     while (p < n) {
-        if (p > (std::numeric_limits<std::size_t>::max() >> 1)) {
+        if (p > (std::numeric_limits<std::size_t>::max() >> 1U)) {
             return make_error<std::size_t>(MathError::overflow);
         }
         p <<= 1;
@@ -117,7 +117,7 @@ auto fft_radix2_inplace(std::vector<std::complex<double>>& a, bool invert) -> vo
     }
     // Bit-reversal permutation.
     for (std::size_t i = 1, j = 0; i < n; ++i) {
-        std::size_t bit = n >> 1;
+        std::size_t bit = n >> 1U;
         for (; (j & bit) != 0; bit >>= 1) {
             j ^= bit;
         }
@@ -133,7 +133,7 @@ auto fft_radix2_inplace(std::vector<std::complex<double>>& a, bool invert) -> vo
         const std::complex<double> wlen = std::polar(1.0, angle);
         for (std::size_t start = 0; start < n; start += len) {
             std::complex<double> w{1.0, 0.0};
-            const std::size_t half = len >> 1;
+            const std::size_t half = len >> 1U;
             for (std::size_t k = 0; k < half; ++k) {
                 const std::complex<double> u = a[start + k];
                 const std::complex<double> v = a[start + k + half] * w;

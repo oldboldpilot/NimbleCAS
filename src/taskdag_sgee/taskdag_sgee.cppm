@@ -44,7 +44,7 @@ enum class SgeePlacement : std::uint8_t {
 export namespace nimblecas::sgee_bridge {
 
 // Maximum task payload over the wire (64 MiB).
-inline constexpr std::size_t k_max_task_payload_bytes = 64u * 1024u * 1024u;
+inline constexpr std::size_t k_max_task_payload_bytes = std::size_t{64} * 1024 * 1024;
 
 // Envelope for task arguments sent from coordinator to worker.
 struct TaskEnvelope {
@@ -910,14 +910,14 @@ namespace {
 
 inline auto write_u16_le(std::uint16_t val, std::vector<std::byte>& out) -> void {
     out.push_back(static_cast<std::byte>(val & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 8) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFF));
 }
 
 inline auto write_u32_le(std::uint32_t val, std::vector<std::byte>& out) -> void {
     out.push_back(static_cast<std::byte>(val & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 8) & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 16) & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 24) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 16U) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 24U) & 0xFF));
 }
 
 inline auto write_u64_le(std::uint64_t val, std::vector<std::byte>& out) -> void {
@@ -928,14 +928,14 @@ inline auto write_u64_le(std::uint64_t val, std::vector<std::byte>& out) -> void
 
 inline auto read_u16_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint16_t {
     return static_cast<std::uint16_t>(bytes[offset]) |
-           (static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
+           (static_cast<std::uint16_t>(bytes[offset + 1]) << 8U);
 }
 
 inline auto read_u32_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint32_t {
     return static_cast<std::uint32_t>(bytes[offset]) |
-           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
-           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8U) |
+           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16U) |
+           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24U);
 }
 
 inline auto read_u64_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint64_t {

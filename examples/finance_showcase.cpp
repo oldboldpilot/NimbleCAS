@@ -598,8 +598,12 @@ auto main() -> int {
         const auto ridge_w = pf::min_variance_weights(singular, 1e-8).value();
         std::println("ridge min-var weights    = [{:.6f}, {:.6f}]", ridge_w[0], ridge_w[1]);
                                             // expect [0.500000, 0.500000] by symmetry
-        const auto x = pf::lu_solve_ridge(singular, std::vector<double>{1.0, 1.0}, 1e-8).value();
-        std::println("lu_solve_ridge x         = [{:.4f}, {:.4f}]", x[0], x[1]);
+        const auto x = pf::lu_solve_ridge(singular, std::vector<double>{1.0, 1.0}, 1e-8);
+        if (x) {
+            std::println("lu_solve_ridge x         = [{:.4f}, {:.4f}]", (*x)[0], (*x)[1]);
+        } else {
+            std::println("lu_solve_ridge x         -> refused");
+        }
                                             // expect ~ [12.5, 12.5] (= 1/(0.08+lambda) each)
         const auto ridge_tan = pf::tangency_weights(cov, mu, 0.02, 0.0).value();
         std::println("ridge tangency (l=0)     = [{:.6f}, {:.6f}]", ridge_tan[0], ridge_tan[1]);

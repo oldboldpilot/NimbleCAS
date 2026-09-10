@@ -73,7 +73,7 @@ using ImageResult = ZpImage;
 
 inline constexpr std::uint32_t k_image_request_magic = 0x4E434751;  // "NCGQ" in LE
 inline constexpr std::uint32_t k_image_result_magic  = 0x4E434749;  // "NCGI" in LE
-inline constexpr std::size_t k_max_payload_size = 64 * 1024 * 1024; // 64 MiB
+inline constexpr std::size_t k_max_payload_size = std::size_t{64} * 1024 * 1024; // 64 MiB
 inline constexpr std::size_t k_default_prime_budget = 256;
 
 // ---------------------------------------------------------------------------
@@ -157,14 +157,14 @@ namespace {
 
 inline auto write_u16_le(std::uint16_t val, std::vector<std::byte>& out) -> void {
     out.push_back(static_cast<std::byte>(val & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 8) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFF));
 }
 
 inline auto write_u32_le(std::uint32_t val, std::vector<std::byte>& out) -> void {
     out.push_back(static_cast<std::byte>(val & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 8) & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 16) & 0xFF));
-    out.push_back(static_cast<std::byte>((val >> 24) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 8U) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 16U) & 0xFF));
+    out.push_back(static_cast<std::byte>((val >> 24U) & 0xFF));
 }
 
 inline auto write_u64_le(std::uint64_t val, std::vector<std::byte>& out) -> void {
@@ -175,14 +175,14 @@ inline auto write_u64_le(std::uint64_t val, std::vector<std::byte>& out) -> void
 
 inline auto read_u16_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint16_t {
     return static_cast<std::uint16_t>(bytes[offset]) |
-           (static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
+           (static_cast<std::uint16_t>(bytes[offset + 1]) << 8U);
 }
 
 inline auto read_u32_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint32_t {
     return static_cast<std::uint32_t>(bytes[offset]) |
-           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
-           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8U) |
+           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16U) |
+           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24U);
 }
 
 inline auto read_u64_le(std::span<const std::byte> bytes, std::size_t offset) -> std::uint64_t {
@@ -441,7 +441,7 @@ auto decode_image_request(std::span<const std::byte> bytes) -> Result<ImageReque
     }
 
     // Validation checks per spec section 5.2
-    if (p <= (1ULL << 30) || p >= (1ULL << 31)) {
+    if (p <= (1ULL << 30U) || p >= (1ULL << 31U)) {
         return make_error<ImageRequest>(MathError::domain_error);
     }
     if (gamma <= 0) {
@@ -786,7 +786,7 @@ auto merge_images(std::span<const ZpImage> images, std::int64_t gamma,
 // ---------------------------------------------------------------------------
 
 PrimeSchedule::PrimeSchedule(std::int64_t lc_a, std::int64_t lc_b)
-    : current_(BigInt::from_u64(1ULL << 30)) {
+    : current_(BigInt::from_u64(1ULL << 30U)) {
     u_lc_a_ = (lc_a < 0) ? (0ULL - static_cast<std::uint64_t>(lc_a))
                          : static_cast<std::uint64_t>(lc_a);
     u_lc_b_ = (lc_b < 0) ? (0ULL - static_cast<std::uint64_t>(lc_b))
@@ -807,7 +807,7 @@ auto PrimeSchedule::next() -> Result<std::uint64_t> {
         const std::uint64_t p = *p_opt;
         // The single-word window is exhausted. Walking past it would keep working in-process while
         // the image-request codec rejected the same prime as out-of-range, so stop here and say so.
-        if (p >= (1ULL << 31)) {
+        if (p >= (1ULL << 31U)) {
             return make_error<std::uint64_t>(MathError::overflow);
         }
         if (u_lc_a_ > 0 && (u_lc_a_ % p == 0)) {

@@ -249,7 +249,7 @@ auto ac3_bitset(const BitCsp& csp) -> Result<std::optional<std::vector<Bitset>>>
         free ^= bit;                                   // consume it
         // Placing a queen advances the diagonals by one column each; the AND with `all` in the
         // free-square expression above keeps out-of-board diagonal bits harmless.
-        count += nqueens_count(all, cols | bit, (d1 | bit) << 1, (d2 | bit) >> 1);
+        count += nqueens_count(all, cols | bit, (d1 | bit) << 1U, (d2 | bit) >> 1U);
     }
     return count;
 }
@@ -271,7 +271,7 @@ auto count_nqueens(int n, bool parallel) -> Result<std::uint64_t> {
     const std::vector<std::uint64_t> subtotals = nimblecas::parallel::transform_index(
         static_cast<std::size_t>(n), [all](std::size_t j) -> std::uint64_t {
             const std::uint64_t bit = std::uint64_t{1} << j;  // queen in column j of row 0
-            return nqueens_count(all, bit, bit << 1, bit >> 1);
+            return nqueens_count(all, bit, bit << 1U, bit >> 1U);
         });
 
     std::uint64_t total = 0;

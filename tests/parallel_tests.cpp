@@ -34,7 +34,7 @@ auto main() -> int {
         .test("parallel_matches_serial_reference",
               [](TestContext& t) {
                   const std::size_t n = 50'000;
-                  const auto f = [](std::size_t i) { return (i * 2654435761u) ^ (i << 3); };
+                  const auto f = [](std::size_t i) { return (i * 2654435761u) ^ (i << 3U); };
                   auto par = np::transform_index(n, f);  // parallel (n >= grain)
                   std::vector<std::size_t> ser(n);
                   for (std::size_t i = 0; i < n; ++i) ser[i] = f(i);

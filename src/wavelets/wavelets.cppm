@@ -584,7 +584,7 @@ enum class Family : std::uint8_t { daubechies, symlet, coiflet };
     double s = 0.0;
     const auto L = static_cast<std::int64_t>(h.size());
     for (std::int64_t k = 0; k < L; ++k) {
-        const std::int64_t j = k + 2 * m;
+        const std::int64_t j = k + (2 * static_cast<std::int64_t>(m));
         if (j >= 0 && j < L) {
             s += h[static_cast<std::size_t>(k)] * h[static_cast<std::size_t>(j)];
         }

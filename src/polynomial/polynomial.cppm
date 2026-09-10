@@ -24,7 +24,7 @@ export namespace nimblecas {
 // shard — a prefetcher-friendly, L2-resident streaming chunk that keeps enough shards for load
 // balancing on a large sweep. Profile-tunable (Code Policy Rule 43/58); chosen from the perf
 // pass on the Xeon Gold 6152 where the serial path saturated memory latency around 16 threads.
-inline constexpr std::size_t default_batch_grain = std::size_t{1} << 16;
+inline constexpr std::size_t default_batch_grain = std::size_t{1} << 16U;
 
 class Polynomial {
 public:

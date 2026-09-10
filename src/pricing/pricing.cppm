@@ -908,7 +908,7 @@ auto monte_carlo_european_parallel(const OptionSpec& spec, std::uint64_t paths, 
     // mutable state); transform_index returns the block partials IN ORDER, and they are combined
     // sequentially. This is numerically equal to the serial running sum (the gap is FP
     // non-associativity, orders of magnitude below the MC standard error) but not bit-identical.
-    constexpr std::uint64_t kBlock = std::uint64_t{1} << 18;  // 262144 paths per block
+    constexpr std::uint64_t kBlock = std::uint64_t{1} << 18U;  // 262144 paths per block
     constexpr std::size_t kTile_ = 8192;                      // per-block RNG/exp fill tile
     const std::size_t n_blocks = static_cast<std::size_t>((paths + kBlock - 1) / kBlock);
 

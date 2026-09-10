@@ -140,7 +140,7 @@ inline constexpr double kExpC2 = 0.5;
     p = std::fma(p, r, 1.0);
     p = std::fma(p, r, 1.0);
     const auto ki = static_cast<std::int64_t>(k);
-    const double pow2 = std::bit_cast<double>(static_cast<std::uint64_t>((ki + 1023) << 52));
+    const double pow2 = std::bit_cast<double>(static_cast<std::uint64_t>((ki + 1023) << 52U));
     return p * pow2;
 }
 auto exp_d_scalar(const double* in, double* out, std::size_t n) noexcept -> void {
@@ -165,7 +165,7 @@ inline constexpr double kLogC8 = 1.0 / 17.0;
 // AVX-512 path — same field extraction, same sqrt2 centring, same std::fma order (Rule 55).
 [[nodiscard]] auto log_scalar_one(double x) noexcept -> double {
     const std::uint64_t bits = std::bit_cast<std::uint64_t>(x);
-    double e = static_cast<double>(static_cast<std::int64_t>((bits >> 52) & 0x7ff) - 1023);
+    double e = static_cast<double>(static_cast<std::int64_t>((bits >> 52U) & 0x7ff) - 1023);
     double m = std::bit_cast<double>((bits & 0x000fffffffffffffULL) | 0x3ff0000000000000ULL);
     if (m > kSqrt2) {  // centre the mantissa in [sqrt2/2, sqrt2) so the atanh argument stays small
         m *= 0.5;

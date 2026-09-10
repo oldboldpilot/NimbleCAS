@@ -398,7 +398,7 @@ auto main() -> int {
             const auto next_rand = [&] -> std::int64_t {
                 state = state * 6364136223846793005ULL + 1442695040888963407ULL;
                 // Small coefficients in [-8, 8]
-                return static_cast<std::int64_t>((state >> 60) & 0xF) - 7;
+                return static_cast<std::int64_t>((state >> 60U) & 0xF) - 7;
             };
 
             for (std::size_t trial = 0; trial < 50; ++trial) {

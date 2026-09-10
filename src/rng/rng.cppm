@@ -198,9 +198,9 @@ __attribute__((target("avx512f"))) void counter_u64_batch_avx512(
 auto splitmix64(std::uint64_t x) noexcept -> std::uint64_t {
     x += 0x9E3779B97F4A7C15ULL;
     std::uint64_t z = x;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
+    z = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31U);
 }
 
 auto counter_u64(std::uint64_t key, std::uint64_t counter) noexcept -> std::uint64_t {
@@ -256,7 +256,7 @@ void counter_u64_batch(std::uint64_t key, std::uint64_t base_counter,
 auto uniform_unit(std::uint64_t bits) noexcept -> double {
     // Top 53 bits scaled by 2^-53 gives a uniform double in [0, 1).
     constexpr double scale = 1.0 / 9007199254740992.0;  // 1 / 2^53
-    return static_cast<double>(bits >> 11) * scale;
+    return static_cast<double>(bits >> 11U) * scale;
 }
 
 auto uniform_double(std::uint64_t bits, double lo, double hi) -> Result<double> {

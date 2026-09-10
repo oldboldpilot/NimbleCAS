@@ -388,7 +388,7 @@ inline constexpr std::size_t sobol_max_dim = 1 + sobol_table.size();  // 8
     if (!v) {
         return make_error<std::uint32_t>(v.error());
     }
-    std::uint32_t gray = static_cast<std::uint32_t>(n ^ (n >> 1));
+    std::uint32_t gray = static_cast<std::uint32_t>(n ^ (n >> 1U));
     std::uint32_t x = 0;
     std::uint32_t bit = 1;
     while (gray != 0) {
@@ -937,7 +937,7 @@ auto adaptive_qmc(const ScalarField& f, std::size_t dimension, double tol, std::
             break;
         }
         // Guard the doubling against overflow; if we cannot grow further, stop.
-        if (n > (std::numeric_limits<std::uint64_t>::max() >> 1)) {
+        if (n > (std::numeric_limits<std::uint64_t>::max() >> 1U)) {
             break;
         }
         n *= 2;

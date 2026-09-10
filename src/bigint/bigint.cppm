@@ -139,7 +139,7 @@ namespace nimblecas {
 namespace {
 
 // Base of the limb representation: each limb is a digit in radix 2^32.
-constexpr std::uint64_t limb_base = 1ULL << 32;
+constexpr std::uint64_t limb_base = 1ULL << 32U;
 constexpr std::uint64_t limb_mask = 0xFFFFFFFFULL;
 
 // Drop trailing zero limbs so a magnitude is in canonical (unnormalised-free) form.
@@ -179,7 +179,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
             sum += b[i];
         }
         r.push_back(static_cast<std::uint32_t>(sum & limb_mask));
-        carry = sum >> 32;
+        carry = sum >> 32U;
     }
     if (carry != 0) {
         r.push_back(static_cast<std::uint32_t>(carry));
@@ -224,7 +224,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
             const std::uint64_t cur =
                 static_cast<std::uint64_t>(r[i + j]) + ai * b[j] + carry;
             r[i + j] = static_cast<std::uint32_t>(cur & limb_mask);
-            carry = cur >> 32;
+            carry = cur >> 32U;
         }
         // Index i + b.size() is untouched until this outer iteration, so a plain store
         // of the final carry is correct (later outer iterations accumulate onto it).
@@ -244,7 +244,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
     for (auto& limb : v) {
         const std::uint64_t cur = static_cast<std::uint64_t>(limb) * m + carry;
         limb = static_cast<std::uint32_t>(cur & limb_mask);
-        carry = cur >> 32;
+        carry = cur >> 32U;
     }
     if (carry != 0) {
         v.push_back(static_cast<std::uint32_t>(carry));
@@ -259,7 +259,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
     for (std::size_t i = 0; i < v.size() && carry != 0; ++i) {
         const std::uint64_t cur = static_cast<std::uint64_t>(v[i]) + carry;
         v[i] = static_cast<std::uint32_t>(cur & limb_mask);
-        carry = cur >> 32;
+        carry = cur >> 32U;
     }
     if (carry != 0) {
         v.push_back(static_cast<std::uint32_t>(carry));
@@ -274,7 +274,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
     std::vector<std::uint32_t> q(u.size(), 0);
     std::uint64_t rem = 0;
     for (std::size_t i = u.size(); i-- > 0;) {
-        const std::uint64_t cur = (rem << 32) | u[i];
+        const std::uint64_t cur = (rem << 32U) | u[i];
         q[i] = static_cast<std::uint32_t>(cur / d);
         rem = cur % d;
     }
@@ -328,11 +328,11 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
         const std::size_t j = jj;
         // D3. Estimate the quotient digit qhat (and running remainder rhat).
         const std::uint64_t num =
-            (static_cast<std::uint64_t>(un[j + n]) << 32) | un[j + n - 1];
+            (static_cast<std::uint64_t>(un[j + n]) << 32U) | un[j + n - 1];
         std::uint64_t qhat = num / vn[n - 1];
         std::uint64_t rhat = num % vn[n - 1];
         while (qhat >= limb_base ||
-               qhat * vn[n - 2] > ((rhat << 32) | un[j + n - 2])) {
+               qhat * vn[n - 2] > ((rhat << 32U) | un[j + n - 2])) {
             --qhat;
             rhat += vn[n - 1];
             if (rhat >= limb_base) {
@@ -350,7 +350,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
             const std::int64_t sub = static_cast<std::int64_t>(un[j + i]) - k -
                                      static_cast<std::int64_t>(static_cast<std::uint32_t>(p));
             un[j + i] = static_cast<std::uint32_t>(sub);
-            k = static_cast<std::int64_t>(p >> 32) - (sub >> 32);
+            k = static_cast<std::int64_t>(p >> 32U) - (sub >> 32U);
         }
         const std::int64_t sub_top = static_cast<std::int64_t>(un[j + n]) - k;
         un[j + n] = static_cast<std::uint32_t>(sub_top);
@@ -365,7 +365,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
                 const std::uint64_t sum =
                     static_cast<std::uint64_t>(un[j + i]) + vn[i] + carry;
                 un[j + i] = static_cast<std::uint32_t>(sum & limb_mask);
-                carry = sum >> 32;
+                carry = sum >> 32U;
             }
             un[j + n] = static_cast<std::uint32_t>(static_cast<std::uint64_t>(un[j + n]) + carry);
         }
@@ -411,7 +411,7 @@ auto trim(std::vector<std::uint32_t>& v) -> void {
 [[nodiscard]] auto limbs_from_u64(std::uint64_t v) -> std::vector<std::uint32_t> {
     std::vector<std::uint32_t> m;
     const auto lo = static_cast<std::uint32_t>(v & limb_mask);
-    const auto hi = static_cast<std::uint32_t>(v >> 32);
+    const auto hi = static_cast<std::uint32_t>(v >> 32U);
     if (hi != 0) {
         m = {lo, hi};
     } else if (lo != 0) {

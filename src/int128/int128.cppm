@@ -115,7 +115,7 @@ namespace {
 // The signed 128-bit bounds. numeric_limits<__int128> is not portably guaranteed, so
 // derive them from the two's-complement layout (C++23 mandates two's complement).
 inline constexpr Int128 int128_max =
-    static_cast<Int128>((static_cast<unsigned __int128>(1) << 127) - 1);   //  2^127 - 1
+    static_cast<Int128>((static_cast<unsigned __int128>(1) << 127U) - 1);   //  2^127 - 1
 inline constexpr Int128 int128_min = -int128_max - 1;                      // -2^127
 
 // Euclidean gcd on Int128, returning a non-negative result; gcd(0, 0) == 0. The
@@ -177,8 +177,8 @@ auto int128_from_string(std::string_view s) -> Result<Int128> {
     // Bound the accumulated magnitude: |int128_min| = 2^127 for a negative literal,
     // int128_max = 2^127 - 1 for a non-negative one.
     const unsigned __int128 max_mag =
-        neg ? (static_cast<unsigned __int128>(1) << 127)
-            : ((static_cast<unsigned __int128>(1) << 127) - 1);
+        neg ? (static_cast<unsigned __int128>(1) << 127U)
+            : ((static_cast<unsigned __int128>(1) << 127U) - 1);
     unsigned __int128 acc = 0;
     for (; i < s.size(); ++i) {
         const char c = s[i];

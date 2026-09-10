@@ -1215,12 +1215,12 @@ struct Canonicaliser {
     // Software binary search determines the index of the highest set bit without external headers.
     auto u = static_cast<std::uint64_t>(x);
     std::int64_t bit = 0;
-    if (u >= (1ULL << 32)) { u >>= 32; bit += 32; }
-    if (u >= (1ULL << 16)) { u >>= 16; bit += 16; }
-    if (u >= (1ULL << 8))  { u >>= 8;  bit += 8; }
-    if (u >= (1ULL << 4))  { u >>= 4;  bit += 4; }
-    if (u >= (1ULL << 2))  { u >>= 2;  bit += 2; }
-    if (u >= (1ULL << 1))  { u >>= 1;  bit += 1; }
+    if (u >= (1ULL << 32U)) { u >>= 32; bit += 32; }
+    if (u >= (1ULL << 16U)) { u >>= 16; bit += 16; }
+    if (u >= (1ULL << 8U))  { u >>= 8;  bit += 8; }
+    if (u >= (1ULL << 4U))  { u >>= 4;  bit += 4; }
+    if (u >= (1ULL << 2U))  { u >>= 2;  bit += 2; }
+    if (u >= (1ULL << 1U))  { u >>= 1;  bit += 1; }
     return bit;
 }
 
