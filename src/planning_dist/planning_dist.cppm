@@ -798,12 +798,29 @@ auto distributed_astar_plan(const Task& task, std::uint64_t max_expansions, std:
         std::vector<std::size_t> rest;
         std::vector<std::int64_t> rest_f;
         for (const auto i : std::views::iota(std::size_t{0}, open.size())) {
-            if (open_f[i] == f_min) {
-                layer.push_back(open[i]);
-            } else {
+            if (open_f[i] != f_min) {
                 rest.push_back(open[i]);
                 rest_f.push_back(open_f[i]);
+                continue;
             }
+            // Skip STALE entries. When a state is re-reached more cheaply a new node is pushed,
+            // and the old one stays in `open` carrying the dearer g. Expanding it is harmless --
+            // every successor it generates loses to the cheaper path in `best` -- but harmless
+            // work still costs a round trip to a worker for every one of its successors, which
+            // is exactly the compute this module exists to spend well. A node is current iff it
+            // is the one `best` holds for its state.
+            const auto it = best.find(nodes[open[i]].state);
+            if (it == best.end() || it->second != open[i]) {
+                continue;
+            }
+            layer.push_back(open[i]);
+        }
+        if (layer.empty()) {
+            // The whole layer was stale. Nothing to expand, and the remaining entries carry
+            // strictly larger f, so the search simply moves on rather than spinning.
+            open = std::move(rest);
+            open_f = std::move(rest_f);
+            continue;
         }
         open = std::move(rest);
         open_f = std::move(rest_f);

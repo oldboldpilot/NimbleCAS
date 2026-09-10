@@ -359,6 +359,52 @@ auto main() -> int {
                                "and the plan still replays to the goal");
                   }
               })
+        .test("a_state_re_reached_more_cheaply_is_not_expanded_twice",
+              [](TestContext& t) {
+                  // Found by adversarial review. When a state is re-reached more cheaply the old
+                  // node stays in `open` carrying the dearer g. Expanding it is harmless -- its
+                  // successors all lose to the cheaper path -- but harmless work still costs a
+                  // round trip per successor, which is the compute this module exists to spend
+                  // well. The shape below reaches var 0's value 2 by a dear direct step and by a
+                  // cheap two-step route, so the dear node is superseded before its layer comes
+                  // up.
+                  Task t2;
+                  t2.domain_size = {4};
+                  t2.initial = {0};
+                  t2.goal = {FactPair{.var = 0, .value = 3}};
+                  t2.operators.push_back(Operator{.name = "direct_dear",
+                                                  .preconditions = {FactPair{.var = 0, .value = 0}},
+                                                  .effects = {FactPair{.var = 0, .value = 2}},
+                                                  .cost = 5});
+                  t2.operators.push_back(Operator{.name = "hop1",
+                                                  .preconditions = {FactPair{.var = 0, .value = 0}},
+                                                  .effects = {FactPair{.var = 0, .value = 1}},
+                                                  .cost = 1});
+                  t2.operators.push_back(Operator{.name = "hop2",
+                                                  .preconditions = {FactPair{.var = 0, .value = 1}},
+                                                  .effects = {FactPair{.var = 0, .value = 2}},
+                                                  .cost = 1});
+                  t2.operators.push_back(Operator{.name = "finish",
+                                                  .preconditions = {FactPair{.var = 0, .value = 2}},
+                                                  .effects = {FactPair{.var = 0, .value = 3}},
+                                                  .cost = 1});
+                  auto exec = local_parallel_executor();
+                  auto want = astar_plan(t2, 100000);
+                  auto got = distributed_astar_plan(t2, 100000, 2, *exec);
+                  t.expect(want.has_value() && got.has_value(), "both planners solve it");
+                  if (!want || !got) {
+                      return;
+                  }
+                  t.expect(got->plan.cost == want->plan.cost,
+                           "the cheap route wins, at the serial planner's cost");
+                  t.expect(got->plan.cost == 3, "which is 1 + 1 + 1, not the dear 5 + 1");
+                  // The point of the filter: a superseded node is never handed to a worker, so
+                  // the expansion count cannot exceed the number of distinct states.
+                  t.expect(got->stats.expanded <= 4,
+                           "no more expansions than there are states -- a superseded node is "
+                           "skipped rather than re-expanded");
+                  t.expect(validate_plan(t2, got->plan).has_value(), "and the plan replays");
+              })
         .test("an_unsolvable_task_is_proved_unsolvable_not_merely_unfinished",
               [](TestContext& t) {
                   // undefined_value means the reachable state space was exhausted -- a proof.
