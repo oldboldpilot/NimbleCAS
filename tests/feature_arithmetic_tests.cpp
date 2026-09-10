@@ -119,7 +119,7 @@ namespace {
 
 // --- int64 Matrix builder (mirrors tests/feature_linalg_tests.cpp) ---------
 
-[[nodiscard]] auto mat(std::vector<std::vector<std::int64_t>> rows) -> Matrix {
+[[nodiscard]] auto mat(const std::vector<std::vector<std::int64_t>>& rows) -> Matrix {
     std::vector<std::vector<Rational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {
@@ -135,7 +135,7 @@ namespace {
 
 // --- BigMatrix builder from integer rows -----------------------------------
 
-[[nodiscard]] auto bmat(std::vector<std::vector<std::int64_t>> rows) -> BigMatrix {
+[[nodiscard]] auto bmat(const std::vector<std::vector<std::int64_t>>& rows) -> BigMatrix {
     std::vector<std::vector<BigRational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {

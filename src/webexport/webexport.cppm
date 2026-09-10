@@ -69,8 +69,8 @@ struct Series {
     SeriesKind kind = SeriesKind::line;
     std::string label;
     std::string color = "#1f77b4";
-    std::vector<double> xs{};
-    std::vector<double> ys{};
+    std::vector<double> xs;
+    std::vector<double> ys;
 };
 
 // Single-series line PlotSpec JSON. Errors (MathError::domain_error): xs/ys length
@@ -86,7 +86,7 @@ struct Series {
 // any x whose f(x) is non-finite (mirrors svgplot::plot_function), then delegate to
 // plot_spec_line. Errors (domain_error): samples < 2, xmin >= xmax, plus any error
 // plot_spec_line raises on the surviving samples (e.g. every f(x) dropped -> empty).
-[[nodiscard]] auto plot_spec_function(std::function<double(double)> f, double xmin,
+[[nodiscard]] auto plot_spec_function(const std::function<double(double)>& f, double xmin,
                                       double xmax, std::size_t samples,
                                       const PlotSpecOptions& opt) -> Result<std::string>;
 
@@ -315,7 +315,7 @@ auto plot_spec_scatter(std::span<const double> xs, std::span<const double> ys,
     return single_series_spec(xs, ys, SeriesKind::scatter, opt);
 }
 
-auto plot_spec_function(std::function<double(double)> f, double xmin, double xmax,
+auto plot_spec_function(const std::function<double(double)>& f, double xmin, double xmax,
                         std::size_t samples, const PlotSpecOptions& opt)
     -> Result<std::string> {
     if (samples < 2) {

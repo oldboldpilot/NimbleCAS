@@ -24,7 +24,7 @@ namespace {
 }
 
 // Build a Matrix from integer rows (low-index row first).
-[[nodiscard]] auto mat(std::vector<std::vector<std::int64_t>> rows) -> Matrix {
+[[nodiscard]] auto mat(const std::vector<std::vector<std::int64_t>>& rows) -> Matrix {
     std::vector<std::vector<Rational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {

@@ -415,7 +415,7 @@ auto main() -> int {
               })
         .test("validate_names_every_shape_fault",
               [](TestContext& t) {
-                  const auto bad = [&t](WireCsp w, MathError want, const char* why) {
+                  const auto bad = [&t](const WireCsp& w, MathError want, const char* why) {
                       auto r = validate(w);
                       t.expect(!r.has_value() && r.error() == want, why);
                   };

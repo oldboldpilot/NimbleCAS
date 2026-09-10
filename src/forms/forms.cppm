@@ -89,7 +89,7 @@ public:
     // in [0, n); otherwise domain_error. Repeated indices in a tuple drop that term.
     [[nodiscard]] static auto from_components(
         std::vector<std::string> coords, std::size_t degree,
-        std::vector<std::pair<std::vector<std::size_t>, Expr>> terms)
+        const std::vector<std::pair<std::vector<std::size_t>, Expr>>& terms)
         -> Result<DifferentialForm>;
 
     [[nodiscard]] auto dimension() const noexcept -> std::size_t { return coords_.size(); }
@@ -214,7 +214,7 @@ struct Canonical {
 
 auto DifferentialForm::from_components(
     std::vector<std::string> coords, std::size_t degree,
-    std::vector<std::pair<std::vector<std::size_t>, Expr>> terms) -> Result<DifferentialForm> {
+    const std::vector<std::pair<std::vector<std::size_t>, Expr>>& terms) -> Result<DifferentialForm> {
     const std::size_t n = coords.size();
     ComponentMap accumulated;
     for (const auto& [raw_indices, coeff] : terms) {

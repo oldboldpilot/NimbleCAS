@@ -121,17 +121,17 @@ enum class Stability {
 struct PhasePortrait {
     PhaseType type{};
     Stability stability{};
-    Rational trace{};          // T = tr(A)
-    Rational determinant{};    // D = det(A)
-    Rational discriminant{};   // delta = T^2 - 4D
+    Rational trace;          // T = tr(A)
+    Rational determinant;    // D = det(A)
+    Rational discriminant;   // delta = T^2 - 4D
     bool complex_eigenvalues{};   // delta < 0
     bool repeated_eigenvalue{};   // delta == 0
     bool eigenvalues_rational{};  // exact rational eigenvalue data is present below
-    std::optional<Rational> lambda1{};    // real case: (T - sqrt(delta))/2
-    std::optional<Rational> lambda2{};    // real case: (T + sqrt(delta))/2
-    std::optional<Rational> real_part{};  // complex case: T/2 (always exact)
-    std::optional<Rational> imag_part{};  // complex case: sqrt(-delta)/2 when rational
-    std::string description{};            // a human-readable one-liner
+    std::optional<Rational> lambda1;    // real case: (T - sqrt(delta))/2
+    std::optional<Rational> lambda2;    // real case: (T + sqrt(delta))/2
+    std::optional<Rational> real_part;  // complex case: T/2 (always exact)
+    std::optional<Rational> imag_part;  // complex case: sqrt(-delta)/2 when rational
+    std::string description;            // a human-readable one-liner
 };
 
 // The full 2x2 phase-portrait classification of dx/dt = A x at the origin. Requires a

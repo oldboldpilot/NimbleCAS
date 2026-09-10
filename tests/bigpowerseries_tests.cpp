@@ -43,7 +43,7 @@ auto brat(TestContext& t, std::int64_t num, std::int64_t den, std::string_view w
 auto bri(std::int64_t v) -> BigRational { return BigRational::from_int(v); }
 
 // Build a BigPowerSeries from integer coefficients at a given order, asserting success.
-auto bseries(TestContext& t, std::vector<std::int64_t> ints, std::size_t order,
+auto bseries(TestContext& t, const std::vector<std::int64_t>& ints, std::size_t order,
              std::string_view what) -> BigPowerSeries {
     std::vector<BigRational> coeffs;
     coeffs.reserve(ints.size());

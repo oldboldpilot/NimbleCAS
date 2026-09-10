@@ -75,7 +75,7 @@ struct StrategyAnalytics {
     bool unbounded_loss{false};
     double max_profit{0.0};         // meaningful iff !unbounded_profit
     double max_loss{0.0};           // most-negative P&L; meaningful iff !unbounded_loss
-    std::vector<double> breakevens{};  // ascending terminal prices where P&L == 0
+    std::vector<double> breakevens;  // ascending terminal prices where P&L == 0
 };
 
 // A composable, reusable option strategy: a bag of signed legs valued at expiry as a unit.
@@ -119,7 +119,7 @@ public:
 
 private:
     OptionStrategy() = default;
-    std::vector<StrategyLeg> legs_{};
+    std::vector<StrategyLeg> legs_;
 };
 
 // --- Named strategy builders (fluent, reusable) -----------------------------

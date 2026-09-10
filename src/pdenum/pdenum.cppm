@@ -63,7 +63,7 @@ enum class BCKind : std::uint8_t { dirichlet, neumann };
 // boundary datum exact.
 struct BoundaryCondition {
     BCKind kind{BCKind::dirichlet};
-    Rational value{};
+    Rational value;
 
     [[nodiscard]] static auto dirichlet(Rational v) -> BoundaryCondition {
         return BoundaryCondition{BCKind::dirichlet, v};
@@ -84,8 +84,8 @@ using RationalField2D = std::function<Result<Rational>(const Rational& x, const 
 // n_intervals is N (the number of cells); there are N+1 nodes. The spacing h = (b - a)/N is
 // exact over Q. make() requires N >= 1 and b > a (a strictly ordered, non-degenerate grid).
 struct Grid1D {
-    Rational a{};
-    Rational b{};
+    Rational a;
+    Rational b;
     std::size_t n_intervals{};
 
     [[nodiscard]] static auto make(Rational a, Rational b, std::size_t n_intervals)
@@ -136,10 +136,10 @@ struct Grid1D {
 // ---------------------------------------------------------------------------
 // nx, ny are the interval counts in x and y; there are (nx+1)(ny+1) nodes.
 struct Grid2D {
-    Rational ax{};
-    Rational bx{};
-    Rational ay{};
-    Rational by{};
+    Rational ax;
+    Rational bx;
+    Rational ay;
+    Rational by;
     std::size_t nx{};
     std::size_t ny{};
 

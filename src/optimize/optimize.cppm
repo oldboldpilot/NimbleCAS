@@ -129,8 +129,8 @@ struct ScalarMinimum {
 
 // Steepest descent with Armijo backtracking line search. Robust but linearly
 // convergent; slow on ill-conditioned (elongated) valleys.
-[[nodiscard]] auto gradient_descent(Objective f, std::span<const double> x0,
-                                    Gradient grad = {}, Options opts = {})
+[[nodiscard]] auto gradient_descent(const Objective& f, std::span<const double> x0,
+                                    const Gradient& grad = {}, Options opts = {})
     -> Result<OptimizeResult>;
 
 // Damped Newton. Uses the Hessian (given or finite-difference); solves H p = -g by
@@ -138,27 +138,27 @@ struct ScalarMinimum {
 // Levenberg-style multiple of the identity, tau*I, is added and grown until p is a
 // genuine descent direction; if that fails it falls back to steepest descent. Then an
 // Armijo backtracking line search globalizes the step.
-[[nodiscard]] auto newton_method(Objective f, std::span<const double> x0, Gradient grad = {},
-                                 HessianFn hess = {}, Options opts = {})
+[[nodiscard]] auto newton_method(const Objective& f, std::span<const double> x0, const Gradient& grad = {},
+                                 const HessianFn& hess = {}, Options opts = {})
     -> Result<OptimizeResult>;
 
 // BFGS quasi-Newton with a maintained INVERSE-Hessian approximation and strong-Wolfe
 // line search. Skips the rank-2 update when the curvature condition s.y > 0 fails
 // (keeps the approximation positive definite). Superlinear near the solution.
-[[nodiscard]] auto bfgs(Objective f, std::span<const double> x0, Gradient grad = {},
+[[nodiscard]] auto bfgs(const Objective& f, std::span<const double> x0, const Gradient& grad = {},
                         Options opts = {}) -> Result<OptimizeResult>;
 
 // Limited-memory BFGS: the two-loop recursion over the last `lbfgs_memory` (s,y)
 // pairs, with the Nocedal H0 = (s.y)/(y.y) I scaling. O(n * memory) per step, no n*n
 // storage — the method of choice for large n.
-[[nodiscard]] auto l_bfgs(Objective f, std::span<const double> x0, Gradient grad = {},
+[[nodiscard]] auto l_bfgs(const Objective& f, std::span<const double> x0, const Gradient& grad = {},
                           Options opts = {}) -> Result<OptimizeResult>;
 
 // Nonlinear conjugate gradient (Fletcher-Reeves or Polak-Ribiere) with strong-Wolfe
 // line search, automatic restart every n steps and whenever the new direction is not a
 // descent direction.
-[[nodiscard]] auto conjugate_gradient(Objective f, std::span<const double> x0,
-                                      Gradient grad = {},
+[[nodiscard]] auto conjugate_gradient(const Objective& f, std::span<const double> x0,
+                                      const Gradient& grad = {},
                                       CGVariant variant = CGVariant::polak_ribiere,
                                       Options opts = {}) -> Result<OptimizeResult>;
 
@@ -185,7 +185,7 @@ struct ScalarMinimum {
 // global-optimality guarantee, and convergence depends on the noise level relative to
 // the scale schedule. Non-convergence returns converged==false (not an error). Empty x0,
 // non-finite inputs, a bounds/x0 length mismatch, or lo > hi all yield domain_error.
-[[nodiscard]] auto implicit_filtering(Objective f, std::span<const double> x0,
+[[nodiscard]] auto implicit_filtering(const Objective& f, std::span<const double> x0,
                                       std::span<const double> lo = {},
                                       std::span<const double> hi = {}, Options opts = {})
     -> Result<OptimizeResult>;
@@ -210,13 +210,13 @@ struct ScalarMinimum {
 // Golden-section search: shrink [a, b] by the golden ratio each step, retaining
 // the interior point with the smaller value. Guaranteed (but only linear)
 // reduction; one new objective evaluation per iteration.
-[[nodiscard]] auto golden_section(ScalarObjective f, double a, double b, double tol = 1e-8,
+[[nodiscard]] auto golden_section(const ScalarObjective& f, double a, double b, double tol = 1e-8,
                                   std::size_t max_iter = 1000) -> Result<ScalarMinimum>;
 
 // Brent's method: successive parabolic interpolation through the three best
 // points where it makes progress, with a golden-section fallback that guarantees
 // convergence. Superlinear on a smooth f near the minimum, robust elsewhere.
-[[nodiscard]] auto brent_minimize(ScalarObjective f, double a, double b, double tol = 1e-8,
+[[nodiscard]] auto brent_minimize(const ScalarObjective& f, double a, double b, double tol = 1e-8,
                                   std::size_t max_iter = 1000) -> Result<ScalarMinimum>;
 
 // ===========================================================================
@@ -770,7 +770,8 @@ auto finite_difference_hessian(const Objective& f, const Gradient& grad,
 
 // --- gradient descent -------------------------------------------------------
 
-auto gradient_descent(Objective f, std::span<const double> x0, Gradient grad, Options opts)
+auto gradient_descent(const Objective& f, std::span<const double> x0, const Gradient& grad,
+                      Options opts)
     -> Result<OptimizeResult> {
     auto start = validate_start(f, &grad, x0);
     if (!start) {
@@ -809,8 +810,8 @@ auto gradient_descent(Objective f, std::span<const double> x0, Gradient grad, Op
 
 // --- Newton -----------------------------------------------------------------
 
-auto newton_method(Objective f, std::span<const double> x0, Gradient grad, HessianFn hess,
-                   Options opts) -> Result<OptimizeResult> {
+auto newton_method(const Objective& f, std::span<const double> x0, const Gradient& grad,
+                   const HessianFn& hess, Options opts) -> Result<OptimizeResult> {
     auto start = validate_start(f, &grad, x0);
     if (!start) {
         return make_error<OptimizeResult>(start.error());
@@ -855,7 +856,7 @@ auto newton_method(Objective f, std::span<const double> x0, Gradient grad, Hessi
 
 // --- BFGS -------------------------------------------------------------------
 
-auto bfgs(Objective f, std::span<const double> x0, Gradient grad, Options opts)
+auto bfgs(const Objective& f, std::span<const double> x0, const Gradient& grad, Options opts)
     -> Result<OptimizeResult> {
     auto start = validate_start(f, &grad, x0);
     if (!start) {
@@ -919,7 +920,7 @@ auto bfgs(Objective f, std::span<const double> x0, Gradient grad, Options opts)
 
 // --- L-BFGS -----------------------------------------------------------------
 
-auto l_bfgs(Objective f, std::span<const double> x0, Gradient grad, Options opts)
+auto l_bfgs(const Objective& f, std::span<const double> x0, const Gradient& grad, Options opts)
     -> Result<OptimizeResult> {
     auto start = validate_start(f, &grad, x0);
     if (!start) {
@@ -1017,7 +1018,7 @@ auto l_bfgs(Objective f, std::span<const double> x0, Gradient grad, Options opts
 
 // --- nonlinear conjugate gradient -------------------------------------------
 
-auto conjugate_gradient(Objective f, std::span<const double> x0, Gradient grad,
+auto conjugate_gradient(const Objective& f, std::span<const double> x0, const Gradient& grad,
                         CGVariant variant, Options opts) -> Result<OptimizeResult> {
     auto start = validate_start(f, &grad, x0);
     if (!start) {
@@ -1225,7 +1226,7 @@ auto nelder_mead(Objective f, std::span<const double> x0, Options opts)
 
 // --- implicit filtering (Kelley; derivative-free, noise-aware) ---------------
 
-auto implicit_filtering(Objective f, std::span<const double> x0, std::span<const double> lo,
+auto implicit_filtering(const Objective& f, std::span<const double> x0, std::span<const double> lo,
                         std::span<const double> hi, Options opts) -> Result<OptimizeResult> {
     // Validate x0 and the objective at x0.
     auto start = validate_start(f, nullptr, x0);
@@ -1357,7 +1358,7 @@ auto implicit_filtering(Objective f, std::span<const double> x0, std::span<const
 
 // --- univariate (1-D) minimizers --------------------------------------------
 
-auto golden_section(ScalarObjective f, double a, double b, double tol, std::size_t max_iter)
+auto golden_section(const ScalarObjective& f, double a, double b, double tol, std::size_t max_iter)
     -> Result<ScalarMinimum> {
     if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(tol) || !(tol > 0.0)) {
         return make_error<ScalarMinimum>(MathError::domain_error);
@@ -1408,7 +1409,7 @@ auto golden_section(ScalarObjective f, double a, double b, double tol, std::size
     return make_error<ScalarMinimum>(MathError::not_implemented);  // did not reach tol in max_iter.
 }
 
-auto brent_minimize(ScalarObjective f, double a, double b, double tol, std::size_t max_iter)
+auto brent_minimize(const ScalarObjective& f, double a, double b, double tol, std::size_t max_iter)
     -> Result<ScalarMinimum> {
     if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(tol) || !(tol > 0.0)) {
         return make_error<ScalarMinimum>(MathError::domain_error);

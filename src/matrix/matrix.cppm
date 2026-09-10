@@ -111,7 +111,7 @@ private:
 
     std::size_t rows_{0};
     std::size_t cols_{0};
-    std::vector<Rational> data_{};  // row-major, size rows_ * cols_
+    std::vector<Rational> data_;  // row-major, size rows_ * cols_
 };
 
 }  // namespace nimblecas

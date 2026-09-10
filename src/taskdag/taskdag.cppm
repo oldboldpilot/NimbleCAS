@@ -141,7 +141,7 @@ private:
         return true;
     }
 
-    std::map<OpId, TaskFn, std::less<>> ops_{};
+    std::map<OpId, TaskFn, std::less<>> ops_;
 };
 
 // Opaque handle to a task within the TaskGraph that issued it. TaskId order == issuance
@@ -303,12 +303,12 @@ private:
         std::vector<TaskId> deps;
         CostHint hint;
         std::size_t depth{0};
-        std::string op_id{};
-        std::vector<Payload> literals{};
+        std::string op_id;
+        std::vector<Payload> literals;
     };
 
-    std::vector<Task> tasks_{};
-    std::vector<std::vector<TaskId>> levels_{};  // levels_[d] = tasks at depth d, issuance order
+    std::vector<Task> tasks_;
+    std::vector<std::vector<TaskId>> levels_;  // levels_[d] = tasks at depth d, issuance order
 };
 
 // Result of running a TaskGraph to completion.

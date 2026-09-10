@@ -61,7 +61,7 @@ export namespace nimblecas {
 // solution is the exact n x 1 Rational solution vector; steps is the number of CG
 // iterations actually performed (guaranteed <= n for an SPD system).
 struct ExactCGResult {
-    Matrix solution{};
+    Matrix solution;
     std::size_t steps{0};
 };
 
@@ -73,9 +73,9 @@ struct ExactCGResult {
 // breakdown        : true iff an invariant Krylov subspace was reached (q_k == 0) before
 //                    m steps — then A basis == basis * hessenberg holds EXACTLY.
 struct RationalArnoldi {
-    std::vector<std::vector<Rational>> basis{};
-    std::vector<Rational> gram_diagonal{};
-    Matrix hessenberg{};
+    std::vector<std::vector<Rational>> basis;
+    std::vector<Rational> gram_diagonal;
+    Matrix hessenberg;
     bool breakdown{false};
 };
 
@@ -86,10 +86,10 @@ struct RationalArnoldi {
 // The subdiagonal is the unit (all-ones) sequence, so tridiagonal is NOT symmetric —
 // it is the exact companion-style projection over Q. tridiagonal is the full k x k Matrix.
 struct RationalLanczos {
-    std::vector<std::vector<Rational>> basis{};
-    std::vector<Rational> alpha{};
-    std::vector<Rational> superdiagonal{};
-    Matrix tridiagonal{};
+    std::vector<std::vector<Rational>> basis;
+    std::vector<Rational> alpha;
+    std::vector<Rational> superdiagonal;
+    Matrix tridiagonal;
     bool breakdown{false};
 };
 
@@ -103,7 +103,7 @@ using MatVec = std::function<void(std::span<const double> x, std::span<double> y
 // estimate). converged == (residual <= tol * ||b||); false simply means "ran out of
 // iterations / stalled", which is a legitimate outcome, not an error.
 struct IterativeResult {
-    std::vector<double> x{};
+    std::vector<double> x;
     std::size_t iterations{0};
     double residual{0.0};
     bool converged{false};
@@ -115,7 +115,7 @@ struct IterativeResult {
 // APPROXIMATIONS. Extracting them needs a general (non-symmetric) eigensolver, which is
 // out of this module's scope; the symmetric case is served directly by lanczos_ritz.
 struct DoubleHessenberg {
-    std::vector<double> h{};
+    std::vector<double> h;
     std::size_t dim{0};
 };
 

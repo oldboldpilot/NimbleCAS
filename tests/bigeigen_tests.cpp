@@ -37,7 +37,7 @@ namespace {
 }
 
 // Build a BigMatrix from integer rows (low-index row first).
-[[nodiscard]] auto bmat(std::vector<std::vector<std::int64_t>> rows) -> BigMatrix {
+[[nodiscard]] auto bmat(const std::vector<std::vector<std::int64_t>>& rows) -> BigMatrix {
     std::vector<std::vector<BigRational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {

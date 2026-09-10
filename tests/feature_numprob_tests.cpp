@@ -61,7 +61,7 @@ namespace {
 
 // A truncated power series over Q from integer coefficients (coeffs[i] multiplies x^i),
 // held to exactly `order` retained terms.
-[[nodiscard]] auto psi(std::vector<std::int64_t> cs, std::size_t order) -> PowerSeries {
+[[nodiscard]] auto psi(const std::vector<std::int64_t>& cs, std::size_t order) -> PowerSeries {
     std::vector<Rational> r;
     r.reserve(cs.size());
     for (const std::int64_t v : cs) {
@@ -97,7 +97,7 @@ namespace {
 }
 
 // A square rational matrix from an integer-valued grid.
-[[nodiscard]] auto mat(std::vector<std::vector<std::int64_t>> grid) -> Matrix {
+[[nodiscard]] auto mat(const std::vector<std::vector<std::int64_t>>& grid) -> Matrix {
     std::vector<std::vector<Rational>> rows;
     rows.reserve(grid.size());
     for (const auto& g : grid) {

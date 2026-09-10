@@ -31,7 +31,7 @@ export namespace nimblecas {
 // disjoint index ranges and summing them in any grouping yields the same total — the
 // estimate does not depend on how (or across how many workers) the range is partitioned.
 // The sum is evaluated serially here; the property is a design guarantee for parallel use.
-[[nodiscard]] auto integrate(std::function<double(double)> f, double a, double b,
+[[nodiscard]] auto integrate(const std::function<double(double)>& f, double a, double b,
                              std::uint64_t samples, std::uint64_t seed) -> Result<double>;
 
 // Classic dart estimate of π: draw (x, y) in [0, 1)² from two decorrelated counter draws
@@ -53,7 +53,7 @@ export namespace nimblecas {
 // always terminates and can never spin forever, even for a pathological pdf/m_bound. The
 // returned vector holds only accepted x values, each in [a, b]. Returns domain_error if
 // b < a, m_bound ≤ 0, want == 0, or max_trials == 0.
-[[nodiscard]] auto rejection_sample(std::function<double(double)> pdf, double a, double b,
+[[nodiscard]] auto rejection_sample(const std::function<double(double)>& pdf, double a, double b,
                                     double m_bound, std::uint64_t want, std::uint64_t seed,
                                     std::uint64_t max_trials) -> Result<std::vector<double>>;
 
@@ -74,7 +74,7 @@ export namespace nimblecas {
 // ===========================================================================
 namespace nimblecas {
 
-auto integrate(std::function<double(double)> f, double a, double b, std::uint64_t samples,
+auto integrate(const std::function<double(double)>& f, double a, double b, std::uint64_t samples,
                std::uint64_t seed) -> Result<double> {
     if (b < a || samples == 0) {
         return make_error<double>(MathError::domain_error);
@@ -115,7 +115,7 @@ auto estimate_pi(std::uint64_t samples, std::uint64_t seed) -> Result<double> {
     return 4.0 * static_cast<double>(hits) / static_cast<double>(samples);
 }
 
-auto rejection_sample(std::function<double(double)> pdf, double a, double b, double m_bound,
+auto rejection_sample(const std::function<double(double)>& pdf, double a, double b, double m_bound,
                       std::uint64_t want, std::uint64_t seed, std::uint64_t max_trials)
     -> Result<std::vector<double>> {
     if (b < a || m_bound <= 0.0 || want == 0 || max_trials == 0) {

@@ -27,7 +27,7 @@ namespace {
 }
 
 // Coefficient list {c_0, ..., c_{k-1}} as a vector of integer-valued Rationals.
-[[nodiscard]] auto coeffs(std::vector<std::int64_t> c) -> std::vector<Rational> {
+[[nodiscard]] auto coeffs(const std::vector<std::int64_t>& c) -> std::vector<Rational> {
     std::vector<Rational> out;
     out.reserve(c.size());
     for (const std::int64_t v : c) {

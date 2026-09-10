@@ -89,7 +89,7 @@ using SeriesOperator = std::function<Result<PowerSeries>(const PowerSeries&)>;
 // Failure modes (MathError::domain_error): empty component list, an empty operator, or
 // components of differing order; f preserving order is required (else domain_error). Any
 // error raised by N is propagated.
-[[nodiscard]] auto adomian_polynomials(SeriesOperator N,
+[[nodiscard]] auto adomian_polynomials(const SeriesOperator& N,
                                        const std::vector<PowerSeries>& components)
     -> Result<std::vector<PowerSeries>>;
 
@@ -97,21 +97,21 @@ using SeriesOperator = std::function<Result<PowerSeries>(const PowerSeries&)>;
 // (terms x^0..x^{order-1}). u_0 = u0; u_{n+1} = L^{-1}[A_n] with A_n the Adomian
 // polynomials of the components so far; the result is Σ u_n. This is the exact Taylor
 // polynomial of the solution to the requested order. order == 0 is a domain_error.
-[[nodiscard]] auto adm_solve(SeriesOperator f, Rational u0, std::size_t order)
+[[nodiscard]] auto adm_solve(const SeriesOperator& f, Rational u0, std::size_t order)
     -> Result<PowerSeries>;
 
 // HPM solution of the same problem. The homotopy (1−p)(v'−u0') + p(v'−f(v)) = 0 with
 // v = Σ p^n v_n gives v_0 = u0 and v_n' = A_{n−1}, integrated term by term. This is the
 // same graded recursion as adm_solve and returns the IDENTICAL series. order == 0 is a
 // domain_error.
-[[nodiscard]] auto hpm_solve(SeriesOperator f, Rational u0, std::size_t order)
+[[nodiscard]] auto hpm_solve(const SeriesOperator& f, Rational u0, std::size_t order)
     -> Result<PowerSeries>;
 
 // HAM solution with convergence-control parameter ħ. The m-th order deformation is
 // u_m = χ_m u_{m−1} + ħ L^{-1}[R_m], R_m = u_{m−1}' − A_{m−1}, χ_m = 0 (m=1) else 1; the
 // result is Σ u_m to `order` coefficients. ħ = −1 recovers HPM/ADM exactly. ħ is the
 // extra degree of freedom HAM adds over HPM. order == 0 is a domain_error.
-[[nodiscard]] auto ham_solve(SeriesOperator f, Rational u0, Rational hbar, std::size_t order)
+[[nodiscard]] auto ham_solve(const SeriesOperator& f, Rational u0, Rational hbar, std::size_t order)
     -> Result<PowerSeries>;
 
 }  // namespace nimblecas
@@ -156,7 +156,7 @@ auto homogeneous_monomial(const Rational& c, std::size_t degree, std::size_t ord
 
 }  // namespace
 
-auto adomian_polynomials(SeriesOperator N, const std::vector<PowerSeries>& components)
+auto adomian_polynomials(const SeriesOperator& N, const std::vector<PowerSeries>& components)
     -> Result<std::vector<PowerSeries>> {
     using Polys = std::vector<PowerSeries>;
     if (components.empty() || !N) {
@@ -246,17 +246,17 @@ auto graded_series_solve(const SeriesOperator& f, const Rational& u0, std::size_
 
 }  // namespace
 
-auto adm_solve(SeriesOperator f, Rational u0, std::size_t order) -> Result<PowerSeries> {
+auto adm_solve(const SeriesOperator& f, Rational u0, std::size_t order) -> Result<PowerSeries> {
     return graded_series_solve(f, u0, order);
 }
 
-auto hpm_solve(SeriesOperator f, Rational u0, std::size_t order) -> Result<PowerSeries> {
+auto hpm_solve(const SeriesOperator& f, Rational u0, std::size_t order) -> Result<PowerSeries> {
     // The homotopy collapses to v' = p f(v); collecting powers of p gives v_0 = u0 and
     // v_n' = A_{n-1}, i.e. the same graded recursion as ADM — hence an identical series.
     return graded_series_solve(f, u0, order);
 }
 
-auto ham_solve(SeriesOperator f, Rational u0, Rational hbar, std::size_t order)
+auto ham_solve(const SeriesOperator& f, Rational u0, Rational hbar, std::size_t order)
     -> Result<PowerSeries> {
     if (order == 0 || !f) {
         return make_error<PowerSeries>(MathError::domain_error);

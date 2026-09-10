@@ -100,7 +100,7 @@ public:
 
 private:
     bool negative_{false};              // sign; always false when mag_ is empty (zero)
-    std::vector<std::uint32_t> mag_{};  // little-endian base-2^32 limbs, no trailing zeros
+    std::vector<std::uint32_t> mag_;  // little-endian base-2^32 limbs, no trailing zeros
 
     // Strip trailing zero limbs and collapse a zero magnitude to the canonical +0.
     auto normalise() -> void {

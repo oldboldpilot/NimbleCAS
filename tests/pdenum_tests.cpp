@@ -34,7 +34,7 @@ namespace {
     return Rational::make(n, d).value();
 }
 
-[[nodiscard]] auto vec(std::vector<std::int64_t> entries) -> std::vector<Rational> {
+[[nodiscard]] auto vec(const std::vector<std::int64_t>& entries) -> std::vector<Rational> {
     std::vector<Rational> v;
     v.reserve(entries.size());
     for (const std::int64_t e : entries) {

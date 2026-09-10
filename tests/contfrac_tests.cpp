@@ -25,7 +25,8 @@ namespace {
     return Rational::from_int(v);
 }
 
-[[nodiscard]] auto rats(std::vector<std::int64_t> ns, std::int64_t d) -> std::vector<Rational> {
+[[nodiscard]] auto rats(const std::vector<std::int64_t>& ns, std::int64_t d)
+    -> std::vector<Rational> {
     std::vector<Rational> out;
     out.reserve(ns.size());
     for (const std::int64_t n : ns) {

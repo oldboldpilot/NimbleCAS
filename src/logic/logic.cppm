@@ -358,7 +358,7 @@ private:
         std::int64_t order{};
         bool live{true};
     };
-    std::vector<Entry> entries_{};
+    std::vector<Entry> entries_;
     std::int64_t next_high_{0};
     std::int64_t next_low_{0};
 };
@@ -468,7 +468,7 @@ public:
     [[nodiscard]] auto database() const -> const Database&;
 
 private:
-    Database db_{};
+    Database db_;
 };
 
 }  // namespace nimblecas

@@ -36,7 +36,7 @@ namespace {
 }
 
 // A Q[x] element from integer coefficients (coeffs[i] is the coefficient of x^i).
-[[nodiscard]] auto rpi(std::vector<std::int64_t> cs) -> RationalPoly {
+[[nodiscard]] auto rpi(const std::vector<std::int64_t>& cs) -> RationalPoly {
     std::vector<Rational> r;
     r.reserve(cs.size());
     for (const std::int64_t v : cs) {

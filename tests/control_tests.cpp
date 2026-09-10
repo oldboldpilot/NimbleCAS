@@ -55,7 +55,7 @@ namespace {
 }
 
 // A RationalPoly from integer coefficients, ascending (index i is the coeff of x^i).
-[[nodiscard]] auto rp(std::vector<std::int64_t> coeffs) -> RationalPoly {
+[[nodiscard]] auto rp(const std::vector<std::int64_t>& coeffs) -> RationalPoly {
     std::vector<Rational> r;
     r.reserve(coeffs.size());
     for (const std::int64_t v : coeffs) {
@@ -65,7 +65,8 @@ namespace {
 }
 
 // A RationalPoly from rational coefficients given as {num, den} pairs, ascending.
-[[nodiscard]] auto rpq(std::vector<std::pair<std::int64_t, std::int64_t>> coeffs) -> RationalPoly {
+[[nodiscard]] auto rpq(const std::vector<std::pair<std::int64_t, std::int64_t>>& coeffs)
+    -> RationalPoly {
     std::vector<Rational> r;
     r.reserve(coeffs.size());
     for (const auto& [n, d] : coeffs) {
@@ -79,7 +80,7 @@ namespace {
 }
 
 // A Matrix from integer rows (low-index row first).
-[[nodiscard]] auto mat(std::vector<std::vector<std::int64_t>> rows) -> Matrix {
+[[nodiscard]] auto mat(const std::vector<std::vector<std::int64_t>>& rows) -> Matrix {
     std::vector<std::vector<Rational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {

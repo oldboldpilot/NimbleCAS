@@ -77,8 +77,9 @@ enum class Scheme : std::uint8_t {
 // counter core keyed by splitmix64(seed): increment n consumes counter draws 2n and 2n+1 and
 // is a pure function of n, so the path is fully reproducible from `seed`. Returns
 // domain_error if steps == 0, T <= 0, or either `a` or `b` is an empty std::function.
-[[nodiscard]] auto euler_maruyama(std::function<double(double)> a, std::function<double(double)> b,
-                                  double x0, double T, std::uint64_t steps, std::uint64_t seed)
+[[nodiscard]] auto euler_maruyama(const std::function<double(double)>& a,
+                                  const std::function<double(double)>& b, double x0, double T,
+                                  std::uint64_t steps, std::uint64_t seed)
     -> Result<SdePath>;
 
 // Milstein integration of dX = a(X) dt + b(X) dW on [0, T], adding the first-order Itô
@@ -90,8 +91,9 @@ enum class Scheme : std::uint8_t {
 // scheme needs it explicitly). Uses the same seeded Brownian increments as euler_maruyama, so
 // with b ≡ 0 the two schemes coincide. Returns domain_error if steps == 0, T <= 0, or any of
 // `a`, `b`, `b_prime` is an empty std::function.
-[[nodiscard]] auto milstein(std::function<double(double)> a, std::function<double(double)> b,
-                            std::function<double(double)> b_prime, double x0, double T,
+[[nodiscard]] auto milstein(const std::function<double(double)>& a,
+                            const std::function<double(double)>& b,
+                            const std::function<double(double)>& b_prime, double x0, double T,
                             std::uint64_t steps, std::uint64_t seed) -> Result<SdePath>;
 
 // Simulate `paths` independent sample paths and return only their terminal values X_T (the
@@ -104,9 +106,10 @@ enum class Scheme : std::uint8_t {
 // any decomposition of 0..paths-1 across workers reproduces the same vector element-wise.
 // Returns domain_error if steps == 0, T <= 0, paths == 0, `a`/`b` is empty, or use_milstein
 // is set with an empty `b_prime`.
-[[nodiscard]] auto simulate_terminal(std::function<double(double)> a,
-                                     std::function<double(double)> b,
-                                     std::function<double(double)> b_prime, double x0, double T,
+[[nodiscard]] auto simulate_terminal(const std::function<double(double)>& a,
+                                     const std::function<double(double)>& b,
+                                     const std::function<double(double)
+    >& b_prime, double x0, double T,
                                      std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
                                      bool use_milstein) -> Result<std::vector<double>>;
 
@@ -138,8 +141,9 @@ enum class Scheme : std::uint8_t {
 // a + ½ b b'), NOT the Itô solution the other schemes target. Strong order 1.0, weak order 1.0.
 // Derivative-free (no b' needed). With b ≡ 0 it reduces to the deterministic Heun/RK2 ODE step,
 // so it does NOT coincide with Euler-Maruyama there (Euler-Maruyama is forward Euler on the drift).
-[[nodiscard]] auto stochastic_heun(std::function<double(double)> a, std::function<double(double)> b,
-                                   double x0, double T, std::uint64_t steps, std::uint64_t seed)
+[[nodiscard]] auto stochastic_heun(const std::function<double(double)>& a,
+                                   const std::function<double(double)>& b, double x0, double T,
+                                   std::uint64_t steps, std::uint64_t seed)
     -> Result<SdePath>;
 
 // Derivative-free stochastic Runge-Kutta (Platen's order-1.0 SRK, a.k.a. the derivative-free
@@ -153,8 +157,9 @@ enum class Scheme : std::uint8_t {
 // derivative b'(x) that Milstein requires with a finite difference of b — so it composes with
 // the plain a/b callback signature and needs no b'. Weak order 1.0. With b ≡ 0 the correction
 // term vanishes and it coincides with euler_maruyama bit-for-bit.
-[[nodiscard]] auto srk(std::function<double(double)> a, std::function<double(double)> b, double x0,
-                       double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath>;
+[[nodiscard]] auto srk(const std::function<double(double)>& a,
+                       const std::function<double(double)>& b, double x0, double T,
+                       std::uint64_t steps, std::uint64_t seed) -> Result<SdePath>;
 
 // Tamed Euler-Maruyama (Hutzenthaler-Jentzen-Kloeden 2012) integration of dX = a(X) dt + b(X) dW:
 //
@@ -167,8 +172,9 @@ enum class Scheme : std::uint8_t {
 // so the step stays finite where plain Euler overflows, while leaving the scheme's strong order
 // at 1/2 and its weak/strong limit unchanged (the taming perturbation is O(dt) per step). Itô
 // convention. Derivative-free.
-[[nodiscard]] auto tamed_euler(std::function<double(double)> a, std::function<double(double)> b,
-                               double x0, double T, std::uint64_t steps, std::uint64_t seed)
+[[nodiscard]] auto tamed_euler(const std::function<double(double)>& a,
+                               const std::function<double(double)>& b, double x0, double T,
+                               std::uint64_t steps, std::uint64_t seed)
     -> Result<SdePath>;
 
 // ---------------------------------------------------------------------------
@@ -185,9 +191,9 @@ enum class Scheme : std::uint8_t {
 // scheme == Scheme::milstein; for every other scheme it is ignored (pass {}). Returns
 // domain_error if steps == 0, T is non-finite or ≤ 0, x0 is non-finite, paths == 0, `a`/`b` is
 // empty, or scheme == Scheme::milstein with an empty `b_prime`.
-[[nodiscard]] auto simulate_terminal_scheme(std::function<double(double)> a,
-                                            std::function<double(double)> b,
-                                            std::function<double(double)> b_prime, double x0,
+[[nodiscard]] auto simulate_terminal_scheme(const std::function<double(double)>& a,
+                                            const std::function<double(double)>& b,
+                                            const std::function<double(double)>& b_prime, double x0,
                                             double T, std::uint64_t steps, std::uint64_t paths,
                                             std::uint64_t seed, Scheme scheme)
     -> Result<std::vector<double>>;
@@ -226,8 +232,8 @@ enum class Scheme : std::uint8_t {
 // (the default) disables jumps entirely; `size_quantile`/`impulse` may then be empty.
 struct JumpSpec {
     double lambda{0.0};                                // jump intensity (jumps / unit time)
-    std::function<double(double)> size_quantile{};      // u in (0,1) -> jump mark J
-    std::function<double(double, double)> impulse{};    // (x, J) -> state increment c(x, J)
+    std::function<double(double)> size_quantile;      // u in (0,1) -> jump mark J
+    std::function<double(double, double)> impulse;    // (x, J) -> state increment c(x, J)
 };
 
 // Builds a Merton (1976) log-normal jump specification: jump marks J ~ N(mu_j, sigma_j^2),
@@ -252,8 +258,9 @@ struct JumpSpec {
 // non-finite, `a`/`b` is empty, jumps.lambda is negative/non-finite, jumps.lambda * dt
 // exceeds 700 (the point at which e^{-lambda dt} underflows to 0 in double precision),
 // or jumps.lambda > 0 with an empty `size_quantile`/`impulse`.
-[[nodiscard]] auto jump_euler_maruyama(std::function<double(double)> a,
-                                       std::function<double(double)> b, const JumpSpec& jumps,
+[[nodiscard]] auto jump_euler_maruyama(const std::function<double(double)>& a,
+                                       const std::function<double(double)
+    >& b, const JumpSpec& jumps,
                                        double x0, double T, std::uint64_t steps,
                                        std::uint64_t seed) -> Result<SdePath>;
 
@@ -278,9 +285,9 @@ struct JumpSpec {
 // for the WHOLE path — an unconverged iterate is never accepted as a step. Returns
 // domain_error if steps == 0, T is non-finite or <= 0, x0 is non-finite, `a`/`b` is
 // empty, or theta is outside [0, 1] or non-finite.
-[[nodiscard]] auto theta_euler(std::function<double(double)> a,
-                               std::function<double(double)> a_prime,
-                               std::function<double(double)> b, double x0, double T,
+[[nodiscard]] auto theta_euler(const std::function<double(double)>& a,
+                               const std::function<double(double)>& a_prime,
+                               const std::function<double(double)>& b, double x0, double T,
                                std::uint64_t steps, std::uint64_t seed, double theta)
     -> Result<SdePath>;
 
@@ -291,9 +298,9 @@ struct JumpSpec {
 // euler_maruyama bit-for-bit (the same theta==0 special-casing as theta_euler, plus the
 // same domain-separated, zero-jump-sum reasoning as jump_euler_maruyama). Domain-error
 // conditions are the union of theta_euler's and jump_euler_maruyama's.
-[[nodiscard]] auto jump_theta_euler(std::function<double(double)> a,
-                                    std::function<double(double)> a_prime,
-                                    std::function<double(double)> b, const JumpSpec& jumps,
+[[nodiscard]] auto jump_theta_euler(const std::function<double(double)>& a,
+                                    const std::function<double(double)>& a_prime,
+                                    const std::function<double(double)>& b, const JumpSpec& jumps,
                                     double x0, double T, std::uint64_t steps,
                                     std::uint64_t seed, double theta) -> Result<SdePath>;
 
@@ -676,16 +683,18 @@ inline constexpr std::uint64_t kMarkDomain = 0x165667B19E3779F9ULL;
 
 }  // namespace
 
-auto euler_maruyama(std::function<double(double)> a, std::function<double(double)> b, double x0,
-                    double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
+auto euler_maruyama(const std::function<double(double)>& a, const std::function<double(double)>& b,
+                    double x0, double T, std::uint64_t steps, std::uint64_t seed)
+    -> Result<SdePath> {
     if (steps == 0 || !std::isfinite(T) || T <= 0.0 || !std::isfinite(x0) || !a || !b) {
         return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
     return simulate_path(a, b, /*b_prime=*/{}, x0, T, steps, seed, Scheme::euler_maruyama);
 }
 
-auto milstein(std::function<double(double)> a, std::function<double(double)> b,
-              std::function<double(double)> b_prime, double x0, double T, std::uint64_t steps,
+auto milstein(const std::function<double(double)>& a, const std::function<double(double)>& b,
+              const std::function<double(double)
+    >& b_prime, double x0, double T, std::uint64_t steps,
               std::uint64_t seed) -> Result<SdePath> {
     if (steps == 0 || !std::isfinite(T) || T <= 0.0 || !std::isfinite(x0) || !a || !b ||
         !b_prime) {
@@ -694,8 +703,9 @@ auto milstein(std::function<double(double)> a, std::function<double(double)> b,
     return simulate_path(a, b, b_prime, x0, T, steps, seed, Scheme::milstein);
 }
 
-auto simulate_terminal(std::function<double(double)> a, std::function<double(double)> b,
-                       std::function<double(double)> b_prime, double x0, double T,
+auto simulate_terminal(const std::function<double(double)>& a,
+                       const std::function<double(double)>& b,
+                       const std::function<double(double)>& b_prime, double x0, double T,
                        std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
                        bool use_milstein) -> Result<std::vector<double>> {
     if (steps == 0 || !std::isfinite(T) || T <= 0.0 || !std::isfinite(x0) || paths == 0 || !a ||
@@ -733,24 +743,25 @@ auto terminal_moments(std::function<double(double)> a, std::function<double(doub
 
 // --- Additional single-path integrators (all derivative-free) ---
 
-auto stochastic_heun(std::function<double(double)> a, std::function<double(double)> b, double x0,
-                     double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
+auto stochastic_heun(const std::function<double(double)>& a, const std::function<double(double)>& b,
+                     double x0, double T, std::uint64_t steps, std::uint64_t seed)
+    -> Result<SdePath> {
     if (!path_inputs_ok(static_cast<bool>(a), static_cast<bool>(b), x0, T, steps)) {
         return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
     return simulate_path(a, b, /*b_prime=*/{}, x0, T, steps, seed, Scheme::stochastic_heun);
 }
 
-auto srk(std::function<double(double)> a, std::function<double(double)> b, double x0, double T,
-         std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
+auto srk(const std::function<double(double)>& a, const std::function<double(double)>& b, double x0,
+         double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
     if (!path_inputs_ok(static_cast<bool>(a), static_cast<bool>(b), x0, T, steps)) {
         return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
     return simulate_path(a, b, /*b_prime=*/{}, x0, T, steps, seed, Scheme::srk);
 }
 
-auto tamed_euler(std::function<double(double)> a, std::function<double(double)> b, double x0,
-                 double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
+auto tamed_euler(const std::function<double(double)>& a, const std::function<double(double)>& b,
+                 double x0, double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
     if (!path_inputs_ok(static_cast<bool>(a), static_cast<bool>(b), x0, T, steps)) {
         return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
@@ -759,8 +770,9 @@ auto tamed_euler(std::function<double(double)> a, std::function<double(double)> 
 
 // --- Generic scheme-parameterised ensemble drivers ---
 
-auto simulate_terminal_scheme(std::function<double(double)> a, std::function<double(double)> b,
-                              std::function<double(double)> b_prime, double x0, double T,
+auto simulate_terminal_scheme(const std::function<double(double)>& a,
+                              const std::function<double(double)>& b,
+                              const std::function<double(double)>& b_prime, double x0, double T,
                               std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
                               Scheme scheme) -> Result<std::vector<double>> {
     // Only Milstein consumes b'; requesting it without one is a domain error, not a thrown
@@ -810,9 +822,9 @@ auto merton_jumps(double lambda, double mu_j, double sigma_j) -> Result<JumpSpec
         [](double x, double J) -> double { return x * std::expm1(J); }};
 }
 
-auto jump_euler_maruyama(std::function<double(double)> a, std::function<double(double)> b,
-                         const JumpSpec& jumps, double x0, double T, std::uint64_t steps,
-                         std::uint64_t seed) -> Result<SdePath> {
+auto jump_euler_maruyama(const std::function<double(double)>& a,
+                         const std::function<double(double)>& b, const JumpSpec& jumps, double x0,
+                         double T, std::uint64_t steps, std::uint64_t seed) -> Result<SdePath> {
     if (!path_inputs_ok(static_cast<bool>(a), static_cast<bool>(b), x0, T, steps)) {
         return make_error<SdePath>(MathError::domain_error);  // NaN/inf T or x0 also rejected
     }
@@ -823,8 +835,9 @@ auto jump_euler_maruyama(std::function<double(double)> a, std::function<double(d
     return build_jump_theta_path(a, /*a_prime=*/{}, b, jumps, x0, T, steps, seed, /*theta=*/0.0);
 }
 
-auto theta_euler(std::function<double(double)> a, std::function<double(double)> a_prime,
-                 std::function<double(double)> b, double x0, double T, std::uint64_t steps,
+auto theta_euler(const std::function<double(double)>& a,
+                 const std::function<double(double)>& a_prime,
+                 const std::function<double(double)>& b, double x0, double T, std::uint64_t steps,
                  std::uint64_t seed, double theta) -> Result<SdePath> {
     if (!path_inputs_ok(static_cast<bool>(a), static_cast<bool>(b), x0, T, steps) ||
         !theta_ok(theta)) {
@@ -833,8 +846,9 @@ auto theta_euler(std::function<double(double)> a, std::function<double(double)> 
     return build_jump_theta_path(a, a_prime, b, JumpSpec{}, x0, T, steps, seed, theta);
 }
 
-auto jump_theta_euler(std::function<double(double)> a, std::function<double(double)> a_prime,
-                      std::function<double(double)> b, const JumpSpec& jumps, double x0,
+auto jump_theta_euler(const std::function<double(double)>& a,
+                      const std::function<double(double)>& a_prime,
+                      const std::function<double(double)>& b, const JumpSpec& jumps, double x0,
                       double T, std::uint64_t steps, std::uint64_t seed, double theta)
     -> Result<SdePath> {
     if (!path_inputs_ok(static_cast<bool>(a), static_cast<bool>(b), x0, T, steps) ||

@@ -100,7 +100,7 @@ private:
     // numerator, then divide both through by their gcd.
     [[nodiscard]] static auto normalise(BigInt num, BigInt den) -> BigRational;
 
-    BigInt num_{};                      // 0 by default; carries the value's sign
+    BigInt num_;                      // 0 by default; carries the value's sign
     BigInt den_ = BigInt::from_u64(1);  // 1 by default; invariant: den_ > 0
 };
 

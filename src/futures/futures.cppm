@@ -120,7 +120,7 @@ struct FuturesSpec {
 // names the underlying/expiry so a multi-leg strategy can report per-instrument P&L and
 // so the pnl_at price vector lines up leg-for-leg.
 struct FuturesLeg {
-    std::string label{};
+    std::string label;
     double entry_price{0.0};
     double quantity{1.0};        // signed: long (+) / short (−), in contracts
     double contract_size{1.0};
@@ -154,7 +154,7 @@ struct StrategyProfile {
     double max_profit{0.0};       // >= 0; meaningful only when !unbounded_profit
     double max_loss{0.0};         // <= 0; meaningful only when !unbounded_loss
     double locked_pnl{0.0};       // the constant P&L of a matched (net-zero) spread; else 0
-    std::optional<double> breakeven{};
+    std::optional<double> breakeven;
     double net_quantity{0.0};     // Σ quantity·contract_size (signed net exposure)
 };
 
@@ -192,7 +192,7 @@ public:
 
 private:
     FuturesStrategy() = default;
-    std::vector<FuturesLeg> legs_{};
+    std::vector<FuturesLeg> legs_;
 };
 
 // --- Named strategy builders (fluent, reusable) -----------------------------

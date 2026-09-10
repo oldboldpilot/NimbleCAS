@@ -238,7 +238,7 @@ private:
     }
 
     std::size_t capacity_{0};
-    std::vector<std::uint64_t> words_{};
+    std::vector<std::uint64_t> words_;
     std::uint64_t last_mask_{0};
 };
 

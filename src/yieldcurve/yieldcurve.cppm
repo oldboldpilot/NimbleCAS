@@ -99,10 +99,10 @@ public:
 
 private:
     Curve() = default;
-    std::vector<double> times_{};
-    std::vector<double> zeros_{};
-    std::vector<double> df_{};     // DF at each pillar (precomputed)
-    std::vector<double> logdf_{};  // ln(DF) at each pillar (for log-linear interpolation)
+    std::vector<double> times_;
+    std::vector<double> zeros_;
+    std::vector<double> df_;     // DF at each pillar (precomputed)
+    std::vector<double> logdf_;  // ln(DF) at each pillar (for log-linear interpolation)
     Interp interp_ = Interp::linear_zero;
     Compounding comp_ = Compounding::continuous;
     int freq_ = 1;
@@ -258,7 +258,7 @@ private:
     HullWhiteLattice() = default;
     double a_{}, sigma_{}, dt_{}, dx_{};
     int jmax_{}, steps_{};
-    std::vector<double> alpha_{};  // slice displacements, index 0..steps-1
+    std::vector<double> alpha_;  // slice displacements, index 0..steps-1
 };
 
 // Calibrate a Hull-White trinomial lattice to `curve` with mean reversion a>0, vol

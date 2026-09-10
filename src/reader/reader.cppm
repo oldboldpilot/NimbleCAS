@@ -100,7 +100,7 @@ enum class TokKind : std::uint8_t {
 
 struct Token {
     TokKind kind{TokKind::End};
-    std::string_view text{};  // view into the caller's source string (valid for parse)
+    std::string_view text;  // view into the caller's source string (valid for parse)
     std::size_t pos{0};
 };
 

@@ -266,10 +266,10 @@ struct CliOptions {
     std::size_t reps{7};
     std::uint64_t seed{1337ULL};
     std::size_t num_workers{4};
-    std::string csv_output_path{};
+    std::string csv_output_path;
     // Arm C against a DURABLE memo instead of the in-memory one, so the cost of durability is
     // measured rather than assumed. Empty = InProcessMemo.
-    std::string file_memo_path{};
+    std::string file_memo_path;
     bool show_help{false};
 };
 

@@ -52,7 +52,7 @@ struct McmcResult {
 // acceptance draw each step), so equal seeds reproduce a bit-identical chain and identical
 // counts. Because the loop count is fixed the routine always terminates. Returns
 // domain_error if step <= 0 or samples == 0.
-[[nodiscard]] auto metropolis_hastings(std::function<double(double)> log_density, double x0,
+[[nodiscard]] auto metropolis_hastings(const std::function<double(double)>& log_density, double x0,
                                        double step, std::uint64_t samples,
                                        std::uint64_t burn_in, std::uint64_t seed)
     -> Result<McmcResult>;
@@ -70,7 +70,7 @@ struct McmcResult {
 //
 // Returns domain_error if chains == 0, or propagates the per-chain domain_error if the
 // shared arguments are invalid (step <= 0 or samples_per_chain == 0).
-[[nodiscard]] auto run_parallel_chains(std::function<double(double)> log_density, double x0,
+[[nodiscard]] auto run_parallel_chains(const std::function<double(double)>& log_density, double x0,
                                        double step, std::uint64_t samples_per_chain,
                                        std::uint64_t burn_in, std::uint64_t seed,
                                        std::uint64_t chains) -> Result<std::vector<McmcResult>>;
@@ -90,7 +90,7 @@ struct McmcResult {
 // ===========================================================================
 namespace nimblecas {
 
-auto metropolis_hastings(std::function<double(double)> log_density, double x0, double step,
+auto metropolis_hastings(const std::function<double(double)>& log_density, double x0, double step,
                          std::uint64_t samples, std::uint64_t burn_in, std::uint64_t seed)
     -> Result<McmcResult> {
     if (step <= 0.0 || samples == 0) {
@@ -160,7 +160,7 @@ auto metropolis_hastings(std::function<double(double)> log_density, double x0, d
     return result;
 }
 
-auto run_parallel_chains(std::function<double(double)> log_density, double x0, double step,
+auto run_parallel_chains(const std::function<double(double)>& log_density, double x0, double step,
                          std::uint64_t samples_per_chain, std::uint64_t burn_in,
                          std::uint64_t seed, std::uint64_t chains)
     -> Result<std::vector<McmcResult>> {

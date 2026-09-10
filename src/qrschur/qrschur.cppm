@@ -80,8 +80,8 @@ struct ExactOrthogonalQr {
 struct NumericQr {
     std::size_t rows{};       // m
     std::size_t cols{};       // n
-    std::vector<double> q{};  // m×m orthonormal, row-major
-    std::vector<double> r{};  // m×n upper-triangular, row-major
+    std::vector<double> q;  // m×m orthonormal, row-major
+    std::vector<double> r;  // m×n upper-triangular, row-major
 };
 
 // Numeric Householder QR of the m×n real matrix given row-major in `a` (length m·n).
@@ -100,8 +100,8 @@ struct NumericQr {
 // entry) carry complex-conjugate eigenvalue pairs. Row-major; NUMERIC.
 struct NumericSchur {
     std::size_t n{};          // matrix dimension
-    std::vector<double> q{};  // n×n orthogonal Schur vectors, row-major
-    std::vector<double> t{};  // n×n quasi-upper-triangular real Schur form, row-major
+    std::vector<double> q;  // n×n orthogonal Schur vectors, row-major
+    std::vector<double> t;  // n×n quasi-upper-triangular real Schur form, row-major
 };
 
 // Numeric real Schur decomposition A = Q·T·Qᵀ of the n×n real matrix given row-major in `a`

@@ -29,7 +29,7 @@ namespace {
 }
 
 // A RationalPoly from integer coefficients (low degree first).
-[[nodiscard]] auto ipoly(std::vector<std::int64_t> c) -> RationalPoly {
+[[nodiscard]] auto ipoly(const std::vector<std::int64_t>& c) -> RationalPoly {
     std::vector<Rational> rs;
     rs.reserve(c.size());
     for (const std::int64_t v : c) {

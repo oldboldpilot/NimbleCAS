@@ -195,7 +195,7 @@ private:
     auto set_binding(std::string name, Expr value,
                      std::vector<std::pair<std::string, Expr>>& delta) -> void;
 
-    std::vector<std::pair<std::string, Expr>> bindings_{};
+    std::vector<std::pair<std::string, Expr>> bindings_;
 };
 
 // ---------------------------------------------------------------------------
@@ -224,7 +224,7 @@ public:
     auto clear() -> void { entries_.clear(); }
 
 private:
-    std::unordered_map<std::size_t, CachedCell> entries_{};
+    std::unordered_map<std::size_t, CachedCell> entries_;
 };
 
 // Execute the cells of `markdown` in order, returning each cell's result. The

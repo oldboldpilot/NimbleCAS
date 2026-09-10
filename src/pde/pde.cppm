@@ -54,7 +54,7 @@ using SpatialOperator = std::function<Result<RationalPoly>(const RationalPoly&)>
 // forming any factorial. For polynomial phi under a polynomial-preserving L the trailing
 // c_n are the zero polynomial (the series terminates). order == 0 or an empty operator is
 // a domain_error; any error raised by L is propagated.
-[[nodiscard]] auto solve_evolution_pde(SpatialOperator l, const RationalPoly& phi,
+[[nodiscard]] auto solve_evolution_pde(const SpatialOperator& l, const RationalPoly& phi,
                                        std::size_t order) -> Result<std::vector<RationalPoly>>;
 
 // Evaluate the truncated solution sum_n c_n(x) t^n exactly at the rational point (x, t),
@@ -131,8 +131,8 @@ using TimeSeriesOperator =
 // `nonlinear` MUST be non-empty. order == 0, a null nonlinear term, or a nonlinear term
 // that does not return the truncation length is a domain_error; any error raised by L or
 // N is propagated. EXACT truncated series (see HONESTY above): local in t, not global.
-[[nodiscard]] auto solve_nonlinear_evolution_pde(SpatialOperator linear,
-                                                 TimeSeriesOperator nonlinear,
+[[nodiscard]] auto solve_nonlinear_evolution_pde(const SpatialOperator& linear,
+                                                 const TimeSeriesOperator& nonlinear,
                                                  const RationalPoly& phi, std::size_t order)
     -> Result<std::vector<RationalPoly>>;
 
@@ -197,7 +197,7 @@ using TimeSeriesOperator =
 // L propagates. For polynomial phi, psi under a constant-coefficient L the series
 // TERMINATES and the truncation is the closed form; otherwise it is the exact truncated
 // Taylor series in t (local in t, no boundary conditions imposed).
-[[nodiscard]] auto solve_wave_pde(SpatialOperator l, const RationalPoly& phi,
+[[nodiscard]] auto solve_wave_pde(const SpatialOperator& l, const RationalPoly& phi,
                                   const RationalPoly& psi, std::size_t order)
     -> Result<std::vector<RationalPoly>>;
 
@@ -294,7 +294,7 @@ namespace {
 
 }  // namespace
 
-auto solve_evolution_pde(SpatialOperator l, const RationalPoly& phi, std::size_t order)
+auto solve_evolution_pde(const SpatialOperator& l, const RationalPoly& phi, std::size_t order)
     -> Result<std::vector<RationalPoly>> {
     using Coeffs = std::vector<RationalPoly>;
     if (order == 0 || !l) {
@@ -477,8 +477,9 @@ auto series_product(const std::vector<RationalPoly>& a, const std::vector<Ration
     return out;
 }
 
-auto solve_nonlinear_evolution_pde(SpatialOperator linear, TimeSeriesOperator nonlinear,
-                                   const RationalPoly& phi, std::size_t order)
+auto solve_nonlinear_evolution_pde(const SpatialOperator& linear,
+                                   const TimeSeriesOperator& nonlinear, const RationalPoly& phi,
+                                   std::size_t order)
     -> Result<std::vector<RationalPoly>> {
     using Coeffs = std::vector<RationalPoly>;
     if (order == 0 || !nonlinear) {
@@ -640,7 +641,7 @@ auto solve_poisson_bvp_1d(const RationalPoly& f, const Rational& a, const Ration
 // Wave equation, KdV, and Schrodinger.
 // ===========================================================================
 
-auto solve_wave_pde(SpatialOperator l, const RationalPoly& phi, const RationalPoly& psi,
+auto solve_wave_pde(const SpatialOperator& l, const RationalPoly& phi, const RationalPoly& psi,
                     std::size_t order) -> Result<std::vector<RationalPoly>> {
     using Coeffs = std::vector<RationalPoly>;
     if (order == 0 || !l) {

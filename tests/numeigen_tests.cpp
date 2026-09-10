@@ -59,7 +59,7 @@ auto max_abs_imag(std::span<const cd> got) -> double {
 }
 
 // A RationalPoly x^... from ascending integer coefficients [c0, c1, ...].
-auto poly(std::vector<std::int64_t> asc) -> RationalPoly {
+auto poly(const std::vector<std::int64_t>& asc) -> RationalPoly {
     std::vector<Rational> c;
     c.reserve(asc.size());
     for (std::int64_t v : asc) {

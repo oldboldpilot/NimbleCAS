@@ -101,7 +101,7 @@ struct RatioTest {
     // yet differ elsewhere could defeat it. The samples are spread widely enough that only a
     // very-high-degree crafted sequence could do so; realistic inputs cannot.
     bool exact{false};
-    std::optional<Rational> exact_limit{};  // the constant rational limit when `exact`
+    std::optional<Rational> exact_limit;  // the constant rational limit when `exact`
     double numeric_limit{0.0};              // a double view of the limit / finite-n estimate
 };
 
@@ -761,7 +761,7 @@ namespace {
 // defeat. Otherwise a NUMERICAL estimate at the largest feasible index is reported.
 struct SeqLimit {
     bool exact{false};
-    Rational exact_value{};    // the constant rational limit, valid iff `exact`
+    Rational exact_value;    // the constant rational limit, valid iff `exact`
     double numeric{0.0};       // a double view of L (constant value or finite-n estimate)
     bool have_numeric{false};  // false only when every sample overflowed / was skipped
 };

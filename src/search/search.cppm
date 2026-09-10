@@ -45,7 +45,7 @@ using HeuristicFn = std::function<std::int64_t(std::int64_t)>;
 // iterative FIFO breadth-first search with a visited set. The returned path includes
 // both `start` and the goal node. If `start` already satisfies `goal` the path is just
 // {start}. Returns undefined_value when no goal node is reachable from `start`.
-[[nodiscard]] auto bfs(std::int64_t start, GoalFn goal, SuccessorFn successors)
+[[nodiscard]] auto bfs(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors)
     -> Result<std::vector<std::int64_t>>;
 
 // Depth-first search to the first goal within `max_depth` edges of `start`, expressed
@@ -60,8 +60,9 @@ using HeuristicFn = std::function<std::int64_t(std::int64_t)>;
 // reverse so the leftmost is popped first and gates acceptance/expansion at pop time,
 // which reproduces the recursive pre-order exactly: for any fixed expansion order the two
 // return the identical first-goal path. Same bound semantics and errors as above.
-[[nodiscard]] auto dfs_iterative(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                                 std::int64_t max_depth) -> Result<std::vector<std::int64_t>>;
+[[nodiscard]] auto dfs_iterative(std::int64_t start, const GoalFn& goal,
+                                 const SuccessorFn& successors, std::int64_t max_depth)
+    -> Result<std::vector<std::int64_t>>;
 
 // Iterative-deepening DFS: repeated depth-limited searches with the bound growing from 0
 // up to `max_depth`, returning the SHALLOWEST goal (fewest edges), matching a BFS-style
@@ -79,8 +80,8 @@ using HeuristicFn = std::function<std::int64_t(std::int64_t)>;
 // with the lower node id wins. Returns domain_error if any traversed edge weight is
 // negative, overflow if a cost sum exceeds std::int64_t, and undefined_value if no goal
 // is reachable.
-[[nodiscard]] auto dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                            CostFn cost)
+[[nodiscard]] auto dijkstra(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors,
+                            const CostFn& cost)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
 
 // A* search: Dijkstra guided by an admissible `heuristic` (a lower bound on the remaining
@@ -88,8 +89,8 @@ using HeuristicFn = std::function<std::int64_t(std::int64_t)>;
 // tentative costs are relaxed lazily so an admissible-but-inconsistent heuristic still
 // yields the optimum. The returned total cost is the true path cost g and EQUALS the cost
 // `dijkstra` reports for the same problem. Same error semantics as `dijkstra`.
-[[nodiscard]] auto a_star(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                          CostFn cost, HeuristicFn heuristic)
+[[nodiscard]] auto a_star(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors,
+                          const CostFn& cost, const HeuristicFn& heuristic)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
 
 // Breadth-first search that returns nodes grouped by level (level 0 is {start}), stopping
@@ -117,8 +118,8 @@ using ObjectiveFn = std::function<std::int64_t(const TabuState&)>;
 // unless it beats the incumbent best (aspiration). The overall best state and value ever
 // seen are returned. Fully deterministic; terminates after at most `max_iters` iterations
 // (or earlier if no admissible move exists). domain_error if tabu_tenure or max_iters < 0.
-[[nodiscard]] auto tabu_search(TabuState initial, NeighborFn neighbors,
-                               ObjectiveFn objective, std::int64_t tabu_tenure,
+[[nodiscard]] auto tabu_search(TabuState initial, const NeighborFn& neighbors,
+                               const ObjectiveFn& objective, std::int64_t tabu_tenure,
                                std::int64_t max_iters)
     -> Result<std::pair<TabuState, std::int64_t>>;
 
@@ -143,25 +144,26 @@ using ObjectiveFn = std::function<std::int64_t(const TabuState&)>;
 // `weight_numerator / weight_denominator` so no floating point enters the ordering.
 // BOUNDED SUBOPTIMAL — the returned path costs at most w times the optimum. w = 1 behaves
 // exactly like `a_star`. A denominator of 0, or a ratio below 1, is a domain_error.
-[[nodiscard]] auto weighted_a_star(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                                   CostFn cost, HeuristicFn heuristic,
-                                   std::int64_t weight_numerator,
+[[nodiscard]] auto weighted_a_star(std::int64_t start, const GoalFn& goal,
+                                   const SuccessorFn& successors, const CostFn& cost,
+                                   HeuristicFn heuristic, std::int64_t weight_numerator,
                                    std::int64_t weight_denominator)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
 
 // Greedy best-first: expands the smallest h and ignores g entirely. NOT OPTIMAL — it finds a
 // path quickly and makes no claim about its cost. Exhausting `max_expansions` is not_converged.
-[[nodiscard]] auto greedy_best_first(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                                     HeuristicFn heuristic, std::int64_t max_expansions)
+[[nodiscard]] auto greedy_best_first(std::int64_t start, const GoalFn& goal,
+                                     const SuccessorFn& successors, const HeuristicFn& heuristic,
+                                     std::int64_t max_expansions)
     -> Result<std::vector<std::int64_t>>;
 
 // Beam search: a level sweep keeping only the `beam_width` best nodes per level. NOT OPTIMAL
 // and INCOMPLETE — it can miss a reachable goal entirely, which is a stronger caveat than
 // suboptimality and the reason to reach for it only when the alternative is not finishing.
 // A width below 1 is a domain_error.
-[[nodiscard]] auto beam_search(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                               HeuristicFn heuristic, std::int64_t beam_width,
-                               std::int64_t max_levels)
+[[nodiscard]] auto beam_search(std::int64_t start, const GoalFn& goal,
+                               const SuccessorFn& successors, const HeuristicFn& heuristic,
+                               std::int64_t beam_width, std::int64_t max_levels)
     -> Result<std::vector<std::int64_t>>;
 
 // Bidirectional Dijkstra: forward from `start`, backward from `goal_node`, meeting in the
@@ -169,8 +171,8 @@ using ObjectiveFn = std::function<std::int64_t(const TabuState&)>;
 // cannot be driven by a goal predicate alone — which is why this is a separate entry point
 // rather than an option on `dijkstra`. Returns the same (path, cost) `dijkstra` does.
 [[nodiscard]] auto bidirectional_dijkstra(std::int64_t start, std::int64_t goal_node,
-                                          SuccessorFn successors, SuccessorFn predecessors,
-                                          CostFn cost)
+                                          const SuccessorFn& successors, const SuccessorFn& predecessors,
+                                          const CostFn& cost)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
 
 // ---------------------------------------------------------------------------
@@ -187,12 +189,12 @@ using ObjectiveFn = std::function<std::int64_t(const TabuState&)>;
 // ---------------------------------------------------------------------------
 
 // A* with each expansion wave evaluated concurrently. Identical results to `a_star`.
-[[nodiscard]] auto parallel_a_star(std::int64_t start, GoalFn goal, SuccessorFn successors,
+[[nodiscard]] auto parallel_a_star(std::int64_t start, const GoalFn& goal, SuccessorFn successors,
                                    CostFn cost, HeuristicFn heuristic)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
 
 // Dijkstra with the same wave structure. Identical results to `dijkstra`.
-[[nodiscard]] auto parallel_dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors,
+[[nodiscard]] auto parallel_dijkstra(std::int64_t start, const GoalFn& goal, SuccessorFn successors,
                                      CostFn cost)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>>;
 
@@ -208,7 +210,7 @@ using ObjectiveFn = std::function<std::int64_t(const TabuState&)>;
 
 // Scores every neighbour of `state` concurrently, returned in neighbour order — the building
 // block for a caller's own parallel local search, without re-deriving the determinism argument.
-[[nodiscard]] auto parallel_neighbourhood_scan(const TabuState& state, NeighborFn neighbors,
+[[nodiscard]] auto parallel_neighbourhood_scan(const TabuState& state, const NeighborFn& neighbors,
                                                ObjectiveFn objective)
     -> Result<std::vector<std::pair<TabuState, std::int64_t>>>;
 // ---------------------------------------------------------------------------
@@ -377,7 +379,7 @@ namespace {
 
 }  // namespace
 
-auto bfs(std::int64_t start, GoalFn goal, SuccessorFn successors)
+auto bfs(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors)
     -> Result<std::vector<std::int64_t>> {
     if (goal(start)) {
         return std::vector<std::int64_t>{start};
@@ -447,7 +449,7 @@ auto dfs_recursive(std::int64_t start, GoalFn goal, SuccessorFn successors,
     return make_error<std::vector<std::int64_t>>(MathError::undefined_value);
 }
 
-auto dfs_iterative(std::int64_t start, GoalFn goal, SuccessorFn successors,
+auto dfs_iterative(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors,
                    std::int64_t max_depth) -> Result<std::vector<std::int64_t>> {
     if (max_depth < 0) {
         return make_error<std::vector<std::int64_t>>(MathError::domain_error);
@@ -528,7 +530,8 @@ auto iterative_deepening_dfs(std::int64_t start, GoalFn goal, SuccessorFn succes
     return make_error<std::vector<std::int64_t>>(MathError::undefined_value);
 }
 
-auto dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn cost)
+auto dijkstra(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors,
+              const CostFn& cost)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
     using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
 
@@ -587,8 +590,8 @@ auto dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn co
     return make_error<PathCost>(MathError::undefined_value);
 }
 
-auto a_star(std::int64_t start, GoalFn goal, SuccessorFn successors, CostFn cost,
-            HeuristicFn heuristic)
+auto a_star(std::int64_t start, const GoalFn& goal, const SuccessorFn& successors,
+            const CostFn& cost, const HeuristicFn& heuristic)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
     using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
 
@@ -707,7 +710,7 @@ auto parallel_bfs_levels(std::int64_t start, SuccessorFn successors, std::int64_
     return levels;
 }
 
-auto tabu_search(TabuState initial, NeighborFn neighbors, ObjectiveFn objective,
+auto tabu_search(TabuState initial, const NeighborFn& neighbors, const ObjectiveFn& objective,
                  std::int64_t tabu_tenure, std::int64_t max_iters)
     -> Result<std::pair<TabuState, std::int64_t>> {
     using Best = std::pair<TabuState, std::int64_t>;
@@ -715,7 +718,7 @@ auto tabu_search(TabuState initial, NeighborFn neighbors, ObjectiveFn objective,
         return make_error<Best>(MathError::domain_error);
     }
 
-    TabuState current = initial;
+    TabuState current = std::move(initial);
     TabuState best = current;
     std::int64_t best_val = objective(current);
 
@@ -1116,9 +1119,9 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 // - domain_error if any edge cost is negative or heuristic is negative.
 // - overflow if integer multiplication or cost addition exceeds std::int64_t.
 // - undefined_value if no goal is reachable.
-[[nodiscard]] auto weighted_a_star(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                                   CostFn cost, HeuristicFn heuristic,
-                                   std::int64_t weight_numerator,
+[[nodiscard]] auto weighted_a_star(std::int64_t start, const GoalFn& goal,
+                                   const SuccessorFn& successors, const CostFn& cost,
+                                   HeuristicFn heuristic, std::int64_t weight_numerator,
                                    std::int64_t weight_denominator)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
     using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
@@ -1253,8 +1256,9 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 // - domain_error if max_expansions < 0 or heuristic returns a negative value.
 // - not_converged if max_expansions node expansions are performed without finding a goal.
 // - undefined_value if the reachable frontier is exhausted without finding a goal.
-[[nodiscard]] auto greedy_best_first(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                                     HeuristicFn heuristic, std::int64_t max_expansions)
+[[nodiscard]] auto greedy_best_first(std::int64_t start, const GoalFn& goal,
+                                     const SuccessorFn& successors, const HeuristicFn& heuristic,
+                                     std::int64_t max_expansions)
     -> Result<std::vector<std::int64_t>> {
     using Path = std::vector<std::int64_t>;
 
@@ -1334,9 +1338,9 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 // - domain_error if beam_width < 1 or max_levels < 0 or heuristic returns a negative value.
 // - not_converged if max_levels levels are explored without finding a goal.
 // - undefined_value if the beam becomes empty with no goal found.
-[[nodiscard]] auto beam_search(std::int64_t start, GoalFn goal, SuccessorFn successors,
-                               HeuristicFn heuristic, std::int64_t beam_width,
-                               std::int64_t max_levels)
+[[nodiscard]] auto beam_search(std::int64_t start, const GoalFn& goal,
+                               const SuccessorFn& successors, const HeuristicFn& heuristic,
+                               std::int64_t beam_width, std::int64_t max_levels)
     -> Result<std::vector<std::int64_t>> {
     using Path = std::vector<std::int64_t>;
 
@@ -1448,8 +1452,8 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 // - overflow if path cost addition exceeds std::int64_t.
 // - undefined_value if no path connects start to goal_node.
 [[nodiscard]] auto bidirectional_dijkstra(std::int64_t start, std::int64_t goal_node,
-                                          SuccessorFn successors, SuccessorFn predecessors,
-                                          CostFn cost)
+                                          const SuccessorFn& successors, const SuccessorFn& predecessors,
+                                          const CostFn& cost)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
     using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
 
@@ -1645,7 +1649,7 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 // Shared-memory parallel search.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] auto parallel_a_star(std::int64_t start, GoalFn goal, SuccessorFn successors,
+[[nodiscard]] auto parallel_a_star(std::int64_t start, const GoalFn& goal, SuccessorFn successors,
                                    CostFn cost, HeuristicFn heuristic)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
     using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
@@ -1808,7 +1812,7 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 
 // Parallel Dijkstra: wave expansion with zero heuristic, matching serial dijkstra exactly.
 // Successor callback is executed concurrently across each wave and MUST be pure.
-[[nodiscard]] auto parallel_dijkstra(std::int64_t start, GoalFn goal, SuccessorFn successors,
+[[nodiscard]] auto parallel_dijkstra(std::int64_t start, const GoalFn& goal, SuccessorFn successors,
                                      CostFn cost)
     -> Result<std::pair<std::vector<std::int64_t>, std::int64_t>> {
     using PathCost = std::pair<std::vector<std::int64_t>, std::int64_t>;
@@ -1990,7 +1994,7 @@ auto knapsack_01(std::span<const std::int64_t> weights, std::span<const std::int
 
 // Evaluates objective over every neighbour of state concurrently and returns them in neighbour order.
 // The objective callback is invoked across threads and MUST be pure.
-[[nodiscard]] auto parallel_neighbourhood_scan(const TabuState& state, NeighborFn neighbors,
+[[nodiscard]] auto parallel_neighbourhood_scan(const TabuState& state, const NeighborFn& neighbors,
                                                ObjectiveFn objective)
     -> Result<std::vector<std::pair<TabuState, std::int64_t>>> {
     using ScannedNeighbors = std::vector<std::pair<TabuState, std::int64_t>>;

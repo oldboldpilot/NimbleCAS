@@ -55,7 +55,7 @@ enum class OptionRight : std::uint8_t { call, put };
 // spot. Any field a provider does not supply stays at its zero default and the adapter
 // only fails when a REQUIRED field (symbol + a usable price) is missing.
 struct Quote {
-    std::string symbol{};
+    std::string symbol;
     AssetClass asset_class{AssetClass::equity};
     double last{0.0};            // last / regular-market price (the pricing spot)
     double bid{0.0};
@@ -65,7 +65,7 @@ struct Quote {
     double low{0.0};
     double previous_close{0.0};
     double volume{0.0};
-    std::string currency{};
+    std::string currency;
     std::int64_t timestamp{0};   // epoch seconds; 0 == unknown
 
     // Mid price when a two-sided market is present, else the last trade. Never invents
@@ -94,9 +94,9 @@ struct Bar {
 
 // A time-ordered series of bars for one instrument (a chart / candles response).
 struct BarSeries {
-    std::string symbol{};
+    std::string symbol;
     AssetClass asset_class{AssetClass::equity};
-    std::vector<Bar> bars{};
+    std::vector<Bar> bars;
 
     [[nodiscard]] auto size() const noexcept -> std::size_t { return bars.size(); }
     [[nodiscard]] auto empty() const noexcept -> bool { return bars.empty(); }
@@ -106,7 +106,7 @@ struct BarSeries {
 
 // A single listed option contract quote.
 struct OptionQuote {
-    std::string contract_symbol{};
+    std::string contract_symbol;
     OptionRight right{OptionRight::call};
     double strike{0.0};
     std::int64_t expiration{0};      // epoch seconds
@@ -120,17 +120,17 @@ struct OptionQuote {
 
 // The calls + puts for one underlying/expiry, plus the underlying's spot.
 struct OptionChain {
-    std::string underlying{};
+    std::string underlying;
     double underlying_price{0.0};
     std::int64_t expiration{0};      // epoch seconds of this chain's expiry
-    std::vector<OptionQuote> calls{};
-    std::vector<OptionQuote> puts{};
+    std::vector<OptionQuote> calls;
+    std::vector<OptionQuote> puts;
 };
 
 // A yield/price quote for a rate instrument (bond, bill, note) — the bridge into the
 // fixed-income / money-market strategy engines.
 struct RateQuote {
-    std::string symbol{};
+    std::string symbol;
     AssetClass asset_class{AssetClass::bond};
     double yield{0.0};               // decimal (0.045 == 4.5%)
     double price{0.0};               // clean price per 100 face, when supplied

@@ -29,7 +29,7 @@ auto r(std::int64_t v) -> Rational { return Rational::from_int(v); }
 
 // Build a matrix from integer rows, recording a failure and returning a 0x0 matrix on the
 // (unexpected) error branch so a later comparison also fails loudly.
-auto mat(TestContext& t, std::vector<std::vector<std::int64_t>> rows, std::string_view what)
+auto mat(TestContext& t, const std::vector<std::vector<std::int64_t>>& rows, std::string_view what)
     -> Matrix {
     std::vector<std::vector<Rational>> converted;
     converted.reserve(rows.size());

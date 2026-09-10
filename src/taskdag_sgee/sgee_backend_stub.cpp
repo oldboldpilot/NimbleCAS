@@ -8,7 +8,7 @@ import nimblecas.core;
 
 namespace nimblecas {
 
-auto sgee_distributed_executor(SgeeExecutorConfig cfg) -> Result<std::unique_ptr<Executor>> {
+auto sgee_distributed_executor(const SgeeExecutorConfig& cfg) -> Result<std::unique_ptr<Executor>> {
     // Validate the config identically to the real (ON) factory so callers get a stable error for
     // the same input across build configs; a valid config then honestly reports not_implemented.
     if (cfg.registry == nullptr || cfg.wal_dir.empty() || cfg.num_workers == 0 ||

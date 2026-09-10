@@ -17,6 +17,7 @@
 
 module;
 #include <cassert>
+#include <utility>
 
 export module nimblecas.currency;
 
@@ -39,7 +40,7 @@ public:
     [[nodiscard]] static auto parse(std::string_view amount, std::string code) -> Result<Money> {
         auto a = BigDecimal::from_string(amount);
         if (!a) { return make_error<Money>(a.error()); }
-        return Money{std::move(*a), std::string{code}};
+        return Money{std::move(*a), std::string{std::move(code)}};
     }
 
     [[nodiscard]] auto amount() const noexcept -> const BigDecimal& { return amount_; }
@@ -67,8 +68,8 @@ public:
 private:
     Money(BigDecimal amount, std::string code)
         : amount_(std::move(amount)), code_(std::move(code)) {}
-    BigDecimal amount_{};
-    std::string code_{};
+    BigDecimal amount_;
+    std::string code_;
 };
 
 // A directed quoted rate base->quote: 1 unit of `base` buys `rate` units of `quote`. Exact.
@@ -118,7 +119,7 @@ private:
     RateTable() = default;
     // Adjacency: from-code -> list of (to-code, rate). Small graphs (dozens of currencies),
     // so a hashed adjacency with BFS pathfinding is ample.
-    std::unordered_map<std::string, std::vector<std::pair<std::string, BigRational>>> adj_{};
+    std::unordered_map<std::string, std::vector<std::pair<std::string, BigRational>>> adj_;
 };
 
 // Covered-interest-parity forward rate: F = S * (1 + r_quote*t) / (1 + r_base*t), with S the

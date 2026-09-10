@@ -127,7 +127,7 @@ enum class LinProgStatus : std::uint8_t { optimal, infeasible, unbounded };
 struct LinProgResult {
     LinProgStatus status{LinProgStatus::optimal};
     double objective{0.0};
-    std::vector<double> x{};
+    std::vector<double> x;
 };
 [[nodiscard]] auto linprog(std::span<const double> c,
                            std::span<const std::vector<double>> A_le,
@@ -223,9 +223,9 @@ struct CVaRResult {
 // rate <= -1 -> domain_error.
 struct AmortSchedule {
     double payment{0.0};
-    std::vector<double> interest{};
-    std::vector<double> principal{};
-    std::vector<double> balance{};
+    std::vector<double> interest;
+    std::vector<double> principal;
+    std::vector<double> balance;
 };
 [[nodiscard]] auto amortize(double rate, std::int64_t nper, double principal)
     -> Result<AmortSchedule>;

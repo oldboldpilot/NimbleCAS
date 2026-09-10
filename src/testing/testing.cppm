@@ -41,7 +41,7 @@ public:
 
 private:
     std::size_t checks_{};
-    std::vector<std::string> failures_{};
+    std::vector<std::string> failures_;
 };
 
 // Collects and runs a group of test cases with a fluent registration API.
@@ -91,7 +91,7 @@ public:
 
 private:
     std::string name_;
-    std::vector<std::pair<std::string, TestFn>> cases_{};
+    std::vector<std::pair<std::string, TestFn>> cases_;
 };
 
 }  // namespace nimblecas::testing

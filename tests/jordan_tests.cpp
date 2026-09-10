@@ -41,7 +41,7 @@ namespace {
 }
 
 // A polynomial from integer coefficients in ascending order (constant term first).
-[[nodiscard]] auto poly(std::vector<std::int64_t> coeffs) -> RationalPoly {
+[[nodiscard]] auto poly(const std::vector<std::int64_t>& coeffs) -> RationalPoly {
     std::vector<Rational> rc;
     rc.reserve(coeffs.size());
     for (const std::int64_t v : coeffs) {

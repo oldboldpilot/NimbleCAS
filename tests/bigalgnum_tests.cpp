@@ -37,7 +37,7 @@ auto qs(std::string_view s) -> BigRational {
 }
 
 // BigRationalPoly from int64 coefficients in index order (constant first).
-auto poly(std::vector<std::int64_t> cs) -> BigRationalPoly {
+auto poly(const std::vector<std::int64_t>& cs) -> BigRationalPoly {
     std::vector<BigRational> v;
     v.reserve(cs.size());
     for (std::int64_t c : cs) {

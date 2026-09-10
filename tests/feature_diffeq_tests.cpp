@@ -69,7 +69,7 @@ using SeriesVec = std::vector<PowerSeries>;
 [[nodiscard]] auto sgn(std::int64_t m) -> std::int64_t { return (m % 2 == 0) ? 1 : -1; }
 
 // A truncated power series over Q from integer coefficients (coeffs[i] multiplies x^i).
-[[nodiscard]] auto psi(std::vector<std::int64_t> cs, std::size_t order) -> PowerSeries {
+[[nodiscard]] auto psi(const std::vector<std::int64_t>& cs, std::size_t order) -> PowerSeries {
     std::vector<Rational> r;
     r.reserve(cs.size());
     for (const std::int64_t v : cs) {

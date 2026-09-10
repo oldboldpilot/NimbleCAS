@@ -138,8 +138,8 @@ public:
     }
 
 private:
-    mutable std::mutex mutex_{};
-    std::unordered_map<std::uint64_t, Payload> storage_{};
+    mutable std::mutex mutex_;
+    std::unordered_map<std::uint64_t, Payload> storage_;
 };
 
 // ---------------------------------------------------------------------------
@@ -425,11 +425,11 @@ private:
 
     ClockFn clock_{nullptr};
     std::atomic<std::uint64_t> current_time_ms_{0};
-    mutable std::mutex mutex_{};
+    mutable std::mutex mutex_;
     std::uint64_t next_qid_{0};
     std::uint64_t next_token_{0};
-    std::unordered_map<std::uint64_t, TaskEntry> tasks_{};
-    std::vector<std::uint64_t> fifo_order_{};
+    std::unordered_map<std::uint64_t, TaskEntry> tasks_;
+    std::vector<std::uint64_t> fifo_order_;
     std::array<std::size_t, 7> fault_counters_{};
 };
 
@@ -495,17 +495,17 @@ private:
 // Cross-process gRPC options and classes
 // ---------------------------------------------------------------------------
 struct SgeeGrpcTlsOptions {           // all-or-nothing
-    std::string ca_cert_path{};
-    std::string cert_path{};
-    std::string key_path{};
-    std::string target_name_override{};  // optional
+    std::string ca_cert_path;
+    std::string cert_path;
+    std::string key_path;
+    std::string target_name_override;  // optional
 };
 
 struct SgeeGrpcExecutorOptions {
-    std::string endpoint{};                 // UNCHANGED, still works alone
-    std::string auth_token{};
+    std::string endpoint;                 // UNCHANGED, still works alone
+    std::string auth_token;
     std::uint64_t rpc_deadline_ms{0};
-    std::vector<std::string> endpoints{};   // NEW: when non-empty, supersedes `endpoint`
+    std::vector<std::string> endpoints;   // NEW: when non-empty, supersedes `endpoint`
     SgeeGrpcTlsOptions tls{};               // NEW: empty == plaintext
 };
 
@@ -668,13 +668,13 @@ struct WorkerPumpConfig {
 };
 
 auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& results,
-                     WorkerPumpConfig cfg, std::stop_token stop) -> void;
+                     WorkerPumpConfig cfg, const std::stop_token& stop) -> void;
 
 // ---------------------------------------------------------------------------
 // SgeeDistributedExecutor
 // ---------------------------------------------------------------------------
 struct SgeeExecutorConfig {
-    std::filesystem::path wal_dir{};
+    std::filesystem::path wal_dir;
     const TaskRegistry* registry{nullptr};
     std::uint64_t visibility_timeout_ms{30'000};
     std::uint32_t max_attempts{3};
@@ -682,7 +682,7 @@ struct SgeeExecutorConfig {
     std::uint64_t poll_interval_ms{2};
     std::uint64_t run_deadline_ms{0};
     std::size_t max_result_recoveries{0};
-    std::function<SgeePlacement(const TaskGraph&, TaskId)> placement{};
+    std::function<SgeePlacement(const TaskGraph&, TaskId)> placement;
     bool cost_ordering{false};
     ScheduleParams schedule_params{};
     const CostTable* cost_table{nullptr};
@@ -797,9 +797,9 @@ struct SgeeExecutorConfig {
 struct RunTransport {
     BrokerPort* port{nullptr};
     ResultChannel* channel{nullptr};
-    std::unique_ptr<BrokerPort> owned_port{};
-    std::unique_ptr<ResultChannel> owned_channel{};
-    std::filesystem::path wal_path{};
+    std::unique_ptr<BrokerPort> owned_port;
+    std::unique_ptr<ResultChannel> owned_channel;
+    std::filesystem::path wal_path;
 };
 
 // Invoked once per run(). Returning an error aborts the run with that error before any
@@ -881,7 +881,7 @@ private:
 // and retained on failure. The factory does NOT open a broker itself: broker-open failure surfaces
 // at run() time as distributed_error, and an executor is safe to reuse after a failed run. With
 // NIMBLECAS_SGEE=OFF the stub honestly returns not_implemented for a valid config.
-[[nodiscard]] auto sgee_distributed_executor(SgeeExecutorConfig cfg)
+[[nodiscard]] auto sgee_distributed_executor(const SgeeExecutorConfig& cfg)
     -> Result<std::unique_ptr<Executor>>;
 
 // ---------------------------------------------------------------------------
@@ -895,8 +895,8 @@ private:
 // pumps against the remote broker (a useful halfway configuration). The RunTransport carries no
 // local WAL, so nothing is reaped on success. With NIMBLECAS_SGEE_GRPC=OFF the stub honestly
 // returns not_implemented for a valid config.
-[[nodiscard]] auto sgee_grpc_distributed_executor(SgeeExecutorConfig cfg,
-                                                  SgeeGrpcExecutorOptions opts)
+[[nodiscard]] auto sgee_grpc_distributed_executor(const SgeeExecutorConfig& cfg,
+                                                  const SgeeGrpcExecutorOptions& opts)
     -> Result<std::unique_ptr<Executor>>;
 
 }  // namespace nimblecas
@@ -1180,7 +1180,7 @@ auto decode_result(std::span<const std::byte> bytes) -> Result<ResultEnvelope> {
 }  // namespace sgee_bridge
 
 auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& results,
-                     WorkerPumpConfig cfg, std::stop_token stop) -> void {
+                     WorkerPumpConfig cfg, const std::stop_token& stop) -> void {
     while (!stop.stop_requested()) {
         auto lease_res = port.lease(cfg.worker_id, cfg.lease_timeout_ms);
         if (!lease_res.has_value()) {
@@ -1389,7 +1389,7 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
     };
     struct PumpGuard {
         std::stop_source stop{};
-        std::vector<std::thread> threads{};
+        std::vector<std::thread> threads;
         ~PumpGuard() {
             stop.request_stop();
             for (auto& t : threads) {

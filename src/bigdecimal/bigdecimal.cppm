@@ -160,7 +160,7 @@ private:
     BigDecimal(BigInt unscaled, std::int32_t scale)
         : unscaled_(std::move(unscaled)), scale_(scale) {}
 
-    BigInt unscaled_{};        // 0 by default; carries the value's sign
+    BigInt unscaled_;        // 0 by default; carries the value's sign
     std::int32_t scale_{0};    // value == unscaled_ * 10^(-scale_)
 };
 

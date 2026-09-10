@@ -79,8 +79,8 @@ struct DdeSolution {
 // (history_local(s) = history(s - tau) for s in [0, tau]); it is normalised to the working
 // `order`. domain_error if tau <= 0, order == 0, or num_intervals == 0; any powerseries or
 // Rational error raised while solving is propagated.
-[[nodiscard]] auto solve_method_of_steps(DdeOperator f,
-                                         PowerSeries history_on_first_interval, Rational tau,
+[[nodiscard]] auto solve_method_of_steps(const DdeOperator& f,
+                                         const PowerSeries& history_on_first_interval, Rational tau,
                                          std::size_t num_intervals, std::size_t order)
     -> Result<DdeSolution>;
 
@@ -151,8 +151,8 @@ auto solve_interval(const DdeOperator& f, const PowerSeries& u_delayed, const Ra
 
 }  // namespace
 
-auto solve_method_of_steps(DdeOperator f, PowerSeries history_on_first_interval, Rational tau,
-                           std::size_t num_intervals, std::size_t order)
+auto solve_method_of_steps(const DdeOperator& f, const PowerSeries& history_on_first_interval,
+                           Rational tau, std::size_t num_intervals, std::size_t order)
     -> Result<DdeSolution> {
     if (!f || order == 0 || num_intervals == 0 || tau.numerator() <= 0) {
         return make_error<DdeSolution>(MathError::domain_error);

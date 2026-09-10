@@ -641,7 +641,7 @@ auto main() -> int {
                   std::jthread pump([&](std::stop_token st) {
                       run_worker_pump(port, reg, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
                   });
                   const bool all_done = wait_until([&] {
                       return port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed &&
@@ -685,7 +685,7 @@ auto main() -> int {
                   std::jthread pump([&](std::stop_token st) {
                       run_worker_pump(port, reg_worker, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100'000,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
                   });
                   const auto res = exec.run(g);
                   pump.request_stop();
@@ -758,7 +758,7 @@ auto main() -> int {
                   std::jthread pump([&](std::stop_token st) {
                       run_worker_pump(port, reg, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100'000,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
                   });
                   runner.join();
                   pump.request_stop();
@@ -917,7 +917,7 @@ auto main() -> int {
                   std::jthread pump([&](std::stop_token st) {
                       run_worker_pump(port, reg, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 1}, st);
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 1}, std::move(st));
                   });
 
                   t.expect(wait_until([&] {

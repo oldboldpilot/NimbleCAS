@@ -86,9 +86,9 @@ export namespace nimblecas {
 // RHS as −u u_x); `convection = 0` drops it. `diffusivity = 0` drops the diffusion term.
 // Any PDE expressible in this form is handled exactly; anything else is not_implemented.
 struct HamPde {
-    Rational diffusivity{};                 // ν, coefficient of u_xx
-    Rational convection{};                  // c, coefficient of the convective term u u_x
-    std::vector<Rational> reaction_coeffs{}; // f(u) = Σ_p reaction_coeffs[p] u^p
+    Rational diffusivity;                 // ν, coefficient of u_xx
+    Rational convection;                  // c, coefficient of the convective term u u_x
+    std::vector<Rational> reaction_coeffs; // f(u) = Σ_p reaction_coeffs[p] u^p
 };
 
 // Solve u_t = F[u], u(x,0) = u0, by the Homotopy Analysis Method with convergence-control

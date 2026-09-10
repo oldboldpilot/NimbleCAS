@@ -61,7 +61,7 @@ using JacobianFn = std::function<std::vector<double>(std::span<const double>)>;
 // Outcome of a solve. `x` is the best iterate found (always populated on a non-error
 // return, even when converged == false). `residual_norm` is ||F(x)||_2 at that iterate.
 struct SolveResult {
-    std::vector<double> x{};            // best iterate located
+    std::vector<double> x;            // best iterate located
     double residual_norm{0.0};          // ||F(x)||_2 there
     std::size_t iterations{0};          // outer iterations performed
     bool converged{false};              // did the stopping test pass?
@@ -327,8 +327,8 @@ auto axpy(Vec& y, double alpha, std::span<const double> x) -> void {
 
 // Result of an Armijo backtracking line search along the direction s from x.
 struct LineSearch {
-    Vec x_new{};        // accepted point x + lambda*s
-    Vec F_new{};        // F(x_new)
+    Vec x_new;        // accepted point x + lambda*s
+    Vec F_new;        // F(x_new)
     double fnorm{0.0};  // ||F(x_new)||_2
     double lambda{0.0}; // accepted step length
     bool ok{false};     // did we find an acceptable (finite / decreasing) step?

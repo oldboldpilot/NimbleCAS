@@ -120,7 +120,7 @@ private:
     // Round m * 2^e to `prec` significant bits (round-to-nearest, ties-to-even) and reduce
     // to canonical form. `sticky` records nonzero content below the mantissa's LSB (from a
     // division / sqrt remainder), breaking exact ties upward. prec must be > 0.
-    [[nodiscard]] static auto normalize(BigInt m, std::int64_t e, std::int64_t prec,
+    [[nodiscard]] static auto normalize(const BigInt& m, std::int64_t e, std::int64_t prec,
                                         bool sticky) -> Result<BigFloat>;
 
     // Round (num / den) * 2^e_bias to `prec` bits. den must be non-zero, prec > 0.
@@ -287,7 +287,7 @@ constexpr std::int64_t guard_bits = 2;
 
 // --- normalisation / rounding ---------------------------------------------------------
 
-auto BigFloat::normalize(BigInt m, std::int64_t e, std::int64_t prec, bool sticky)
+auto BigFloat::normalize(const BigInt& m, std::int64_t e, std::int64_t prec, bool sticky)
     -> Result<BigFloat> {
     assert(prec > 0 && "normalize requires a positive precision");
     if (m.is_zero()) {

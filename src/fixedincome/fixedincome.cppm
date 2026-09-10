@@ -50,8 +50,8 @@ export namespace nimblecas::fixedincome {
 
 // Parallel cashflow amounts (per the face convention supplied) and their calendar dates.
 struct DatedCashflows {
-    std::vector<double> amounts{};
-    std::vector<finance::Date> dates{};
+    std::vector<double> amounts;
+    std::vector<finance::Date> dates;
 };
 
 // Level-payment amortization output: the constant payment, and per-period interest, principal
@@ -59,9 +59,9 @@ struct DatedCashflows {
 // remaining balance so the schedule closes exactly (sum of principal == loan, final balance 0).
 struct AmortizationSchedule {
     double payment{0.0};
-    std::vector<double> interest{};
-    std::vector<double> principal{};
-    std::vector<double> balance{};
+    std::vector<double> interest;
+    std::vector<double> principal;
+    std::vector<double> balance;
 };
 
 // ===========================================================================

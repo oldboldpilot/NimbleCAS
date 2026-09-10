@@ -32,7 +32,7 @@ namespace {
 [[nodiscard]] auto ri(std::int64_t v) -> Rational { return Rational::from_int(v); }
 
 // Integer node/value vectors -> Rational vectors, for terse test data.
-[[nodiscard]] auto rats(std::vector<std::int64_t> xs) -> std::vector<Rational> {
+[[nodiscard]] auto rats(const std::vector<std::int64_t>& xs) -> std::vector<Rational> {
     std::vector<Rational> r;
     r.reserve(xs.size());
     for (std::int64_t v : xs) {

@@ -67,8 +67,8 @@ export namespace nimblecas {
 // A 2-D point with exact rational coordinates (for 2-D Bezier control data).
 // ---------------------------------------------------------------------------
 struct Point2 {
-    Rational x{};
-    Rational y{};
+    Rational x;
+    Rational y;
     [[nodiscard]] auto operator==(const Point2& o) const noexcept -> bool {
         return x == o.x && y == o.y;
     }
@@ -216,7 +216,7 @@ struct BezierSplit {
 // pair of independent scalar curves (one per coordinate). This class is that pair.
 class BezierCurve2 {
 public:
-    [[nodiscard]] static auto make(std::vector<Point2> control_points) -> Result<BezierCurve2>;
+    [[nodiscard]] static auto make(const std::vector<Point2>& control_points) -> Result<BezierCurve2>;
 
     [[nodiscard]] auto degree() const noexcept -> std::size_t { return x_.degree(); }
     [[nodiscard]] auto control_points() const -> std::vector<Point2>;
@@ -568,7 +568,7 @@ namespace {
 // (in absolute x). Uses the Hermite basis with t = (x - x_i)/h:
 //   H = h00(t) y_i + h10(t) (h d_i) + h01(t) y_{i+1} + h11(t) (h d_{i+1}),
 //   h00 = 2t^3-3t^2+1, h10 = t^3-2t^2+t, h01 = -2t^3+3t^2, h11 = t^3-t^2.
-[[nodiscard]] auto hermite_piece(const Rational& xi, const Rational& xi1, const Rational& yi,
+[[nodiscard]] auto hermite_piece(const Rational& xi, const Rational& yi,
                                  const Rational& yi1, const Rational& di, const Rational& di1,
                                  const Rational& h) -> Result<RationalPoly> {
     auto inv_h = rat_one().divide(h);  // h != 0
@@ -987,7 +987,7 @@ auto HermiteSpline::from_slopes(std::span<const Rational> xs, std::span<const Ra
     std::vector<RationalPoly> pieces;
     pieces.reserve(h->size());
     for (std::size_t i = 0; i < h->size(); ++i) {
-        auto piece = hermite_piece(xs[i], xs[i + 1], ys[i], ys[i + 1], slopes[i], slopes[i + 1],
+        auto piece = hermite_piece(xs[i], ys[i], ys[i + 1], slopes[i], slopes[i + 1],
                                    (*h)[i]);
         if (!piece) {
             return make_error<HermiteSpline>(piece.error());
@@ -1373,7 +1373,7 @@ auto bezier_subdivide(const BezierCurve& curve, const Rational& t) -> Result<Bez
 
 // --- BezierCurve2 -----------------------------------------------------------
 
-auto BezierCurve2::make(std::vector<Point2> control_points) -> Result<BezierCurve2> {
+auto BezierCurve2::make(const std::vector<Point2>& control_points) -> Result<BezierCurve2> {
     if (control_points.empty()) {
         return make_error<BezierCurve2>(MathError::domain_error);
     }

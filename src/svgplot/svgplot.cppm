@@ -62,7 +62,7 @@ struct PlotOptions {
 //
 // Errors (MathError::domain_error): samples < 2, xmin >= xmax, plus any error
 // plot_line raises on the surviving samples (e.g. every f(x) dropped -> empty data).
-[[nodiscard]] auto plot_function(std::function<double(double)> f, double xmin, double xmax,
+[[nodiscard]] auto plot_function(const std::function<double(double)>& f, double xmin, double xmax,
                                  int samples, const PlotOptions& opt) -> Result<std::string>;
 
 }  // namespace nimblecas
@@ -239,7 +239,7 @@ auto plot_scatter(std::span<const double> xs, std::span<const double> ys,
     return svg;
 }
 
-auto plot_function(std::function<double(double)> f, double xmin, double xmax, int samples,
+auto plot_function(const std::function<double(double)>& f, double xmin, double xmax, int samples,
                    const PlotOptions& opt) -> Result<std::string> {
     if (samples < 2) {
         return make_error<std::string>(MathError::domain_error);  // need an interval

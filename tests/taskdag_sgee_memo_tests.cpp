@@ -1050,7 +1050,7 @@ auto main() -> int {
                                                      .lease_timeout_ms = 100'000,
                                                      .idle_backoff_ms = 1,
                                                      .heartbeat_every_ms = 0
-                                                 }, st);
+                                                 }, std::move(st));
                   });
                   const auto res1 = exec1.run(g);
                   pump.request_stop();

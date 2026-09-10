@@ -29,7 +29,7 @@ namespace {
     return Rational::from_int(v);
 }
 
-[[nodiscard]] auto ints(std::vector<std::int64_t> vs) -> std::vector<Rational> {
+[[nodiscard]] auto ints(const std::vector<std::int64_t>& vs) -> std::vector<Rational> {
     std::vector<Rational> out;
     out.reserve(vs.size());
     for (const std::int64_t v : vs) {

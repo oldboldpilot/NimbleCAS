@@ -44,9 +44,9 @@ export namespace nimblecas {
 struct NumericSvd {
     std::size_t rows{};
     std::size_t cols{};
-    std::vector<double> u{};
-    std::vector<double> singular_values{};
-    std::vector<double> v{};
+    std::vector<double> u;
+    std::vector<double> singular_values;
+    std::vector<double> v;
 };
 
 // Thin numeric SVD of the rows x cols matrix given row-major in `a` (length rows*cols),
@@ -84,8 +84,8 @@ struct NumericSvd {
 // A^T*A), both row-major. NUMERIC.
 struct NumericPolar {
     std::size_t n{};
-    std::vector<double> u{};
-    std::vector<double> p{};
+    std::vector<double> u;
+    std::vector<double> p;
 };
 
 // Polar decomposition A = U*P of the SQUARE n x n matrix given row-major in `a` (length

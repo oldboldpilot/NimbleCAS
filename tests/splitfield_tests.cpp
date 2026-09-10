@@ -35,7 +35,7 @@ using nimblecas::testing::TestSuite;
 namespace {
 
 // RationalPoly from ascending integer coefficients (index i is the coeff of x^i).
-auto rpoly(std::vector<std::int64_t> asc) -> RationalPoly {
+auto rpoly(const std::vector<std::int64_t>& asc) -> RationalPoly {
     std::vector<Rational> c;
     c.reserve(asc.size());
     for (std::int64_t v : asc) {

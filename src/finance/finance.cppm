@@ -347,8 +347,8 @@ public:
 
 private:
     CashflowSchedule() = default;
-    std::vector<BigRational> amounts_{};
-    std::vector<Date> dates_{};
+    std::vector<BigRational> amounts_;
+    std::vector<Date> dates_;
     bool dated_{false};
 };
 

@@ -154,14 +154,14 @@ struct Estimate {
 // Plain Monte Carlo: (b - a) * mean f(U_i), U_i ~ Uniform[a, b]. Unbiased. Provided as the
 // baseline against which the variance-reduced estimators below are compared at equal
 // sample count. Guards: b < a or samples == 0 => domain_error.
-[[nodiscard]] auto plain_estimate(std::function<double(double)> f, double a, double b,
+[[nodiscard]] auto plain_estimate(const std::function<double(double)>& f, double a, double b,
                                   std::uint64_t samples, std::uint64_t seed) -> Result<Estimate>;
 
 // Antithetic variates: for each of `pairs` draws U, average f at U and at its reflection
 // 1 - U. Uses 2 * pairs function evaluations. Unbiased; for a MONOTONE integrand the pair
 // is negatively correlated, so the variance (and std_error) is strictly below plain Monte
 // Carlo at the same 2*pairs sample count. Guards: b < a or pairs == 0 => domain_error.
-[[nodiscard]] auto antithetic_estimate(std::function<double(double)> f, double a, double b,
+[[nodiscard]] auto antithetic_estimate(const std::function<double(double)>& f, double a, double b,
                                        std::uint64_t pairs, std::uint64_t seed)
     -> Result<Estimate>;
 
@@ -172,8 +172,8 @@ struct Estimate {
 // unbiased), not exact. When f and control are correlated the std_error falls below plain
 // Monte Carlo. Guards: b < a or samples == 0 => domain_error (samples < 2 yields a valid
 // value but a NaN std_error, since variance needs >= 2 points).
-[[nodiscard]] auto control_variate_estimate(std::function<double(double)> f,
-                                            std::function<double(double)> control,
+[[nodiscard]] auto control_variate_estimate(const std::function<double(double)>& f,
+                                            const std::function<double(double)>& control,
                                             double control_mean, double a, double b,
                                             std::uint64_t samples, std::uint64_t seed)
     -> Result<Estimate>;
@@ -183,7 +183,7 @@ struct Estimate {
 // only, so it is <= plain Monte Carlo at the same strata*per_stratum sample count (the
 // between-stratum variance is removed by construction). Guards: b < a, strata == 0, or
 // per_stratum == 0 => domain_error.
-[[nodiscard]] auto stratified_estimate(std::function<double(double)> f, double a, double b,
+[[nodiscard]] auto stratified_estimate(const std::function<double(double)>& f, double a, double b,
                                        std::uint64_t strata, std::uint64_t per_stratum,
                                        std::uint64_t seed) -> Result<Estimate>;
 
@@ -523,8 +523,8 @@ auto bootstrap_particle_filter(const StateSampler& initial_sampler,
 
 // --- Variance-reduced integration ---
 
-auto plain_estimate(std::function<double(double)> f, double a, double b, std::uint64_t samples,
-                    std::uint64_t seed) -> Result<Estimate> {
+auto plain_estimate(const std::function<double(double)>& f, double a, double b,
+                    std::uint64_t samples, std::uint64_t seed) -> Result<Estimate> {
     if (b < a || samples == 0) {
         return make_error<Estimate>(MathError::domain_error);
     }
@@ -552,7 +552,7 @@ auto plain_estimate(std::function<double(double)> f, double a, double b, std::ui
     return Estimate{value, std_error};
 }
 
-auto antithetic_estimate(std::function<double(double)> f, double a, double b,
+auto antithetic_estimate(const std::function<double(double)>& f, double a, double b,
                          std::uint64_t pairs, std::uint64_t seed) -> Result<Estimate> {
     if (b < a || pairs == 0) {
         return make_error<Estimate>(MathError::domain_error);
@@ -582,9 +582,10 @@ auto antithetic_estimate(std::function<double(double)> f, double a, double b,
     return Estimate{value, std_error};
 }
 
-auto control_variate_estimate(std::function<double(double)> f, std::function<double(double)> control,
-                              double control_mean, double a, double b, std::uint64_t samples,
-                              std::uint64_t seed) -> Result<Estimate> {
+auto control_variate_estimate(const std::function<double(double)>& f,
+                              const std::function<double(double)>& control, double control_mean,
+                              double a, double b, std::uint64_t samples, std::uint64_t seed)
+    -> Result<Estimate> {
     if (b < a || samples == 0) {
         return make_error<Estimate>(MathError::domain_error);
     }
@@ -641,7 +642,7 @@ auto control_variate_estimate(std::function<double(double)> f, std::function<dou
     return Estimate{value, std_error};
 }
 
-auto stratified_estimate(std::function<double(double)> f, double a, double b,
+auto stratified_estimate(const std::function<double(double)>& f, double a, double b,
                          std::uint64_t strata, std::uint64_t per_stratum, std::uint64_t seed)
     -> Result<Estimate> {
     if (b < a || strata == 0 || per_stratum == 0) {

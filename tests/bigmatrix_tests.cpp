@@ -33,7 +33,7 @@ namespace {
 }
 
 // Build a BigMatrix from integer rows (low-index row first).
-[[nodiscard]] auto bmat(std::vector<std::vector<std::int64_t>> rows) -> BigMatrix {
+[[nodiscard]] auto bmat(const std::vector<std::vector<std::int64_t>>& rows) -> BigMatrix {
     std::vector<std::vector<BigRational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {
@@ -48,7 +48,7 @@ namespace {
 }
 
 // Build an int64-Rational Matrix from integer rows (for promotion / cross-check tests).
-[[nodiscard]] auto imat(std::vector<std::vector<std::int64_t>> rows) -> Matrix {
+[[nodiscard]] auto imat(const std::vector<std::vector<std::int64_t>>& rows) -> Matrix {
     std::vector<std::vector<Rational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {

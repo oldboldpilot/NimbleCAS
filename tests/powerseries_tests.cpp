@@ -33,7 +33,7 @@ auto rat(TestContext& t, std::int64_t num, std::int64_t den, std::string_view wh
 auto ri(std::int64_t v) -> Rational { return Rational::from_int(v); }
 
 // Build a series from integer coefficients at a given order, asserting success.
-auto series(TestContext& t, std::vector<std::int64_t> ints, std::size_t order,
+auto series(TestContext& t, const std::vector<std::int64_t>& ints, std::size_t order,
             std::string_view what) -> PowerSeries {
     std::vector<Rational> coeffs;
     coeffs.reserve(ints.size());

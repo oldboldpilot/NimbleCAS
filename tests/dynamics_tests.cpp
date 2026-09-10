@@ -33,7 +33,7 @@ namespace {
 }
 
 // Build a Matrix from integer rows (low-index row first).
-[[nodiscard]] auto mat(std::vector<std::vector<std::int64_t>> rows) -> Matrix {
+[[nodiscard]] auto mat(const std::vector<std::vector<std::int64_t>>& rows) -> Matrix {
     std::vector<std::vector<Rational>> r;
     r.reserve(rows.size());
     for (const auto& row : rows) {
@@ -48,7 +48,7 @@ namespace {
 }
 
 // An n x 1 column matrix from integer entries.
-[[nodiscard]] auto col(std::vector<std::int64_t> entries) -> Matrix {
+[[nodiscard]] auto col(const std::vector<std::int64_t>& entries) -> Matrix {
     std::vector<std::vector<std::int64_t>> rows;
     rows.reserve(entries.size());
     for (const std::int64_t v : entries) {

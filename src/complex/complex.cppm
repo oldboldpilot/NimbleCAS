@@ -81,8 +81,8 @@ public:
     [[nodiscard]] auto to_string() const -> std::string;
 
 private:
-    Rational re_{};  // 0/1
-    Rational im_{};  // 0/1
+    Rational re_;  // 0/1
+    Rational im_;  // 0/1
 };
 
 }  // namespace nimblecas

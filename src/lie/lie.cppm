@@ -79,7 +79,7 @@ public:
 
 private:
     std::size_t dim_{0};
-    std::vector<Rational> data_{};  // flat n^3, index ((i*n)+j)*n + k
+    std::vector<Rational> data_;  // flat n^3, index ((i*n)+j)*n + k
 };
 
 // Compute the structure constants of a basis {X_0..X_{n-1}} of square matrices over Q.

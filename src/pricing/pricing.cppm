@@ -210,7 +210,7 @@ public:
 
 private:
     Portfolio() = default;
-    std::vector<Position> legs_{};
+    std::vector<Position> legs_;
 };
 
 // ===========================================================================

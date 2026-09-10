@@ -80,8 +80,8 @@ using HigherOrderOperator = std::function<Result<PowerSeries>(const std::vector<
 // whose output length differs from n, or an f whose output series do not have order `order`
 // (f must preserve the order). Any error raised by f or by the powerseries engine is
 // propagated.
-[[nodiscard]] auto solve_first_order_system(SystemOperator f, std::vector<Rational> u0,
-                                            std::size_t order)
+[[nodiscard]] auto solve_first_order_system(const SystemOperator& f,
+                                            const std::vector<Rational>& u0, std::size_t order)
     -> Result<std::vector<PowerSeries>>;
 
 // Solve the scalar k-th order IVP u^{(k)} = f(u, u', ..., u^{(k-1)}) with initial data
@@ -91,7 +91,7 @@ using HigherOrderOperator = std::function<Result<PowerSeries>(const std::vector<
 //
 // Failure modes (MathError::domain_error): order == 0, empty `initial` (k must be >= 1), or
 // an empty operator. Errors from f or the engine are propagated.
-[[nodiscard]] auto solve_higher_order(HigherOrderOperator f, std::vector<Rational> initial,
+[[nodiscard]] auto solve_higher_order(const HigherOrderOperator& f, std::vector<Rational> initial,
                                       std::size_t order) -> Result<PowerSeries>;
 
 // Exact Horner evaluation of the TRUNCATED series s at the rational point x, i.e. the value
@@ -107,7 +107,8 @@ using HigherOrderOperator = std::function<Result<PowerSeries>(const std::vector<
 // ===========================================================================
 namespace nimblecas {
 
-auto solve_first_order_system(SystemOperator f, std::vector<Rational> u0, std::size_t order)
+auto solve_first_order_system(const SystemOperator& f, const std::vector<Rational>& u0,
+                              std::size_t order)
     -> Result<std::vector<PowerSeries>> {
     using Vec = std::vector<PowerSeries>;
     if (order == 0 || !f || u0.empty()) {
@@ -160,7 +161,8 @@ auto solve_first_order_system(SystemOperator f, std::vector<Rational> u0, std::s
     return u;
 }
 
-auto solve_higher_order(HigherOrderOperator f, std::vector<Rational> initial, std::size_t order)
+auto solve_higher_order(const HigherOrderOperator& f, std::vector<Rational> initial,
+                        std::size_t order)
     -> Result<PowerSeries> {
     if (order == 0 || !f || initial.empty()) {
         return make_error<PowerSeries>(MathError::domain_error);

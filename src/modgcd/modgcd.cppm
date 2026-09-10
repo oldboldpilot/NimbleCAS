@@ -32,7 +32,7 @@ export namespace nimblecas {
 // Modular image of a GCD in Z_p[x] (canonical residues in [0, p), gamma-scaled monic).
 struct ZpImage {
     std::uint64_t p{0};
-    std::vector<std::uint64_t> coeffs{};
+    std::vector<std::uint64_t> coeffs;
 
     [[nodiscard]] auto operator==(const ZpImage& other) const noexcept -> bool = default;
 };
@@ -47,7 +47,7 @@ struct CoprimeProven {
 };
 
 struct Candidate {
-    Polynomial polynomial{};
+    Polynomial polynomial;
 
     [[nodiscard]] auto operator==(const Candidate& other) const noexcept -> bool {
         return polynomial.is_equal(other.polynomial);
@@ -60,8 +60,8 @@ using MergeOutcome = std::variant<NeedMorePrimes, CoprimeProven, Candidate>;
 struct ImageRequest {
     std::uint64_t p{0};
     std::int64_t gamma{0};
-    Polynomial a{};
-    Polynomial b{};
+    Polynomial a;
+    Polynomial b;
 
     [[nodiscard]] auto operator==(const ImageRequest& other) const noexcept -> bool {
         return p == other.p && gamma == other.gamma &&
@@ -144,7 +144,7 @@ public:
 private:
     std::uint64_t u_lc_a_{0};
     std::uint64_t u_lc_b_{0};
-    BigInt current_{};
+    BigInt current_;
 };
 
 }  // namespace nimblecas

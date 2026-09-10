@@ -36,7 +36,7 @@ namespace {
 auto q(std::int64_t v) -> BigRational { return BigRational::from_int(v); }
 
 // BigRationalPoly from int64 coefficients in index order (constant first).
-auto poly(std::vector<std::int64_t> cs) -> BigRationalPoly {
+auto poly(const std::vector<std::int64_t>& cs) -> BigRationalPoly {
     std::vector<BigRational> v;
     v.reserve(cs.size());
     for (std::int64_t c : cs) {

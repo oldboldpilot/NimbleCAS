@@ -44,7 +44,7 @@ auto qs(std::string_view s) -> BigRational {
 }
 
 // BigRationalPoly from int64 coefficients in index order (constant first).
-auto poly(std::vector<std::int64_t> cs) -> BigRationalPoly {
+auto poly(const std::vector<std::int64_t>& cs) -> BigRationalPoly {
     std::vector<BigRational> v;
     v.reserve(cs.size());
     for (std::int64_t c : cs) {
@@ -60,7 +60,7 @@ auto poly_x2_minus_2() -> BigRationalPoly { return poly({-2, 0, 1}); }
 // Build a BigAlgebraicPoly whose x^i coefficient is the field element (residue) `residues[i]`.
 // Each residue is reduced mod m via from_poly, then the coefficient vector is trimmed by
 // from_coeffs. Returns Result so callers can guard on failure.
-auto apoly(const BigNumberField& f, std::vector<BigRationalPoly> residues)
+auto apoly(const BigNumberField& f, const std::vector<BigRationalPoly>& residues)
     -> Result<BigAlgebraicPoly> {
     std::vector<BigAlgebraicNumber> cs;
     cs.reserve(residues.size());

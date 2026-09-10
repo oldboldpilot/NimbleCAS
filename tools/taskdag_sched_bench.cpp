@@ -537,7 +537,7 @@ struct CliOptions {
     std::size_t reps{30};
     std::size_t warmups{3};
     double target_heavy_seconds{0.200};
-    std::string csv_output_path{};
+    std::string csv_output_path;
     bool run_cost_table_calibration{false};
     bool show_help{false};
 };

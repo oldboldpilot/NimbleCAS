@@ -14,7 +14,7 @@ using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 
 namespace {
-auto constant_fn(Expr value) -> std::function<Result<Expr>()> {
+auto constant_fn(const Expr& value) -> std::function<Result<Expr>()> {
     return [value] -> Result<Expr> { return value; };
 }
 }  // namespace
