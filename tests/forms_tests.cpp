@@ -110,7 +110,7 @@ auto main() -> int {
                   terms.push_back({Idx{0}, P});
                   terms.push_back({Idx{1}, Q});
                   terms.push_back({Idx{2}, R});
-                  const auto w = DifferentialForm::from_components(coords, 1, std::move(terms)).value();
+                  const auto w = DifferentialForm::from_components(coords, 1, terms).value();
                   const auto dw = exterior_derivative(w).value();
                   t.expect(!dw.is_zero(), "dw is a non-trivial 2-form");
                   const auto ddw = exterior_derivative(dw).value();

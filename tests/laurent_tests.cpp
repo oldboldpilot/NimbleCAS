@@ -38,13 +38,13 @@ namespace {
 }
 
 // Laurent from a low exponent and integer coefficients.
-[[nodiscard]] auto lau(std::int64_t order_min, std::vector<std::int64_t> vs) -> Laurent {
-    return Laurent::from_coeffs(order_min, ints(std::move(vs))).value();
+[[nodiscard]] auto lau(std::int64_t order_min, const std::vector<std::int64_t>& vs) -> Laurent {
+    return Laurent::from_coeffs(order_min, ints(vs)).value();
 }
 
 // RationalPoly from integer coefficients (c[i] * x^i).
-[[nodiscard]] auto poly(std::vector<std::int64_t> vs) -> RationalPoly {
-    return RationalPoly::from_coeffs(ints(std::move(vs)));
+[[nodiscard]] auto poly(const std::vector<std::int64_t>& vs) -> RationalPoly {
+    return RationalPoly::from_coeffs(ints(vs));
 }
 
 }  // namespace

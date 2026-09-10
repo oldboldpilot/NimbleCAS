@@ -62,7 +62,7 @@ namespace {
     for (const std::int64_t v : entries) {
         rows.push_back({v});
     }
-    return mat(std::move(rows));
+    return mat(rows);
 }
 
 // The 3x3 discrete-Laplacian operator tridiag(-1, 2, -1) as (sub, diag, super) and as a dense

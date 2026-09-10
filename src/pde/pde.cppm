@@ -150,8 +150,8 @@ using TimeSeriesOperator =
 // the ħ-parameterised deformation from a single Q[[x]] series to the two-index (Q[x])[[t]]
 // ring used here needs care that has not been done and verified; rather than guess at it,
 // this gap is left open and documented, matching Rule 32's honesty discipline.
-[[nodiscard]] auto solve_nonlinear_evolution_pde_hpm(SpatialOperator linear,
-                                                     TimeSeriesOperator nonlinear,
+[[nodiscard]] auto solve_nonlinear_evolution_pde_hpm(const SpatialOperator& linear,
+                                                     const TimeSeriesOperator& nonlinear,
                                                      const RationalPoly& phi, std::size_t order)
     -> Result<std::vector<RationalPoly>>;
 
@@ -538,16 +538,17 @@ auto solve_nonlinear_evolution_pde(const SpatialOperator& linear,
     return partial;
 }
 
-auto solve_nonlinear_evolution_pde_hpm(SpatialOperator linear, TimeSeriesOperator nonlinear,
-                                       const RationalPoly& phi, std::size_t order)
+auto solve_nonlinear_evolution_pde_hpm(const SpatialOperator& linear,
+                                       const TimeSeriesOperator& nonlinear, const RationalPoly& phi,
+                                       std::size_t order)
     -> Result<std::vector<RationalPoly>> {
-    return solve_nonlinear_evolution_pde(std::move(linear), std::move(nonlinear), phi, order);
+    return solve_nonlinear_evolution_pde(linear, nonlinear, phi, order);
 }
 
 auto burgers(Rational viscosity, const RationalPoly& phi, std::size_t order)
     -> Result<std::vector<RationalPoly>> {
     // N[u] = -(u * u_x): differentiate the series in x, Cauchy-multiply by u, negate.
-    TimeSeriesOperator convective = [](const std::vector<RationalPoly>& u)
+    const TimeSeriesOperator convective = [](const std::vector<RationalPoly>& u)
         -> Result<std::vector<RationalPoly>> {
         auto ux = series_dx(u);
         if (!ux) {
@@ -560,16 +561,16 @@ auto burgers(Rational viscosity, const RationalPoly& phi, std::size_t order)
         return series_scale(*prod, Rational::from_int(-1));
     };
     return solve_nonlinear_evolution_pde(heat_operator(viscosity),
-                                         std::move(convective), phi, order);
+                                         convective, phi, order);
 }
 
 auto reaction_diffusion_quadratic(Rational diffusivity, const RationalPoly& phi,
                                   std::size_t order) -> Result<std::vector<RationalPoly>> {
     // N[u] = u^2: the truncated Cauchy square of the series.
-    TimeSeriesOperator square = [](const std::vector<RationalPoly>& u)
+    const TimeSeriesOperator square = [](const std::vector<RationalPoly>& u)
         -> Result<std::vector<RationalPoly>> { return series_product(u, u); };
     return solve_nonlinear_evolution_pde(heat_operator(diffusivity),
-                                         std::move(square), phi, order);
+                                         square, phi, order);
 }
 
 auto solve_poisson_bvp_1d(const RationalPoly& f, const Rational& a, const Rational& alpha,
@@ -695,7 +696,7 @@ auto wave_equation(Rational speed, const RationalPoly& phi, const RationalPoly& 
 
 auto kdv(const RationalPoly& phi, std::size_t order) -> Result<std::vector<RationalPoly>> {
     // Dispersion carried as the LINEAR operator L[u] = -u_xxx.
-    SpatialOperator dispersion = [](const RationalPoly& p) -> Result<RationalPoly> {
+    const SpatialOperator dispersion = [](const RationalPoly& p) -> Result<RationalPoly> {
         auto d1 = p.derivative();
         if (!d1) {
             return make_error<RationalPoly>(d1.error());
@@ -711,7 +712,7 @@ auto kdv(const RationalPoly& phi, std::size_t order) -> Result<std::vector<Ratio
         return d3->scale(Rational::from_int(-1));  // -u_xxx
     };
     // Convective nonlinearity N[u] = -(u * u_x): identical in shape to inviscid Burgers.
-    TimeSeriesOperator convective = [](const std::vector<RationalPoly>& u)
+    const TimeSeriesOperator convective = [](const std::vector<RationalPoly>& u)
         -> Result<std::vector<RationalPoly>> {
         auto ux = series_dx(u);
         if (!ux) {
@@ -723,7 +724,7 @@ auto kdv(const RationalPoly& phi, std::size_t order) -> Result<std::vector<Ratio
         }
         return series_scale(*prod, Rational::from_int(-1));
     };
-    return solve_nonlinear_evolution_pde(std::move(dispersion), std::move(convective), phi, order);
+    return solve_nonlinear_evolution_pde(dispersion, convective, phi, order);
 }
 
 namespace {

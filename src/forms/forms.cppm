@@ -257,7 +257,7 @@ auto DifferentialForm::scalar(std::vector<std::string> coords, Expr value)
     -> Result<DifferentialForm> {
     std::vector<std::pair<std::vector<std::size_t>, Expr>> terms;
     terms.emplace_back(std::vector<std::size_t>{}, std::move(value));
-    return from_components(std::move(coords), 0, std::move(terms));
+    return from_components(std::move(coords), 0, terms);
 }
 
 auto DifferentialForm::zero(std::vector<std::string> coords, std::size_t degree)
@@ -270,7 +270,7 @@ auto DifferentialForm::basis(std::vector<std::string> coords, std::vector<std::s
     const std::size_t degree = indices.size();
     std::vector<std::pair<std::vector<std::size_t>, Expr>> terms;
     terms.emplace_back(std::move(indices), std::move(coeff));
-    return from_components(std::move(coords), degree, std::move(terms));
+    return from_components(std::move(coords), degree, terms);
 }
 
 auto DifferentialForm::component(const std::vector<std::size_t>& indices) const -> Result<Expr> {
@@ -336,7 +336,7 @@ auto wedge(const DifferentialForm& a, const DifferentialForm& b) -> Result<Diffe
             terms.emplace_back(std::move(merged), Expr::product({ca, cb}));
         }
     }
-    return DifferentialForm::from_components(a.coordinates(), result_degree, std::move(terms));
+    return DifferentialForm::from_components(a.coordinates(), result_degree, terms);
 }
 
 auto exterior_derivative(const DifferentialForm& w) -> Result<DifferentialForm> {
@@ -363,7 +363,7 @@ auto exterior_derivative(const DifferentialForm& w) -> Result<DifferentialForm> 
             terms.emplace_back(std::move(new_indices), std::move(*derivative));
         }
     }
-    return DifferentialForm::from_components(coords, result_degree, std::move(terms));
+    return DifferentialForm::from_components(coords, result_degree, terms);
 }
 
 auto hodge_star_euclidean(const DifferentialForm& w) -> Result<DifferentialForm> {
@@ -393,7 +393,7 @@ auto hodge_star_euclidean(const DifferentialForm& w) -> Result<DifferentialForm>
         Expr signed_coeff = (sign == 1) ? coeff : negate(coeff);
         terms.emplace_back(std::move(complement), std::move(signed_coeff));
     }
-    return DifferentialForm::from_components(coords, result_degree, std::move(terms));
+    return DifferentialForm::from_components(coords, result_degree, terms);
 }
 
 auto hodge_star(const DifferentialForm& w, const std::vector<std::vector<Expr>>& metric)
@@ -454,7 +454,7 @@ auto interior_product(const DifferentialForm& w, const std::vector<Expr>& field)
                                Expr::product({parity, coeff, field[removed]}));
         }
     }
-    return DifferentialForm::from_components(coords, p - 1, std::move(terms));
+    return DifferentialForm::from_components(coords, p - 1, terms);
 }
 
 auto is_closed(const DifferentialForm& w) -> Result<bool> {

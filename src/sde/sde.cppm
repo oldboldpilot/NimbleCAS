@@ -118,10 +118,12 @@ enum class Scheme : std::uint8_t {
 // uses the unbiased (Bessel, n − 1) estimator when paths >= 2 and is 0 for a single path.
 // Scheme selection and the seeding/partition contract are exactly as for simulate_terminal.
 // Returns domain_error under the same conditions as simulate_terminal.
-[[nodiscard]] auto terminal_moments(std::function<double(double)> a, std::function<double(double)> b,
-                                    std::function<double(double)> b_prime, double x0, double T,
-                                    std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
-                                    bool use_milstein) -> Result<std::pair<double, double>>;
+[[nodiscard]] auto terminal_moments(const std::function<double(double)>& a,
+                                    const std::function<double(double)>& b,
+                                    const std::function<double(double)>& b_prime, double x0,
+                                    double T, std::uint64_t steps, std::uint64_t paths,
+                                    std::uint64_t seed, bool use_milstein)
+    -> Result<std::pair<double, double>>;
 
 // ---------------------------------------------------------------------------
 // Additional single-path integrators. Each mirrors euler_maruyama's signature/return style and
@@ -201,9 +203,9 @@ enum class Scheme : std::uint8_t {
 // Estimate { sample mean, unbiased (n−1) sample variance } of X_T over `paths` seeded paths using
 // the chosen `scheme`. Seeding/partition contract and domain-error conditions are exactly as for
 // simulate_terminal_scheme.
-[[nodiscard]] auto terminal_moments_scheme(std::function<double(double)> a,
-                                           std::function<double(double)> b,
-                                           std::function<double(double)> b_prime, double x0,
+[[nodiscard]] auto terminal_moments_scheme(const std::function<double(double)>& a,
+                                           const std::function<double(double)>& b,
+                                           const std::function<double(double)>& b_prime, double x0,
                                            double T, std::uint64_t steps, std::uint64_t paths,
                                            std::uint64_t seed, Scheme scheme)
     -> Result<std::pair<double, double>>;
@@ -729,11 +731,12 @@ auto simulate_terminal(const std::function<double(double)>& a,
     return terminals;
 }
 
-auto terminal_moments(std::function<double(double)> a, std::function<double(double)> b,
-                      std::function<double(double)> b_prime, double x0, double T,
+auto terminal_moments(const std::function<double(double)>& a,
+                      const std::function<double(double)>& b,
+                      const std::function<double(double)>& b_prime, double x0, double T,
                       std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
                       bool use_milstein) -> Result<std::pair<double, double>> {
-    auto terminals = simulate_terminal(std::move(a), std::move(b), std::move(b_prime), x0, T, steps,
+    auto terminals = simulate_terminal(a, b, b_prime, x0, T, steps,
                                        paths, seed, use_milstein);
     if (!terminals) {
         return make_error<std::pair<double, double>>(terminals.error());
@@ -797,11 +800,12 @@ auto simulate_terminal_scheme(const std::function<double(double)>& a,
     return terminals;
 }
 
-auto terminal_moments_scheme(std::function<double(double)> a, std::function<double(double)> b,
-                             std::function<double(double)> b_prime, double x0, double T,
+auto terminal_moments_scheme(const std::function<double(double)>& a,
+                             const std::function<double(double)>& b,
+                             const std::function<double(double)>& b_prime, double x0, double T,
                              std::uint64_t steps, std::uint64_t paths, std::uint64_t seed,
                              Scheme scheme) -> Result<std::pair<double, double>> {
-    auto terminals = simulate_terminal_scheme(std::move(a), std::move(b), std::move(b_prime), x0, T,
+    auto terminals = simulate_terminal_scheme(a, b, b_prime, x0, T,
                                               steps, paths, seed, scheme);
     if (!terminals) {
         return make_error<std::pair<double, double>>(terminals.error());

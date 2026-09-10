@@ -91,8 +91,9 @@ using HigherOrderOperator = std::function<Result<PowerSeries>(const std::vector<
 //
 // Failure modes (MathError::domain_error): order == 0, empty `initial` (k must be >= 1), or
 // an empty operator. Errors from f or the engine are propagated.
-[[nodiscard]] auto solve_higher_order(const HigherOrderOperator& f, std::vector<Rational> initial,
-                                      std::size_t order) -> Result<PowerSeries>;
+[[nodiscard]] auto solve_higher_order(const HigherOrderOperator& f,
+                                      const std::vector<Rational>& initial, std::size_t order)
+    -> Result<PowerSeries>;
 
 // Exact Horner evaluation of the TRUNCATED series s at the rational point x, i.e. the value
 // of the polynomial c_0 + c_1 x + ... + c_{N-1} x^{N-1}. This is the value of the truncated
@@ -161,7 +162,7 @@ auto solve_first_order_system(const SystemOperator& f, const std::vector<Rationa
     return u;
 }
 
-auto solve_higher_order(const HigherOrderOperator& f, std::vector<Rational> initial,
+auto solve_higher_order(const HigherOrderOperator& f, const std::vector<Rational>& initial,
                         std::size_t order)
     -> Result<PowerSeries> {
     if (order == 0 || !f || initial.empty()) {
@@ -171,7 +172,7 @@ auto solve_higher_order(const HigherOrderOperator& f, std::vector<Rational> init
 
     // Reduce to the companion first-order system: y_j' = y_{j+1} for j < k-1 and
     // y_{k-1}' = f(y_0, ..., y_{k-1}).
-    SystemOperator companion =
+    const SystemOperator companion =
         [f, k](const std::vector<PowerSeries>& y) -> Result<std::vector<PowerSeries>> {
         using Vec = std::vector<PowerSeries>;
         if (y.size() != k) {
@@ -190,7 +191,7 @@ auto solve_higher_order(const HigherOrderOperator& f, std::vector<Rational> init
         return rhs;
     };
 
-    auto sol = solve_first_order_system(std::move(companion), std::move(initial), order);
+    auto sol = solve_first_order_system(companion, initial, order);
     if (!sol) {
         return make_error<PowerSeries>(sol.error());
     }

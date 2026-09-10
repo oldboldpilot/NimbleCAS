@@ -356,7 +356,7 @@ auto BigFloat::ratio(const BigInt& num, const BigInt& den, std::int64_t e_bias,
     if (sub_ov(e_bias, shift, e)) {  // value = (a/d) * 2^e_bias = q * 2^(e_bias - shift) + ...
         return make_error<BigFloat>(MathError::overflow);
     }
-    return normalize(neg ? q.negate() : std::move(q), e, prec, sticky);
+    return normalize(neg ? q.negate() : q, e, prec, sticky);
 }
 
 // --- construction ---------------------------------------------------------------------
@@ -481,8 +481,8 @@ auto BigFloat::from_string(std::string_view text, std::int64_t prec) -> Result<B
     }
     if (p >= 0) {
         // 10^p = 2^p * 5^p, so value = (digits * 5^p) * 2^p — an exact dyadic, then rounded.
-        BigInt scaled = n_int.multiply(pow5(static_cast<std::uint64_t>(p)));
-        return normalize(std::move(scaled), p, prec, false);
+        const BigInt scaled = n_int.multiply(pow5(static_cast<std::uint64_t>(p)));
+        return normalize(scaled, p, prec, false);
     }
     // p < 0: value = n_int / 5^k * 2^p with k = -p; a rounded binary division.
     std::int64_t k = 0;

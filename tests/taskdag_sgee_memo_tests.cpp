@@ -1043,14 +1043,14 @@ auto main() -> int {
                       .with_memo(memo);
                   SgeeDistributedExecutor exec1(cfg1, port1, chan1);
 
-                  std::jthread pump([&](std::stop_token st) {
+                  std::jthread pump([&](const std::stop_token& st) {
                       nimblecas::run_worker_pump(port1, reg_worker, chan1,
                                                  nimblecas::WorkerPumpConfig{
                                                      .worker_id = 1,
                                                      .lease_timeout_ms = 100'000,
                                                      .idle_backoff_ms = 1,
                                                      .heartbeat_every_ms = 0
-                                                 }, std::move(st));
+                                                 }, st);
                   });
                   const auto res1 = exec1.run(g);
                   pump.request_stop();

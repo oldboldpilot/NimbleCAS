@@ -688,7 +688,7 @@ auto solve_semiexplicit_nonlinear_series(const std::vector<Expr>& f, const std::
     }
 
     const std::string time_name(time);
-    SystemOperator field = [&, order, time_name](const std::vector<PowerSeries>& u)
+    const SystemOperator field = [&, order, time_name](const std::vector<PowerSeries>& u)
         -> Result<std::vector<PowerSeries>> {
         if (u.size() != nx + ny) {
             return make_error<std::vector<PowerSeries>>(MathError::domain_error);
@@ -732,7 +732,7 @@ auto solve_semiexplicit_nonlinear_series(const std::vector<Expr>& f, const std::
     u0.insert(u0.end(), x0.begin(), x0.end());
     u0.insert(u0.end(), y0.begin(), y0.end());
 
-    auto sol = solve_first_order_system(std::move(field), u0, order);
+    auto sol = solve_first_order_system(field, u0, order);
     if (!sol) {
         return make_error<DaeSolution>(sol.error());
     }

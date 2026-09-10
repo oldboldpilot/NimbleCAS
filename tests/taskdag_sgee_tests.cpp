@@ -638,10 +638,10 @@ auto main() -> int {
                       .registry_fp = reg.fingerprint(), .op_id = "no.such/v1", .args = {}}).value();
                   (void)port.enqueue(p3, SgeePlacement::cpu, 3);
 
-                  std::jthread pump([&](std::stop_token st) {
+                  std::jthread pump([&](const std::stop_token& st) {
                       run_worker_pump(port, reg, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
                   });
                   const bool all_done = wait_until([&] {
                       return port.state(1).has_value() && *port.state(1) == BrokerPort::QState::completed &&
@@ -682,10 +682,10 @@ auto main() -> int {
                   cfg.with_registry(reg_coord).with_num_workers(0).with_poll_interval_ms(1);
                   SgeeDistributedExecutor exec(cfg, port, results);
 
-                  std::jthread pump([&](std::stop_token st) {
+                  std::jthread pump([&](const std::stop_token& st) {
                       run_worker_pump(port, reg_worker, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100'000,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
                   });
                   const auto res = exec.run(g);
                   pump.request_stop();
@@ -755,10 +755,10 @@ auto main() -> int {
                   }), "A organically re-pended by the coordinator sweep (attempt still 1)");
 
                   // Now a real pump re-leases and re-executes with a huge lease timeout (no further expiry).
-                  std::jthread pump([&](std::stop_token st) {
+                  std::jthread pump([&](const std::stop_token& st) {
                       run_worker_pump(port, reg, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100'000,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
                   });
                   runner.join();
                   pump.request_stop();
@@ -914,10 +914,10 @@ auto main() -> int {
                       .registry_fp = reg.fingerprint(), .op_id = "test.block/v1", .args = {}}).value();
                   (void)port.enqueue(p, SgeePlacement::cpu, 3);
 
-                  std::jthread pump([&](std::stop_token st) {
+                  std::jthread pump([&](const std::stop_token& st) {
                       run_worker_pump(port, reg, results,
                                       WorkerPumpConfig{.worker_id = 1, .lease_timeout_ms = 100,
-                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 1}, std::move(st));
+                                                       .idle_backoff_ms = 1, .heartbeat_every_ms = 1}, st);
                   });
 
                   t.expect(wait_until([&] {

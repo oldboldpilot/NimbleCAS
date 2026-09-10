@@ -398,10 +398,10 @@ auto main() -> int {
                 port.advance_time_ms(150);
 
                 // Start worker pump that picks up the expired task and executes to completion
-                std::jthread pump([&](std::stop_token st) {
+                std::jthread pump([&](const std::stop_token& st) {
                     run_worker_pump(port, reg, results,
                                     WorkerPumpConfig{.worker_id = 2, .lease_timeout_ms = 100'000,
-                                                     .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, std::move(st));
+                                                     .idle_backoff_ms = 1, .heartbeat_every_ms = 0}, st);
                 });
 
                 coord.join();

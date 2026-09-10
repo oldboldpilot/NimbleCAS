@@ -782,14 +782,14 @@ auto solve_linear_index1_dae(const Matrix& A, const Matrix& B, const Matrix& C, 
     // The vector field is autonomous in the series ring: r is a fixed series vector.
     const Matrix Mmat = std::move(*M);
     const SeriesVec rvec = std::move(*r);
-    SystemOperator field = [Mmat, rvec, order](const SeriesVec& u) -> Result<SeriesVec> {
+    const SystemOperator field = [Mmat, rvec, order](const SeriesVec& u) -> Result<SeriesVec> {
         auto mx = mat_series_vec(Mmat, u, order);
         if (!mx) {
             return make_error<SeriesVec>(mx.error());
         }
         return vec_add(*mx, rvec);
     };
-    auto xsol = solve_first_order_system(std::move(field), x0, order);
+    auto xsol = solve_first_order_system(field, x0, order);
     if (!xsol) {
         return make_error<DaeSolution>(xsol.error());
     }
@@ -932,14 +932,14 @@ auto solve_linear_dae(const Matrix& E, const Matrix& A, const SeriesVec& f,
 
     const Matrix Mmat = std::move(*M);
     const SeriesVec rvec = std::move(*rforce);
-    SystemOperator field = [Mmat, rvec, order](const SeriesVec& u) -> Result<SeriesVec> {
+    const SystemOperator field = [Mmat, rvec, order](const SeriesVec& u) -> Result<SeriesVec> {
         auto mx = mat_series_vec(Mmat, u, order);
         if (!mx) {
             return make_error<SeriesVec>(mx.error());
         }
         return vec_add(*mx, rvec);
     };
-    auto xsol = solve_first_order_system(std::move(field), x0_used, order);
+    auto xsol = solve_first_order_system(field, x0_used, order);
     if (!xsol) {
         return make_error<LinearDaeSolution>(xsol.error());
     }

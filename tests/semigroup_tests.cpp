@@ -65,7 +65,7 @@ namespace {
     for (const std::int64_t v : entries) {
         rows.push_back({v});
     }
-    return mat(std::move(rows));
+    return mat(rows);
 }
 
 }  // namespace
