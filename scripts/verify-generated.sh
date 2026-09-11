@@ -148,6 +148,38 @@ compile_cu() {
     pass "${label}: compiles"
 }
 
+# Compiling a .cu proves less than it looks. nvcc checks that the launcher names a kernel that
+# exists -- which is how `<entry>_kernel_kernel` was caught -- but it cannot tell whether the
+# kernel COMPUTES anything, and an emitted solver that returns a confident wrong number compiles
+# perfectly. So where there is a device to run on, the emitted host wrapper is called and its
+# answer checked, exactly as the C++ emissions are.
+compile_and_run_cu() {
+    local label="$1" gen="$2" driver="$3" exe="${WORK}/cu.$$"
+    if [[ -z "${NVCC}" ]]; then
+        printf '  [SKIP] %s: no nvcc that can target this GPU\n' "${label}"
+        return 0
+    fi
+    if ! "${NVCC}" -std=c++20 -arch="${NIMBLECAS_CUDA_ARCH:-native}" \
+            -I"$(dirname "${gen}")" "${driver}" -o "${exe}" > "${WORK}/nvcc.log" 2>&1; then
+        fail "${label}: did not compile"
+        sed -n '1,15p' "${WORK}/nvcc.log"
+        return 1
+    fi
+    if [[ -z "${CUDA_RUNS}" ]]; then
+        pass "${label}: compiles (no device to run it on)"
+        rm -f "${exe}"
+        return 0
+    fi
+    if ! "${exe}" > "${WORK}/curun.log" 2>&1; then
+        fail "${label}: compiled but the run disagreed"
+        sed -n '1,15p' "${WORK}/curun.log"
+        rm -f "${exe}"
+        return 1
+    fi
+    pass "${label}: compiles, runs and agrees with the reference"
+    rm -f "${exe}"
+}
+
 # $1 label, $2 generated file
 # A Triton emission gets the same treatment as the others where the machine can give it: the
 # kernel goes through the Triton JIT and a driver checks the ANSWER against a reference.
@@ -202,6 +234,25 @@ while IFS= read -r c; do
 done < <({ ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V -r; \
            echo /usr/local/cuda/bin/nvcc; command -v nvcc 2>/dev/null; })
 [[ -n "${NVCC}" ]] && echo "verify-generated: ${NVCC}"
+
+# nvcc can compile for a card this machine does not have. Running needs one that is actually
+# visible to the driver, so ask -- rather than reporting a wrong answer from a failed launch as
+# an emitter defect.
+CUDA_RUNS=""
+if [[ -n "${NVCC}" ]]; then
+    cat > "${WORK}/devprobe.cu" <<'EOF'
+#include <cstdio>
+int main() {
+    int n = 0;
+    return (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) ? 0 : 1;
+}
+EOF
+    if "${NVCC}" -std=c++20 -arch="${NIMBLECAS_CUDA_ARCH:-native}" "${WORK}/devprobe.cu" \
+            -o "${WORK}/devprobe" >/dev/null 2>&1 && "${WORK}/devprobe" >/dev/null 2>&1; then
+        CUDA_RUNS="yes"
+        echo "verify-generated: a CUDA device is visible; the emitted CUDA will be run"
+    fi
+fi
 
 PY="$(command -v python3 2>/dev/null || true)"
 
@@ -273,12 +324,72 @@ done
 
 for width in 64 128; do
     gen="${WORK}/fib_${width}.cu"
-    if "${BUILD}/prolog_compile" "${REPO}/examples/fib.pl" fib io cuda "${width}" \
+    if ! "${BUILD}/prolog_compile" "${REPO}/examples/fib.pl" fib io cuda "${width}" \
             > "${gen}" 2>/dev/null; then
-        compile_cu "logic_compile cuda/${width}" "${gen}"
-    else
         fail "logic_compile cuda/${width}: emission refused"
+        continue
     fi
+    cat > "${WORK}/fib_cu_driver_${width}.cu" <<EOF
+#include "fib_${width}.cu"
+
+#include <cstdio>
+
+// The same closed values the C++ driver checks, through the batch kernel: one thread per row,
+// and ok[i] must say the predicate succeeded there.
+//
+// The device stack limit is raised because the emitted file says to. fib/2 is recursive, and a
+// recursive predicate overruns the 1 KB per thread CUDA gives by default -- which surfaces from
+// cudaDeviceSynchronize as an illegal memory access and reads like a codegen bug.
+int main() {
+    constexpr int N = 21;
+    const long long expected[N] = {0,   1,   1,    2,    3,    5,    8,
+                                   13,  21,  34,   55,   89,   144,  233,
+                                   377, 610, 987,  1597, 2584, 4181, 6765};
+    if (cudaDeviceSetLimit(cudaLimitStackSize, 64 * 1024) != cudaSuccess) {
+        std::fprintf(stderr, "could not raise the device stack limit\n");
+        return 1;
+    }
+    nc_int h_in[N];
+    nc_int h_out[N];
+    unsigned char h_ok[N];
+    for (int i = 0; i < N; ++i) { h_in[i] = static_cast<nc_int>(i); }
+
+    nc_int* d_in = nullptr;
+    nc_int* d_out = nullptr;
+    unsigned char* d_ok = nullptr;
+    if (cudaMalloc(&d_in, sizeof(h_in)) != cudaSuccess ||
+        cudaMalloc(&d_out, sizeof(h_out)) != cudaSuccess ||
+        cudaMalloc(&d_ok, sizeof(h_ok)) != cudaSuccess ||
+        cudaMemcpy(d_in, h_in, sizeof(h_in), cudaMemcpyHostToDevice) != cudaSuccess) {
+        std::fprintf(stderr, "device allocation failed\n");
+        return 1;
+    }
+    p_fib_2_batch<<<1, N>>>(N, d_ok, d_in, d_out);
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        std::fprintf(stderr, "the batch kernel failed: %s\n",
+                     cudaGetErrorString(cudaGetLastError()));
+        return 1;
+    }
+    if (cudaMemcpy(h_out, d_out, sizeof(h_out), cudaMemcpyDeviceToHost) != cudaSuccess ||
+        cudaMemcpy(h_ok, d_ok, sizeof(h_ok), cudaMemcpyDeviceToHost) != cudaSuccess) {
+        std::fprintf(stderr, "reading the results back failed\n");
+        return 1;
+    }
+    for (int i = 0; i < N; ++i) {
+        if (h_ok[i] != 1) {
+            std::fprintf(stderr, "fib(%d) reported failure\n", i);
+            return 1;
+        }
+        if (h_out[i] != static_cast<nc_int>(expected[i])) {
+            std::fprintf(stderr, "fib(%d) disagreed\n", i);
+            return 1;
+        }
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cu "logic_compile cuda/${width}" "${gen}" \
+        "${WORK}/fib_cu_driver_${width}.cu"
 done
 
 # Triton refuses recursion -- a kernel is a flat block of lanes with no call stack -- so fib/2
@@ -318,6 +429,352 @@ EOF
     check_triton "logic_compile triton/64" "${gen}" "${WORK}/poly_tri_driver.py"
 else
     fail "logic_compile triton/64: emission refused"
+fi
+
+# ---------------------------------------------------------------------------
+# nimblecas.logic_compile — the things fib/2 cannot reach: the width boundaries, the tail-call
+# rewrite, and continuation-passing emission.
+#
+# fib(0..20) tops out at 6765. It exercises 64-bit arithmetic and calls the 128-bit path with
+# numbers that would fit in a byte, so it is not a width test at all. An accumulator factorial
+# is, and it is tail recursive, so it tests the loop rewrite at the same time.
+# ---------------------------------------------------------------------------
+note "logic_compile: widths, tail recursion and continuation passing"
+
+# The boundaries are exact and they are the point: 20! is the largest factorial that fits in 64
+# bits and 33! the largest that fits in 128, so the pairs (20, 21) and (33, 34) sit either side
+# of each limit. A refusal is the honest answer at the far side; a wrapped value would not be.
+gen="${WORK}/fact_64.hpp"
+if ! "${BUILD}/prolog_compile" "${REPO}/examples/fact.pl" fact_acc iio cpp 64 \
+        > "${gen}" 2>/dev/null; then
+    fail "logic_compile cpp/64 widths: emission refused"
+else
+    cat > "${WORK}/fact64_driver.cpp" <<'EOF'
+#include "fact_64.hpp"
+
+// 20! fits in 64 bits and 21! does not, so one must be computed exactly and the other REFUSED.
+// Refusing is not a limitation being tolerated here -- it is the honesty invariant: the compiled
+// program reports that it cannot represent the answer rather than returning a wrapped one.
+auto main() -> int {
+    nc_int got = nc_lit(0);
+    if (!p_fact_acc_3(nc_lit(20), nc_lit(1), got) || got != nc_lit(2432902008176640000LL)) {
+        std::println(std::cerr, "20! is wrong or was refused at 64 bits");
+        return 1;
+    }
+    nc_int overflowed = nc_lit(0);
+    if (p_fact_acc_3(nc_lit(21), nc_lit(1), overflowed)) {
+        std::println(std::cerr, "21! was answered at 64 bits, where it does not fit");
+        return 1;
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cpp "logic_compile cpp/64 widths" "${gen}" "${WORK}/fact64_driver.cpp"
+fi
+
+gen="${WORK}/fact_128.hpp"
+if ! "${BUILD}/prolog_compile" "${REPO}/examples/fact.pl" fact_acc iio cpp 128 \
+        > "${gen}" 2>/dev/null; then
+    fail "logic_compile cpp/128 widths: emission refused"
+else
+    cat > "${WORK}/fact128_driver.cpp" <<'EOF'
+#include "fact_128.hpp"
+
+// The expected values are built from 64-bit factors because a 128-bit literal cannot be written
+// directly: 21! = 20! * 21, and 33! = 20! * (21*22*...*33), whose second factor is 3569119343741952000
+// and fits in 64 bits. Both are therefore exact constants, not a re-run of the algorithm under test.
+auto main() -> int {
+    const nc_int f20 = nc_lit(2432902008176640000LL);
+    const nc_int f21 = f20 * nc_lit(21);
+    const nc_int f33 = f20 * nc_lit(3569119343741952000LL);
+
+    nc_int got = nc_lit(0);
+    if (!p_fact_acc_3(nc_lit(21), nc_lit(1), got) || got != f21) {
+        std::println(std::cerr, "21! is wrong or was refused at 128 bits");
+        return 1;
+    }
+    got = nc_lit(0);
+    if (!p_fact_acc_3(nc_lit(33), nc_lit(1), got) || got != f33) {
+        std::println(std::cerr, "33! is wrong or was refused at 128 bits");
+        return 1;
+    }
+    // And 128 bits must be a real boundary, not a wider-looking 64: 34! is past it.
+    nc_int overflowed = nc_lit(0);
+    if (p_fact_acc_3(nc_lit(34), nc_lit(1), overflowed)) {
+        std::println(std::cerr, "34! was answered at 128 bits, where it does not fit");
+        return 1;
+    }
+    // The width must actually BE 128 bits wide, not an alias that compiled.
+    static_assert(sizeof(nc_int) == 16, "the 128-bit width did not emit a 128-bit type");
+    return 0;
+}
+EOF
+    compile_and_run_cpp "logic_compile cpp/128 widths" "${gen}" "${WORK}/fact128_driver.cpp"
+fi
+
+# The tail-call rewrite, tested by the only thing that can tell the difference: a recursion deep
+# enough that the un-rewritten form would exhaust the stack. A million frames would; a loop does
+# not notice. count/3 sums 1..N, so the answer is N(N+1)/2 and stays inside 64 bits.
+gen="${WORK}/count_64.hpp"
+if ! "${BUILD}/prolog_compile" "${REPO}/examples/countdown.pl" count iio cpp 64 \
+        > "${gen}" 2>/dev/null; then
+    fail "logic_compile cpp/64 tail recursion: emission refused"
+elif ! grep -q "for (;;)" "${gen}"; then
+    fail "logic_compile cpp/64 tail recursion: no loop in the emitted source, so the self tail call was not rewritten"
+else
+    cat > "${WORK}/count_driver.cpp" <<'EOF'
+#include "count_64.hpp"
+
+// One million frames. Compiled as recursion this overflows the stack and the process dies;
+// compiled as the loop the emitter promises, it returns 500000500000.
+auto main() -> int {
+    nc_int got = nc_lit(0);
+    if (!p_count_3(nc_lit(1000000), nc_lit(0), got)) {
+        std::println(std::cerr, "count/3 failed on an input it should accept");
+        return 1;
+    }
+    if (got != nc_lit(500000500000LL)) {
+        std::println(std::cerr, "count(1000000, 0, R) disagreed");
+        return 1;
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cpp "logic_compile cpp/64 tail recursion" "${gen}" "${WORK}/count_driver.cpp"
+fi
+
+# Continuation-passing emission. A nondeterministic predicate compiled deterministically would be
+# truncated to its first solution, so what has to be checked is that EVERY solution arrives, in
+# order -- and that a continuation returning false stops the enumeration where it said to.
+gen="${WORK}/between_cps.hpp"
+if ! "${BUILD}/prolog_compile" "${REPO}/examples/between.pl" between iio cpp 64 cps \
+        > "${gen}" 2>/dev/null; then
+    fail "logic_compile cpp/64 cps: emission refused"
+else
+    cat > "${WORK}/between_driver.cpp" <<'EOF'
+#include "between_cps.hpp"
+
+auto main() -> int {
+    std::vector<std::int64_t> seen;
+    const bool completed = p_between_3(nc_lit(3), nc_lit(9), [&](nc_int x) -> bool {
+        seen.push_back(static_cast<std::int64_t>(x));
+        return true;
+    });
+    if (!completed) {
+        std::println(std::cerr, "the enumeration reported that it did not complete");
+        return 1;
+    }
+    const std::vector<std::int64_t> expected{3, 4, 5, 6, 7, 8, 9};
+    if (seen != expected) {
+        std::println(std::cerr, "between(3, 9, X) enumerated {} solutions, expected {}",
+                     seen.size(), expected.size());
+        return 1;
+    }
+
+    // A continuation that refuses stops the enumeration, and that answer travels back out.
+    std::vector<std::int64_t> stopped;
+    const bool ran_to_end = p_between_3(nc_lit(3), nc_lit(9), [&](nc_int x) -> bool {
+        stopped.push_back(static_cast<std::int64_t>(x));
+        return stopped.size() < 3;
+    });
+    if (ran_to_end) {
+        std::println(std::cerr, "the enumeration claimed to complete after being stopped");
+        return 1;
+    }
+    if (stopped != std::vector<std::int64_t>{3, 4, 5}) {
+        std::println(std::cerr, "stopping after three solutions did not stop after three");
+        return 1;
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cpp "logic_compile cpp/64 cps" "${gen}" "${WORK}/between_driver.cpp"
+fi
+
+# A clause that CHAINS CALLS, which mode inference could not read until now: a variable bound
+# by one call is bound for the next, and a call whose arguments are all inputs is a test rather
+# than a producer. Compiling it is half the check -- it also has to fail where the test fails.
+cat > "${WORK}/chain.pl" <<'EOF'
+positive(X) :- X > 0.
+double(X, Y) :- Y is X * 2.
+chain(X, Z) :- double(X, T), positive(T), Z is T + 1.
+EOF
+gen="${WORK}/chain_64.hpp"
+if ! "${BUILD}/prolog_compile" "${WORK}/chain.pl" chain io cpp 64 > "${gen}" 2>/dev/null; then
+    fail "logic_compile cpp/64 chained calls: emission refused"
+else
+    cat > "${WORK}/chain_driver.cpp" <<'EOF'
+#include "chain_64.hpp"
+
+auto main() -> int {
+    // double(5) is 10, which is positive, so chain(5) is 11.
+    nc_int got = nc_lit(0);
+    if (!p_chain_2(nc_lit(5), got) || got != nc_lit(11)) {
+        std::println(std::cerr, "chain(5) should be 5*2+1 = 11");
+        return 1;
+    }
+    // double(-1) is -2, which is not, so the clause must FAIL rather than answer
+    // -- the all-input call is a guard and has to behave like one.
+    nc_int none = nc_lit(0);
+    if (p_chain_2(nc_lit(-1), none)) {
+        std::println(std::cerr, "chain(-1) succeeded, but the guard should have failed it");
+        return 1;
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cpp "logic_compile cpp/64 chained calls" "${gen}" "${WORK}/chain_driver.cpp"
+fi
+
+# ---------------------------------------------------------------------------
+# nimblecas.logic_compile — the 128-bit FIXED-POINT DECIMAL width, on money.
+#
+# What has to be checked here is not that it compiles but that it is EXACT: that the cents
+# survive a rescaled multiplication, and that an answer the scale cannot hold is refused rather
+# than rounded. A money type that quietly rounds is worse than one that refuses.
+# ---------------------------------------------------------------------------
+note "logic_compile: 128-bit decimal money"
+
+gen="${WORK}/money_dec.hpp"
+if ! "${BUILD}/prolog_compile" "${REPO}/examples/money.pl" settle iiio cpp dec \
+        > "${gen}" 2>/dev/null; then
+    fail "logic_compile cpp/decimal: emission refused"
+else
+    cat > "${WORK}/money_driver.cpp" <<'EOF'
+#include "money_dec.hpp"
+
+// Values are minor units: at scale 2, nc_lit(10000) is 100.00 and nc_lit(10) is 0.10.
+auto main() -> int {
+    int bad = 0;
+    const auto check = [&bad](bool ok, std::string_view what) {
+        if (!ok) {
+            std::println(std::cerr, "{}", what);
+            ++bad;
+        }
+    };
+
+    // The whole transaction: 100.00 plus 10% is 110.00, split four ways is 27.50. It also
+    // exercises a CALL between two compiled predicates at this width.
+    nc_int each = nc_lit(0);
+    check(p_settle_4(nc_lit(10000), nc_lit(10), nc_lit(400), each), "settle/4 failed to run");
+    check(nc_to_string(each) == "27.50", "100.00 +10% split four ways was not 27.50");
+
+    // 19.99 scaled by 2.00 is 39.98: the cents must survive the rescale, which is exactly what
+    // a naive a*b/10^s gets wrong when it divides at the wrong moment.
+    nc_int scaled = nc_lit(0);
+    check(p_with_tax_3(nc_lit(1999), nc_lit(200), scaled), "with_tax/3 failed to run");
+    check(nc_to_string(scaled) == "59.97", "19.99 plus 200% was not 59.97");
+
+    // 0.01 * 0.01 is 0.0001. Two digits cannot hold it, so it is REFUSED -- not rounded to
+    // zero, which is the answer that would look right and cost a business money.
+    nc_int lost = nc_lit(0);
+    check(!p_with_tax_3(nc_lit(1), nc_lit(1), lost), "0.01 * 0.01 was answered, not refused");
+
+    // Division the same way: exact or nothing.
+    nc_int quarter = nc_lit(0);
+    check(p_split_3(nc_lit(1000), nc_lit(400), quarter), "10.00 four ways failed to run");
+    check(nc_to_string(quarter) == "2.50", "10.00 divided four ways was not 2.50");
+    nc_int third = nc_lit(0);
+    check(!p_split_3(nc_lit(1000), nc_lit(300), third),
+          "10.00 divided three ways was answered, so a cent went missing");
+
+    // Rendering, on the values most likely to be got wrong.
+    check(nc_to_string(nc_lit(0)) == "0.00", "zero did not render as 0.00");
+    check(nc_to_string(nc_lit(5)) == "0.05", "five minor units did not render as 0.05");
+    check(nc_to_string(nc_lit(-1999)) == "-19.99", "a negative amount lost its sign");
+
+    // And it is genuinely 128 bits wide: ten multiplications by 1000.00 reach 10^28 currency
+    // units, which 64 bits could not hold.
+    static_assert(sizeof(nc_int) == 16, "the decimal width did not emit a 128-bit type");
+    nc_int big = nc_lit(1);
+    for (int i = 0; i < 10; ++i) {
+        const auto step = nc_mul(big, nc_lit(100000));
+        check(step.has_value(), "a large but representable multiplication was refused");
+        if (!step) {
+            break;
+        }
+        big = *step;
+    }
+    check(big > (nc_int{1} << 96), "the running total never left 64 bits behind");
+
+    return bad == 0 ? 0 : 1;
+}
+EOF
+    compile_and_run_cpp "logic_compile cpp/decimal" "${gen}" "${WORK}/money_driver.cpp"
+fi
+
+# The refusals are as much of the contract as the answers, so they are checked as answers.
+mkdir -p "${WORK}/dec"
+cat > "${WORK}/dec/bad.pl" <<'EOF'
+leftover(A, B, R) :- R is A mod B.
+EOF
+refusals=0
+"${BUILD}/prolog_compile" "${WORK}/dec/bad.pl" leftover iio cpp dec >/dev/null 2>&1 &&
+    { echo "    mod was accepted at a decimal width"; refusals=1; }
+"${BUILD}/prolog_compile" "${WORK}/dec/bad.pl" leftover iio cpp 64 >/dev/null 2>&1 ||
+    { echo "    mod was refused at 64 bits, where it is meaningful"; refusals=1; }
+"${BUILD}/prolog_compile" "${REPO}/examples/money.pl" line_total iio cpp dec:18 >/dev/null 2>&1 ||
+    { echo "    a scale of 18 was refused"; refusals=1; }
+"${BUILD}/prolog_compile" "${REPO}/examples/money.pl" line_total iio cpp dec:19 >/dev/null 2>&1 &&
+    { echo "    a scale of 19 was accepted"; refusals=1; }
+"${BUILD}/prolog_compile" "${REPO}/examples/money.pl" line_total iio triton dec >/dev/null 2>&1 &&
+    { echo "    Triton accepted a decimal, which tl.int64 cannot represent"; refusals=1; }
+if [[ "${refusals}" -eq 0 ]]; then
+    pass "logic_compile decimal: mod, an out-of-range scale and Triton are all refused"
+else
+    fail "logic_compile decimal: a refusal did not hold"
+fi
+
+# CUDA takes the decimal width too -- __int128 is synthesised there from 64-bit pieces.
+gen="${WORK}/money_dec.cu"
+if "${BUILD}/prolog_compile" "${REPO}/examples/money.pl" settle iiio cuda dec \
+        > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/money_cu_driver.cu" <<'EOF'
+#include "money_dec.cu"
+
+#include <cstdio>
+
+// The same transaction on the device, and it must give the same minor units. A width that
+// disagrees between host and device is worse than one that is missing.
+__global__ void settle_kernel(unsigned char* ok, nc_int* out) {
+    nc_int each = nc_lit(0);
+    *ok = p_settle_4(nc_lit(10000), nc_lit(10), nc_lit(400), each) ? 1 : 0;
+    *out = each;
+}
+
+int main() {
+    unsigned char* d_ok = nullptr;
+    nc_int* d_out = nullptr;
+    if (cudaMalloc(&d_ok, 1) != cudaSuccess || cudaMalloc(&d_out, sizeof(nc_int)) != cudaSuccess) {
+        std::fprintf(stderr, "device allocation failed\n");
+        return 1;
+    }
+    settle_kernel<<<1, 1>>>(d_ok, d_out);
+    if (cudaDeviceSynchronize() != cudaSuccess) {
+        std::fprintf(stderr, "the kernel failed: %s\n", cudaGetErrorString(cudaGetLastError()));
+        return 1;
+    }
+    unsigned char ok = 0;
+    nc_int got = 0;
+    if (cudaMemcpy(&ok, d_ok, 1, cudaMemcpyDeviceToHost) != cudaSuccess ||
+        cudaMemcpy(&got, d_out, sizeof(got), cudaMemcpyDeviceToHost) != cudaSuccess) {
+        std::fprintf(stderr, "reading the result back failed\n");
+        return 1;
+    }
+    if (ok != 1) {
+        std::fprintf(stderr, "settle/4 failed on the device\n");
+        return 1;
+    }
+    if (got != static_cast<nc_int>(2750)) {
+        std::fprintf(stderr, "the device disagreed with the host on the minor units\n");
+        return 1;
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cu "logic_compile cuda/decimal" "${gen}" "${WORK}/money_cu_driver.cu"
+else
+    fail "logic_compile cuda/decimal: emission refused"
 fi
 
 # ---------------------------------------------------------------------------
@@ -416,14 +873,92 @@ EOF
         "${WORK}/walk_driver_${variant}.cpp"
 done
 
-for strategy in exhaustive walksat; do
-    gen="${WORK}/sat_${strategy}.cu"
-    if "${BUILD}/sat_compile" "${WORK}/f.cnf" cuda formula "${strategy}" > "${gen}" 2>/dev/null; then
-        compile_cu "sat_compile cuda/${strategy}" "${gen}"
-    else
-        fail "sat_compile cuda/${strategy}: emission refused"
-    fi
-done
+gen="${WORK}/sat_exhaustive.cu"
+if ! "${BUILD}/sat_compile" "${WORK}/f.cnf" cuda formula exhaustive > "${gen}" 2>/dev/null; then
+    fail "sat_compile cuda/exhaustive: emission refused"
+elif [[ -z "${ANSWER}" ]]; then
+    fail "sat_compile cuda/exhaustive: no reference assignment to check against"
+else
+    cat > "${WORK}/sat_ex_cu_driver.cu" <<EOF
+#include "sat_exhaustive.cu"
+
+#include <cstdio>
+
+// The smallest satisfying assignment, which every target must agree on.
+int main() {
+    const unsigned long long got = formula_solve_cuda();
+    const unsigned long long want = ${ANSWER}ULL;
+    if (got != want) {
+        std::fprintf(stderr, "the CUDA scan returned %llu, the reference says %llu\n", got, want);
+        return 1;
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cu "sat_compile cuda/exhaustive" "${gen}" "${WORK}/sat_ex_cu_driver.cu"
+fi
+
+gen="${WORK}/sat_walksat.cu"
+if "${BUILD}/sat_compile" "${WORK}/f.cnf" cuda formula walksat > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/sat_wk_cu_driver.cu" <<EOF
+#include "sat_walksat.cu"
+
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+// The oracle is the DIMACS file this script wrote, not the tables the emitter produced: those
+// are the kernel's input and so are part of what is being tested.
+//
+// The emitted wrapper says plainly that the model handed back is the LAST writer's rather than
+// strictly the winning walker's, because a lower walker can finish after a higher one. Both
+// satisfy the formula, and verifying whichever arrives is exactly what it asks the caller to do.
+int main() {
+    std::vector<std::vector<int>> clauses;
+    std::ifstream in("${WORK}/f.cnf");
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == 'c' || line[0] == 'p' || line[0] == '%') { continue; }
+        std::istringstream ls(line);
+        std::vector<int> lits;
+        int lit = 0;
+        while (ls >> lit) {
+            if (lit != 0) { lits.push_back(lit); }
+        }
+        if (!lits.empty()) { clauses.push_back(lits); }
+    }
+    if (clauses.empty()) {
+        std::fprintf(stderr, "no clauses were read, so nothing would have been checked\n");
+        return 1;
+    }
+
+    std::vector<unsigned char> model(nc_formula_nvars, 0);
+    const unsigned winner = formula_solve_cuda(64U, 100000ULL, 50U, 0x9E3779B97F4A7C15ULL,
+                                               model.data());
+    if (winner == 0xFFFFFFFFu) {
+        std::fprintf(stderr, "no walker succeeded on a satisfiable formula\n");
+        return 1;
+    }
+    for (const auto& c : clauses) {
+        bool sat = false;
+        for (const int lit : c) {
+            const auto v = static_cast<unsigned>(lit < 0 ? -lit : lit) - 1U;
+            if ((lit > 0) == (model[v] != 0)) { sat = true; break; }
+        }
+        if (!sat) {
+            std::fprintf(stderr, "a clause is not satisfied by the model the walk reported\n");
+            return 1;
+        }
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cu "sat_compile cuda/walksat" "${gen}" "${WORK}/sat_wk_cu_driver.cu"
+else
+    fail "sat_compile cuda/walksat: emission refused"
+fi
 
 gen="${WORK}/sat_exhaustive.py"
 if ! "${BUILD}/sat_compile" "${WORK}/f.cnf" triton formula exhaustive > "${gen}" 2>/dev/null; then
@@ -582,14 +1117,77 @@ else
     fail "csp_compile cpp/min_conflicts: emission refused"
 fi
 
-for strategy in exhaustive minconflicts; do
-    gen="${WORK}/csp_${strategy}.cu"
-    if "${BUILD}/csp_compile" 6 cuda ncq "${strategy}" > "${gen}" 2>/dev/null; then
-        compile_cu "csp_compile cuda/${strategy}" "${gen}"
-    else
-        fail "csp_compile cuda/${strategy}: emission refused"
-    fi
-done
+gen="${WORK}/csp_exhaustive.cu"
+if ! "${BUILD}/csp_compile" 6 cuda ncq exhaustive > "${gen}" 2>/dev/null; then
+    fail "csp_compile cuda/exhaustive: emission refused"
+elif [[ -z "${FIRST}" ]]; then
+    fail "csp_compile cuda/exhaustive: no reference solution to check against"
+else
+    cat > "${WORK}/csp_ex_cu_driver.cu" <<EOF
+#include "csp_exhaustive.cu"
+
+#include <cstdio>
+
+// The lexicographically first solution, the same one the module's own backtracking search
+// returns and the C++ emission is checked against.
+int main() {
+    const long long expected[] = {$(echo "${FIRST}" | tr ' ' ',')};
+    constexpr int n = static_cast<int>(sizeof(expected) / sizeof(expected[0]));
+    long long got[n] = {};
+    if (!ncq_solve_exhaustive(got)) {
+        std::fprintf(stderr, "the emitted scan found nothing\n");
+        return 1;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (got[i] != expected[i]) {
+            std::fprintf(stderr, "the emitted scan disagreed with the reference\n");
+            return 1;
+        }
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cu "csp_compile cuda/exhaustive" "${gen}" "${WORK}/csp_ex_cu_driver.cu"
+fi
+
+gen="${WORK}/csp_minconflicts.cu"
+if "${BUILD}/csp_compile" 6 cuda ncq minconflicts > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/csp_mc_cu_driver.cu" <<'EOF'
+#include "csp_minconflicts.cu"
+
+#include <cstdio>
+#include <cstdlib>
+
+// As with the C++ walk: 6-queens is solvable and the configuration is fixed, so a false return
+// is a broken walk rather than bad luck. And the assignment must actually be a solution --
+// checked here from the PROBLEM, because the emitted ncq_satisfies is __device__ and the point
+// is not to ask the code under test whether it is right.
+int main() {
+    constexpr int n = 6;
+    long long got[n] = {};
+    if (!ncq_solve_min_conflicts(got)) {
+        std::fprintf(stderr, "the walk found nothing on a 6-queens instance\n");
+        return 1;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (got[i] < 0 || got[i] >= n) {
+            std::fprintf(stderr, "the walk reported a value outside the domain\n");
+            return 1;
+        }
+        for (int j = i + 1; j < n; ++j) {
+            if (got[i] == got[j] || std::llabs(got[i] - got[j]) == j - i) {
+                std::fprintf(stderr, "the walk reported an assignment that is not a solution\n");
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+EOF
+    compile_and_run_cu "csp_compile cuda/min_conflicts" "${gen}" "${WORK}/csp_mc_cu_driver.cu"
+else
+    fail "csp_compile cuda/minconflicts: emission refused"
+fi
 
 if ! "${BUILD}/csp_compile" 6 triton ncq > "${WORK}/csp_triton.py" 2>/dev/null; then
     fail "csp_compile triton: emission refused"

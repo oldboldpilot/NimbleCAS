@@ -44,7 +44,7 @@ Depends on [`core`](core.md) (`Result`, `MathError`) and [`logic`](logic.md)
 ```cpp
 enum class Target : std::uint8_t { cpp, cuda, triton };
 enum class ArgMode : std::uint8_t { input, output };
-enum class Width  : std::uint8_t { bits64, bits128, arbitrary };
+enum class Width  : std::uint8_t { bits64, bits128, arbitrary, decimal128 };
 enum class Style  : std::uint8_t { deterministic, continuation };
 
 struct PredicateSignature {
@@ -57,6 +57,7 @@ struct PredicateSignature {
 struct CompileOptions {
     Target target{Target::cpp};
     Width width{Width::bits64};
+    std::int32_t decimal_scale{2};   // digits after the point when width is decimal128
     Style style{Style::deterministic};
     bool tail_call_optimise{true};
     bool emit_batch{false};
@@ -87,6 +88,47 @@ struct CompileOptions {
   Refused by CUDA (`MathError::not_implemented`) because `BigInt` dynamically allocates on
   the host heap, which GPU device functions cannot do.
 
+### `Width::decimal128` — fixed-point decimal, for money
+
+A 128-bit **fixed-point decimal** at a scale fixed when you compile. A value is an integer
+count of **minor units**: at `decimal_scale = 2`, the integer `u` denotes `u / 100` exactly.
+Nothing is a binary float, so nothing is approximately `0.1`. Supported by `Target::cpp` and
+`Target::cuda`; refused by Triton, whose lattice stops at `tl.int64`.
+
+**Literals in the Prolog source are minor units.** The reader has no decimal literal, so
+`Price is 1999` means 19.99 at scale 2 — the source is written in the unit the representation
+uses, and the generated file states the scale in `nc_scale_digits` and `nc_scale_v`.
+
+**Exact or refused, never rounded.** `+`, `-`, unary minus and every comparison are the
+integer operations unchanged, which is the point of fixed point. Multiplication and division
+rescale, and an answer the scale cannot hold exactly is reported rather than rounded:
+
+| Expression at scale 2 | Result |
+| :--- | :--- |
+| `19.99 * 3.00` | `59.97` |
+| `100.00 * 0.10` | `10.00` |
+| `0.01 * 0.01` | refused — `0.0001` needs four digits |
+| `10.00 // 4.00` | `2.50` |
+| `10.00 // 3.00` | refused — not representable at two digits |
+
+There is deliberately **no rounding mode**. A rounding rule chosen inside a code generator is
+a wrong answer no caller asked for; when you need one, quantise with
+[`nimblecas.currency`](currency.md), whose `convert()` takes a scale and a `Rounding`
+explicitly. `//` and `div` are the same function here, because they differ only in how they
+round a division that does not come out even and this width refuses those instead.
+
+`mod` and `rem` are **refused** (`MathError::not_implemented`). Their integer meaning does not
+survive scaling — the remainder of one amount divided by another differs depending on whether
+the quotient is taken as an integer count or as a decimal — and picking one silently is
+exactly the failure Rule 32 exists to prevent.
+
+`decimal_scale` must be in `0..18`; anything else is a `MathError::domain_error`. The
+generated file also carries `nc_to_string`, which renders a scaled integer as the decimal it
+means (`1999` as `"19.99"`, `-1999` as `"-19.99"`, `0` as `"0.00"`). It builds a
+`std::string`, so it is emitted for `Target::cpp` only.
+
+A worked example is `examples/money.pl`.
+
 ### Evaluation styles
 
 - `Style::deterministic`: compiles a predicate to a function computing its single
@@ -95,6 +137,14 @@ struct CompileOptions {
   invoked once per solution to handle non-deterministic predicates without truncation.
   Supported only on `Target::cpp`; refused on CUDA and Triton (`MathError::not_implemented`)
   because nested lambda continuations cannot be represented on device architectures.
+
+  The public entry is a template on the caller's callable, but the body that actually
+  enumerates takes an **erased continuation view** (`nc_cont_<n>`, one per output arity) and is
+  an ordinary function. That is what lets a RECURSIVE predicate compile at all: when the body
+  was a template, each level of the enumeration handed itself a fresh lambda type and demanded
+  a fresh instantiation, so `between/3` — the very shape CPS exists for — could not be built.
+  The view is a pointer to the callable plus a pointer to a function that invokes it: no
+  allocation, and so nothing that can throw.
 
 ### Optimisation and batching flags
 
@@ -128,7 +178,7 @@ The repository includes a command-line tool `tools/prolog_compile.cpp` built int
 `build/prolog_compile`:
 
 ```bash
-prolog_compile <file.pl> <entry-name> <modes:i|o...> [cpp|cuda|triton] [64|128|big] [det|cps] [batch]
+prolog_compile <file.pl> <entry-name> <modes:i|o...> [cpp|cuda|triton] [64|128|big|dec[:N]] [det|cps] [batch]
 ```
 
 ### Arguments
@@ -138,7 +188,8 @@ prolog_compile <file.pl> <entry-name> <modes:i|o...> [cpp|cuda|triton] [64|128|b
 - `<modes>`: argument modes specified as a character sequence of `i` (input) and `o` (output).
   For example, `fib(+N, -Result)` is specified as `io`.
 - Target (optional): `cpp` (default), `cuda`, or `triton`.
-- Width (optional): `64` (default), `128`, or `big`.
+- Width (optional): `64` (default), `128`, `big`, or `dec` / `dec:N` for a fixed-point
+  decimal with N digits after the point (`dec` is two).
 - Style (optional): `det` (default) or `cps`.
 - Batch (optional): `batch` or `simd` to emit batch evaluation functions.
 
@@ -151,9 +202,22 @@ are refused by `triton`, which has no call stack. `examples/poly.pl` is the stra
 arithmetic the Triton target accepts:
 
 ```bash
-prolog_compile examples/fib.pl  fib       io cpp    64   # or cuda
-prolog_compile examples/poly.pl eval_poly io triton 64
+prolog_compile examples/fib.pl      fib       io   cpp    64      # or cuda
+prolog_compile examples/poly.pl     eval_poly io   triton 64      # Triton refuses recursion
+prolog_compile examples/countdown.pl count     iio  cpp    64      # a self tail call, as a loop
+prolog_compile examples/fact.pl     fact_acc  iio  cpp    128     # past 2^63 at 21!
+prolog_compile examples/between.pl  between   iio  cpp    64 cps  # nondeterministic
+prolog_compile examples/money.pl    settle    iiio cpp    dec     # fixed-point money
 ```
+
+| Example | What it is there to exercise |
+| :--- | :--- |
+| `fib.pl` | ordinary recursion, every target and width |
+| `countdown.pl` | a self tail call, which the compiler rewrites to a loop |
+| `poly.pl` | straight-line arithmetic — the only shape Triton accepts |
+| `fact.pl` | the width boundaries: 20!/21! at 64 bits, 33!/34! at 128 |
+| `between.pl` | a nondeterministic predicate, for `Style::continuation` |
+| `money.pl` | `Width::decimal128`, including the refusals |
 
 The Triton kernel takes one pointer per argument plus an `ok_ptr`, a length and a `BLOCK`
 constexpr, and reports per lane through `ok` whether the predicate succeeded there.
@@ -164,7 +228,9 @@ constexpr, and reports per lane through `ok` whether the predicate succeeded the
 | :--- | :--- |
 | Non-integer types, floats, lists, compounds, or unsupported builtins | `MathError::not_implemented` |
 | Recursive calls or sub-predicate calls when target is `Target::triton` | `MathError::not_implemented` |
-| `Width::bits128` or `Width::arbitrary` requested for `Target::triton` | `MathError::not_implemented` |
+| Any width other than `Width::bits64` requested for `Target::triton` | `MathError::not_implemented` |
+| `mod` or `rem` in a program compiled at `Width::decimal128` | `MathError::not_implemented` |
+| `decimal_scale` outside `0..18` at `Width::decimal128` | `MathError::domain_error` |
 | `Width::arbitrary` requested for `Target::cuda` | `MathError::not_implemented` |
 | `Style::continuation` requested for `Target::cuda` or `Target::triton` | `MathError::not_implemented` |
 | Entry predicate not found, arity mismatch, or output variable never bound | `MathError::domain_error` |

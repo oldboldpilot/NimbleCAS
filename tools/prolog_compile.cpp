@@ -3,6 +3,11 @@
 //
 // Usage:
 //   prolog_compile <file.pl> <entry-name> <modes> [cpp|cuda|triton]
+//                  [64|128|big|dec[:N]] [det|cps] [batch]
+//
+// `dec` selects a 128-bit FIXED-POINT DECIMAL, two digits after the point; `dec:N` gives N.
+// Values are integer counts of minor units, so a literal in the source is written in those
+// units: at `dec` the literal 1999 is 19.99. Arithmetic is exact or refused, never rounded.
 //
 // `modes` is one character per argument: `i` for an input, `o` for an output. So compiling
 // `fib/2` called as fib(+N, -F) is `prolog_compile fib.pl fib io cpp`.
@@ -58,15 +63,43 @@ namespace {
     return std::nullopt;
 }
 
-[[nodiscard]] auto parse_width(std::string_view name) -> std::optional<lc::Width> {
+// The width, and for a fixed-point decimal the scale that comes with it. `dec` is two digits
+// after the point -- the minor unit of most currencies -- and `dec:N` says N of them.
+struct WidthChoice {
+    lc::Width width;
+    std::int32_t scale;
+};
+
+[[nodiscard]] auto parse_width(std::string_view name) -> std::optional<WidthChoice> {
     if (name == "64") {
-        return lc::Width::bits64;
+        return WidthChoice{.width = lc::Width::bits64, .scale = 0};
     }
     if (name == "128") {
-        return lc::Width::bits128;
+        return WidthChoice{.width = lc::Width::bits128, .scale = 0};
     }
     if (name == "big" || name == "arbitrary") {
-        return lc::Width::arbitrary;
+        return WidthChoice{.width = lc::Width::arbitrary, .scale = 0};
+    }
+    if (name == "dec" || name == "decimal") {
+        return WidthChoice{.width = lc::Width::decimal128, .scale = 2};
+    }
+    for (const std::string_view prefix : {std::string_view{"dec:"}, std::string_view{"decimal:"}}) {
+        if (!name.starts_with(prefix)) {
+            continue;
+        }
+        const std::string_view digits = name.substr(prefix.size());
+        if (digits.empty() ||
+            !std::ranges::all_of(digits, [](char c) { return c >= '0' && c <= '9'; })) {
+            return std::nullopt;
+        }
+        std::int32_t scale = 0;
+        for (const char c : digits) {
+            if (scale > 99) {  // any value this large is refused downstream anyway
+                return std::nullopt;
+            }
+            scale = scale * 10 + (c - '0');
+        }
+        return WidthChoice{.width = lc::Width::decimal128, .scale = scale};
     }
     return std::nullopt;
 }
@@ -109,7 +142,7 @@ auto main(int argc, char** argv) -> int {
     if (args.size() < 4) {
         std::println(std::cerr,
                      "usage: prolog_compile <file.pl> <entry-name> <modes:i|o...> "
-                     "[cpp|cuda|triton] [64|128|big] [det|cps] [batch]");
+                     "[cpp|cuda|triton] [64|128|big|dec[:N]] [det|cps] [batch]");
         return 2;
     }
     const std::string& path = args[1];
@@ -138,7 +171,9 @@ auto main(int argc, char** argv) -> int {
 
     const auto width = parse_width(args.size() > 5 ? args[5] : "64");
     if (!width) {
-        std::println(std::cerr, "error: width must be 64, 128 or big");
+        std::println(std::cerr,
+                     "error: width must be 64, 128, big, or dec / dec:N for a fixed-point "
+                     "decimal with N digits after the point (default 2)");
         return 2;
     }
 
@@ -151,7 +186,8 @@ auto main(int argc, char** argv) -> int {
     }
 
     const lc::CompileOptions opts{.target = *target,
-                                  .width = *width,
+                                  .width = width->width,
+                                  .decimal_scale = width->scale,
                                   .style = *style,
                                   .tail_call_optimise = true,
                                   .emit_batch = want_batch};

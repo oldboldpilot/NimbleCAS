@@ -87,13 +87,14 @@ struct PredicateSignature {
 //
 // Not every width fits every target, and `compile` refuses the combinations that do not rather
 // than emitting something that wraps — see the notes on `CompileOptions::target`.
-enum class Width : std::uint8_t { bits64, bits128, arbitrary };
+enum class Width : std::uint8_t { bits64, bits128, arbitrary, decimal128 };
 
 [[nodiscard]] constexpr auto to_string_view(Width w) noexcept -> std::string_view {
     switch (w) {
-        case Width::bits64:    return "bits64";
-        case Width::bits128:   return "bits128";
-        case Width::arbitrary: return "arbitrary";
+        case Width::bits64:     return "bits64";
+        case Width::bits128:    return "bits128";
+        case Width::arbitrary:  return "arbitrary";
+        case Width::decimal128: return "decimal128";
     }
     return "bits64";
 }
@@ -122,6 +123,10 @@ enum class Style : std::uint8_t { deterministic, continuation };
 struct CompileOptions {
     Target target{Target::cpp};
     Width width{Width::bits64};
+    // Digits after the decimal point when `width` is `decimal128`, and meaningless otherwise.
+    // Two is the minor unit of most currencies; a scale outside 0..18 is refused, because
+    // 10^scale has to be a value the arithmetic can hold and still leave room to compute in.
+    std::int32_t decimal_scale{2};
     Style style{Style::deterministic};
     // Compile a self tail call to a loop. On by default; the flag exists so the two forms can
     // be compared, not because recursion is ever preferable.
@@ -290,6 +295,7 @@ struct ExprEmitter {
     std::string fail_stmt;
     std::uint32_t* temp_counter;
     bool device;  // emit CUDA __device__-callable helper names
+    Width width{Width::bits64};
 };
 
 // Emits a call to one checked arithmetic helper, binding its result to `tmp`.
@@ -347,6 +353,14 @@ auto emit_checked_call(const ExprEmitter& e, std::string_view tmp, std::string_v
     if (c.args.size() == 2) {
         const auto op = checked_binary(c.functor);
         if (!op) {
+            return make_error<std::string>(MathError::not_implemented);
+        }
+        // `mod` and `rem` are REFUSED on a fixed-point decimal, and the refusal is the point.
+        // Their integer meaning does not survive scaling: the remainder of one money amount
+        // divided by another depends on whether the quotient is taken as an integer count or as
+        // a decimal, and the two give different answers. Choosing one silently inside a code
+        // generator is exactly the plausible-looking wrong answer Rule 32 exists to prevent.
+        if (e.width == Width::decimal128 && (*op == "mod" || *op == "rem")) {
             return make_error<std::string>(MathError::not_implemented);
         }
         auto lhs = emit_expr(e, c.args[0]);
@@ -486,7 +500,113 @@ struct GenericOps {
            "inline constexpr nc_int nc_min_v = -nc_max_v - 1;\n\n";
 }
 
-[[nodiscard]] auto checked_preamble(bool device, Width width) -> std::string {
+// 10^scale, written out as a literal the generated code can hold. Built by repetition rather
+// than by pow, because the value has to be exact and pow returns a double.
+[[nodiscard]] auto power_of_ten(std::int32_t scale) -> std::string {
+    std::string digits = "1";
+    for (std::int32_t i = 0; i < scale; ++i) {
+        digits += '0';
+    }
+    return digits;
+}
+
+// The fixed-point decimal layer, on top of the 128-bit checked helpers.
+//
+// A value is an integer count of MINOR UNITS: `u` denotes u / 10^scale, exactly. Addition,
+// subtraction, negation and every comparison are the integer ones unchanged -- that is what
+// fixed point buys. Multiplication and division are where the scale shows, and both are EXACT
+// OR REFUSED. There is deliberately no rounding mode: a rounding rule chosen by a code
+// generator is a wrong answer no caller asked for, and money is where that matters most.
+[[nodiscard]] auto decimal_ops(bool device, const OpStyle& st, const std::string& a2,
+                               std::int32_t scale) -> std::string {
+    // Calling one checked helper from inside another differs by target and only here: C++
+    // returns std::optional, CUDA writes through a reference.
+    const auto raw = [device](std::string_view name, std::string_view args,
+                              std::string_view into) -> std::string {
+        if (device) {
+            return std::format("    nc_int {}{{}};\n    if (!{}({}, {})) {{ NC_FAIL; }}\n", into,
+                               name, args, into);
+        }
+        return std::format(
+            "    const auto {}_r = {}({});\n    if (!{}_r) {{ NC_FAIL; }}\n"
+            "    const nc_int {} = *{}_r;\n",
+            into, name, args, into, into, into);
+    };
+    const auto tail = [device](std::string_view name, std::string_view args) -> std::string {
+        return device ? std::format("return {}({}, r);", name, args)
+                      : std::format("return {}({});", name, args);
+    };
+
+    std::string s;
+    s += std::format(
+        "// One scaled multiplication: (a/10^{0}) * (b/10^{0}) is (a*b)/10^(2*{0}), so the\n"
+        "// unscaled answer is a*b/10^{0}.\n"
+        "//\n"
+        "// Dividing FIRST where that is exact is not an optimisation, it is range. Money times\n"
+        "// a whole count is the ordinary case, and forming a*b before scaling would overflow\n"
+        "// long before the answer does.\n",
+        scale);
+    s += render_op(
+        st, "nc_mul", a2, a2,
+        std::format("    if (a % nc_scale_v == 0) {{ {} }}\n"
+                    "    if (b % nc_scale_v == 0) {{ {} }}\n"
+                    "{}"
+                    "    if (prod % nc_scale_v != 0) {{ NC_FAIL; }}\n"
+                    "    NC_OK(prod / nc_scale_v);\n",
+                    tail("nc_mul_raw", "a / nc_scale_v, b"),
+                    tail("nc_mul_raw", "a, b / nc_scale_v"), raw("nc_mul_raw", "a, b", "prod")));
+
+    s += std::format(
+        "// Scaled division: (a/10^{0}) / (b/10^{0}) is a/b, whose unscaled form is a*10^{0}/b.\n"
+        "// Exact or refused -- 10.00/4 is 2.50 and answered, 10.00/3 is not representable at\n"
+        "// this scale and is reported rather than rounded.\n"
+        "//\n"
+        "// `//` and `div` are the SAME function here. They differ only in how they round a\n"
+        "// division that does not come out even, and this one refuses those instead.\n",
+        scale);
+    const std::string div_body =
+        std::format("    if (b == 0) {{ NC_FAIL; }}\n"
+                    "    if (a == nc_min_v && b == -1) {{ NC_FAIL; }}\n"
+                    "    if (a % b == 0) {{ {} }}\n"
+                    "{}"
+                    "    if (wide % b != 0) {{ NC_FAIL; }}\n"
+                    "    NC_OK(wide / b);\n",
+                    tail("nc_mul_raw", "a / b, nc_scale_v"),
+                    raw("nc_mul_raw", "a, nc_scale_v", "wide"));
+    s += render_op(st, "nc_quot", a2, a2, div_body);
+    s += render_op(st, "nc_fdiv", a2, a2, div_body);
+    s += render_op(st, "nc_min", a2, a2, "    NC_OK(a < b ? a : b);\n");
+    s += render_op(st, "nc_max", a2, a2, "    NC_OK(a > b ? a : b);\n");
+
+    if (!device) {
+        s += "// Rendering, because a scaled integer that prints as 1999 when it means 19.99 is\n";
+        s += "// a value waiting to be misread. Host only: it builds a std::string.\n";
+        s += "[[nodiscard]] inline auto nc_to_string(nc_int v) -> std::string {\n";
+        s += "    const bool negative = v < 0;\n";
+        s += "    // Cast BEFORE negating. `-v` on the most negative value overflows a signed\n";
+        s += "    // 128-bit integer, which is undefined behaviour; the unsigned negation is\n";
+        s += "    // defined and gives exactly the magnitude wanted.\n";
+        s += "    const auto unsigned_v = static_cast<unsigned __int128>(v);\n";
+        s += "    unsigned __int128 magnitude = negative ? -unsigned_v : unsigned_v;\n";
+        s += "    std::string digits;\n";
+        s += "    while (magnitude > 0) {\n";
+        s += "        digits.push_back(static_cast<char>('0' + static_cast<int>(magnitude % 10)));\n";
+        s += "        magnitude /= 10;\n";
+        s += "    }\n";
+        s += std::format(
+            "    while (digits.size() <= static_cast<std::size_t>({})) {{ digits.push_back('0'); }}\n",
+            scale);
+        s += "    std::ranges::reverse(digits);\n";
+        if (scale > 0) {
+            s += std::format("    digits.insert(digits.size() - {}, 1, '.');\n", scale);
+        }
+        s += "    return negative ? \"-\" + digits : digits;\n";
+        s += "}\n\n";
+    }
+    return s;
+}
+
+[[nodiscard]] auto checked_preamble(bool device, Width width, std::int32_t scale) -> std::string {
     // Rules 8/10/42: pure arithmetic is constexpr and its result must not be discarded --
     // a dropped nc_add return is a dropped overflow check. The CUDA helpers stay `inline`
     // rather than `constexpr` so nvcc needs no relaxed-constexpr flag from its caller.
@@ -504,6 +624,11 @@ struct GenericOps {
     // `nc_int` is the one place the width lives. Everything the compiler emits is written in
     // terms of it and of `nc_lit`, so widening is a change to this preamble rather than to the
     // code generator — and a generated file always says, in its own text, what it computes in.
+    const bool decimal = width == Width::decimal128;
+    // At decimal128 the checked MULTIPLY is a building block rather than the operator: the
+    // operator has to rescale afterwards. It is emitted under its own name and `nc_mul` is
+    // built on top of it below.
+    const std::string mul_name = decimal ? "nc_mul_raw" : "nc_mul";
     if (width == Width::bits64) {
         s += "// 64-bit arithmetic. Every operation is PRE-checked: signed overflow is undefined\n";
         s += "// behaviour in C++, so a guard spelled `a + b < a` is itself the bug. Reporting\n";
@@ -518,19 +643,44 @@ struct GenericOps {
         s += render_op(st, "nc_sub", a2, a2, g.sub);
         s += render_op(st, "nc_neg", a1, a1, g.neg);
         s += render_op(st, "nc_mul", a2, a2, g.mul);
-    } else if (width == Width::bits128) {
-        s += "// 128-bit arithmetic, checked with the compiler's overflow builtins — the same\n";
-        s += "// three that nimblecas.int128 uses, for the same reason.\n";
-        s += "//\n";
-        s += "// STILL BOUNDED. Widening to 128 bits does not make a program that overflows\n";
-        s += "// correct; it makes a larger set of programs representable. An operation whose\n";
-        s += "// exact result leaves the range is an OVERFLOW, not a wrong answer, and a caller\n";
-        s += "// who sees one should move to arbitrary precision rather than assume the value.\n";
+    } else if (width == Width::bits128 || width == Width::decimal128) {
+        if (decimal) {
+            s += std::format(
+                "// 128-BIT FIXED-POINT DECIMAL at scale {0}: a value is an integer count of\n"
+                "// MINOR UNITS, and the integer u denotes u / 10^{0} exactly. Nothing here is a\n"
+                "// binary float, so nothing here is approximately 0.1.\n"
+                "//\n"
+                "// LITERALS IN THE PROLOG SOURCE ARE MINOR UNITS. `Price is 1999` means\n"
+                "// 1999 / 10^{0}, not 1999. The reader this was compiled from has no decimal\n"
+                "// literal, so the source is written in the unit the representation uses and the\n"
+                "// scale is stated once -- here, and in nc_scale_v below.\n"
+                "//\n"
+                "// EXACT OR REFUSED. `+`, `-`, unary minus and every comparison are the integer\n"
+                "// ones unchanged, which is what fixed point is for. Multiplication and division\n"
+                "// rescale, and when the exact answer is not representable at this scale they\n"
+                "// report that rather than round: a rounding rule chosen by a code generator is a\n"
+                "// wrong answer nobody asked for. `mod` and `rem` are refused outright.\n",
+                scale);
+        } else {
+            s += "// 128-bit arithmetic, checked with the compiler's overflow builtins — the same\n";
+            s += "// three that nimblecas.int128 uses, for the same reason.\n";
+            s += "//\n";
+            s += "// STILL BOUNDED. Widening to 128 bits does not make a program that overflows\n";
+            s += "// correct; it makes a larger set of programs representable. An operation whose\n";
+            s += "// exact result leaves the range is an OVERFLOW, not a wrong answer, and a caller\n";
+            s += "// who sees one should move to arbitrary precision rather than assume the value.\n";
+        }
         s += "#if !defined(__SIZEOF_INT128__)\n";
         s += "#error \"generated for 128-bit arithmetic, which this compiler does not provide\"\n";
         s += "#endif\n";
         s += "using nc_int = __int128;\n";
         s += bounds_constants(device, width);
+        if (decimal) {
+            s += std::format("inline constexpr std::int32_t nc_scale_digits = {};\n", scale);
+            s += std::format(
+                "inline constexpr nc_int nc_scale_v = static_cast<nc_int>({}LL);\n\n",
+                power_of_ten(scale));
+        }
         s += st.qualifiers
              + "auto nc_lit(std::int64_t v) -> nc_int { return static_cast<nc_int>(v); }\n\n";
         if (device) {
@@ -541,7 +691,7 @@ struct GenericOps {
             s += render_op(st, "nc_add", a2, a2, g.add);
             s += render_op(st, "nc_sub", a2, a2, g.sub);
             s += render_op(st, "nc_neg", a1, a1, g.neg);
-            s += render_op(st, "nc_mul", a2, a2, g.mul);
+            s += render_op(st, mul_name, a2, a2, g.mul);
         } else {
             s += render_op(st, "nc_add", a2, a2,
                            "    nc_int out{};\n"
@@ -555,10 +705,17 @@ struct GenericOps {
                            "    nc_int out{};\n"
                            "    if (__builtin_sub_overflow(static_cast<nc_int>(0), a, &out)) { NC_FAIL; }\n"
                            "    NC_OK(out);\n");
-            s += render_op(st, "nc_mul", a2, a2,
+            s += render_op(st, mul_name, a2, a2,
                            "    nc_int out{};\n"
                            "    if (__builtin_mul_overflow(a, b, &out)) { NC_FAIL; }\n"
                            "    NC_OK(out);\n");
+        }
+        if (decimal) {
+            // The scaled operators, and then nothing else: the integer division block below
+            // would define `//`, `div`, `mod` and `rem` with the wrong meaning for a scaled
+            // value, so decimal128 returns before reaching it.
+            s += decimal_ops(device, st, a2, scale);
+            return s;
         }
     } else {
         s += "// ARBITRARY-PRECISION arithmetic, on nimblecas::BigInt.\n";
@@ -648,9 +805,10 @@ struct CompileCtx {
 // The C++ spelling of the generated code's integer type.
 [[nodiscard]] auto int_type_of(Width w) -> std::string {
     switch (w) {
-        case Width::bits64:    return "std::int64_t";
-        case Width::bits128:   return "nc_int";  // an alias, so the #if guard sits in one place
-        case Width::arbitrary: return "nimblecas::BigInt";
+        case Width::bits64:     return "std::int64_t";
+        case Width::bits128:    return "nc_int";  // an alias, so the #if guard sits in one place
+        case Width::decimal128: return "nc_int";  // likewise: the scale lives in the preamble
+        case Width::arbitrary:  return "nimblecas::BigInt";
     }
     return "std::int64_t";
 }
@@ -800,7 +958,8 @@ struct CompileCtx {
                               .indent = indent,
                               .fail_stmt = fail,
                               .temp_counter = &temp,
-                              .device = ctx.device};
+                              .device = ctx.device,
+                              .width = ctx.width};
 
     for (const Term& goal : clause.body) {
         if (is_atom(goal)) {
@@ -1067,6 +1226,67 @@ struct CompileCtx {
 // it is why CPS needs no explicit choice-point stack: the C++ call stack is the choice-point
 // stack.
 
+// How many arguments a continuation for this predicate receives: one per output.
+[[nodiscard]] auto output_count(const PredicateSignature& sig) -> std::size_t {
+    return static_cast<std::size_t>(
+        std::ranges::count(sig.modes, ArgMode::output));
+}
+
+// The continuation view for `m` output arguments.
+//
+// WHY THIS TYPE EXISTS, because it is not decoration. A CPS predicate used to be a template on
+// its continuation's type, and a RECURSIVE one passed itself a fresh lambda at every level. Each
+// level therefore asked for a new instantiation whose body asked for another, and the compiler
+// never finished -- `between/3`, the very predicate continuation passing is for, could not be
+// compiled at all. Erasing the type at the recursive boundary makes every continuation the same
+// type, so one instantiation serves the whole enumeration.
+//
+// It holds a pointer to the callable and a pointer to a function that invokes it. That is a raw
+// pointer in generated code that otherwise has none, and it is inherent: type erasure IS an
+// opaque pointer plus a dispatch function. What it buys is that the view allocates nothing and
+// so cannot throw, which is the property std::function would have cost.
+[[nodiscard]] auto emit_cont_view(std::size_t m) -> std::string {
+    std::string params;
+    std::string args;
+    std::string types;
+    for (std::size_t i = 0; i < m; ++i) {
+        const std::string sep = i == 0 ? "" : ", ";
+        params += std::format("{}nc_int a{}", sep, i);
+        args += std::format("{}a{}", sep, i);
+        types += std::format("{}nc_int", sep);
+    }
+    const std::string comma = m == 0 ? "" : ", ";
+
+    std::string out;
+    out += std::format(
+        "// A non-owning view of a continuation taking {} output argument{}.\n", m,
+        m == 1 ? "" : "s");
+    out += "//\n";
+    out += "// Every continuation has the SAME type here, which is what lets a RECURSIVE\n";
+    out += "// predicate compile: a continuation type carried as a template parameter would ask\n";
+    out += "// for a fresh instantiation at each level of the enumeration and never terminate.\n";
+    out += "// The view is a pointer to the callable and a pointer to a function that invokes\n";
+    out += "// it -- no allocation, and so nothing that can throw.\n";
+    out += std::format("class nc_cont_{} {{\n", m);
+    out += " public:\n";
+    out += "    template <typename F>\n";
+    out += std::format(
+        "        requires(!std::is_same_v<std::remove_cvref_t<F>, nc_cont_{}>)\n", m);
+    out += std::format("    explicit nc_cont_{}(F& f) noexcept\n", m);
+    out += "        : obj_(static_cast<void*>(std::addressof(f))),\n";
+    out += std::format(
+        "          call_([](void* o{}{}) -> bool {{ return (*static_cast<F*>(o))({}); }}) {{}}\n",
+        comma, params, args);
+    out += std::format(
+        "    [[nodiscard]] auto operator()({}) const -> bool {{ return call_(obj_{}{}); }}\n",
+        params, comma, args);
+    out += "\n private:\n";
+    out += "    void* obj_;\n";
+    out += std::format("    bool (*call_)(void*{}{});\n", comma, types);
+    out += "};\n\n";
+    return out;
+}
+
 // Emits the goals of one clause from `pos` onward, with the remainder of the clause nested
 // inside any call's continuation. `on_success` is the statement that reports a solution.
 [[nodiscard]] auto emit_cps_goals(const CompileCtx& ctx, const PredicateSignature& sig,
@@ -1117,7 +1337,8 @@ struct CompileCtx {
                               .indent = indent,
                               .fail_stmt = fail,
                               .temp_counter = &temp,
-                              .device = ctx.device};
+                              .device = ctx.device,
+                              .width = ctx.width};
 
     if (g.functor == "is" && g.args.size() == 2 && is_var(g.args[0])) {
         auto value = emit_expr(emitter, g.args[1]);
@@ -1192,9 +1413,14 @@ struct CompileCtx {
         return rest;
     }
     call_args += call_args.empty() ? "" : ", ";
-    body += std::format("{}return {}({}[&]({}) -> bool {{\n{}{}}});\n", indent,
-                        mangle(g.functor, g.args.size()), call_args, lambda_params, *rest,
-                        indent);
+    // The continuation is NAMED and then wrapped in the view, rather than passed as a
+    // temporary lambda: the view is non-owning, so it needs an lvalue to point at, and the
+    // named object outlives the call it is handed to.
+    const std::string lam = std::format("nc_k{}", temp++);
+    body += std::format("{}auto {} = [&]({}) -> bool {{\n{}{}}};\n", indent, lam,
+                        lambda_params, *rest, indent);
+    body += std::format("{}return {}_cps({}nc_cont_{}{{{}}});\n", indent,
+                        mangle(g.functor, g.args.size()), call_args, output_count(*callee), lam);
     return body;
 }
 
@@ -1213,13 +1439,8 @@ struct CompileCtx {
     }
 
     std::string out;
-    out += std::format(
-        "// {}/{} in continuation-passing form. `k` is called once per solution with the output\n"
-        "// arguments; returning false from it stops the enumeration, and that answer travels\n"
-        "// back out unchanged. The function itself returns whether the enumeration COMPLETED.\n",
-        def.name, def.arity);
-    out += std::format("template <class K>\n[[nodiscard]] auto {}({}K&& k) -> bool {{\n", fn,
-                       params);
+    out += std::format("[[nodiscard]] inline auto {}_cps({}nc_cont_{} k) -> bool {{\n", fn,
+                       params, output_count(sig));
     out += "    bool nc_cut = false;\n";
 
     std::uint32_t temp = 0;
@@ -1304,7 +1525,35 @@ struct CompileCtx {
         out += "    }()) { return false; }\n";
         out += "    if (nc_cut) { return true; }\n";
     }
-    out += "    return true;\n}\n";
+    out += "    return true;\n}\n\n";
+
+    // The public entry stays a template, so a caller hands it a lambda and nothing about the
+    // erasure shows. It names the callable and takes a view of it; the view never outlives this
+    // frame, and this frame encloses the whole enumeration.
+    std::string arg_names;
+    std::string k_params;
+    std::string k_args;
+    for (std::size_t i = 0; i < sig.arity(); ++i) {
+        if (sig.modes[i] == ArgMode::input) {
+            arg_names += std::format("a{}, ", i);
+            continue;
+        }
+        const std::string sep = k_params.empty() ? "" : ", ";
+        k_params += std::format("{}nc_int v{}", sep, i);
+        k_args += std::format("{}v{}", sep, i);
+    }
+    out += std::format(
+        "// {}/{} in continuation-passing form. `k` is called once per solution with the "
+        "output\n"
+        "// arguments; returning false from it stops the enumeration, and that answer travels\n"
+        "// back out unchanged. The function itself returns whether the enumeration COMPLETED.\n",
+        def.name, def.arity);
+    out += std::format("template <class K>\n[[nodiscard]] auto {}({}K&& k) -> bool {{\n", fn,
+                       params);
+    out += std::format("    auto nc_entry = [&]({}) -> bool {{ return k({}); }};\n", k_params,
+                       k_args);
+    out += std::format("    return {}_cps({}nc_cont_{}{{nc_entry}});\n}}\n", fn, arg_names,
+                       output_count(sig));
     return out;
 }
 
@@ -1334,42 +1583,50 @@ struct CompileCtx {
         ctx.order.push_back(key);
 
         for (const Clause& c : def.clauses) {
+            // What is bound, walked LEFT TO RIGHT and carried forward. Prolog binds as it goes,
+            // so the set has to grow as the body is read.
+            //
+            // A CALL BINDS ITS OUTPUTS, and for a long time this loop did not say so: it seeded
+            // the set from the head's inputs and from earlier `is/2` goals only. A clause with
+            // two calls in it -- `outer(X, Z) :- inner(X, T), mid(T, Z).`, which is ordinary
+            // Prolog -- therefore read T as UNBOUND at the second call, inferred `mid` to have
+            // two outputs, and then refused the program because mid's own clause never binds
+            // its first argument. The refusal named the symptom and not the cause, and the
+            // shape it rejected is the shape any pipeline of predicates has.
+            std::set<std::string> known;
+            const auto note_var = [&known](const Term& t) {
+                if (is_var(t)) {
+                    known.insert(mangle_var(VarKey{.name = var_of(t).name,
+                                                   .generation = var_of(t).generation}));
+                }
+            };
+            if (is_compound(c.head)) {
+                const auto& hargs = compound_of(c.head).args;
+                const PredicateSignature* hs = signature_of(ctx, sig.name, sig.arity());
+                for (std::size_t i = 0; i < hargs.size() && hs != nullptr; ++i) {
+                    if (hs->modes[i] == ArgMode::input) {
+                        note_var(hargs[i]);
+                    }
+                }
+            }
+
             for (const Term& goal : c.body) {
                 if (!is_compound(goal)) {
                     continue;
                 }
                 const CompoundNode& g = compound_of(goal);
-                if (g.functor == "is" || comparison_op(g.functor)) {
+                if (g.functor == "is") {
+                    note_var(g.args[0]);
+                    continue;
+                }
+                if (comparison_op(g.functor)) {
                     continue;
                 }
                 if (!allow_calls) {
                     return make_error<void>(MathError::not_implemented);
                 }
-                // Modes at the call site: the head's input variables plus anything already
-                // computed are inputs; a variable first seen here is an output.
-                std::set<std::string> known;
-                if (is_compound(c.head)) {
-                    const auto& hargs = compound_of(c.head).args;
-                    const PredicateSignature* hs = signature_of(ctx, sig.name, sig.arity());
-                    for (std::size_t i = 0; i < hargs.size() && hs != nullptr; ++i) {
-                        if (hs->modes[i] == ArgMode::input && is_var(hargs[i])) {
-                            known.insert(mangle_var(
-                                VarKey{.name = var_of(hargs[i]).name,
-                                       .generation = var_of(hargs[i]).generation}));
-                        }
-                    }
-                }
-                for (const Term& earlier : c.body) {
-                    if (&earlier == &goal) {
-                        break;
-                    }
-                    if (is_compound(earlier) && compound_of(earlier).functor == "is" &&
-                        is_var(compound_of(earlier).args[0])) {
-                        const auto& v = var_of(compound_of(earlier).args[0]);
-                        known.insert(
-                            mangle_var(VarKey{.name = v.name, .generation = v.generation}));
-                    }
-                }
+                // Modes at the call site: anything already bound is an input, a variable first
+                // seen here is an output.
                 PredicateSignature callee{.name = g.functor, .modes = {}};
                 for (const Term& a : g.args) {
                     const bool is_out =
@@ -1377,6 +1634,25 @@ struct CompileCtx {
                         !known.contains(mangle_var(VarKey{.name = var_of(a).name,
                                                           .generation = var_of(a).generation}));
                     callee.modes.push_back(is_out ? ArgMode::output : ArgMode::input);
+                }
+                // THE SAME VARIABLE MAY NOT COME BACK FROM TWO OUTPUT POSITIONS. In Prolog
+                // `top(Z) :- pair(Z, Z).` asks that pair's two answers UNIFY, and fails when
+                // they differ. This compiler has no unification to express that: it would emit
+                // `p_pair_2(v_Z, v_Z)`, let the second write win, and report success -- a
+                // plausible-looking wrong answer, which Rule 32 forbids. The head already
+                // refuses the same shape; the call site now does too.
+                std::set<std::string> written;
+                for (std::size_t i = 0; i < g.args.size(); ++i) {
+                    if (callee.modes[i] != ArgMode::output) {
+                        continue;
+                    }
+                    const std::string v = mangle_var(
+                        VarKey{.name = var_of(g.args[i]).name,
+                               .generation = var_of(g.args[i]).generation});
+                    if (!written.insert(v).second) {
+                        return make_error<void>(MathError::domain_error);
+                    }
+                    note_var(g.args[i]);
                 }
                 queue.push_back(std::move(callee));
             }
@@ -1718,6 +1994,13 @@ auto compile(const Program& program, const PredicateSignature& entry,
         // BigInt allocates a std::vector per operation; device code cannot allocate.
         return make_error<std::string>(MathError::not_implemented);
     }
+    if (options.width == Width::decimal128 &&
+        (options.decimal_scale < 0 || options.decimal_scale > 18)) {
+        // 10^scale has to be a value the arithmetic can hold and still leave room to compute
+        // in. Eighteen digits keeps it inside 64 bits, which is where every currency's minor
+        // unit and every rate convention this is likely to meet already lives.
+        return make_error<std::string>(MathError::domain_error);
+    }
     if (options.style == Style::continuation && target != Target::cpp) {
         // A CPS predicate is a template taking an arbitrary callable, and its continuations
         // nest to the depth of the conjunction. Neither a CUDA device function nor a Triton
@@ -1749,6 +2032,7 @@ auto compile(const Program& program, const PredicateSignature& entry,
     // except for a recursive predicate, which needs one for itself.
     std::string decls;
     std::string defs;
+    std::set<std::size_t> cont_arities;
     const bool cps = options.style == Style::continuation;
     for (auto it = ctx.order.rbegin(); it != ctx.order.rend(); ++it) {
         const PredicateSignature& sig = ctx.signatures.at(*it);
@@ -1766,6 +2050,9 @@ auto compile(const Program& program, const PredicateSignature& entry,
                     params += std::format("nc_int a{}, ", i);
                 }
             }
+            cont_arities.insert(output_count(sig));
+            decls += std::format("[[nodiscard]] inline auto {}_cps({}nc_cont_{} k) -> bool;\n",
+                                 mangle(sig.name, sig.arity()), params, output_count(sig));
             decls += std::format("template <class K>\n[[nodiscard]] auto {}({}K&& k) -> bool;\n",
                                  mangle(sig.name, sig.arity()), params);
             defs += *body;
@@ -1844,8 +2131,12 @@ auto compile(const Program& program, const PredicateSignature& entry,
             out += "#include \"simd_batch.inc\"\n\n";
         }
     }
-    out += checked_preamble(ctx.device, options.width);
+    out += checked_preamble(ctx.device, options.width, options.decimal_scale);
     out += '\n';
+    // The continuation views come before the declarations that name them.
+    for (const std::size_t m : cont_arities) {
+        out += emit_cont_view(m);
+    }
     out += decls;
     out += '\n';
     out += defs;

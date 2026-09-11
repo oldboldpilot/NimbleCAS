@@ -580,15 +580,27 @@ auto main() -> int {
                   t.expect(src->contains("template <class K>\n[[nodiscard]] auto p_between_3(nc_int a0, nc_int a1, K&& k) -> bool;"),
                            "forward declaration is templated on continuation callable K");
                   t.expect(src->contains("template <class K>\n[[nodiscard]] auto p_between_3(nc_int a0, nc_int a1, K&& k) -> bool {"),
-                           "predicate definition takes continuation argument k");
+                           "the public entry stays templated on the caller's callable");
                   t.expect(src->contains("return k(v_Low);"),
                            "base clause invokes continuation with solution value v_Low");
                   t.expect(src->contains("return k(v_Out);"),
                            "recursive clause invokes continuation with solution value v_Out");
-                  t.expect(src->contains("return p_between_3("),
-                           "recursive call passes trailing lambda continuation");
                   t.expect(src->contains("[&](nc_int v_Out) -> bool"),
                            "continuation closure binds returned argument and chains the rest of the clause");
+
+                  // THE RECURSIVE CALL MUST NOT BE A TEMPLATE INSTANTIATION. It used to be, and
+                  // every level of the enumeration handed itself a fresh lambda type, so each
+                  // instantiation demanded another and the compiler never finished -- between/3,
+                  // the predicate continuation passing exists for, could not be built at all.
+                  // The erased view gives every continuation one type, so there is one body.
+                  t.expect(src->contains("class nc_cont_1 {"),
+                           "a continuation view with a single output argument is emitted");
+                  t.expect(src->contains("return p_between_3_cps(v_Next, v_High, nc_cont_1{"),
+                           "the recursive call goes through the erased view, not a new instantiation");
+                  t.expect(src->contains("[[nodiscard]] inline auto p_between_3_cps(nc_int a0, nc_int a1, nc_cont_1 k) -> bool {"),
+                           "the body that recurses is an ordinary function, so it instantiates once");
+                  t.expect(!src->contains("std::function"),
+                           "the view allocates nothing, so nothing in the emitted code can throw");
               })
         .test("continuation_passing_style_handles_cut_to_prune_subsequent_clauses",
               [](TestContext& t) {
@@ -1006,6 +1018,181 @@ auto main() -> int {
                   auto res_cbig = compile(p, sig, cuda_big);
                   t.expect(!res_cbig.has_value() && res_cbig.error() == MathError::not_implemented,
                            "CUDA refuses arbitrary precision BigInt as not_implemented");
+              })
+        .test("decimal128_emits_a_scaled_fixed_point_type_that_is_exact_or_refuses",
+              [](TestContext& t) {
+                  // Money at a fixed scale. A value is an integer count of minor units, so the
+                  // arithmetic is integer arithmetic plus a rescale on multiply and divide --
+                  // and the rescale is exact or the operation reports that it is not.
+                  const Program p = prog("price(A, B, C) :- C is A * B.\n");
+                  const PredicateSignature sig{
+                      .name = "price",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  CompileOptions opts;
+                  opts.width = Width::decimal128;
+                  opts.decimal_scale = 2;
+
+                  auto src = compile(p, sig, opts);
+                  t.expect(src.has_value(), "compilation at decimal128 succeeds");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->contains("using nc_int = __int128;"),
+                           "the representation is 128 bits wide");
+                  t.expect(src->contains("inline constexpr std::int32_t nc_scale_digits = 2;"),
+                           "the scale is stated in the generated file, not left to the caller");
+                  t.expect(src->contains("inline constexpr nc_int nc_scale_v = "
+                                         "static_cast<nc_int>(100LL);"),
+                           "and carried as the power of ten the arithmetic divides by");
+                  t.expect(src->contains("if (prod % nc_scale_v != 0) { return std::nullopt; }"),
+                           "a product the scale cannot hold exactly is refused, not rounded");
+                  t.expect(src->contains("nc_to_string"),
+                           "a scaled integer can be rendered as the decimal it means");
+
+                  // The scale must reach the output: a different request is a different file.
+                  CompileOptions four;
+                  four.width = Width::decimal128;
+                  four.decimal_scale = 4;
+                  auto wider = compile(p, sig, four);
+                  t.expect(wider.has_value() &&
+                               wider->contains("static_cast<nc_int>(10000LL)"),
+                           "a scale of four divides by ten thousand");
+
+                  t.expect(to_string_view(Width::decimal128) == "decimal128",
+                           "Width::decimal128 names itself");
+              })
+        .test("decimal128_refuses_mod_rem_an_out_of_range_scale_and_triton",
+              [](TestContext& t) {
+                  // `mod` and `rem` have no scale-independent meaning: the remainder of one
+                  // amount divided by another differs depending on whether the quotient is an
+                  // integer count or a decimal. Refusing is the honest answer; choosing one
+                  // silently is the plausible-looking wrong one.
+                  const Program modp = prog("leftover(A, B, R) :- R is A mod B.\n");
+                  const PredicateSignature msig{
+                      .name = "leftover",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  CompileOptions dec;
+                  dec.width = Width::decimal128;
+                  auto refused = compile(modp, msig, dec);
+                  t.expect(!refused.has_value() &&
+                               refused.error() == MathError::not_implemented,
+                           "mod is refused at a decimal width");
+                  t.expect(compile(modp, msig, CompileOptions{}).has_value(),
+                           "and still compiles at the integer width, where it means something");
+
+                  const Program p = prog("price(A, B, C) :- C is A * B.\n");
+                  const PredicateSignature sig{
+                      .name = "price",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  CompileOptions too_wide;
+                  too_wide.width = Width::decimal128;
+                  too_wide.decimal_scale = 19;
+                  auto wide = compile(p, sig, too_wide);
+                  t.expect(!wide.has_value() && wide.error() == MathError::domain_error,
+                           "a scale past eighteen digits is refused as a domain error");
+
+                  CompileOptions negative;
+                  negative.width = Width::decimal128;
+                  negative.decimal_scale = -1;
+                  t.expect(!compile(p, sig, negative).has_value(),
+                           "and so is a negative one");
+
+                  CompileOptions tri;
+                  tri.target = Target::triton;
+                  tri.width = Width::decimal128;
+                  auto refused_triton = compile(p, sig, tri);
+                  t.expect(!refused_triton.has_value() &&
+                               refused_triton.error() == MathError::not_implemented,
+                           "Triton refuses a decimal, whose lattice stops at tl.int64");
+
+                  CompileOptions cuda;
+                  cuda.target = Target::cuda;
+                  cuda.width = Width::decimal128;
+                  t.expect(compile(p, sig, cuda).has_value(),
+                           "CUDA accepts one, because __int128 is synthesised there");
+              })
+        .test("a_clause_may_chain_two_predicate_calls",
+              [](TestContext& t) {
+                  // A VARIABLE BOUND BY A CALL IS BOUND. Mode inference used to seed its known
+                  // set from the head's inputs and from earlier is/2 goals only, so the second
+                  // call in a clause read its input as unbound, inferred the callee to have two
+                  // outputs, and refused the program -- naming the symptom, an output no clause
+                  // binds, rather than the cause. Any pipeline of predicates has this shape.
+                  const Program p = prog(
+                      "inner(X, Y) :- Y is X + 1.\n"
+                      "outer_p(X, Y) :- Y is X * 2.\n"
+                      "chain(X, Z) :- inner(X, T), outer_p(T, Z).\n");
+                  const PredicateSignature sig{
+                      .name = "chain",
+                      .modes = {ArgMode::input, ArgMode::output},
+                  };
+                  auto src = compile(p, sig, CompileOptions{});
+                  t.expect(src.has_value(), "a clause with two calls in it compiles");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(src->contains("p_inner_2") && src->contains("p_outer_p_2"),
+                           "and both callees are emitted");
+
+                  // Distinct anonymous variables stay distinct. Each `_` carries its own
+                  // generation, so noting one as bound cannot make the next read as an input.
+                  const Program anon = prog(
+                      "two(A, B) :- A is 1, B is 2.\n"
+                      "useit(X) :- two(_, T), two(_, U), X is T + U.\n");
+                  const PredicateSignature asig{.name = "useit", .modes = {ArgMode::output}};
+                  t.expect(compile(anon, asig, CompileOptions{}).has_value(),
+                           "two anonymous variables in one clause still compile");
+              })
+        .test("a_call_may_not_bind_the_same_variable_in_two_output_positions",
+              [](TestContext& t) {
+                  // `top(Z) :- pair(Z, Z).` asks in Prolog that pair's two answers UNIFY, and
+                  // fails when they differ. This compiler has no unification to express that:
+                  // it would emit `p_pair_2(v_Z, v_Z)`, let the second write win and report
+                  // success. That is the plausible-looking wrong answer Rule 32 forbids, so the
+                  // shape is refused -- as the same shape already is in a head.
+                  const Program p = prog(
+                      "pair(A, B) :- A is 1, B is 2.\n"
+                      "top(Z) :- pair(Z, Z).\n");
+                  const PredicateSignature sig{.name = "top", .modes = {ArgMode::output}};
+                  auto refused = compile(p, sig, CompileOptions{});
+                  t.expect(!refused.has_value() && refused.error() == MathError::domain_error,
+                           "a call binding one variable twice is refused as a domain error");
+
+                  // The same variable in two INPUT positions is fine: nothing is being unified,
+                  // the callee simply receives the value twice.
+                  const Program inputs = prog(
+                      "sum(A, B, C) :- C is A + B.\n"
+                      "twice(X, Y) :- sum(X, X, Y).\n");
+                  const PredicateSignature isig{
+                      .name = "twice",
+                      .modes = {ArgMode::input, ArgMode::output},
+                  };
+                  t.expect(compile(inputs, isig, CompileOptions{}).has_value(),
+                           "the same variable in two input positions still compiles");
+              })
+        .test("decimal_rendering_does_not_negate_the_most_negative_value",
+              [](TestContext& t) {
+                  // `-v` on the most negative 128-bit value overflows a signed integer, which is
+                  // undefined behaviour. The magnitude has to be taken in the unsigned type.
+                  const Program p = prog("price(A, B, C) :- C is A * B.\n");
+                  const PredicateSignature sig{
+                      .name = "price",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  CompileOptions opts;
+                  opts.width = Width::decimal128;
+                  auto src = compile(p, sig, opts);
+                  t.expect(src.has_value(), "the decimal width compiles");
+                  if (!src.has_value()) {
+                      return;
+                  }
+                  t.expect(!src->contains("static_cast<unsigned __int128>(negative ? -v : v)"),
+                           "the signed value is not negated before the cast");
+                  t.expect(src->contains("const auto unsigned_v = static_cast<unsigned __int128>(v);"),
+                           "the cast happens first, and the negation is the unsigned one");
               })
         .test("compile_refuses_cps_style_on_non_cpp_targets",
               [](TestContext& t) {
