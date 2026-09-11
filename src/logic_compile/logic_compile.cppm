@@ -1418,7 +1418,7 @@ struct TritonEmitter {
 [[nodiscard]] auto emit_triton_expr(const TritonEmitter& e, const Term& t)
     -> Result<TritonValue> {
     if (is_int(t)) {
-        return TritonValue{.expr = std::format("tl.full(shape, {}, tl.int64)", int_of(t).value),
+        return TritonValue{.expr = std::format("tl.full((BLOCK,), {}, tl.int64)", int_of(t).value),
                            .ok = ""};
     }
     if (is_var(t)) {
@@ -1484,7 +1484,7 @@ struct TritonEmitter {
         *e.body += std::format("    {} = {} * {}\n", n, lhs->expr, rhs->expr);
     } else if (c.functor == "min" || c.functor == "max") {
         const std::string cmp = c.functor == "min" ? "<" : ">";
-        *e.body += std::format("    {}_ok = tl.full(shape, 1, tl.int1)\n", n);
+        *e.body += std::format("    {}_ok = tl.full((BLOCK,), 1, tl.int1)\n", n);
         *e.body += std::format("    {} = tl.where({} {} {}, {}, {})\n", n, lhs->expr, cmp,
                                rhs->expr, lhs->expr, rhs->expr);
     } else if (c.functor == "//" || c.functor == "mod" || c.functor == "rem" ||
@@ -1604,7 +1604,7 @@ struct TritonEmitter {
         }
 
         if (guard.empty()) {
-            guard = "tl.full(shape, 1, tl.int1)";
+            guard = "tl.full((BLOCK,), 1, tl.int1)";
         }
         body += std::format("    g{} = {} & ~done\n", ci, guard);
         for (std::size_t i = 0; i < head_args.size(); ++i) {
@@ -1645,7 +1645,7 @@ struct TritonEmitter {
         if (sig.modes[i] == ArgMode::input) {
             loads += std::format("    a{} = tl.load(a{}_ptr + offs, mask=m, other=0)\n", i, i);
         } else {
-            loads += std::format("    a{} = tl.zeros(shape, dtype=tl.int64)\n", i);
+            loads += std::format("    a{} = tl.zeros((BLOCK,), dtype=tl.int64)\n", i);
             stores += std::format("    tl.store(a{}_ptr + offs, a{}, mask=m)\n", i, i);
         }
     }
@@ -1664,16 +1664,21 @@ struct TritonEmitter {
     out += "import triton\n";
     out += "import triton.language as tl\n";
     out += '\n';
-    out += "INT64_MAX = 9223372036854775807\n";
-    out += "INT64_MIN = -9223372036854775808\n";
+    // tl.constexpr, not a plain module global: a @triton.jit function refuses to read a
+    // global that is not one, so writing these as bare Python integers leaves a kernel
+    // that cannot be compiled at all.
+    out += "INT64_MAX = tl.constexpr(9223372036854775807)\n";
+    out += "INT64_MIN = tl.constexpr(-9223372036854775808)\n";
     out += '\n';
     out += "@triton.jit\n";
     out += std::format("def {}_kernel({}ok_ptr, n, BLOCK: tl.constexpr):\n", fn, ptr_params);
     out += "    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n";
     out += "    m = offs < n\n";
-    out += "    shape = offs.shape\n";
+    // The block shape is written out as `(BLOCK,)` at every use rather than bound to a
+    // local. Triton needs a tensor shape to be a tuple of compile-time integers, and a
+    // shape read off another tensor does not stay one once it is stored in a variable.
     out += loads;
-    out += "    done = tl.zeros(shape, dtype=tl.int1)\n";
+    out += "    done = tl.zeros((BLOCK,), dtype=tl.int1)\n";
     out += clauses_src;
     out += stores;
     out += "    tl.store(ok_ptr + offs, done.to(tl.int8), mask=m)\n";

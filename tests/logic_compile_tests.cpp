@@ -396,10 +396,24 @@ auto main() -> int {
 
                   t.expect(src->contains("import triton\nimport triton.language as tl\n"),
                            "triton and triton.language modules are imported");
-                  t.expect(src->contains("INT64_MAX = 9223372036854775807"),
-                           "INT64_MAX constant boundary is defined for overflow checks");
-                  t.expect(src->contains("INT64_MIN = -9223372036854775808"),
-                           "INT64_MIN constant boundary is defined for overflow checks");
+                  // The bounds must be tl.constexpr. A @triton.jit function cannot read a
+                  // module global that is not one, so the bare-integer form this assertion
+                  // used to pin made every emitted kernel refuse to compile.
+                  t.expect(src->contains("INT64_MAX = tl.constexpr(9223372036854775807)"),
+                           "INT64_MAX boundary is a tl.constexpr a jitted kernel can read");
+                  t.expect(src->contains("INT64_MIN = tl.constexpr(-9223372036854775808)"),
+                           "INT64_MIN boundary is a tl.constexpr a jitted kernel can read");
+                  // And the tile shape must be a tuple of compile-time integers. Reading it
+                  // off another tensor does not survive being stored in a variable.
+                  //
+                  // The constructs are named exactly rather than banning the word `.shape`
+                  // outright: a blanket ban is the assertion that matches its own explanatory
+                  // comment the moment someone writes one. What actually keeps this honest is
+                  // scripts/verify-generated.sh, which puts the kernel through the JIT.
+                  t.expect(!src->contains("tl.zeros(shape") && !src->contains("tl.full(shape"),
+                           "no tensor is sized from a shape bound to a variable");
+                  t.expect(src->contains("tl.zeros((BLOCK,), dtype=tl.int1)"),
+                           "the tile shape is written literally as (BLOCK,)");
                   t.expect(src->contains("@triton.jit"),
                            "kernel function is decorated with @triton.jit");
                   t.expect(src->contains("def p_eval_poly_2_kernel(a0_ptr, a1_ptr, ok_ptr, n, BLOCK: tl.constexpr):"),

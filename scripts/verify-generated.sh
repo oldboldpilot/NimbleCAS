@@ -149,8 +149,20 @@ compile_cu() {
 }
 
 # $1 label, $2 generated file
-check_python() {
-    local label="$1" gen="$2"
+# A Triton emission gets the same treatment as the others where the machine can give it: the
+# kernel goes through the Triton JIT and a driver checks the ANSWER against a reference.
+#
+# A parse is nowhere near enough, and this is not a hypothetical. `shape = offs.shape` parses,
+# and so does `INT64_MAX = 9223372036854775807` at module scope -- and each on its own makes
+# Triton refuse the kernel outright, the first because a tensor shape has to be a tuple of
+# compile-time integers and the second because a @triton.jit function cannot read a global that
+# is not a tl.constexpr. Both were in the logic_compile Triton target, which therefore reached
+# this script never once having compiled.
+#
+# Where there is no Triton or no CUDA device the parse still runs, announced as the weaker
+# check it is rather than as a pass for something that was not tested.
+check_triton() {
+    local label="$1" gen="$2" driver="$3"
     if [[ -z "${PY}" ]]; then
         printf '  [SKIP] %s: no python3\n' "${label}"
         return 0
@@ -161,7 +173,19 @@ check_python() {
         sed -n '1,10p' "${WORK}/py.log"
         return 1
     fi
-    pass "${label}: parses as Python"
+    if [[ -z "${TRITON_PY}" ]]; then
+        # A SKIP, not a pass. The parse succeeded, but the parse is not the check, and
+        # counting it as one is how a kernel that cannot compile gets a clean report.
+        printf '  [SKIP] %s: parses as Python; no Triton with a CUDA device to compile it\n' \
+            "${label}"
+        return 0
+    fi
+    if ! "${TRITON_PY}" "${driver}" > "${WORK}/tri.log" 2>&1; then
+        fail "${label}: did not compile through Triton and run"
+        tail -n 25 "${WORK}/tri.log"
+        return 1
+    fi
+    pass "${label}: compiles through Triton and agrees with the reference"
 }
 
 # The newest nvcc that can actually target this GPU, chosen the same way scripts/build.sh does:
@@ -180,6 +204,20 @@ done < <({ ls -d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V -r; \
 [[ -n "${NVCC}" ]] && echo "verify-generated: ${NVCC}"
 
 PY="$(command -v python3 2>/dev/null || true)"
+
+# Compiling a Triton kernel needs Triton, and running one needs a device. Both, or the emitted
+# kernels fall back to a parse.
+TRITON_PY=""
+if [[ -n "${PY}" ]] && "${PY}" - <<'PROBE' >/dev/null 2>&1
+import sys
+import torch
+import triton  # noqa: F401
+sys.exit(0 if torch.cuda.is_available() else 1)
+PROBE
+then
+    TRITON_PY="${PY}"
+    echo "verify-generated: triton $("${PY}" -c 'import triton; print(triton.__version__)')"
+fi
 
 # ---------------------------------------------------------------------------
 # The emitting tools.
@@ -242,6 +280,45 @@ for width in 64 128; do
         fail "logic_compile cuda/${width}: emission refused"
     fi
 done
+
+# Triton refuses recursion -- a kernel is a flat block of lanes with no call stack -- so fib/2
+# cannot reach this target at all, and examples/poly.pl is the straight-line arithmetic that can.
+# Without it the module's third target would have no coverage here, which is exactly how it came
+# to be shipped uncompilable.
+gen="${WORK}/poly_triton.py"
+if "${BUILD}/prolog_compile" "${REPO}/examples/poly.pl" eval_poly io triton 64 \
+        > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/poly_tri_driver.py" <<EOF
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import torch
+
+import poly_triton as k
+
+# The whole int32-ish neighbourhood of zero, including the negatives: the emitted overflow
+# predicates are the interesting part, and they are sign-dependent.
+N = 256
+x = torch.arange(N, dtype=torch.int64, device="cuda") - (N // 2)
+y = torch.zeros(N, dtype=torch.int64, device="cuda")
+ok = torch.zeros(N, dtype=torch.int8, device="cuda")
+k.p_eval_poly_2_kernel[(1,)](x, y, ok, N, BLOCK=N)
+
+for xi, yi, oki in zip(x.tolist(), y.tolist(), ok.tolist()):
+    want = xi * xi + 3 * xi + 5
+    if oki != 1:
+        print("eval_poly({}) reported failure on a total predicate".format(xi), file=sys.stderr)
+        raise SystemExit(1)
+    if yi != want:
+        print("eval_poly({}) = {}, expected {}".format(xi, yi, want), file=sys.stderr)
+        raise SystemExit(1)
+EOF
+    check_triton "logic_compile triton/64" "${gen}" "${WORK}/poly_tri_driver.py"
+else
+    fail "logic_compile triton/64: emission refused"
+fi
 
 # ---------------------------------------------------------------------------
 # nimblecas.sat_compile — a CNF formula.
@@ -346,13 +423,103 @@ for strategy in exhaustive walksat; do
     else
         fail "sat_compile cuda/${strategy}: emission refused"
     fi
-    gen="${WORK}/sat_${strategy}.py"
-    if "${BUILD}/sat_compile" "${WORK}/f.cnf" triton formula "${strategy}" > "${gen}" 2>/dev/null; then
-        check_python "sat_compile triton/${strategy}" "${gen}"
-    else
-        fail "sat_compile triton/${strategy}: emission refused"
-    fi
 done
+
+gen="${WORK}/sat_exhaustive.py"
+if ! "${BUILD}/sat_compile" "${WORK}/f.cnf" triton formula exhaustive > "${gen}" 2>/dev/null; then
+    fail "sat_compile triton/exhaustive: emission refused"
+elif [[ -z "${ANSWER}" ]]; then
+    fail "sat_compile triton/exhaustive: no reference assignment to check against"
+else
+    cat > "${WORK}/sat_ex_tri_driver.py" <<EOF
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import sat_exhaustive as k
+
+# The same number the C++ and CUDA emissions return, and the same number the reference solver
+# in the module printed: the smallest satisfying assignment, not merely a satisfying one.
+got = k.formula_solve()
+want = ${ANSWER}
+if got != want:
+    print("the Triton scan returned {}, the reference says {}".format(got, want), file=sys.stderr)
+    raise SystemExit(1)
+EOF
+    check_triton "sat_compile triton/exhaustive" "${gen}" "${WORK}/sat_ex_tri_driver.py"
+fi
+
+gen="${WORK}/sat_walksat.py"
+if "${BUILD}/sat_compile" "${WORK}/f.cnf" triton formula walksat > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/sat_walk_tri_driver.py" <<EOF
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import torch
+
+import sat_walksat as k
+
+# The oracle is the DIMACS file this script wrote, parsed here -- not the tables the emitter
+# produced, which are half of what is under test.
+clauses = []
+for line in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "f.cnf")):
+    line = line.strip()
+    if not line or line[0] in "cp%":
+        continue
+    lits = [int(tok) for tok in line.split() if int(tok) != 0]
+    if lits:
+        clauses.append(lits)
+
+
+def unsat_count(row):
+    return sum(
+        0 if any((lit > 0) == (row[abs(lit) - 1] == 1) for lit in c) else 1 for c in clauses
+    )
+
+
+# Every assignment of six variables, so the check is exhaustive rather than a sample: the
+# emitted kernel must agree with the formula on all 64 of them, and the emitted literal and
+# clause-start tables are the kernel's input, so they are under test too.
+rows = [[(a >> v) & 1 for v in range(k.NC_VARS)] for a in range(1 << k.NC_VARS)]
+assign = torch.tensor(rows, dtype=torch.int32, device="cuda")
+lits = torch.tensor(k.NC_formula_LITS, dtype=torch.int32, device="cuda")
+cstart = torch.tensor(k.NC_formula_CSTART, dtype=torch.int32, device="cuda")
+out = torch.zeros((len(rows),), dtype=torch.int32, device="cuda")
+k.formula_score_kernel[(len(rows),)](
+    assign, lits, cstart, out, len(rows), k.NC_VARS, k.NC_CLAUSES, BLOCK=16
+)
+
+scored = out.tolist()
+for row, got in zip(rows, scored):
+    want = unsat_count(row)
+    if got != want:
+        print(
+            "the scorer counted {} unsatisfied clauses under {}, the formula says {}".format(
+                got, row, want
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+if min(scored) != 0:
+    print("no assignment scored zero on a satisfiable formula", file=sys.stderr)
+    raise SystemExit(1)
+
+# And the emitted host helper, which is the entry a caller actually uses.
+best_assign, best_counts = k.formula_sample_and_score(n_samples=1024, seed=1)
+if int(best_counts[0].item()) != 0:
+    print("the sampler's best draw was not a model", file=sys.stderr)
+    raise SystemExit(1)
+if unsat_count(best_assign[0].tolist()) != 0:
+    print("the sampler called an assignment a model that is not one", file=sys.stderr)
+    raise SystemExit(1)
+EOF
+    check_triton "sat_compile triton/walksat" "${gen}" "${WORK}/sat_walk_tri_driver.py"
+else
+    fail "sat_compile triton/walksat: emission refused"
+fi
 
 # ---------------------------------------------------------------------------
 # nimblecas.csp_compile — n-queens.
@@ -424,10 +591,76 @@ for strategy in exhaustive minconflicts; do
     fi
 done
 
-if "${BUILD}/csp_compile" 6 triton ncq > "${WORK}/csp.py" 2>/dev/null; then
-    check_python "csp_compile triton" "${WORK}/csp.py"
-else
+if ! "${BUILD}/csp_compile" 6 triton ncq > "${WORK}/csp_triton.py" 2>/dev/null; then
     fail "csp_compile triton: emission refused"
+elif [[ -z "${FIRST}" ]]; then
+    fail "csp_compile triton: the reference search reported no solution to check against"
+else
+    cat > "${WORK}/csp_tri_driver.py" <<EOF
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import torch
+import triton
+
+import csp_triton as k
+
+N = k.ncq_NUM_VARS
+
+
+def is_solution(row):
+    """6-queens, stated from the problem rather than from the emitter's constraint list."""
+    for i in range(N):
+        for j in range(i + 1, N):
+            if row[i] == row[j] or abs(row[i] - row[j]) == j - i:
+                return False
+    return True
+
+
+# The whole 6**6 assignment space. The kernel counts VIOLATED CONSTRAINTS, and its all-different
+# constraint is one constraint rather than fifteen, so the counts are not comparable term by
+# term -- but a count of zero means a solution, and that set is comparable exactly.
+rows = []
+for a in range(N ** N):
+    row = []
+    rest = a
+    for _ in range(N):
+        row.append(rest % N)
+        rest //= N
+    rows.append(row)
+
+assign = torch.tensor(rows, dtype=torch.int64, device="cuda")
+conflicts = torch.zeros((len(rows),), dtype=torch.int64, device="cuda")
+BLOCK = 256
+k.ncq_conflict_kernel[(triton.cdiv(len(rows), BLOCK),)](
+    assign, conflicts, len(rows), BLOCK=BLOCK
+)
+
+scored = conflicts.tolist()
+kernel_says = {i for i, c in enumerate(scored) if c == 0}
+truth = {i for i, row in enumerate(rows) if is_solution(row)}
+if kernel_says != truth:
+    wrong = sorted(kernel_says ^ truth)[:5]
+    print(
+        "the scorer and the problem disagree on {} of {} assignments, e.g. {}".format(
+            len(kernel_says ^ truth), len(rows), [rows[i] for i in wrong]
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+if not truth:
+    print("6-queens has solutions; the check found none and so proves nothing", file=sys.stderr)
+    raise SystemExit(1)
+
+# And the solution the module's own reference search reported must score zero.
+reference = [$(echo "${FIRST}" | tr ' ' ',')]
+if rows.index(reference) not in kernel_says:
+    print("the scorer found conflicts in the reference solution", file=sys.stderr)
+    raise SystemExit(1)
+EOF
+    check_triton "csp_compile triton" "${WORK}/csp_triton.py" "${WORK}/csp_tri_driver.py"
 fi
 
 # ---------------------------------------------------------------------------

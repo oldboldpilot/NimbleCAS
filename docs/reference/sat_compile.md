@@ -198,9 +198,18 @@ program, and for a long time nothing ran a compiler over it -- which is how an e
 target that had never been compilable survived a green suite.
 
 `scripts/verify-generated.sh` closes that: it emits every variant, compiles each one
-(`clang++-23` with libc++ for C++, `nvcc` for CUDA, a Python parse for Triton) and RUNS the C++
-ones against the reference answer the emitting tool prints. It is not part of `ctest`, because it
-needs a toolchain a test binary has no business assuming. Run it after touching an emitter.
+(`clang++-23` with libc++ for C++, `nvcc` for CUDA, the Triton JIT for Triton) and RUNS every
+target it can -- the C++ emissions and the Triton kernels -- against the reference answer the
+emitting tool prints. It is not part of `ctest`, because it needs a toolchain a test binary has
+no business assuming. Run it after touching an emitter.
+
+A Triton kernel that parses as Python is not thereby a kernel: `shape = offs.shape` and a bare
+`INT64_MAX = 9223372036854775807` at module scope both parse, and each on its own makes the
+Triton compiler refuse the kernel -- a tensor shape must be a tuple of compile-time integers,
+and a `@triton.jit` function cannot read a global that is not a `tl.constexpr`. Both were in the
+emitted output until the script started compiling it. Where there is no Triton or no CUDA device
+the script falls back to the parse and says so, rather than reporting a pass for something it
+did not test.
 
 
 ## Worked examples
