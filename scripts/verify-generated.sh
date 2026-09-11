@@ -431,6 +431,167 @@ else
     fail "logic_compile triton/64: emission refused"
 fi
 
+# A CALL, which the Triton target does not refuse but INLINES: fee/3 is pasted into total/4 at
+# both of its call sites. Every way that can go wrong leaves a kernel that still compiles and
+# still answers -- two frames sharing the caller's variables, a callee's failure never reaching
+# the caller's guard, a frame's later clause overriding the earlier one that should have won.
+# Only running it against an oracle says which happened.
+gen="${WORK}/fee_triton.py"
+if "${BUILD}/prolog_compile" "${REPO}/examples/fee.pl" total iiio triton 64 \
+        > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/fee_tri_driver.py" <<'EOF'
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import torch
+
+import fee_triton as k
+
+INT64_MIN = -(2 ** 63)
+INT64_MAX = 2 ** 63 - 1
+
+amounts = [-8, 3, 50, 100, INT64_MAX, INT64_MIN]
+divisors = [-3, -1, 0, 1, 2, 7]
+rows = [(x, y, r) for x in amounts for y in amounts for r in divisors]
+N = 256
+assert len(rows) <= N
+rows += [(0, 0, 1)] * (N - len(rows))
+
+a = torch.tensor([r[0] for r in rows], dtype=torch.int64, device="cuda")
+b = torch.tensor([r[1] for r in rows], dtype=torch.int64, device="cuda")
+d = torch.tensor([r[2] for r in rows], dtype=torch.int64, device="cuda")
+tot = torch.zeros(N, dtype=torch.int64, device="cuda")
+ok = torch.zeros(N, dtype=torch.int8, device="cuda")
+k.p_total_4_kernel[(1,)](a, b, d, tot, ok, N, BLOCK=N)
+
+
+def fee(amount, divisor):
+    # Clause order, stated: the flat minimum comes first and the general clause does not
+    # exclude it, so a small amount pays 10 however the division would have come out.
+    if amount < 100:
+        return 10
+    if divisor == 0 or (amount == INT64_MIN and divisor == -1):
+        return None
+    quotient = abs(amount) // abs(divisor)      # Prolog // truncates toward zero
+    return quotient if (amount < 0) == (divisor < 0) else -quotient
+
+
+def reference(x, y, r):
+    first, second = fee(y, r), fee(x, r)
+    if first is None or second is None:
+        return None
+    total = first + second
+    return total if INT64_MIN <= total <= INT64_MAX else None
+
+
+for (x, y, r), ti, oki in zip(rows, tot.tolist(), ok.tolist()):
+    want = reference(x, y, r)
+    if want is None:
+        if oki != 0:
+            print(
+                "total({}, {}, {}) reported success where there is no answer".format(x, y, r),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        continue
+    if oki != 1:
+        print(
+            "total({}, {}, {}) reported failure, expected {}".format(x, y, r, want),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if ti != want:
+        print(
+            "total({}, {}, {}) = {}, expected {}".format(x, y, r, ti, want),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+EOF
+    check_triton "logic_compile triton/inlined call" "${gen}" "${WORK}/fee_tri_driver.py"
+else
+    fail "logic_compile triton/inlined call: emission refused"
+fi
+
+# THE FOUR INTEGER DIVISIONS, which is where a Triton kernel can be wrong and look right.
+# Triton's `//` and `%` truncate toward zero, as C does; Prolog's `//` and `rem` do too, but
+# its `div` and `mod` FLOOR, and lowering all four to the same two operators answered
+# -7 div 2 = -3 where every other target says -4. A string match cannot see that and neither
+# can the JIT: only the arithmetic, against an oracle that states each rounding rule.
+gen="${WORK}/divmod_triton.py"
+if "${BUILD}/prolog_compile" "${REPO}/examples/divmod.pl" divs iioooo triton 64 \
+        > "${gen}" 2>/dev/null; then
+    cat > "${WORK}/divmod_tri_driver.py" <<'EOF'
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import torch
+
+import divmod_triton as k
+
+INT64_MIN = -(2 ** 63)
+INT64_MAX = 2 ** 63 - 1
+
+vals = [-8, -7, -3, -1, 0, 1, 3, 7, 8, INT64_MIN, INT64_MAX]
+pairs = [(x, y) for x in vals for y in vals]
+N = 256
+assert len(pairs) <= N
+pairs += [(0, 1)] * (N - len(pairs))
+
+a = torch.tensor([p[0] for p in pairs], dtype=torch.int64, device="cuda")
+b = torch.tensor([p[1] for p in pairs], dtype=torch.int64, device="cuda")
+outs = [torch.zeros(N, dtype=torch.int64, device="cuda") for _ in range(4)]
+ok = torch.zeros(N, dtype=torch.int8, device="cuda")
+k.p_divs_6_kernel[(1,)](a, b, outs[0], outs[1], outs[2], outs[3], ok, N, BLOCK=N)
+
+
+def truncating_quotient(x, y):
+    # Stated rather than borrowed: Python's // floors, which is the rule under test, so using
+    # it to define the truncating quotient would make the oracle agree with whichever answer
+    # came back.
+    q = abs(x) // abs(y)
+    return q if (x < 0) == (y < 0) else -q
+
+
+def reference(x, y):
+    if y == 0 or (x == INT64_MIN and y == -1):
+        return None
+    quot = truncating_quotient(x, y)     # Prolog //
+    floor = x // y                       # Prolog div, and Python's own rounding
+    return (quot, floor, x - quot * y, x - floor * y)   # ... rem, mod
+
+
+names = ("//", "div", "rem", "mod")
+got = [o.tolist() for o in outs]
+for i, ((x, y), oki) in enumerate(zip(pairs, ok.tolist())):
+    want = reference(x, y)
+    if want is None:
+        if oki != 0:
+            print(
+                "divs({}, {}) reported success where there is no 64-bit answer".format(x, y),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        continue
+    if oki != 1:
+        print("divs({}, {}) reported failure, expected {}".format(x, y, want), file=sys.stderr)
+        raise SystemExit(1)
+    for j, name in enumerate(names):
+        if got[j][i] != want[j]:
+            print(
+                "{} {} {} = {}, expected {}".format(x, name, y, got[j][i], want[j]),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+EOF
+    check_triton "logic_compile triton/div, mod, rem" "${gen}" "${WORK}/divmod_tri_driver.py"
+else
+    fail "logic_compile triton/div, mod, rem: emission refused"
+fi
+
 # ---------------------------------------------------------------------------
 # nimblecas.logic_compile — the things fib/2 cannot reach: the width boundaries, the tail-call
 # rewrite, and continuation-passing emission.

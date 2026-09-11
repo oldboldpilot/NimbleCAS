@@ -198,12 +198,15 @@ The driver writes generated code to `stdout` and diagnostic messages to `stderr`
 ### Which example goes with which target
 
 `examples/fib.pl` and `examples/countdown.pl` are recursive, so they reach `cpp` and `cuda` but
-are refused by `triton`, which has no call stack. `examples/poly.pl` is the straight-line
-arithmetic the Triton target accepts:
+are refused by `triton`, which has no call stack to re-enter. A call that is not recursive needs
+no stack — the Triton target INLINES it — so `triton` takes any program whose call graph is
+acyclic. `examples/poly.pl` is the straight-line arithmetic; `examples/fee.pl` is the call:
 
 ```bash
 prolog_compile examples/fib.pl      fib       io   cpp    64      # or cuda
-prolog_compile examples/poly.pl     eval_poly io   triton 64      # Triton refuses recursion
+prolog_compile examples/poly.pl     eval_poly io   triton 64      # straight-line
+prolog_compile examples/fee.pl      total     iiio triton 64      # a call, inlined
+prolog_compile examples/divmod.pl   divs      iioooo triton 64    # the four divisions
 prolog_compile examples/countdown.pl count     iio  cpp    64      # a self tail call, as a loop
 prolog_compile examples/fact.pl     fact_acc  iio  cpp    128     # past 2^63 at 21!
 prolog_compile examples/between.pl  between   iio  cpp    64 cps  # nondeterministic
@@ -214,7 +217,9 @@ prolog_compile examples/money.pl    settle    iiio cpp    dec     # fixed-point 
 | :--- | :--- |
 | `fib.pl` | ordinary recursion, every target and width |
 | `countdown.pl` | a self tail call, which the compiler rewrites to a loop |
-| `poly.pl` | straight-line arithmetic — the only shape Triton accepts |
+| `poly.pl` | straight-line arithmetic, on every target |
+| `fee.pl` | a call to a multi-clause, partial predicate, which Triton inlines |
+| `divmod.pl` | `//`, `div`, `rem` and `mod`, which round two different ways |
 | `fact.pl` | the width boundaries: 20!/21! at 64 bits, 33!/34! at 128 |
 | `between.pl` | a nondeterministic predicate, for `Style::continuation` |
 | `money.pl` | `Width::decimal128`, including the refusals |
@@ -222,12 +227,39 @@ prolog_compile examples/money.pl    settle    iiio cpp    dec     # fixed-point 
 The Triton kernel takes one pointer per argument plus an `ok_ptr`, a length and a `BLOCK`
 constexpr, and reports per lane through `ok` whether the predicate succeeded there.
 
+### How a call survives having no call stack
+
+Each call site is expanded in place under a fresh `f<n>_` prefix: the callee's clauses are
+emitted with the caller's values as their inputs and the caller's variables as their outputs,
+and they pick a clause with their own `f<n>_done` mask exactly as the entry predicate does.
+The prefix is what keeps the frames apart — a caller and a callee may both write `X`, and a
+clause assigns its variables unconditionally because masking happens when outputs are selected,
+not when they are computed. Whether the call succeeded comes back as `f<n>_done`, which is
+conjoined into the calling clause's guard, so a lane whose call failed cannot be reported as a
+success. Inlining is duplication, so the number of call sites expanded is capped; past the cap
+the request is refused rather than turned into a kernel that will not finish compiling.
+
+Recursion is the one shape this cannot reach, and it stays a `not_implemented` — direct or
+mutual, since the check is for a CYCLE in the call graph and not for a predicate naming
+itself.
+
+### The four divisions on Triton
+
+Triton's `//` and `%` truncate toward zero, the way C does and the way Python does not. Prolog's
+`//` and `rem` truncate too, so those lower straight through; its `div` and `mod` **floor**, and
+the kernel emits the same correction the C++ and CUDA targets apply. The two roundings differ
+only when the signs differ and the division is not exact — `-7 div 2` is `-4`, and truncation
+says `-3` — which is a wrong answer no string match and no JIT pass can see.
+`examples/divmod.pl` is run against an oracle for it.
+
 ## Error model
 
 | Condition | Error |
 | :--- | :--- |
 | Non-integer types, floats, lists, compounds, or unsupported builtins | `MathError::not_implemented` |
-| Recursive calls or sub-predicate calls when target is `Target::triton` | `MathError::not_implemented` |
+| A cycle in the call graph — recursion, direct or mutual — when target is `Target::triton` | `MathError::not_implemented` |
+| More inlined call sites than `Target::triton` will expand (256) | `MathError::not_implemented` |
+| One predicate reached in two different mode patterns | `MathError::not_implemented` |
 | Any width other than `Width::bits64` requested for `Target::triton` | `MathError::not_implemented` |
 | `mod` or `rem` in a program compiled at `Width::decimal128` | `MathError::not_implemented` |
 | `decimal_scale` outside `0..18` at `Width::decimal128` | `MathError::domain_error` |

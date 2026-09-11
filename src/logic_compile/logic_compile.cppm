@@ -29,9 +29,16 @@
 // a database update, a non-integer constant — is refused with a MathError. It is NOT partially
 // compiled and it is NOT quietly handed back to the interpreter.
 //
-// Additionally, `Target::triton` refuses RECURSION and calls: a Triton kernel is a flat
-// elementwise program over a block of lanes, with no call stack to recurse on. Saying so is
-// better than emitting something that looks like a kernel and deadlocks.
+// A callee's modes are read off its CALL SITE, and one function is emitted per name and arity,
+// so a predicate reached in two different mode patterns — asked for an answer at one site and
+// asked to check one at another — is refused too. Compiling the second call as the first made
+// it overwrite a bound variable and report success.
+//
+// Additionally, `Target::triton` refuses RECURSION: a Triton kernel is a flat elementwise
+// program over a block of lanes, with no call stack to recurse on. A call to a non-recursive
+// predicate is a different matter -- it needs a stack only to be RE-ENTERED -- so those are
+// INLINED, and the target takes any program whose call graph is acyclic. Saying so is better
+// than emitting something that looks like a kernel and deadlocks.
 //
 // THE GENERATED CODE IS HELD TO THE SAME STANDARD AS THIS REPO'S OWN. Trailing return types,
 // `[[nodiscard]]`, no exceptions, no raw pointers — and, most importantly, Rule 32: the emitted
@@ -797,7 +804,6 @@ struct CompileCtx {
     std::map<std::string, PredicateSignature> signatures;  // key -> signature, in call order
     std::vector<std::string> order;                        // emission order, callees first
     bool device{};
-    bool allow_calls{true};
     bool tail_call_optimise{true};
     Width width{Width::bits64};
 };
@@ -1058,9 +1064,6 @@ struct CompileCtx {
         }
 
         // --- a call to another compiled predicate ---
-        if (!ctx.allow_calls) {
-            return make_error<std::string>(MathError::not_implemented);
-        }
         const PredicateSignature* callee = signature_of(ctx, g.functor, g.args.size());
         if (callee == nullptr) {
             return make_error<std::string>(MathError::not_implemented);
@@ -1563,7 +1566,7 @@ struct CompileCtx {
 // is the only place modes are inferred, and it is inferable because the caller's own modes
 // pin it down.
 [[nodiscard]] auto collect_predicates(const Program& program, const PredicateSignature& entry,
-                                      bool allow_calls, CompileCtx& ctx) -> Result<void> {
+                                      CompileCtx& ctx) -> Result<void> {
     std::vector<PredicateSignature> queue{entry};
     std::set<std::string> seen;
 
@@ -1572,6 +1575,22 @@ struct CompileCtx {
         queue.pop_back();
         const std::string key = predicate_key(sig.name, sig.arity());
         if (seen.contains(key)) {
+            // A PREDICATE CALLED IN TWO DIFFERENT MODES IS NOT ONE PREDICATE HERE. Modes are
+            // read off the call site and exactly one function is emitted per name and arity,
+            // so reaching `seven/1` first as an output and then as an input compiled the
+            // second call as the first:
+            //
+            //     seven(V) :- V is 7.
+            //     b(Z) :- T is 3, seven(T), Z is T.
+            //
+            // emitted a call that OVERWROTE T with 7 and answered Z = 7, where Prolog runs
+            // `7 is 7` against a bound T of 3 and FAILS. That is the plausible-looking wrong
+            // answer Rule 32 forbids, and it reached every target. Supporting the shape means
+            // emitting one version per mode pattern; until there is one, it is refused.
+            const auto previous = ctx.signatures.find(key);
+            if (previous != ctx.signatures.end() && previous->second.modes != sig.modes) {
+                return make_error<void>(MathError::not_implemented);
+            }
             continue;
         }
         seen.insert(key);
@@ -1621,9 +1640,6 @@ struct CompileCtx {
                 }
                 if (comparison_op(g.functor)) {
                     continue;
-                }
-                if (!allow_calls) {
-                    return make_error<void>(MathError::not_implemented);
                 }
                 // Modes at the call site: anything already bound is an input, a variable first
                 // seen here is an output.
@@ -1679,6 +1695,10 @@ struct TritonEmitter {
     std::string* body;
     const std::set<std::string>* bound;
     std::uint32_t* temp_counter;
+    // The inlined frame this expression belongs to. Every variable in the emitted kernel wears
+    // its frame's prefix, so an expression reading `X` in a callee must read the callee's `X`
+    // and not the caller's -- the two are different names and, in general, different values.
+    const std::string* prefix;
 };
 
 [[nodiscard]] auto tri_and(const std::string& a, const std::string& b) -> std::string {
@@ -1699,6 +1719,7 @@ struct TritonEmitter {
     }
     if (is_var(t)) {
         const std::string v =
+            *e.prefix +
             mangle_var(VarKey{.name = var_of(t).name, .generation = var_of(t).generation});
         if (!e.bound->contains(v)) {
             return make_error<TritonValue>(MathError::domain_error);
@@ -1773,10 +1794,29 @@ struct TritonEmitter {
             "    {}_ok = ({} != 0) & (({} != -9223372036854775808) | ({} != -1))\n", n,
             rhs->expr, lhs->expr, rhs->expr);
         const std::string safe = std::format("tl.where({} == 0, 1, {})", rhs->expr, rhs->expr);
-        if (c.functor == "//" || c.functor == "div") {
+        // Triton's `//` and `%` TRUNCATE toward zero, the way C does and the way Python does
+        // NOT: -7 // 2 is -3 here and -4 in Python. Truncation is exactly Prolog's `//` and
+        // `rem`, so those two are emitted directly. `div` and `mod` FLOOR, and lowering them
+        // to the same two operators quietly answered -7 div 2 = -3 where the interpreter, the
+        // C++ target and the CUDA target all say -4 -- a plausible-looking wrong value, and
+        // one that only appears when the signs differ and the division is not exact. The
+        // correction is the one those targets already apply, written as a mask.
+        if (c.functor == "//") {
             *e.body += std::format("    {} = {} // {}\n", n, lhs->expr, safe);
-        } else {
+        } else if (c.functor == "rem") {
             *e.body += std::format("    {} = {} % {}\n", n, lhs->expr, safe);
+        } else {
+            *e.body += std::format("    {}_r = {} % {}\n", n, lhs->expr, safe);
+            *e.body += std::format("    {}_adj = ({}_r != 0) & (({} < 0) != ({} < 0))\n", n, n,
+                                   lhs->expr, safe);
+            if (c.functor == "div") {
+                *e.body += std::format("    {}_q = {} // {}\n", n, lhs->expr, safe);
+                *e.body +=
+                    std::format("    {} = tl.where({}_adj, {}_q - 1, {}_q)\n", n, n, n, n);
+            } else {
+                *e.body += std::format("    {} = tl.where({}_adj, {}_r + {}, {}_r)\n", n, n, n,
+                                       safe, n);
+            }
         }
     } else {
         return make_error<TritonValue>(MathError::not_implemented);
@@ -1784,16 +1824,91 @@ struct TritonEmitter {
     return TritonValue{.expr = n, .ok = tri_and(both, std::format("{}_ok", n))};
 }
 
-[[nodiscard]] auto emit_triton(const Program& program, const PredicateSignature& sig)
-    -> Result<std::string> {
+// How many call sites one Triton kernel may INLINE. Inlining is duplication: a diamond in the
+// call graph expands the callee once per path, so the emitted kernel grows with the number of
+// call sites reached and not with the number of predicates written. A budget makes a
+// pathological program a refusal instead of a kernel nobody can wait for the JIT to finish.
+constexpr std::uint32_t triton_inline_budget = 256;
+
+// Whether the call graph reachable from `key` is ACYCLIC, which is what decides whether the
+// Triton target can take a program at all. A Triton kernel is a flat elementwise program over a
+// block of lanes and has no call stack, so a call is representable exactly when the callee's
+// body can be pasted into the caller. An acyclic graph can be pasted; a recursive one would
+// have to paste itself forever, and is refused rather than approximated to some depth --
+// truncating a recursion is the plausible-looking wrong answer Rule 32 forbids.
+[[nodiscard]] auto triton_calls_are_acyclic(const Program& program, const CompileCtx& ctx,
+                                            const std::string& key,
+                                            std::set<std::string>& on_path,
+                                            std::set<std::string>& settled) -> bool {
+    if (settled.contains(key)) {
+        return true;
+    }
+    if (!on_path.insert(key).second) {
+        return false;  // already being expanded on this path: a cycle
+    }
+    const auto it = ctx.signatures.find(key);
+    if (it != ctx.signatures.end()) {
+        const PredicateDef def = gather(program, it->second.name, it->second.arity());
+        for (const Clause& c : def.clauses) {
+            for (const Term& goal : c.body) {
+                if (!is_compound(goal)) {
+                    continue;
+                }
+                const CompoundNode& g = compound_of(goal);
+                // The same two shapes the emitter handles in place, tested the same way: a
+                // goal the emitter would INLINE has to be an edge here, or a cycle through it
+                // would reach emission and be expanded until the inline budget stopped it.
+                if (g.args.size() == 2 && (g.functor == "is" || comparison_op(g.functor))) {
+                    continue;
+                }
+                if (!triton_calls_are_acyclic(program, ctx,
+                                              predicate_key(g.functor, g.args.size()), on_path,
+                                              settled)) {
+                    return false;
+                }
+            }
+        }
+    }
+    on_path.erase(key);
+    settled.insert(key);
+    return true;
+}
+
+// The state one kernel body is accumulated into. `frame_counter` names each inlined call, and
+// that is what keeps a callee's variables from colliding with its caller's: both may be written
+// with an `X`, and a clause assigns its variables unconditionally -- the mask is applied when
+// the outputs are selected, not when they are computed. Without a per-frame prefix a callee
+// would quietly overwrite a caller variable the caller had still to read.
+struct TritonFrames {
+    std::string* body;
+    std::uint32_t* temp_counter;
+    std::uint32_t* frame_counter;
+};
+
+// Emits one predicate INLINE: code computing `out_names` from `in_exprs`, and an expression
+// naming the lanes on which the predicate SUCCEEDED. Clauses are tried in program order and the
+// first whose guard holds wins, which the frame's own `done` mask enforces. A lane on which the
+// predicate failed keeps whatever its outputs were initialised to -- the caller must, and does,
+// conjoin the returned mask into its own guard rather than trust those lanes.
+[[nodiscard]] auto emit_triton_predicate(const Program& program, const CompileCtx& ctx,
+                                         const TritonFrames& fr, const PredicateSignature& sig,
+                                         const std::vector<std::string>& in_exprs,
+                                         const std::vector<std::string>& out_names,
+                                         const std::string& prefix) -> Result<std::string> {
     const PredicateDef def = gather(program, sig.name, sig.arity());
     if (def.clauses.empty()) {
         return make_error<std::string>(MathError::domain_error);
     }
-    const std::string fn = mangle(sig.name, sig.arity());
 
-    std::string clauses_src;
-    std::uint32_t temp = 0;
+    // Not const: it is the return value, and const would cost the move on the way out.
+    std::string done = std::format("{}done", prefix);
+    for (std::size_t i = 0; i < sig.arity(); ++i) {
+        if (sig.modes[i] == ArgMode::output) {
+            *fr.body +=
+                std::format("    {} = tl.zeros((BLOCK,), dtype=tl.int64)\n", out_names[i]);
+        }
+    }
+    *fr.body += std::format("    {} = tl.zeros((BLOCK,), dtype=tl.int1)\n", done);
 
     for (std::size_t ci = 0; ci < def.clauses.size(); ++ci) {
         const Clause& clause = def.clauses[ci];
@@ -1802,39 +1917,48 @@ struct TritonEmitter {
         if (head_args.size() != sig.arity()) {
             return make_error<std::string>(MathError::domain_error);
         }
-        std::string body;
         std::set<std::string> bound;
         std::string guard;
         std::set<std::string> head_vars;
 
-        body += std::format("    # --- clause {} ---\n", ci);
+        // Every variable of this frame carries the frame's prefix, so one source variable named
+        // in both a caller and a callee becomes two different names in the kernel.
+        const auto local = [&prefix](const Term& t) -> std::string {
+            return prefix + mangle_var(VarKey{.name = var_of(t).name,
+                                              .generation = var_of(t).generation});
+        };
+
+        *fr.body += std::format("    # --- {}/{} clause {} ---\n", sig.name, sig.arity(), ci);
         for (std::size_t i = 0; i < head_args.size(); ++i) {
             const Term& h = head_args[i];
             if (is_int(h)) {
                 if (sig.modes[i] == ArgMode::input) {
-                    guard = tri_and(guard, std::format("(a{} == {})", i, int_of(h).value));
+                    guard = tri_and(guard,
+                                    std::format("({} == {})", in_exprs[i], int_of(h).value));
                 }
                 continue;
             }
             if (!is_var(h)) {
                 return make_error<std::string>(MathError::not_implemented);
             }
-            const std::string v =
-                mangle_var(VarKey{.name = var_of(h).name, .generation = var_of(h).generation});
             if (is_anonymous_var(var_of(h).name)) {
                 continue;
             }
+            const std::string v = local(h);
             if (head_vars.contains(v)) {
                 return make_error<std::string>(MathError::not_implemented);
             }
             head_vars.insert(v);
             if (sig.modes[i] == ArgMode::input) {
-                body += std::format("    {} = a{}\n", v, i);
+                *fr.body += std::format("    {} = {}\n", v, in_exprs[i]);
                 bound.insert(v);
             }
         }
 
-        const TritonEmitter em{.body = &body, .bound = &bound, .temp_counter = &temp};
+        const TritonEmitter em{.body = fr.body,
+                               .bound = &bound,
+                               .temp_counter = fr.temp_counter,
+                               .prefix = &prefix};
         for (const Term& goal : clause.body) {
             if (is_atom(goal)) {
                 const std::string& g = atom_of(goal).name;
@@ -1852,10 +1976,8 @@ struct TritonEmitter {
                 if (!value) {
                     return make_error<std::string>(value.error());
                 }
-                const std::string v = mangle_var(
-                    VarKey{.name = var_of(g.args[0]).name,
-                           .generation = var_of(g.args[0]).generation});
-                body += std::format("    {} = {}\n", v, value->expr);
+                const std::string v = local(g.args[0]);
+                *fr.body += std::format("    {} = {}\n", v, value->expr);
                 bound.insert(v);
                 guard = tri_and(guard, value->ok);
                 continue;
@@ -1874,56 +1996,125 @@ struct TritonEmitter {
                                                            rhs->expr)));
                 continue;
             }
-            // A call would need a stack; Triton has none. This is refused earlier, but a
-            // predicate reaching here with one is refused rather than mis-compiled.
-            return make_error<std::string>(MathError::not_implemented);
+
+            // --- a call, INLINED ---------------------------------------------------------
+            //
+            // The callee needs no stack frame here because it needs no stack: its body is
+            // pasted in under a fresh prefix, reading the caller's values and writing the
+            // caller's variables. What a stack would have carried back -- did this call
+            // succeed? -- is a mask, and it goes into this clause's guard. Recursion is what
+            // genuinely cannot be done this way, and it is refused before emission begins.
+            if (*fr.frame_counter >= triton_inline_budget) {
+                return make_error<std::string>(MathError::not_implemented);
+            }
+            const PredicateSignature* callee = signature_of(ctx, g.functor, g.args.size());
+            if (callee == nullptr) {
+                return make_error<std::string>(MathError::not_implemented);
+            }
+            std::vector<std::string> call_in(g.args.size());
+            std::vector<std::string> call_out(g.args.size());
+            std::string call_ok;
+            std::set<std::string> written;
+            for (std::size_t i = 0; i < g.args.size(); ++i) {
+                if (callee->modes[i] == ArgMode::input) {
+                    auto a = emit_triton_expr(em, g.args[i]);
+                    if (!a) {
+                        return make_error<std::string>(a.error());
+                    }
+                    call_in[i] = a->expr;
+                    call_ok = tri_and(call_ok, a->ok);
+                    continue;
+                }
+                if (!is_var(g.args[i])) {
+                    return make_error<std::string>(MathError::not_implemented);
+                }
+                // Two outputs of one call may not come back into the same variable: Prolog asks
+                // there that the two answers UNIFY, and there is no unification here to express
+                // it. collect_predicates already refuses the shape; repeating it costs a line
+                // and means the emitter never depends on having been asked first.
+                const std::string v = local(g.args[i]);
+                if (!written.insert(v).second) {
+                    return make_error<std::string>(MathError::domain_error);
+                }
+                call_out[i] = v;
+            }
+            const std::string frame = std::format("f{}_", (*fr.frame_counter)++);
+            auto call_done =
+                emit_triton_predicate(program, ctx, fr, *callee, call_in, call_out, frame);
+            if (!call_done) {
+                return call_done;
+            }
+            for (std::size_t i = 0; i < g.args.size(); ++i) {
+                if (callee->modes[i] == ArgMode::output) {
+                    bound.insert(call_out[i]);
+                }
+            }
+            guard = tri_and(guard, tri_and(call_ok, *call_done));
         }
 
         if (guard.empty()) {
             guard = "tl.full((BLOCK,), 1, tl.int1)";
         }
-        body += std::format("    g{} = {} & ~done\n", ci, guard);
+        const std::string gv = std::format("{}g{}", prefix, ci);
+        *fr.body += std::format("    {} = {} & ~{}\n", gv, guard, done);
         for (std::size_t i = 0; i < head_args.size(); ++i) {
             if (sig.modes[i] != ArgMode::output) {
                 continue;
             }
             if (is_int(head_args[i])) {
-                body += std::format("    a{} = tl.where(g{}, {}, a{})\n", i, ci,
-                                    int_of(head_args[i]).value, i);
+                *fr.body += std::format("    {} = tl.where({}, {}, {})\n", out_names[i], gv,
+                                        int_of(head_args[i]).value, out_names[i]);
                 continue;
             }
             if (!is_var(head_args[i])) {
                 return make_error<std::string>(MathError::not_implemented);
             }
-            const std::string v =
-                mangle_var(VarKey{.name = var_of(head_args[i]).name,
-                                  .generation = var_of(head_args[i]).generation});
             if (is_anonymous_var(var_of(head_args[i]).name)) {
                 // As on the other targets: an anonymous variable in an OUTPUT position binds
                 // nothing, so there is no value to write into the output lane. Leaving the lane
                 // untouched would silently hand back whatever was there before.
                 return make_error<std::string>(MathError::domain_error);
             }
+            const std::string v = local(head_args[i]);
             if (!bound.contains(v)) {
                 return make_error<std::string>(MathError::domain_error);
             }
-            body += std::format("    a{} = tl.where(g{}, {}, a{})\n", i, ci, v, i);
+            *fr.body += std::format("    {} = tl.where({}, {}, {})\n", out_names[i], gv, v,
+                                    out_names[i]);
         }
-        body += std::format("    done = done | g{}\n", ci);
-        clauses_src += body;
+        *fr.body += std::format("    {} = {} | {}\n", done, done, gv);
     }
+    return done;
+}
+
+[[nodiscard]] auto emit_triton(const Program& program, const CompileCtx& ctx,
+                               const PredicateSignature& sig) -> Result<std::string> {
+    const std::string fn = mangle(sig.name, sig.arity());
 
     std::string ptr_params;
     std::string loads;
     std::string stores;
+    std::vector<std::string> in_exprs(sig.arity());
+    std::vector<std::string> out_names(sig.arity());
     for (std::size_t i = 0; i < sig.arity(); ++i) {
         ptr_params += std::format("a{}_ptr, ", i);
         if (sig.modes[i] == ArgMode::input) {
             loads += std::format("    a{} = tl.load(a{}_ptr + offs, mask=m, other=0)\n", i, i);
+            in_exprs[i] = std::format("a{}", i);
         } else {
-            loads += std::format("    a{} = tl.zeros((BLOCK,), dtype=tl.int64)\n", i);
+            out_names[i] = std::format("a{}", i);
             stores += std::format("    tl.store(a{}_ptr + offs, a{}, mask=m)\n", i, i);
         }
+    }
+
+    std::string clauses_src;
+    std::uint32_t temp = 0;
+    std::uint32_t frame = 0;
+    const TritonFrames fr{
+        .body = &clauses_src, .temp_counter = &temp, .frame_counter = &frame};
+    auto done = emit_triton_predicate(program, ctx, fr, sig, in_exprs, out_names, "");
+    if (!done) {
+        return done;
     }
 
     std::string out;
@@ -1936,6 +2127,11 @@ struct TritonEmitter {
     out += "# whose arithmetic could not be represented in 64 bits, is reported rather than\n";
     out += "# left holding a wrapped value. Triton executes every lane through every\n";
     out += "# instruction, so overflow is carried as a MASK; there is no trap to raise.\n";
+    out += "#\n";
+    out += "# A kernel has no call stack, so a call to another predicate is INLINED: the\n";
+    out += "# callee's clauses appear below under an `f<n>_` prefix, and whether the call\n";
+    out += "# succeeded is a mask conjoined into the calling clause's guard. Recursion cannot\n";
+    out += "# be inlined and is refused before anything is emitted.\n";
     out += '\n';
     out += "import triton\n";
     out += "import triton.language as tl\n";
@@ -1954,10 +2150,9 @@ struct TritonEmitter {
     // local. Triton needs a tensor shape to be a tuple of compile-time integers, and a
     // shape read off another tensor does not stay one once it is stored in a variable.
     out += loads;
-    out += "    done = tl.zeros((BLOCK,), dtype=tl.int1)\n";
     out += clauses_src;
     out += stores;
-    out += "    tl.store(ok_ptr + offs, done.to(tl.int8), mask=m)\n";
+    out += std::format("    tl.store(ok_ptr + offs, {}.to(tl.int8), mask=m)\n", *done);
     return out;
 }
 
@@ -2013,19 +2208,31 @@ auto compile(const Program& program, const PredicateSignature& entry,
                    .signatures = {},
                    .order = {},
                    .device = target == Target::cuda,
-                   .allow_calls = target != Target::triton,
                    .tail_call_optimise = options.tail_call_optimise,
                    .width = options.width};
-    auto collected = collect_predicates(program, entry, ctx.allow_calls, ctx);
+    auto collected = collect_predicates(program, entry, ctx);
     if (!collected) {
         return make_error<std::string>(collected.error());
     }
 
-    if (target == Target::triton && ctx.order.size() != 1) {
-        // A Triton kernel is a flat elementwise program over a block of lanes. It has no call
-        // stack, so recursion and calls are not "slow" here, they are unrepresentable. One
-        // predicate, straight-line, is what the target can honestly express.
-        return make_error<std::string>(MathError::not_implemented);
+    if (target == Target::triton) {
+        // A Triton kernel is a flat elementwise program over a block of lanes, and it has no
+        // call stack. That does not make a call unrepresentable -- a call needs a stack only
+        // when the callee has to be RE-ENTERED, and one that cannot be is simply pasted into
+        // its caller. So the target takes any program whose call graph is acyclic, inlining
+        // every call, and refuses a recursive one, which no amount of pasting terminates.
+        //
+        // Triton is also emitted here rather than below because it shares none of the C++
+        // emission that follows: emitting those predicate bodies first only to discard them
+        // would make a program the kernel can express depend on the C++ emitter accepting it.
+        std::set<std::string> on_path;
+        std::set<std::string> settled;
+        if (!triton_calls_are_acyclic(program, ctx, predicate_key(entry.name, entry.arity()),
+                                      on_path, settled)) {
+            return make_error<std::string>(MathError::not_implemented);
+        }
+        return emit_triton(program, ctx,
+                           ctx.signatures.at(predicate_key(entry.name, entry.arity())));
     }
 
     // Emit callees before callers so the generated source needs no forward declarations —
@@ -2074,10 +2281,6 @@ auto compile(const Program& program, const PredicateSignature& entry,
 
     const PredicateSignature& esig = ctx.signatures.at(predicate_key(entry.name, entry.arity()));
     const std::string efn = mangle(entry.name, entry.arity());
-
-    if (target == Target::triton) {
-        return emit_triton(program, esig);
-    }
 
     std::string out;
     out += std::format("// Generated by nimblecas.logic_compile from a Prolog program.\n");

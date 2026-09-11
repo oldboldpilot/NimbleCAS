@@ -845,9 +845,19 @@ auto main() -> int {
                   t.expect(src->contains("tl.where"),
                            "triton division employs tl.where guards to prevent division by zero");
                   t.expect(src->contains("// tl.where"),
-                           "integer division emits floor division // with guarded divisor");
+                           "the quotient is taken against a divisor guarded away from zero");
                   t.expect(src->contains("% tl.where"),
-                           "remainder emits modulo % with guarded divisor");
+                           "the remainder is taken against a divisor guarded away from zero");
+
+                  // Triton's `//` and `%` TRUNCATE toward zero -- -7 // 2 is -3, not the -4
+                  // Python would give. That is Prolog's `//` and `rem` exactly, and it is NOT
+                  // Prolog's `div` and `mod`, which floor. Emitting all four as the same two
+                  // operators answered -7 div 2 = -3 where every other target says -4, so the
+                  // flooring correction has to appear.
+                  t.expect(src->contains("_adj = "),
+                           "div and mod emit the correction that turns truncation into floor");
+                  t.expect(src->contains("_q - 1"),
+                           "div steps the truncated quotient down where it rounded toward zero");
               })
         .test("compile_and_is_compilable_refuse_unbound_output_variables",
               [](TestContext& t) {
@@ -1216,9 +1226,11 @@ auto main() -> int {
                   t.expect(!res_triton.has_value() && res_triton.error() == MathError::not_implemented,
                            "Triton refuses continuation style as not_implemented");
               })
-        .test("compile_and_is_compilable_refuse_recursion_and_calls_on_triton",
+        .test("compile_and_is_compilable_refuse_recursion_on_triton",
               [](TestContext& t) {
-                  // Triton executes elementwise without a call stack; recursion is refused.
+                  // A Triton kernel executes elementwise and has no call stack. What a stack is
+                  // needed FOR is re-entering a predicate, so recursion is what the target
+                  // cannot express -- not calling as such, which is inlined.
                   const Program rec_p = fact_acc_program();
                   const PredicateSignature rec_sig{
                       .name = "fact_acc",
@@ -1231,15 +1243,21 @@ auto main() -> int {
                   t.expect(!rec_check.has_value() && rec_check.error() == MathError::not_implemented,
                            "is_compilable returns not_implemented for recursive predicate on Triton");
 
-                  // Calls to secondary predicates are likewise refused on Triton.
-                  const Program multi_p = multi_pred_program();
-                  const PredicateSignature multi_sig{
-                      .name = "sum_of_squares",
-                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  // MUTUAL recursion is the same refusal reached the long way round. Neither
+                  // predicate names itself, so a check that looked for self-calls would inline
+                  // this pair forever; what is refused is a CYCLE in the call graph.
+                  const Program mutual_p = prog(
+                      "ping(X, Y) :- X =< 0, Y is 0.\n"
+                      "ping(X, Y) :- X > 0, N is X - 1, pong(N, Y).\n"
+                      "pong(X, Y) :- ping(X, Y).\n");
+                  const PredicateSignature mutual_sig{
+                      .name = "ping",
+                      .modes = {ArgMode::input, ArgMode::output},
                   };
-                  auto multi_comp = compile(multi_p, multi_sig, Target::triton);
-                  t.expect(!multi_comp.has_value() && multi_comp.error() == MathError::not_implemented,
-                           "Triton refuses callee calls as not_implemented");
+                  auto mutual_comp = compile(mutual_p, mutual_sig, Target::triton);
+                  t.expect(!mutual_comp.has_value() &&
+                               mutual_comp.error() == MathError::not_implemented,
+                           "Triton refuses mutual recursion as not_implemented");
 
                   // Repeated head variables on Triton are also refused.
                   const Program rep_p = prog("same(X, X).\n");
@@ -1250,6 +1268,96 @@ auto main() -> int {
                   auto rep_comp = compile(rep_p, rep_sig, Target::triton);
                   t.expect(!rep_comp.has_value() && rep_comp.error() == MathError::not_implemented,
                            "Triton refuses repeated head variable as not_implemented");
+              })
+        .test("a_callee_reached_in_two_modes_is_refused_rather_than_compiled_as_the_first",
+              [](TestContext& t) {
+                  // Modes are read off the CALL SITE and one function is emitted per name and
+                  // arity, so a predicate reached first as an output and then as an input used
+                  // to be compiled as the first at both sites. Here that meant `seven(T)` with
+                  // T bound to 3 emitting a call that OVERWROTE T with 7 -- so b/1 answered
+                  // Z = 7 where Prolog runs `7 is 7` against a bound 3 and fails. A wrong
+                  // answer, reported as a success, on every target.
+                  //
+                  // The call order matters: a/1 has to be reached first for its (output) modes
+                  // to be the ones cached.
+                  const Program p = prog(
+                      "seven(V) :- V is 7.\n"
+                      "a(Z) :- seven(Z).\n"
+                      "b(Z) :- T is 3, seven(T), Z is T.\n"
+                      "top(P, Q) :- b(Q), a(P).\n");
+                  const PredicateSignature sig{
+                      .name = "top",
+                      .modes = {ArgMode::output, ArgMode::output},
+                  };
+                  for (const Target target : {Target::cpp, Target::cuda, Target::triton}) {
+                      auto refused = compile(p, sig, target);
+                      t.expect(!refused.has_value() &&
+                                   refused.error() == MathError::not_implemented,
+                               "a predicate called in two modes is refused, not mis-compiled");
+                  }
+
+                  // One mode, reached from two call sites, is still perfectly ordinary.
+                  const Program fine = prog(
+                      "sq(X, Y) :- Y is X * X.\n"
+                      "both(A, B, S) :- sq(A, P), sq(B, Q), S is P + Q.\n");
+                  const PredicateSignature fsig{
+                      .name = "both",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  t.expect(compile(fine, fsig, Target::cpp).has_value(),
+                           "two call sites agreeing on the modes still compile");
+              })
+        .test("triton_inlines_a_non_recursive_call_under_its_own_frame_prefix",
+              [](TestContext& t) {
+                  // A call needs a stack only to be RE-ENTERED. One that cannot be is pasted
+                  // into its caller instead, which is something a flat kernel can hold.
+                  const Program p = multi_pred_program();
+                  const PredicateSignature sig{
+                      .name = "sum_of_squares",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  auto src = compile(p, sig, Target::triton);
+                  t.expect(src.has_value(), "a call to a non-recursive predicate reaches Triton");
+                  if (!src.has_value()) {
+                      return;
+                  }
+
+                  t.expect(src->contains("def p_sum_of_squares_3_kernel("),
+                           "the entry predicate is the kernel");
+                  t.expect(!src->contains("def p_square_2"),
+                           "the callee is pasted in, not emitted as a function a kernel "
+                           "would have to call");
+
+                  // The two call sites are separate FRAMES. Both paste in the same clause,
+                  // which writes X and Y, and a clause assigns its variables unmasked -- so
+                  // without a per-frame prefix the second call would overwrite the first's
+                  // value while the caller still had to add it.
+                  t.expect(src->contains("f0_v_X") && src->contains("f1_v_X"),
+                           "each call site is inlined under its own frame prefix");
+                  t.expect(src->contains("f0_done") && src->contains("f1_done"),
+                           "each inlined frame carries its own first-match-wins mask");
+                  t.expect(src->contains("(f0_done & f1_done)"),
+                           "the calling clause succeeds only on lanes where both calls did");
+
+                  // And a callee with more than one clause has to choose between them inside
+                  // the frame, exactly as the entry predicate does.
+                  const Program guarded = prog(
+                      "abs_val(X, Y) :- X < 0, Y is -X.\n"
+                      "abs_val(X, Y) :- X >= 0, Y is X.\n"
+                      "l1(A, B, S) :- abs_val(A, PA), abs_val(B, PB), S is PA + PB.\n");
+                  const PredicateSignature lsig{
+                      .name = "l1",
+                      .modes = {ArgMode::input, ArgMode::input, ArgMode::output},
+                  };
+                  auto lsrc = compile(guarded, lsig, Target::triton);
+                  t.expect(lsrc.has_value(), "a multi-clause callee is inlined too");
+                  if (!lsrc.has_value()) {
+                      return;
+                  }
+                  t.expect(lsrc->contains("f0_g0") && lsrc->contains("f0_g1"),
+                           "both clauses of the callee are emitted inside the frame");
+                  t.expect(lsrc->contains("f0_g1 = ") && lsrc->contains("& ~f0_done"),
+                           "the frame's later clause is masked out where an earlier one won");
               })
         .test("compile_and_is_compilable_refuse_unsupported_body_goals",
               [](TestContext& t) {
@@ -1277,7 +1385,11 @@ auto main() -> int {
                   t.expect(!missing_comp.has_value() && missing_comp.error() == MathError::domain_error,
                            "call to undefined callee is refused as domain_error");
 
-                  // Callee call where output argument is an integer constant rather than a variable.
+                  // The same callee reached in two different modes. `square(X, Y)` asks for an
+                  // answer and `square(X, 10)` checks one, and a compiler that emits a single
+                  // function per name and arity cannot be both. It is refused as a thing this
+                  // emitter does not do, not as a fault in the program -- the program is
+                  // ordinary Prolog.
                   const Program const_out_p = prog(
                       "test_call(X, Y) :- square(X, Y), square(X, 10).\n"
                       "square(X, Y) :- Y is X * X.\n");
@@ -1287,8 +1399,8 @@ auto main() -> int {
                   };
                   auto const_out_comp = compile(const_out_p, const_out_sig, Target::cpp);
                   t.expect(!const_out_comp.has_value() &&
-                               const_out_comp.error() == MathError::domain_error,
-                           "callee call with non-variable output argument is refused as domain_error");
+                               const_out_comp.error() == MathError::not_implemented,
+                           "a callee reached in two different modes is refused");
               })
         .test("compile_refuses_output_only_variable_in_multiple_head_positions",
               [](TestContext& t) {
