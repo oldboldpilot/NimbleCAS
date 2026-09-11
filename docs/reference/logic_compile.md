@@ -156,6 +156,17 @@ The driver writes generated code to `stdout` and diagnostic messages to `stderr`
 | Entry predicate not found, arity mismatch, or output variable never bound | `MathError::domain_error` |
 | Syntax error while parsing the Prolog source file | `MathError::syntax_error` |
 
+## Verifying the generated code
+
+The test suite checks the emitted TEXT. A string match cannot tell whether that text is a
+program, and for a long time nothing ran a compiler over it -- which is how an emitted CUDA
+target that had never been compilable survived a green suite.
+
+`scripts/verify-generated.sh` closes that: it emits every variant, compiles each one
+(`clang++-23` with libc++ for C++, `nvcc` for CUDA, a Python parse for Triton) and RUNS the C++
+ones against the reference answer the emitting tool prints. It is not part of `ctest`, because it
+needs a toolchain a test binary has no business assuming. Run it after touching an emitter.
+
 ## Worked examples
 
 ### Compiling a recursive factorial predicate

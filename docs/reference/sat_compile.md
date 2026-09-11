@@ -15,7 +15,15 @@ The compiler adheres strictly to the **honesty boundary** (Code Policy Rule 32):
 - **Emits source text, not machine binary:** `nimblecas.sat_compile` generates complete,
   standalone source code strings. It is **not a JIT** compiler and emits neither PTX nor machine
   instructions directly. The emitted source code contains no hidden dependencies on NimbleCAS
-  headers and can be dropped directly into downstream compilation pipelines.
+  headers and can be dropped directly into downstream compilation pipelines. Standalone means it
+  depends on nothing of NimbleCAS's — not that it depends on nothing: the C++ target opens with
+  `import std;`, like the rest of the repository.
+- **The emitted C++ follows the same code policy as the emitter:** `config/cpp_details.txt`
+  applies to generated files too — `import std` (Rules 11/12/41), fixed-width types (Rule 48),
+  `std::span` over the tables rather than raw pointers (Rules 3/24), trailing return types
+  (Rule 31), `[[nodiscard]]` (Rule 10), and `std::countr_zero` rather than a compiler builtin.
+  The CUDA and Triton targets are deliberately exempt: `nvcc` has no `import std`, and Python is
+  not C++.
 - **CDCL cannot be emitted as a data-parallel kernel:** Conflict-Driven Clause Learning (CDCL) —
   the algorithm that powers serious general-purpose solvers — cannot be compiled into a data-parallel
   SIMD or GPU kernel. The strength of CDCL stems from dynamic clause learning: each learned clause is
@@ -182,6 +190,18 @@ Options include:
 
 The tool reads the DIMACS formula, outputs the generated source code to `stdout`, and prints a diagnostic
 summary (variable count, clause count, and reference solve verification) to `stderr`.
+
+## Verifying the generated code
+
+The test suite checks the emitted TEXT. A string match cannot tell whether that text is a
+program, and for a long time nothing ran a compiler over it -- which is how an emitted CUDA
+target that had never been compilable survived a green suite.
+
+`scripts/verify-generated.sh` closes that: it emits every variant, compiles each one
+(`clang++-23` with libc++ for C++, `nvcc` for CUDA, a Python parse for Triton) and RUNS the C++
+ones against the reference answer the emitting tool prints. It is not part of `ctest`, because it
+needs a toolchain a test binary has no business assuming. Run it after touching an emitter.
+
 
 ## Worked examples
 

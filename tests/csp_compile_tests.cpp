@@ -237,8 +237,53 @@ auto main() -> int {
                   mc.strategy = Strategy::min_conflicts;
                   auto ms = emit(wire_queens(5), mc);
                   t.expect(ms.has_value() &&
-                               ms->contains("std::vector<long long>(5)"),
+                               ms->contains("std::vector<std::int64_t>(5)"),
                            "each walker's result buffer is sized to the variable count");
+              })
+        .test("the_cpp_target_emits_only_policy_conforming_source",
+              [](TestContext& t) {
+                  // config/cpp_details.txt applied to the code this module WRITES. The emitted
+                  // solver used to be C -- `#include` headers, `const long long*` parameters,
+                  // C arrays, leading return types -- inside a repository that is C++23.
+                  const auto w = wire_queens(5);
+                  for (const Strategy s : {Strategy::exhaustive, Strategy::min_conflicts}) {
+                      EmitOptions opts;
+                      opts.target = Target::cpp;
+                      opts.strategy = s;
+                      const auto src = emit(w, opts);
+                      t.expect(src.has_value(), "the C++ target emits");
+                      if (!src.has_value()) {
+                          continue;
+                      }
+                      t.expect(src->contains("import std;"), "Rules 11/12/41: import std");
+                      t.expect(!src->contains("#include <"),
+                               "Rules 11/12/41: no standard header in the C++ target");
+                      t.expect(!src->contains("long long*"),
+                               "Rule 3: no raw pointers in the emitted signatures");
+                      t.expect(!src->contains("unsigned long long"),
+                               "Rule 48: the widths are named, not spelled out in C keywords");
+                      t.expect(src->contains("std::span<std::int64_t> out"),
+                               "Rule 24: an assignment arrives as a span, which carries its size");
+                      t.expect(src->contains("[[nodiscard]] inline auto"),
+                               "Rules 10/31: trailing return types, and results that must not be "
+                               "dropped say so");
+                      t.expect(!src->contains("(void)"),
+                               "and nothing is discarded C-style; the dead local that needed it "
+                               "is gone");
+                  }
+
+                  // CUDA is deliberately exempt and must NOT be changed to match: device code
+                  // has neither `import std` nor std::span.
+                  EmitOptions cu;
+                  cu.target = Target::cuda;
+                  const auto cs = emit(w, cu);
+                  t.expect(cs.has_value(), "the CUDA target still emits");
+                  if (cs.has_value()) {
+                      t.expect(cs->contains("#include <cstdint>"),
+                               "CUDA keeps headers, because nvcc has no import std");
+                      t.expect(cs->contains("__device__ __constant__ long long"),
+                               "and keeps plain constant arrays, which device code can address");
+                  }
               })
         .test("the_emitted_text_states_which_guarantee_it_carries",
               [](TestContext& t) {
@@ -292,6 +337,17 @@ auto main() -> int {
                            "and defines a host launcher with exactly the promised name");
                   t.expect(cs.has_value() && cs->contains("cudaMemcpy"),
                            "which actually copies the results back");
+                  // ...and the kernel that launcher LAUNCHES must exist. It did not: the
+                  // definition came out as `<entry>_kernel_kernel`, because the format string
+                  // appended `_kernel` and so did the argument, while the launch site named
+                  // `<entry>_kernel`. nvcc: `identifier "..." is undefined`. This target had
+                  // therefore never compiled, and asserting the launcher's own name -- which
+                  // the line above does -- could not have revealed it.
+                  t.expect(cs.has_value() &&
+                               cs->contains("__global__ void " + entry_point_name(cu) + "_kernel("),
+                           "and defines the kernel it launches");
+                  t.expect(cs.has_value() && !cs->contains("_kernel_kernel"),
+                           "with the suffix applied once, not twice");
 
                   // 3. INT64_MIN cannot be written as a plain decimal literal in C or C++:
                   //    -9223372036854775808 is unary minus applied to a value that does not fit.

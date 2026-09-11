@@ -337,23 +337,30 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
         "// does not depend on the thread count.\n\n",
         cnf.num_vars, cnf.clauses.size(), cnf.num_vars, e);
 
-    out += "#include <cstdint>\n#include <cstddef>\n";
-    if (opts.emit_parallel) {
-        out += "#include <thread>\n#include <vector>\n#include <algorithm>\n";
-    }
-    out += '\n';
+    // `import std;` rather than headers. Rules 11/12/41 govern the code this emitter WRITES
+    // as much as the emitter itself -- a generated file is still project source, and the widths
+    // below are the fixed-width names for the same reason.
+    //
+    // Two emitted solvers are meant to be includable in ONE translation unit, so this import has
+    // to survive appearing after declarations another include already made. In a non-module
+    // translation unit it does, and importing the same module twice is fine.
+    out += "import std;\n\n";
 
-    out += std::format("inline constexpr unsigned nc_{}_vars = {};\n", e, cnf.num_vars);
-    out += std::format("inline constexpr unsigned long long nc_{}_none = ~0ULL;\n", e);
-    out += std::format("inline constexpr unsigned long long nc_{}_blocks = {}ULL;\n\n", e,
+    out += std::format("inline constexpr std::uint32_t nc_{}_vars = {};\n", e, cnf.num_vars);
+    out += std::format("inline constexpr std::uint64_t nc_{}_none = ~0ULL;\n", e);
+    out += std::format("inline constexpr std::uint64_t nc_{}_blocks = {}ULL;\n\n", e,
                        cnf.num_vars <= 6 ? 1ULL : (1ULL << (cnf.num_vars - 6)));
 
     // ---- scalar block kernel ----
     out += std::format(
         "// The satisfying lanes of block `b`, one bit per assignment in [64b, 64b + 64).\n"
-        "[[nodiscard]] inline auto nc_{}_block(unsigned long long b) noexcept\n"
-        "    -> unsigned long long {{\n"
-        "    unsigned long long sat = ~0ULL;\n",
+        "//\n"
+        "// `b` is [[maybe_unused]] because whether it is read depends on the FORMULA: the first\n"
+        "// six variables are constant lane patterns, so a formula of six variables or fewer\n"
+        "// names the block index nowhere.\n"
+        "[[nodiscard]] constexpr auto nc_{}_block([[maybe_unused]] std::uint64_t b) noexcept\n"
+        "    -> std::uint64_t {{\n"
+        "    std::uint64_t sat = ~0ULL;\n",
         e);
     const auto scalar_word = [](std::size_t i) { return block_word_cpp(i, "b"); };
     for (const std::vector<std::int64_t>& clause : cnf.clauses) {
@@ -370,13 +377,16 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
 
     out += std::format(
         "// The smallest satisfying assignment in blocks [first, first + count), or nc_{0}_none.\n"
-        "[[nodiscard]] inline auto {0}_solve_range(unsigned long long first,\n"
-        "                                         unsigned long long count) noexcept\n"
-        "    -> unsigned long long {{\n"
-        "    for (unsigned long long b = first; b < first + count; ++b) {{\n"
-        "        const unsigned long long sat = nc_{0}_block(b);\n"
+        "[[nodiscard]] constexpr auto {0}_solve_range(std::uint64_t first,\n"
+        "                                            std::uint64_t count) noexcept\n"
+        "    -> std::uint64_t {{\n"
+        "    for (std::uint64_t b = first; b < first + count; ++b) {{\n"
+        "        const std::uint64_t sat = nc_{0}_block(b);\n"
         "        if (sat != 0ULL) {{\n"
-        "            return (b << 6) | static_cast<unsigned long long>(__builtin_ctzll(sat));\n"
+        "            // std::countr_zero rather than the GNU count-trailing-zeros builtin:\n"
+        "            // the same instruction here, and defined by the standard rather than by\n"
+        "            // whichever compiler happens to be reading this.\n"
+        "            return (b << 6) | static_cast<std::uint64_t>(std::countr_zero(sat));\n"
         "        }}\n"
         "    }}\n"
         "    return nc_{0}_none;\n"
@@ -396,13 +406,16 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
             "// The vector type and its splat carry the entry name, like everything else here.\n"
             "// Two emitted solvers must be includable in ONE translation unit, and a shared\n"
             "// unprefixed helper collides the moment anyone tries.\n"
-            "using nc_{0}_u64x8 [[gnu::vector_size(64)]] = unsigned long long;\n\n"
-            "[[nodiscard]] inline auto nc_{0}_splat(unsigned long long v) noexcept\n"
+            "using nc_{0}_u64x8 [[gnu::vector_size(64)]] = std::uint64_t;\n\n"
+            "[[nodiscard]] constexpr auto nc_{0}_splat(std::uint64_t v) noexcept\n"
             "    -> nc_{0}_u64x8 {{\n"
             "    return nc_{0}_u64x8{{v, v, v, v, v, v, v, v}};\n"
             "}}\n\n"
             "// The satisfying lanes of the eight blocks 8g .. 8g+7, one word per block.\n"
-            "[[nodiscard]] inline auto nc_{0}_group(unsigned long long g) noexcept\n"
+            "// `g` is [[maybe_unused]] for the same reason as `b` above, one regime later:\n"
+            "// three more indices vary between the lanes of a group, so the group number is\n"
+            "// first read at the tenth variable.\n"
+            "[[nodiscard]] constexpr auto nc_{0}_group([[maybe_unused]] std::uint64_t g) noexcept\n"
             "    -> nc_{0}_u64x8 {{\n"
             "    nc_{0}_u64x8 sat = nc_{0}_splat(~0ULL);\n",
             e);
@@ -421,31 +434,31 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
         out += std::format(
             "// As {0}_solve_range, eight blocks at a time. Same answer, by construction: the\n"
             "// lanes are scanned in block order and the lowest set bit wins.\n"
-            "[[nodiscard]] inline auto {0}_solve_range_simd(unsigned long long first,\n"
-            "                                              unsigned long long count) noexcept\n"
-            "    -> unsigned long long {{\n"
-            "    unsigned long long b = first;\n"
-            "    const unsigned long long last = first + count;\n"
+            "[[nodiscard]] constexpr auto {0}_solve_range_simd(std::uint64_t first,\n"
+            "                                                 std::uint64_t count) noexcept\n"
+            "    -> std::uint64_t {{\n"
+            "    std::uint64_t b = first;\n"
+            "    const std::uint64_t last = first + count;\n"
             "    // Lead-in until the group boundary, so groups stay aligned to multiples of 8.\n"
             "    for (; b < last && (b % 8ULL) != 0ULL; ++b) {{\n"
-            "        const unsigned long long sat = nc_{0}_block(b);\n"
+            "        const std::uint64_t sat = nc_{0}_block(b);\n"
             "        if (sat != 0ULL) {{\n"
-            "            return (b << 6) | static_cast<unsigned long long>(__builtin_ctzll(sat));\n"
+            "            return (b << 6) | static_cast<std::uint64_t>(std::countr_zero(sat));\n"
             "        }}\n"
             "    }}\n"
             "    for (; b + 8ULL <= last; b += 8ULL) {{\n"
             "        const nc_{0}_u64x8 sat = nc_{0}_group(b / 8ULL);\n"
-            "        for (unsigned lane = 0; lane < 8U; ++lane) {{\n"
+            "        for (std::uint32_t lane = 0; lane < 8U; ++lane) {{\n"
             "            if (sat[lane] != 0ULL) {{\n"
             "                return ((b + lane) << 6) |\n"
-            "                       static_cast<unsigned long long>(__builtin_ctzll(sat[lane]));\n"
+            "                       static_cast<std::uint64_t>(std::countr_zero(sat[lane]));\n"
             "            }}\n"
             "        }}\n"
             "    }}\n"
             "    for (; b < last; ++b) {{\n"
-            "        const unsigned long long sat = nc_{0}_block(b);\n"
+            "        const std::uint64_t sat = nc_{0}_block(b);\n"
             "        if (sat != 0ULL) {{\n"
-            "            return (b << 6) | static_cast<unsigned long long>(__builtin_ctzll(sat));\n"
+            "            return (b << 6) | static_cast<std::uint64_t>(std::countr_zero(sat));\n"
             "        }}\n"
             "    }}\n"
             "    return nc_{0}_none;\n"
@@ -459,7 +472,7 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
 
     out += std::format(
         "// The smallest satisfying assignment of the whole formula, or nc_{}_none.\n"
-        "[[nodiscard]] inline auto {}_solve() noexcept -> unsigned long long {{\n"
+        "[[nodiscard]] constexpr auto {}_solve() noexcept -> std::uint64_t {{\n"
         "    return {}(0ULL, nc_{}_blocks);\n"
         "}}\n\n",
         e, e, range_fn, e);
@@ -473,30 +486,29 @@ constexpr std::array<std::uint64_t, 6> lane_patterns{
             "// whatever order the workers finish in and however many there are. A worker that\n"
             "// finds nothing reports the sentinel, which is the largest value and so loses the\n"
             "// minimum without needing a special case.\n"
-            "[[nodiscard]] inline auto {}_solve_parallel(unsigned threads) noexcept\n"
-            "    -> unsigned long long {{\n"
-            "    if (threads == 0U) {{\n"
-            "        threads = 1U;\n"
-            "    }}\n"
-            "    const unsigned long long total = nc_{}_blocks;\n"
-            "    const unsigned long long per = (total + threads - 1U) / threads;\n"
-            "    std::vector<unsigned long long> found(threads, nc_{}_none);\n"
+            "[[nodiscard]] inline auto {}_solve_parallel(std::uint32_t threads) noexcept\n"
+            "    -> std::uint64_t {{\n"
+            "    const std::uint32_t workers_wanted = threads == 0U ? 1U : threads;\n"
+            "    const std::uint64_t total = nc_{}_blocks;\n"
+            "    const std::uint64_t per = (total + workers_wanted - 1U) / workers_wanted;\n"
+            "    std::vector<std::uint64_t> found(workers_wanted, nc_{}_none);\n"
             "    {{\n"
             "        std::vector<std::jthread> workers;\n"
-            "        workers.reserve(threads);\n"
-            "        for (unsigned t = 0; t < threads; ++t) {{\n"
-            "            const unsigned long long first = static_cast<unsigned long long>(t) * per;\n"
+            "        workers.reserve(workers_wanted);\n"
+            "        for (std::uint32_t t = 0; t < workers_wanted; ++t) {{\n"
+            "            const std::uint64_t first = static_cast<std::uint64_t>(t) * per;\n"
             "            if (first >= total) {{\n"
             "                break;\n"
             "            }}\n"
-            "            const unsigned long long count =\n"
+            "            const std::uint64_t count =\n"
             "                (first + per > total) ? (total - first) : per;\n"
             "            workers.emplace_back([&found, t, first, count]() {{\n"
             "                found[t] = {}(first, count);\n"
             "            }});\n"
             "        }}\n"
             "    }}\n"
-            "    return *std::min_element(found.begin(), found.end());\n"
+            "    // A minimum reduction, so the answer does not depend on the thread count.\n"
+            "    return std::ranges::min(found);\n"
             "}}\n",
             e, e, e, range_fn);
     }
@@ -758,11 +770,16 @@ struct FlatFormula {
     return f;
 }
 
-// A table as a C array initialiser, wrapped so a large formula does not become one enormous line.
+// A table, wrapped so a large formula does not become one enormous line, in the form its target
+// actually wants: a `std::array` for C++, which the walk takes spans over (Rule 24), and a plain
+// `__managed__` array for CUDA, where device code cannot use one.
 template <typename T>
-[[nodiscard]] auto table_of(std::string_view qualifier, std::string_view type,
+[[nodiscard]] auto table_of(bool device, std::string_view cpp_type, std::string_view cuda_type,
                             std::string_view name, const std::vector<T>& values) -> std::string {
-    std::string out = std::format("{}{} {}[] = {{", qualifier, type, name);
+    std::string out =
+        device ? std::format("__managed__ {} {}[] = {{", cuda_type, name)
+               : std::format("inline constexpr std::array<{}, {}> {}{{", cpp_type,
+                             std::max<std::size_t>(values.size(), 1), name);
     if (values.empty()) {
         // A zero-length array is not valid C++, and an empty occurrence list is entirely normal
         // for a variable that appears with only one sign. One unused element costs nothing and
@@ -781,17 +798,17 @@ template <typename T>
 
 // The formula tables, shared by every WalkSAT target.
 [[nodiscard]] auto emit_tables(const Cnf& cnf, const FlatFormula& f, std::string_view e,
-                               std::string_view qualifier) -> std::string {
+                               bool device) -> std::string {
     std::string out;
-    out += std::format("{}unsigned nc_{}_nvars = {}u;\n", qualifier, e, cnf.num_vars);
-    out += std::format("{}unsigned nc_{}_nclauses = {}u;\n\n", qualifier, e,
-                       cnf.clauses.size());
-    out += table_of(qualifier, "int", std::format("nc_{}_lits", e), f.lits);
-    out += table_of(qualifier, "unsigned", std::format("nc_{}_cstart", e), f.cstart);
-    out += table_of(qualifier, "unsigned", std::format("nc_{}_occp", e), f.occ_pos);
-    out += table_of(qualifier, "unsigned", std::format("nc_{}_opstart", e), f.op_start);
-    out += table_of(qualifier, "unsigned", std::format("nc_{}_occn", e), f.occ_neg);
-    out += table_of(qualifier, "unsigned", std::format("nc_{}_onstart", e), f.on_start);
+    const std::string_view scalar = device ? "__managed__ unsigned" : "inline constexpr std::uint32_t";
+    out += std::format("{} nc_{}_nvars = {}u;\n", scalar, e, cnf.num_vars);
+    out += std::format("{} nc_{}_nclauses = {}u;\n\n", scalar, e, cnf.clauses.size());
+    out += table_of(device, "std::int32_t", "int", std::format("nc_{}_lits", e), f.lits);
+    out += table_of(device, "std::uint32_t", "unsigned", std::format("nc_{}_cstart", e), f.cstart);
+    out += table_of(device, "std::uint32_t", "unsigned", std::format("nc_{}_occp", e), f.occ_pos);
+    out += table_of(device, "std::uint32_t", "unsigned", std::format("nc_{}_opstart", e), f.op_start);
+    out += table_of(device, "std::uint32_t", "unsigned", std::format("nc_{}_occn", e), f.occ_neg);
+    out += table_of(device, "std::uint32_t", "unsigned", std::format("nc_{}_onstart", e), f.on_start);
     out += '\n';
     return out;
 }
@@ -811,8 +828,10 @@ template <typename T>
 
     out += std::format(
         "// The largest clause in this formula, so the per-clause scratch is a fixed array rather\n"
-        "// than an allocation inside the hot loop.\n"
-        "static const unsigned nc_{0}_maxclause = {1}u;\n\n",
+        "// than an allocation inside the hot loop. It is the REAL maximum: sizing the scratch by\n"
+        "// a fixed 64 and stopping the gather there would silently drop the remaining literals of\n"
+        "// a wider clause, and the rule would then choose from a clause it could not see all of.\n"
+        "inline constexpr std::uint32_t nc_{0}_maxclause = {1}U;\n\n",
         e, std::max<std::size_t>(max_clause, 1));
 
     // Common prologue: gather the clause's variables and their break counts.
@@ -820,20 +839,21 @@ template <typename T>
         "// Picks the variable to flip from clause [from, to).\n"
         "//\n"
         "// `noise` is a percentage; `step` is the flip counter, which the age-based rules need.\n"
-        "static inline unsigned nc_{0}_choose(nc_{0}_scratch* s, unsigned from, unsigned to,\n"
-        "                                     unsigned long long step, unsigned noise,\n"
-        "                                     unsigned long long* rng) {{\n"
-        "    unsigned vars[64];\n"
-        "    unsigned brk[64];\n"
-        "    unsigned n = 0;\n"
-        "    for (unsigned i = from; i < to && n < 64u; ++i) {{\n"
-        "        const int lit = nc_{0}_lits[i];\n"
-        "        vars[n] = (unsigned)(lit < 0 ? -lit : lit) - 1u;\n"
+        "[[nodiscard]] inline auto nc_{0}_choose(const nc_{0}_scratch& s, std::uint32_t from,\n"
+        "                                        std::uint32_t to, std::uint64_t step,\n"
+        "                                        std::uint32_t noise, std::uint64_t& rng)\n"
+        "    -> std::uint32_t {{\n"
+        "    std::array<std::uint32_t, nc_{0}_maxclause> vars{{}};\n"
+        "    std::array<std::uint32_t, nc_{0}_maxclause> brk{{}};\n"
+        "    std::uint32_t n = 0;\n"
+        "    for (std::uint32_t i = from; i < to; ++i) {{\n"
+        "        const std::int32_t lit = nc_{0}_lits[i];\n"
+        "        vars[n] = static_cast<std::uint32_t>(lit < 0 ? -lit : lit) - 1U;\n"
         "        brk[n] = nc_{0}_break_count(s, vars[n]);\n"
         "        ++n;\n"
         "    }}\n"
-        "    if (n == 0u) {{\n"
-        "        return 0u;\n"
+        "    if (n == 0U) {{\n"
+        "        return 0U;\n"
         "    }}\n",
         e);
 
@@ -842,20 +862,22 @@ template <typename T>
             out += std::format(
                 "    // WalkSAT/SKC. A free move is never worth gambling against, so a zero break\n"
                 "    // is taken outright; otherwise flip a coin between random and greedy.\n"
-                "    unsigned best = 0u;\n"
-                "    int freebie = 0;\n"
-                "    for (unsigned i = 1u; i < n; ++i) {{\n"
+                "    std::uint32_t best = 0U;\n"
+                "    bool freebie = false;\n"
+                "    for (std::uint32_t i = 1U; i < n; ++i) {{\n"
                 "        if (brk[i] < brk[best] || (brk[i] == brk[best] && vars[i] < vars[best])) {{\n"
                 "            best = i;\n"
                 "        }}\n"
                 "    }}\n"
-                "    for (unsigned i = 0; i < n; ++i) {{\n"
-                "        if (brk[i] == 0u) {{\n"
-                "            freebie = 1;\n"
+                "    for (std::uint32_t i = 0; i < n; ++i) {{\n"
+                "        if (brk[i] == 0U) {{\n"
+                "            freebie = true;\n"
                 "        }}\n"
                 "    }}\n"
-                "    (void)step;\n"
-                "    if (freebie == 0 && (nc_{0}_next(rng) % 100ULL) < noise) {{\n"
+                "    // SKC has no age rule, so the flip counter is genuinely unused here. Naming\n"
+                "    // it in a discard keeps the four rules on one signature.\n"
+                "    static_cast<void>(step);\n"
+                "    if (!freebie && (nc_{0}_next(rng) % 100ULL) < noise) {{\n"
                 "        return vars[nc_{0}_next(rng) % n];\n"
                 "    }}\n"
                 "    return vars[best];\n"
@@ -875,23 +897,24 @@ template <typename T>
                 "    // different answers on different machines. Exact reproducibility is worth\n"
                 "    // more here than the last few percent of solve rate, and this comment is the\n"
                 "    // honest record of that trade.\n"
-                "    (void)noise;\n"
-                "    (void)step;\n"
-                "    unsigned long long weight[64];\n"
-                "    unsigned long long total = 0ULL;\n"
-                "    for (unsigned i = 0; i < n; ++i) {{\n"
-                "        const unsigned capped = brk[i] > 40u ? 40u : brk[i];\n"
-                "        weight[i] = 1ULL << (40u - capped);\n"
+                "    // probSAT takes neither the noise setting nor the flip counter.\n"
+                "    static_cast<void>(noise);\n"
+                "    static_cast<void>(step);\n"
+                "    std::array<std::uint64_t, nc_{0}_maxclause> weight{{}};\n"
+                "    std::uint64_t total = 0ULL;\n"
+                "    for (std::uint32_t i = 0; i < n; ++i) {{\n"
+                "        const std::uint32_t capped = brk[i] > 40U ? 40U : brk[i];\n"
+                "        weight[i] = 1ULL << (40U - capped);\n"
                 "        total += weight[i];\n"
                 "    }}\n"
-                "    unsigned long long r = nc_{0}_next(rng) % total;\n"
-                "    for (unsigned i = 0; i < n; ++i) {{\n"
+                "    std::uint64_t r = nc_{0}_next(rng) % total;\n"
+                "    for (std::uint32_t i = 0; i < n; ++i) {{\n"
                 "        if (r < weight[i]) {{\n"
                 "            return vars[i];\n"
                 "        }}\n"
                 "        r -= weight[i];\n"
                 "    }}\n"
-                "    return vars[n - 1u];\n"
+                "    return vars[n - 1U];\n"
                 "}}\n\n",
                 e);
             break;
@@ -904,9 +927,10 @@ template <typename T>
                 "    // see the five will refuse it -- scoring on break alone measurably wrecks\n"
                 "    // this variant, which is why the make count is computed here and not\n"
                 "    // borrowed from the SKC path.\n"
-                "    int score[64];\n"
-                "    for (unsigned i = 0; i < n; ++i) {{\n"
-                "        score[i] = (int)nc_{0}_make_count(s, vars[i]) - (int)brk[i];\n"
+                "    std::array<std::int32_t, nc_{0}_maxclause> score{{}};\n"
+                "    for (std::uint32_t i = 0; i < n; ++i) {{\n"
+                "        score[i] = static_cast<std::int32_t>(nc_{0}_make_count(s, vars[i])) -\n"
+                "                   static_cast<std::int32_t>(brk[i]);\n"
                 "    }}\n"
                 "    // The `+` is this branch: a small chance of a uniformly random step, which\n"
                 "    // stops the rule looping forever on a region it keeps re-entering. Without\n"
@@ -914,35 +938,36 @@ template <typename T>
                 "    if ((nc_{0}_next(rng) % 100ULL) < 2ULL) {{\n"
                 "        return vars[nc_{0}_next(rng) % n];\n"
                 "    }}\n"
-                "    unsigned best = 0u;\n"
-                "    unsigned second = 0u;\n"
-                "    int have_second = 0;\n"
-                "    for (unsigned i = 1u; i < n; ++i) {{\n"
+                "    std::uint32_t best = 0U;\n"
+                "    std::uint32_t second = 0U;\n"
+                "    bool have_second = false;\n"
+                "    for (std::uint32_t i = 1U; i < n; ++i) {{\n"
                 "        if (score[i] > score[best] ||\n"
                 "            (score[i] == score[best] && vars[i] < vars[best])) {{\n"
                 "            second = best;\n"
-                "            have_second = 1;\n"
+                "            have_second = true;\n"
                 "            best = i;\n"
-                "        }} else if (have_second == 0 ||\n"
+                "        }} else if (!have_second ||\n"
                 "                   score[i] > score[second] ||\n"
                 "                   (score[i] == score[second] && vars[i] < vars[second])) {{\n"
                 "            second = i;\n"
-                "            have_second = 1;\n"
+                "            have_second = true;\n"
                 "        }}\n"
                 "    }}\n"
-                "    if (have_second == 0) {{\n"
+                "    if (!have_second) {{\n"
                 "        return vars[best];\n"
                 "    }}\n"
                 "    // The AGE test, and the whole idea of Novelty: if the best variable is the\n"
                 "    // one flipped most recently in this clause, taking it again probably just\n"
                 "    // undoes the last move, so the second best is considered instead.\n"
-                "    unsigned youngest = 0u;\n"
-                "    for (unsigned i = 1u; i < n; ++i) {{\n"
-                "        if (s->age[vars[i]] > s->age[vars[youngest]]) {{\n"
+                "    std::uint32_t youngest = 0U;\n"
+                "    for (std::uint32_t i = 1U; i < n; ++i) {{\n"
+                "        if (s.age[vars[i]] > s.age[vars[youngest]]) {{\n"
                 "            youngest = i;\n"
                 "        }}\n"
                 "    }}\n"
-                "    (void)step;\n"
+                "    // The age comparison is relative, so the absolute flip counter is not read.\n"
+                "    static_cast<void>(step);\n"
                 "    if (best != youngest) {{\n"
                 "        return vars[best];\n"
                 "    }}\n"
@@ -970,12 +995,24 @@ template <typename T>
     // variant takes the caller's setting. Starting the adaptive rule at the caller's noise would
     // be a different algorithm wearing its name.
     const std::string initial_noise =
-        opts.variant == SlsVariant::adaptive_novelty_plus ? "0u" : "noise_percent";
+        opts.variant == SlsVariant::adaptive_novelty_plus ? "0U" : "noise_percent";
 
     // AdaptNovelty+'s noise control, emitted into the walk loop only for that variant. Hoos's
     // constants: the noise rises when the best unsatisfied count has not improved for a sixth of
     // the clause count, and falls by half that step when it does improve. Everything is integer
     // percent, so the schedule is exact and reproducible.
+    // The adaptive schedule's state. Declared for every variant, these were two unused
+    // variables in three of the four emitted files -- and `noise_percent` is genuinely unread by
+    // the adaptive rule, which starts from zero and tunes itself.
+    const std::string adapt_state =
+        opts.variant == SlsVariant::adaptive_novelty_plus
+            ? std::string(
+                  "    // AdaptNovelty+ sets its own noise, so the caller's setting is not read.\n"
+                  "    static_cast<void>(noise_percent);\n"
+                  "    std::uint64_t best_unsat = 0xFFFFFFFFFFFFFFFFULL;\n"
+                  "    std::uint64_t last_improve = 0ULL;\n")
+            : std::string("");
+
     const std::string adapt =
         opts.variant == SlsVariant::adaptive_novelty_plus
             ? std::string(
@@ -989,16 +1026,16 @@ template <typename T>
                   "        // clause count, p rises by a fifth of its headroom. Progress lowers it\n"
                   "        // again, by HALF that step, so the noise falls back more slowly than it\n"
                   "        // climbed and the search is not thrown straight back into greed.\n"
-                  "        const unsigned long long now_unsat = s->unsat.size();\n"
+                  "        const std::uint64_t now_unsat = s.unsat.size();\n"
                   "        if (now_unsat < best_unsat) {\n"
                   "            best_unsat = now_unsat;\n"
                   "            last_improve = flip;\n"
-                  "            noise = noise - noise / 10u;\n"
+                  "            noise = noise - noise / 10U;\n"
                   "        } else if (flip - last_improve > (nc_" + e +
-                  "_nclauses / 6u) + 1u) {\n"
-                  "            noise = noise + ((100u - noise) / 5u);\n"
-                  "            if (noise > 99u) {\n"
-                  "                noise = 99u;\n"
+                  "_nclauses / 6U) + 1U) {\n"
+                  "            noise = noise + ((100U - noise) / 5U);\n"
+                  "            if (noise > 99U) {\n"
+                  "                noise = 99U;\n"
                   "            }\n"
                   "            last_improve = flip;\n"
                   "            // The reference count RESETS here, and this line is the whole\n"
@@ -1028,65 +1065,63 @@ template <typename T>
         "// search with no synchronisation at all. The reduction takes the LOWEST-INDEXED walker\n"
         "// that succeeded rather than the first to finish, so the answer is reproducible however\n"
         "// many threads run it.\n\n"
-        "#include <cstdint>\n"
-        "#include <cstddef>\n"
-        "#include <vector>\n",
+        "import std;\n\n",
         cnf.num_vars, cnf.clauses.size());
-    if (opts.emit_parallel) {
-        out += "#include <thread>\n";
-    }
-    out += '\n';
-    out += emit_tables(cnf, f, e, "static const ");
+    out += emit_tables(cnf, f, e, /*device=*/false);
 
     out += std::format(
         "// xorshift64*, seeded through splitmix64. Self-contained on purpose: emitted code must\n"
         "// not depend on the host's <random>, whose engines differ between standard libraries\n"
         "// and would make the same seed give different answers on different machines.\n"
-        "static inline unsigned long long nc_{0}_mix(unsigned long long z) {{\n"
+        "[[nodiscard]] constexpr auto nc_{0}_mix(std::uint64_t z) noexcept -> std::uint64_t {{\n"
         "    z += 0x9E3779B97F4A7C15ULL;\n"
         "    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;\n"
         "    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;\n"
         "    return z ^ (z >> 31);\n"
         "}}\n\n"
-        "static inline unsigned long long nc_{0}_next(unsigned long long* s) {{\n"
-        "    unsigned long long x = *s;\n"
+        "// Advances the state and returns the draw, so the result is never incidental.\n"
+        "[[nodiscard]] constexpr auto nc_{0}_next(std::uint64_t& state) noexcept -> std::uint64_t {{\n"
+        "    std::uint64_t x = state;\n"
         "    x ^= x >> 12;\n"
         "    x ^= x << 25;\n"
         "    x ^= x >> 27;\n"
-        "    *s = x;\n"
+        "    state = x;\n"
         "    return x * 0x2545F4914F6CDD1DULL;\n"
         "}}\n\n"
         "// Scratch for one walker. Allocated once per walker rather than per restart: the walk is\n"
         "// long and the allocation is not part of what is being measured.\n"
         "struct nc_{0}_scratch {{\n"
-        "    std::vector<unsigned char> assign;    // one byte per variable\n"
-        "    std::vector<unsigned> true_count;     // true literals in each clause\n"
-        "    std::vector<unsigned> unsat;          // the currently unsatisfied clauses\n"
-        "    std::vector<unsigned> unsat_at;       // where clause c sits in `unsat`\n"
-        "    std::vector<unsigned long long> age;  // step each variable was last flipped at\n"
-        "}};\n\n"
-        "static inline void nc_{0}_alloc(nc_{0}_scratch* s) {{\n"
-        "    s->assign.assign(nc_{0}_nvars, 0);\n"
-        "    s->true_count.assign(nc_{0}_nclauses, 0);\n"
-        "    s->unsat.clear();\n"
-        "    s->unsat.reserve(nc_{0}_nclauses);\n"
-        "    s->unsat_at.assign(nc_{0}_nclauses, 0);\n"
-        "    s->age.assign(nc_{0}_nvars, 0ULL);\n"
-        "}}\n\n",
+        "    std::vector<std::uint8_t> assign;      // one byte per variable\n"
+        "    std::vector<std::uint32_t> true_count; // true literals in each clause\n"
+        "    std::vector<std::uint32_t> unsat;      // the currently unsatisfied clauses\n"
+        "    std::vector<std::uint32_t> unsat_at;   // where clause c sits in `unsat`\n"
+        "    std::vector<std::uint64_t> age;        // step each variable was last flipped at\n"
+        "\n"
+        "    // The scratch sizes itself (Rule 6). A separate allocate step is a step a caller can\n"
+        "    // omit, and an unsized scratch indexes out of bounds on the first flip.\n"
+        "    nc_{0}_scratch()\n"
+        "        : assign(nc_{0}_nvars, 0), true_count(nc_{0}_nclauses, 0),\n"
+        "          unsat_at(nc_{0}_nclauses, 0), age(nc_{0}_nvars, 0ULL) {{\n"
+        "        unsat.reserve(nc_{0}_nclauses);\n"
+        "    }}\n"
+        "}};\n\n",
         e);
 
     out += std::format(
         "// The number of clauses that flipping variable v would BREAK: those where v's literal is\n"
         "// currently the only true one. Because occurrences are split by sign, the clauses at risk\n"
         "// are exactly one contiguous list and no sign test is needed inside the loop.\n"
-        "static inline unsigned nc_{0}_break_count(const nc_{0}_scratch* s, unsigned v) {{\n"
-        "    const unsigned char val = s->assign[v];\n"
-        "    const unsigned* list = val ? nc_{0}_occp : nc_{0}_occn;\n"
-        "    const unsigned* start = val ? nc_{0}_opstart : nc_{0}_onstart;\n"
-        "    const unsigned from = start[v];\n"
-        "    const unsigned to = start[v + 1u];\n"
-        "    const unsigned* counts = s->true_count.data();\n"
-        "    unsigned broken = 0;\n",
+        "[[nodiscard]] inline auto nc_{0}_break_count(const nc_{0}_scratch& s, std::uint32_t v)\n"
+        "    -> std::uint32_t {{\n"
+        "    using nc_{0}_list = std::span<const std::uint32_t>;\n"
+        "    const bool val = s.assign[v] != 0U;\n"
+        "    const nc_{0}_list list = val ? nc_{0}_list{{nc_{0}_occp}} : nc_{0}_list{{nc_{0}_occn}};\n"
+        "    const nc_{0}_list start =\n"
+        "        val ? nc_{0}_list{{nc_{0}_opstart}} : nc_{0}_list{{nc_{0}_onstart}};\n"
+        "    const std::uint32_t from = start[v];\n"
+        "    const std::uint32_t to = start[v + 1U];\n"
+        "    const nc_{0}_list counts{{s.true_count}};\n"
+        "    std::uint32_t broken = 0;\n",
         e);
     if (opts.emit_simd) {
         out += std::format(
@@ -1094,26 +1129,26 @@ template <typename T>
             "    // hot loop of WalkSAT -- a scan of a contiguous index list, gathering counts and\n"
             "    // testing each against one -- and it is the one part of the walk that is genuinely\n"
             "    // data-parallel. Everything else in the flip is a dependent gather.\n"
-            "    using nc_{0}_u32x8 [[gnu::vector_size(32)]] = unsigned;\n"
-            "    unsigned i = from;\n"
-            "    for (; i + 8u <= to; i += 8u) {{\n"
-            "        nc_{0}_u32x8 g;\n"
-            "        for (unsigned k = 0; k < 8u; ++k) {{\n"
+            "    using nc_{0}_u32x8 [[gnu::vector_size(32)]] = std::uint32_t;\n"
+            "    std::uint32_t i = from;\n"
+            "    for (; i + 8U <= to; i += 8U) {{\n"
+            "        nc_{0}_u32x8 g{{}};\n"
+            "        for (std::uint32_t k = 0; k < 8U; ++k) {{\n"
             "            g[k] = counts[list[i + k]];\n"
             "        }}\n"
-            "        const nc_{0}_u32x8 hit = (g == 1u);\n"
-            "        for (unsigned k = 0; k < 8u; ++k) {{\n"
-            "            broken += (hit[k] != 0u) ? 1u : 0u;\n"
+            "        const nc_{0}_u32x8 hit = (g == 1U);\n"
+            "        for (std::uint32_t k = 0; k < 8U; ++k) {{\n"
+            "            broken += (hit[k] != 0U) ? 1U : 0U;\n"
             "        }}\n"
             "    }}\n"
             "    for (; i < to; ++i) {{\n"
-            "        broken += (counts[list[i]] == 1u) ? 1u : 0u;\n"
+            "        broken += (counts[list[i]] == 1U) ? 1U : 0U;\n"
             "    }}\n",
             e);
     } else {
         out += std::format(
-            "    for (unsigned i = from; i < to; ++i) {{\n"
-            "        broken += (counts[list[i]] == 1u) ? 1u : 0u;\n"
+            "    for (std::uint32_t i = from; i < to; ++i) {{\n"
+            "        broken += (counts[list[i]] == 1U) ? 1U : 0U;\n"
             "    }}\n");
     }
     out += "    return broken;\n}\n\n";
@@ -1125,52 +1160,59 @@ template <typename T>
         "// Novelty scores by make MINUS break, not by break alone. A variable that breaks two\n"
         "// clauses but repairs five is a good move, and a rule that cannot see the five will\n"
         "// refuse it -- which is measurably worse, not merely different.\n"
-        "static inline unsigned nc_{0}_make_count(const nc_{0}_scratch* s, unsigned v) {{\n"
-        "    const unsigned char val = s->assign[v];\n"
+        "[[nodiscard]] inline auto nc_{0}_make_count(const nc_{0}_scratch& s, std::uint32_t v)\n"
+        "    -> std::uint32_t {{\n"
+        "    using nc_{0}_list = std::span<const std::uint32_t>;\n"
+        "    const bool val = s.assign[v] != 0U;\n"
         "    // Flipping v makes its OPPOSITE-sign occurrences true.\n"
-        "    const unsigned* list = val ? nc_{0}_occn : nc_{0}_occp;\n"
-        "    const unsigned* start = val ? nc_{0}_onstart : nc_{0}_opstart;\n"
-        "    unsigned made = 0;\n"
-        "    for (unsigned i = start[v]; i < start[v + 1u]; ++i) {{\n"
-        "        made += (s->true_count[list[i]] == 0u) ? 1u : 0u;\n"
+        "    const nc_{0}_list list = val ? nc_{0}_list{{nc_{0}_occn}} : nc_{0}_list{{nc_{0}_occp}};\n"
+        "    const nc_{0}_list start =\n"
+        "        val ? nc_{0}_list{{nc_{0}_onstart}} : nc_{0}_list{{nc_{0}_opstart}};\n"
+        "    std::uint32_t made = 0;\n"
+        "    for (std::uint32_t i = start[v]; i < start[v + 1U]; ++i) {{\n"
+        "        made += (s.true_count[list[i]] == 0U) ? 1U : 0U;\n"
         "    }}\n"
         "    return made;\n"
         "}}\n\n",
         e);
 
     out += std::format(
-        "static inline void nc_{0}_set_unsat(nc_{0}_scratch* s, unsigned c) {{\n"
-        "    s->unsat_at[c] = static_cast<unsigned>(s->unsat.size());\n"
-        "    s->unsat.push_back(c);\n"
+        "inline auto nc_{0}_set_unsat(nc_{0}_scratch& s, std::uint32_t c) -> void {{\n"
+        "    s.unsat_at[c] = static_cast<std::uint32_t>(s.unsat.size());\n"
+        "    s.unsat.push_back(c);\n"
         "}}\n\n"
-        "static inline void nc_{0}_clear_unsat(nc_{0}_scratch* s, unsigned c) {{\n"
+        "inline auto nc_{0}_clear_unsat(nc_{0}_scratch& s, std::uint32_t c) -> void {{\n"
         "    // Swap-with-last removal, so dropping a clause from the unsatisfied set is O(1) and\n"
         "    // the set stays a dense array a random index can address directly.\n"
-        "    const unsigned at = s->unsat_at[c];\n"
-        "    const unsigned last = s->unsat.back();\n"
-        "    s->unsat[at] = last;\n"
-        "    s->unsat_at[last] = at;\n"
-        "    s->unsat.pop_back();\n"
+        "    const std::uint32_t at = s.unsat_at[c];\n"
+        "    const std::uint32_t last = s.unsat.back();\n"
+        "    s.unsat[at] = last;\n"
+        "    s.unsat_at[last] = at;\n"
+        "    s.unsat.pop_back();\n"
         "}}\n\n"
         "// Flips v and repairs the incremental state. The counts and the unsatisfied set are\n"
         "// maintained rather than recomputed -- that is what makes a flip cost the size of one\n"
         "// variable's occurrence list instead of the whole formula.\n"
-        "static inline void nc_{0}_flip(nc_{0}_scratch* s, unsigned v) {{\n"
-        "    const unsigned char was = s->assign[v];\n"
-        "    s->assign[v] = static_cast<unsigned char>(was ^ 1u);\n"
-        "    const unsigned* losing = was ? nc_{0}_occp : nc_{0}_occn;\n"
-        "    const unsigned* lstart = was ? nc_{0}_opstart : nc_{0}_onstart;\n"
-        "    const unsigned* gaining = was ? nc_{0}_occn : nc_{0}_occp;\n"
-        "    const unsigned* gstart = was ? nc_{0}_onstart : nc_{0}_opstart;\n"
-        "    for (unsigned i = gstart[v]; i < gstart[v + 1u]; ++i) {{\n"
-        "        const unsigned c = gaining[i];\n"
-        "        if (s->true_count[c]++ == 0u) {{\n"
+        "inline auto nc_{0}_flip(nc_{0}_scratch& s, std::uint32_t v) -> void {{\n"
+        "    using nc_{0}_list = std::span<const std::uint32_t>;\n"
+        "    const bool was = s.assign[v] != 0U;\n"
+        "    s.assign[v] = static_cast<std::uint8_t>(was ? 0U : 1U);\n"
+        "    const nc_{0}_list losing = was ? nc_{0}_list{{nc_{0}_occp}} : nc_{0}_list{{nc_{0}_occn}};\n"
+        "    const nc_{0}_list lstart =\n"
+        "        was ? nc_{0}_list{{nc_{0}_opstart}} : nc_{0}_list{{nc_{0}_onstart}};\n"
+        "    const nc_{0}_list gaining =\n"
+        "        was ? nc_{0}_list{{nc_{0}_occn}} : nc_{0}_list{{nc_{0}_occp}};\n"
+        "    const nc_{0}_list gstart =\n"
+        "        was ? nc_{0}_list{{nc_{0}_onstart}} : nc_{0}_list{{nc_{0}_opstart}};\n"
+        "    for (std::uint32_t i = gstart[v]; i < gstart[v + 1U]; ++i) {{\n"
+        "        const std::uint32_t c = gaining[i];\n"
+        "        if (s.true_count[c]++ == 0U) {{\n"
         "            nc_{0}_clear_unsat(s, c);\n"
         "        }}\n"
         "    }}\n"
-        "    for (unsigned i = lstart[v]; i < lstart[v + 1u]; ++i) {{\n"
-        "        const unsigned c = losing[i];\n"
-        "        if (--s->true_count[c] == 0u) {{\n"
+        "    for (std::uint32_t i = lstart[v]; i < lstart[v + 1U]; ++i) {{\n"
+        "        const std::uint32_t c = losing[i];\n"
+        "        if (--s.true_count[c] == 0U) {{\n"
         "            nc_{0}_set_unsat(s, c);\n"
         "        }}\n"
         "    }}\n"
@@ -1187,80 +1229,82 @@ template <typename T>
         "// with probability `noise` take a random variable from the clause and with the remaining\n"
         "// probability the one that breaks fewest. The random move is what escapes local minima,\n"
         "// and without it this degenerates into greedy descent that sticks.\n"
-        "static int nc_{0}_walk(nc_{0}_scratch* s, unsigned long long seed,\n"
-        "                       unsigned long long max_flips, unsigned noise_percent) {{\n"
-        "    unsigned noise = {2};\n"
-        "    unsigned long long best_unsat = 0xFFFFFFFFFFFFFFFFULL;\n"
-        "    unsigned long long last_improve = 0ULL;\n"
-        "    unsigned long long rng = nc_{0}_mix(seed) | 1ULL;\n"
-        "    for (unsigned v = 0; v < nc_{0}_nvars; ++v) {{\n"
-        "        s->assign[v] = static_cast<unsigned char>(nc_{0}_next(&rng) & 1ULL);\n"
+        "[[nodiscard]] inline auto nc_{0}_walk(nc_{0}_scratch& s, std::uint64_t seed,\n"
+        "                                      std::uint64_t max_flips,\n"
+        "                                      std::uint32_t noise_percent) -> bool {{\n"
+        "    std::uint32_t noise = {2};\n"
+        "{3}"
+        "    std::uint64_t rng = nc_{0}_mix(seed) | 1ULL;\n"
+        "    for (std::uint32_t v = 0; v < nc_{0}_nvars; ++v) {{\n"
+        "        s.assign[v] = static_cast<std::uint8_t>(nc_{0}_next(rng) & 1ULL);\n"
         "        // Ages MUST be cleared per walk, not per walker range. The flip counter restarts\n"
         "        // at zero here, so an age left from the previous walk would read as being in the\n"
         "        // future, and the age-based rules would consult nonsense.\n"
-        "        s->age[v] = 0ULL;\n"
+        "        s.age[v] = 0ULL;\n"
         "    }}\n"
-        "    s->unsat.clear();\n"
-        "    for (unsigned c = 0; c < nc_{0}_nclauses; ++c) {{\n"
-        "        unsigned t = 0;\n"
-        "        for (unsigned i = nc_{0}_cstart[c]; i < nc_{0}_cstart[c + 1u]; ++i) {{\n"
-        "            const int lit = nc_{0}_lits[i];\n"
-        "            const unsigned v = static_cast<unsigned>(lit < 0 ? -lit : lit) - 1u;\n"
-        "            t += ((lit > 0) == (s->assign[v] != 0u)) ? 1u : 0u;\n"
+        "    s.unsat.clear();\n"
+        "    for (std::uint32_t c = 0; c < nc_{0}_nclauses; ++c) {{\n"
+        "        std::uint32_t t = 0;\n"
+        "        for (std::uint32_t i = nc_{0}_cstart[c]; i < nc_{0}_cstart[c + 1U]; ++i) {{\n"
+        "            const std::int32_t lit = nc_{0}_lits[i];\n"
+        "            const std::uint32_t v = static_cast<std::uint32_t>(lit < 0 ? -lit : lit) - 1U;\n"
+        "            t += ((lit > 0) == (s.assign[v] != 0U)) ? 1U : 0U;\n"
         "        }}\n"
-        "        s->true_count[c] = t;\n"
-        "        if (t == 0u) {{\n"
+        "        s.true_count[c] = t;\n"
+        "        if (t == 0U) {{\n"
         "            nc_{0}_set_unsat(s, c);\n"
         "        }}\n"
         "    }}\n\n"
-        "    for (unsigned long long flip = 0; flip < max_flips; ++flip) {{\n"
-        "        if (s->unsat.empty()) {{\n"
-        "            return 1;\n"
+        "    for (std::uint64_t flip = 0; flip < max_flips; ++flip) {{\n"
+        "        if (s.unsat.empty()) {{\n"
+        "            return true;\n"
         "        }}\n"
-        "        const unsigned pick =\n"
-        "            static_cast<unsigned>(nc_{0}_next(&rng) % s->unsat.size());\n"
-        "        const unsigned c = s->unsat[pick];\n"
-        "        const unsigned from = nc_{0}_cstart[c];\n"
-        "        const unsigned to = nc_{0}_cstart[c + 1u];\n"
+        "        const std::uint32_t pick =\n"
+        "            static_cast<std::uint32_t>(nc_{0}_next(rng) % s.unsat.size());\n"
+        "        const std::uint32_t c = s.unsat[pick];\n"
+        "        const std::uint32_t from = nc_{0}_cstart[c];\n"
+        "        const std::uint32_t to = nc_{0}_cstart[c + 1U];\n"
         "        if (from == to) {{\n"
-        "            return 0;  // an empty clause can never be satisfied by any walk\n"
+        "            return false;  // an empty clause can never be satisfied by any walk\n"
         "        }}\n"
         "        // The variable-choice rule. Everything above this line is shared by all four\n"
         "        // variants; the rule is the only thing they disagree about.\n"
-        "        const unsigned chosen =\n"
-        "            nc_{0}_choose(s, from, to, flip, noise, &rng);\n"
-        "        s->age[chosen] = flip + 1ULL;\n"
+        "        const std::uint32_t chosen =\n"
+        "            nc_{0}_choose(s, from, to, flip, noise, rng);\n"
+        "        s.age[chosen] = flip + 1ULL;\n"
         "{1}"
         "        nc_{0}_flip(s, chosen);\n"
         "    }}\n"
-        "    return s->unsat.empty() ? 1 : 0;\n"
+        "    return s.unsat.empty();\n"
         "}}\n\n",
-        e, adapt, initial_noise);
+        e, adapt, initial_noise, adapt_state);
 
     out += std::format(
-        "// The result of a solve: `found` is 0 or 1, and `model` is meaningful only when found.\n"
+        "// No walker succeeded. The largest index, so a minimum reduction discards it without\n"
+        "// needing a special case.\n"
+        "inline constexpr std::uint32_t nc_{0}_no_walker = 0xFFFFFFFFU;\n\n"
+        "// The result of a solve. `model` is meaningful only when `found`.\n"
         "struct {0}_result {{\n"
-        "    int found;\n"
-        "    unsigned walker;                    // which walk succeeded; 0xFFFFFFFF if none\n"
-        "    std::vector<unsigned char> model;   // one byte per variable\n"
+        "    bool found{{false}};\n"
+        "    std::uint32_t walker{{nc_{0}_no_walker}};  // which walk succeeded\n"
+        "    std::vector<std::uint8_t> model;          // one byte per variable\n"
         "}};\n\n"
         "// Runs walkers [first, first + count) in this thread and returns the LOWEST-INDEXED one\n"
         "// that succeeded.\n"
-        "inline {0}_result {0}_solve_range(unsigned first, unsigned count,\n"
-        "                                  unsigned long long max_flips, unsigned noise_percent,\n"
-        "                                  unsigned long long base_seed) {{\n"
+        "[[nodiscard]] inline auto {0}_solve_range(std::uint32_t first, std::uint32_t count,\n"
+        "                                         std::uint64_t max_flips,\n"
+        "                                         std::uint32_t noise_percent,\n"
+        "                                         std::uint64_t base_seed) -> {0}_result {{\n"
         "    {0}_result out;\n"
-        "    out.found = 0;\n"
-        "    out.walker = 0xFFFFFFFFu;\n"
         "    nc_{0}_scratch s;\n"
-        "    nc_{0}_alloc(&s);\n"
-        "    for (unsigned w = first; w < first + count; ++w) {{\n"
+        "    for (std::uint32_t w = first; w < first + count; ++w) {{\n"
         "        // Each walker's seed is derived from the base and its own index, so a walker's\n"
         "        // trajectory depends on nothing but those two -- not on the thread it ran on,\n"
         "        // nor on how many walkers there were.\n"
-        "        if (nc_{0}_walk(&s, base_seed + static_cast<unsigned long long>(w) * 0x9E3779B97F4A7C15ULL,\n"
-        "                        max_flips, noise_percent) != 0) {{\n"
-        "            out.found = 1;\n"
+        "        const std::uint64_t seed =\n"
+        "            base_seed + (static_cast<std::uint64_t>(w) * 0x9E3779B97F4A7C15ULL);\n"
+        "        if (nc_{0}_walk(s, seed, max_flips, noise_percent)) {{\n"
+        "            out.found = true;\n"
         "            out.walker = w;\n"
         "            out.model = s.assign;\n"
         "            return out;\n"
@@ -1279,33 +1323,26 @@ template <typename T>
             "// lowest-indexed successful walker overall, which does not depend on the thread count\n"
             "// or on which thread finished first -- so a run on one core and a run on sixty-four\n"
             "// return the same model.\n"
-            "inline {0}_result {0}_solve_parallel(unsigned walkers, unsigned threads,\n"
-            "                                     unsigned long long max_flips,\n"
-            "                                     unsigned noise_percent,\n"
-            "                                     unsigned long long base_seed) {{\n"
-            "    if (threads == 0u) {{\n"
-            "        threads = 1u;\n"
-            "    }}\n"
-            "    if (walkers == 0u) {{\n"
-            "        walkers = 1u;\n"
-            "    }}\n"
-            "    if (threads > walkers) {{\n"
-            "        threads = walkers;\n"
-            "    }}\n"
-            "    const unsigned per = (walkers + threads - 1u) / threads;\n"
-            "    std::vector<{0}_result> found(threads);\n"
+            "[[nodiscard]] inline auto {0}_solve_parallel(std::uint32_t walkers,\n"
+            "                                            std::uint32_t threads,\n"
+            "                                            std::uint64_t max_flips,\n"
+            "                                            std::uint32_t noise_percent,\n"
+            "                                            std::uint64_t base_seed) -> {0}_result {{\n"
+            "    const std::uint32_t total_walkers = walkers == 0U ? 1U : walkers;\n"
+            "    const std::uint32_t wanted = threads == 0U ? 1U : threads;\n"
+            "    const std::uint32_t workers = wanted > total_walkers ? total_walkers : wanted;\n"
+            "    const std::uint32_t per = (total_walkers + workers - 1U) / workers;\n"
+            "    std::vector<{0}_result> found(workers);\n"
             "    {{\n"
             "        std::vector<std::jthread> ws;\n"
-            "        ws.reserve(threads);\n"
-            "        for (unsigned t = 0; t < threads; ++t) {{\n"
-            "            const unsigned first = t * per;\n"
-            "            if (first >= walkers) {{\n"
-            "                found[t].found = 0;\n"
-            "                found[t].walker = 0xFFFFFFFFu;\n"
+            "        ws.reserve(workers);\n"
+            "        for (std::uint32_t t = 0; t < workers; ++t) {{\n"
+            "            const std::uint32_t first = t * per;\n"
+            "            if (first >= total_walkers) {{\n"
             "                continue;\n"
             "            }}\n"
-            "            const unsigned count =\n"
-            "                (first + per > walkers) ? (walkers - first) : per;\n"
+            "            const std::uint32_t count =\n"
+            "                (first + per > total_walkers) ? (total_walkers - first) : per;\n"
             "            ws.emplace_back([&found, t, first, count, max_flips, noise_percent,\n"
             "                             base_seed]() {{\n"
             "                found[t] = {0}_solve_range(first, count, max_flips, noise_percent,\n"
@@ -1314,10 +1351,8 @@ template <typename T>
             "        }}\n"
             "    }}\n"
             "    {0}_result best;\n"
-            "    best.found = 0;\n"
-            "    best.walker = 0xFFFFFFFFu;\n"
-            "    for (unsigned t = 0; t < threads; ++t) {{\n"
-            "        if (found[t].found != 0 && found[t].walker < best.walker) {{\n"
+            "    for (std::uint32_t t = 0; t < workers; ++t) {{\n"
+            "        if (found[t].found && found[t].walker < best.walker) {{\n"
             "            best = found[t];\n"
             "        }}\n"
             "    }}\n"
@@ -1328,9 +1363,10 @@ template <typename T>
 
     out += std::format(
         "// Every walker on this thread.\n"
-        "inline {0}_result {0}_solve(unsigned walkers, unsigned long long max_flips,\n"
-        "                            unsigned noise_percent, unsigned long long base_seed) {{\n"
-        "    return {0}_solve_range(0u, walkers, max_flips, noise_percent, base_seed);\n"
+        "[[nodiscard]] inline auto {0}_solve(std::uint32_t walkers, std::uint64_t max_flips,\n"
+        "                                   std::uint32_t noise_percent,\n"
+        "                                   std::uint64_t base_seed) -> {0}_result {{\n"
+        "    return {0}_solve_range(0U, walkers, max_flips, noise_percent, base_seed);\n"
         "}}\n",
         e);
     return out;
@@ -1369,7 +1405,7 @@ template <typename T>
     // formula and would overflow the 64 KB constant bank, and unified memory lets the HOST read
     // the same arrays -- so a caller can verify a returned model without a second copy of the
     // formula.
-    out += emit_tables(cnf, f, e, "__managed__ ");
+    out += emit_tables(cnf, f, e, /*device=*/true);
 
     out += std::format(
         "__device__ __forceinline__ unsigned long long nc_{0}_mix(unsigned long long z) {{\n"

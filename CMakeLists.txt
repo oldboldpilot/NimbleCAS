@@ -2551,3 +2551,9 @@ add_executable(sat_compile tools/sat_compile.cpp)
 target_link_libraries(sat_compile
   PRIVATE nimblecas_sat_compile nimblecas_sat nimblecas_rng nimblecas_parallel
           nimblecas_core std_module)
+
+# The third emitter's front end, so every generator this repo ships can be driven from a shell
+# and its output put through a compiler by scripts/verify-generated.sh.
+add_executable(csp_compile tools/csp_compile.cpp)
+target_link_libraries(csp_compile
+  PRIVATE nimblecas_csp_compile nimblecas_csp nimblecas_parallel nimblecas_core std_module)

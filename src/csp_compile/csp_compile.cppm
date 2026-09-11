@@ -331,7 +331,7 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
 }
 
 // The domain table, emitted once and shared by every entry point.
-[[nodiscard]] auto emit_domains(const WireCsp& w, std::string_view p, std::string_view qual)
+[[nodiscard]] auto emit_domains(const WireCsp& w, std::string_view p, bool device)
     -> std::string {
     std::string out;
     std::string flat;
@@ -353,9 +353,22 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
             ++running;
         }
     }
-    out += std::format("{}long long {}_domain_values[] = {{{}}};\n", qual, p, flat);
-    out += std::format("{}unsigned long long {}_domain_offset[] = {{{}}};\n", qual, p, offsets);
-    out += std::format("{}unsigned long long {}_domain_size[] = {{{}}};\n", qual, p, sizes);
+    if (device) {
+        out += std::format("__device__ __constant__ long long {}_domain_values[] = {{{}}};\n", p,
+                           flat);
+        out += std::format("__device__ __constant__ unsigned long long {}_domain_offset[] = "
+                           "{{{}}};\n", p, offsets);
+        out += std::format("__device__ __constant__ unsigned long long {}_domain_size[] = "
+                           "{{{}}};\n", p, sizes);
+        return out;
+    }
+    const std::size_t nvars = w.domains.size();
+    out += std::format("inline constexpr std::array<std::int64_t, {}> {}_domain_values{{{}}};\n",
+                       running, p, flat);
+    out += std::format("inline constexpr std::array<std::size_t, {}> {}_domain_offset{{{}}};\n",
+                       nvars, p, offsets);
+    out += std::format("inline constexpr std::array<std::size_t, {}> {}_domain_size{{{}}};\n",
+                       nvars, p, sizes);
     return out;
 }
 
@@ -390,11 +403,22 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
     return out;
 }
 
-[[nodiscard]] auto emit_check_fn(const WireCsp& w, std::string_view p, std::string_view qual)
+[[nodiscard]] auto emit_check_fn(const WireCsp& w, std::string_view p, bool device)
     -> std::string {
+    // Device code has neither std::span nor std::array, so the two targets genuinely differ in
+    // how an assignment is passed. Everything between the signatures is identical.
+    const std::string_view assignment =
+        device ? "const long long* a" : "std::span<const std::int64_t> a";
+    const std::string_view count_t = device ? "unsigned long long" : "std::size_t";
+
     std::string out;
     out += std::format("// True when `a` satisfies every constraint.\n");
-    out += std::format("{}bool {}_satisfies(const long long* a) {{\n", qual, p);
+    if (device) {
+        out += std::format("__device__ inline bool {}_satisfies({}) {{\n", p, assignment);
+    } else {
+        out += std::format("[[nodiscard]] inline auto {}_satisfies({}) -> bool {{\n", p,
+                           assignment);
+    }
     for (const auto& c : w.constraints) {
         out += std::format("    if (!{}) {{ return false; }}  // {}\n",
                            emit_constraint_expr(c, "a", /*python=*/false), kind_name(c.kind));
@@ -402,8 +426,14 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
     out += "    return true;\n}\n\n";
 
     out += std::format("// How many constraints `a` violates; zero exactly when it is a solution.\n");
-    out += std::format("{}unsigned long long {}_conflicts(const long long* a) {{\n", qual, p);
-    out += "    unsigned long long n = 0;\n";
+    if (device) {
+        out += std::format("__device__ inline unsigned long long {}_conflicts({}) {{\n", p,
+                           assignment);
+    } else {
+        out += std::format("[[nodiscard]] inline auto {}_conflicts({}) -> std::size_t {{\n", p,
+                           assignment);
+    }
+    out += std::format("    {} n = 0;\n", count_t);
     for (const auto& c : w.constraints) {
         out += std::format("    if (!{}) {{ ++n; }}  // {}\n", emit_constraint_expr(c, "a", /*python=*/false),
                            kind_name(c.kind));
@@ -416,11 +446,18 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
     // any size, wasting most steps is the difference between solving it and not.
     out += "// The variables taking part in at least one violated constraint, written into\n";
     out += "// `out`; returns how many. Re-valuing anything else cannot repair the assignment.\n";
-    out += std::format("{}unsigned long long {}_conflicted(const long long* a, unsigned long long* out) {{\n",
-                       qual, p);
-    out += std::format("    bool m[{}];\n", w.domains.size());
-    out += std::format("    for (unsigned long long i = 0; i < {}ULL; ++i) {{ m[i] = false; }}\n",
-                       w.domains.size());
+    if (device) {
+        out += std::format("__device__ inline unsigned long long {}_conflicted({}, unsigned long "
+                           "long* out) {{\n", p, assignment);
+        out += std::format("    bool m[{}];\n", w.domains.size());
+        out += std::format("    for (unsigned long long i = 0; i < {}ULL; ++i) {{ m[i] = false; }}\n",
+                           w.domains.size());
+    } else {
+        out += std::format("[[nodiscard]] inline auto {}_conflicted({}, std::span<std::size_t> out)"
+                           "\n    -> std::size_t {{\n", p, assignment);
+        // Value-initialised, so the separate clearing loop the device path still needs is gone.
+        out += std::format("    std::array<bool, {}> m{{}};\n", w.domains.size());
+    }
     for (const auto& c : w.constraints) {
         std::string marks;
         for (const std::size_t idx : c.scope) {
@@ -429,24 +466,40 @@ auto decode_index(const WireCsp& w, std::uint64_t index, std::vector<std::int64_
         out += std::format("    if (!{}) {{{} }}  // {}\n", emit_constraint_expr(c, "a", /*python=*/false), marks,
                            kind_name(c.kind));
     }
-    out += "    unsigned long long k = 0;\n";
-    out += std::format("    for (unsigned long long i = 0; i < {}ULL; ++i) {{\n",
-                       w.domains.size());
+    out += std::format("    {} k = 0;\n", count_t);
+    if (device) {
+        out += std::format("    for (unsigned long long i = 0; i < {}ULL; ++i) {{\n",
+                           w.domains.size());
+    } else {
+        out += std::format("    for (std::size_t i = 0; i < {}; ++i) {{\n", w.domains.size());
+    }
     out += "        if (m[i]) { out[k] = i; ++k; }\n";
     out += "    }\n    return k;\n}\n\n";
     return out;
 }
 
-[[nodiscard]] auto emit_decode_fn(const WireCsp& w, std::string_view p, std::string_view qual)
+[[nodiscard]] auto emit_decode_fn(const WireCsp& w, std::string_view p, bool device)
     -> std::string {
     std::string out;
     out += "// Decodes an assignment index into values, the LAST variable varying fastest, so\n";
     out += "// ascending index walks the assignments in ascending lexicographic order.\n";
-    out += std::format("{}void {}_decode(unsigned long long index, long long* out) {{\n", qual, p);
-    out += "    unsigned long long rest = index;\n";
-    out += std::format("    for (long long i = {}; i >= 0; --i) {{\n",
-                       static_cast<std::int64_t>(w.domains.size()) - 1);
-    out += std::format("        const unsigned long long sz = {}_domain_size[i];\n", p);
+    if (device) {
+        out += std::format("__device__ inline void {}_decode(unsigned long long index, long long* out) {{\n",
+                           p);
+        out += "    unsigned long long rest = index;\n";
+        out += std::format("    for (long long i = {}; i >= 0; --i) {{\n",
+                           static_cast<std::int64_t>(w.domains.size()) - 1);
+        out += std::format("        const unsigned long long sz = {}_domain_size[i];\n", p);
+    } else {
+        out += std::format("inline auto {}_decode(std::uint64_t index, std::span<std::int64_t> out)"
+                           "\n    -> void {{\n", p);
+        out += "    std::uint64_t rest = index;\n";
+        // Counting down through an UNSIGNED index: `i-- > 0` tests before it decrements, so the
+        // body runs for n-1 .. 0 and stops without ever forming the wrapped value a `>= 0` test
+        // on an unsigned counter would loop on forever.
+        out += std::format("    for (std::size_t i = {}; i-- > 0;) {{\n", w.domains.size());
+        out += std::format("        const std::size_t sz = {}_domain_size[i];\n", p);
+    }
     out += std::format(
         "        out[i] = {}_domain_values[{}_domain_offset[i] + (rest % sz)];\n", p, p);
     out += "        rest /= sz;\n";
@@ -539,29 +592,30 @@ namespace {
         out += "// INCOMPLETE search: a false return means UNKNOWN. This algorithm cannot prove\n";
         out += "// unsatisfiability, and nothing it does should be read as such a proof.\n";
     }
-    out += "#include <algorithm>\n#include <cstdint>\n#include <thread>\n#include <vector>\n\n";
+    // Rules 11/12/41 apply to what this emitter WRITES, not only to the emitter.
+    out += "import std;\n\n";
     out += "namespace {\n\n";
-    out += emit_domains(w, p, "constexpr ");
+    out += emit_domains(w, p, /*device=*/false);
     out += '\n';
-    out += emit_check_fn(w, p, "inline ");
-    out += emit_decode_fn(w, p, "inline ");
+    out += emit_check_fn(w, p, /*device=*/false);
+    out += emit_decode_fn(w, p, /*device=*/false);
 
     if (opts.strategy == Strategy::exhaustive) {
         out += std::format(
             "// Scans [begin, end) and reports the SMALLEST satisfying index it saw.\n"
-            "inline bool {}_scan(unsigned long long begin, unsigned long long end,\n"
-            "                    unsigned long long* found) {{\n"
-            "    long long a[{}];\n"
-            "    for (unsigned long long i = begin; i < end; ++i) {{\n"
+            "[[nodiscard]] inline auto {}_scan(std::uint64_t begin, std::uint64_t end,\n"
+            "                                  std::uint64_t& found) -> bool {{\n"
+            "    std::array<std::int64_t, {}> a{{}};\n"
+            "    for (std::uint64_t i = begin; i < end; ++i) {{\n"
             "        {}_decode(i, a);\n"
-            "        if ({}_satisfies(a)) {{ *found = i; return true; }}\n"
+            "        if ({}_satisfies(a)) {{ found = i; return true; }}\n"
             "    }}\n"
             "    return false;\n"
             "}}\n\n",
             p, n, p, p);
     } else {
         out += std::format(
-            "inline unsigned long long {}_mix(unsigned long long z) {{\n"
+            "[[nodiscard]] constexpr auto {}_mix(std::uint64_t z) -> std::uint64_t {{\n"
             "    z += 0x9E3779B97F4A7C15ULL;\n"
             "    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;\n"
             "    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;\n"
@@ -571,23 +625,24 @@ namespace {
         out += std::format(
             "// One walker. Its k-th decision is a pure function of (seed, walker, k), so the\n"
             "// walk is reproducible and shares no state with any other walker.\n"
-            "inline bool {}_walk(unsigned long long walker, long long* a) {{\n"
-            "    for (unsigned long long v = 0; v < {}ULL; ++v) {{\n"
-            "        const unsigned long long r = {}_mix({}ULL + walker * 0x1000193ULL + v);\n"
+            "[[nodiscard]] inline auto {}_walk(std::uint64_t walker, std::span<std::int64_t> a)\n"
+            "    -> bool {{\n"
+            "    for (std::size_t v = 0; v < {}; ++v) {{\n"
+            "        const std::uint64_t r = {}_mix({}ULL + (walker * 0x1000193ULL) + v);\n"
             "        a[v] = {}_domain_values[{}_domain_offset[v] + (r % {}_domain_size[v])];\n"
             "    }}\n"
-            "    for (unsigned long long step = 0; step < {}ULL; ++step) {{\n"
+            "    for (std::uint64_t step = 0; step < {}ULL; ++step) {{\n"
             "        if ({}_conflicts(a) == 0) {{ return true; }}\n"
-            "        const unsigned long long r = {}_mix(walker * 0x9E3779B9ULL + step);\n"
+            "        const std::uint64_t r = {}_mix((walker * 0x9E3779B9ULL) + step);\n"
             "        // Re-value a variable that is actually IN CONFLICT. A variable in no\n"
             "        // violated constraint cannot be the reason the assignment fails, so\n"
             "        // changing it is a wasted step.\n"
-            "        unsigned long long conf[{}];\n"
-            "        const unsigned long long nconf = {}_conflicted(a, conf);\n"
+            "        std::array<std::size_t, {}> conf{{}};\n"
+            "        const std::size_t nconf = {}_conflicted(a, conf);\n"
             "        if (nconf == 0) {{ return true; }}\n"
-            "        const unsigned long long var = conf[r % nconf];\n"
-            "        const unsigned long long sz = {}_domain_size[var];\n"
-            "        const unsigned long long off = {}_domain_offset[var];\n"
+            "        const std::size_t var = conf[r % nconf];\n"
+            "        const std::size_t sz = {}_domain_size[var];\n"
+            "        const std::size_t off = {}_domain_offset[var];\n"
             "        if ((r >> 32) % 1024ULL < {}ULL) {{\n"
             "            // Noise: take some value regardless of whether it helps, which is what\n"
             "            // lets the walk leave a local minimum at all.\n"
@@ -596,16 +651,14 @@ namespace {
             "        }}\n"
             "        // Otherwise take the value minimising conflicts, ties to the LOWEST value,\n"
             "        // so the choice does not depend on iteration order.\n"
-            "        const long long keep = a[var];\n"
-            "        long long best = keep;\n"
-            "        unsigned long long best_c = ~0ULL;\n"
-            "        for (unsigned long long k = 0; k < sz; ++k) {{\n"
+            "        std::int64_t best = a[var];\n"
+            "        std::size_t best_c = ~std::size_t{{0}};\n"
+            "        for (std::size_t k = 0; k < sz; ++k) {{\n"
             "            a[var] = {}_domain_values[off + k];\n"
-            "            const unsigned long long c = {}_conflicts(a);\n"
+            "            const std::size_t c = {}_conflicts(a);\n"
             "            if (c < best_c) {{ best_c = c; best = a[var]; }}\n"
             "        }}\n"
             "        a[var] = best;\n"
-            "        (void)keep;\n"
             "    }}\n"
             "    return {}_conflicts(a) == 0;\n"
             "}}\n\n",
@@ -620,25 +673,27 @@ namespace {
             "// when there is none -- and because the scan is exhaustive, false is a proof.\n"
             "// The index range is split across {} shards; the split cannot change the answer,\n"
             "// because the smallest satisfying index wins regardless of which shard found it.\n"
-            "inline bool {}(long long* out) {{\n"
-            "    constexpr unsigned long long space = {}ULL;\n"
-            "    constexpr unsigned long long shards = {}ULL;\n"
-            "    std::vector<unsigned long long> hit(shards, ~0ULL);\n"
+            "[[nodiscard]] inline auto {}(std::span<std::int64_t> out) -> bool {{\n"
+            "    constexpr std::uint64_t space = {}ULL;\n"
+            "    constexpr std::uint64_t shards = {}ULL;\n"
+            "    std::vector<std::uint64_t> hit(shards, ~0ULL);\n"
             "    {{\n"
             "        std::vector<std::jthread> ts;\n"
             "        ts.reserve(shards);\n"
-            "        for (unsigned long long s = 0; s < shards; ++s) {{\n"
+            "        for (std::uint64_t s = 0; s < shards; ++s) {{\n"
             "            ts.emplace_back([s, &hit]() {{\n"
-            "                const unsigned long long lo = (space * s) / shards;\n"
-            "                const unsigned long long hi = (space * (s + 1)) / shards;\n"
-            "                unsigned long long f = 0;\n"
-            "                if ({}_scan(lo, hi, &f)) {{ hit[s] = f; }}\n"
+            "                const std::uint64_t lo = (space * s) / shards;\n"
+            "                const std::uint64_t hi = (space * (s + 1)) / shards;\n"
+            "                std::uint64_t f = 0;\n"
+            "                if ({}_scan(lo, hi, f)) {{ hit[s] = f; }}\n"
             "            }});\n"
             "        }}\n"
             "    }}\n"
-            "    const auto it = std::min_element(hit.begin(), hit.end());\n"
-            "    if (it == hit.end() || *it == ~0ULL) {{ return false; }}\n"
-            "    {}_decode(*it, out);\n"
+            "    // A minimum over the shards' hits: the smallest satisfying index wins whichever\n"
+            "    // shard found it, so the split cannot change the answer.\n"
+            "    const std::uint64_t first = std::ranges::min(hit);\n"
+            "    if (first == ~0ULL) {{ return false; }}\n"
+            "    {}_decode(first, out);\n"
             "    return true;\n"
             "}}\n",
             opts.shards, entry_point_name(opts), search_space(w).value_or(0), opts.shards, p, p);
@@ -648,22 +703,26 @@ namespace {
             "// prove that no solution exists, and false must not be read as such a proof.\n"
             "// The answer is the LOWEST-INDEXED walker that succeeded, so it does not depend on\n"
             "// which finished first.\n"
-            "inline bool {}(long long* out) {{\n"
-            "    constexpr unsigned long long walkers = {}ULL;\n"
-            "    std::vector<int> ok(walkers, 0);\n"
-            "    std::vector<std::vector<long long>> res(walkers, std::vector<long long>({}));\n"
+            "[[nodiscard]] inline auto {}(std::span<std::int64_t> out) -> bool {{\n"
+            "    constexpr std::uint64_t walkers = {}ULL;\n"
+            "    // One BYTE per walker, not std::vector<bool>: the walkers write their own slots\n"
+            "    // concurrently, and the packed specialisation would put neighbouring walkers in\n"
+            "    // the same byte -- a data race the element-per-object version does not have.\n"
+            "    std::vector<std::uint8_t> ok(walkers, 0);\n"
+            "    std::vector<std::vector<std::int64_t>> res(walkers,\n"
+            "                                              std::vector<std::int64_t>({}));\n"
             "    {{\n"
             "        std::vector<std::jthread> ts;\n"
             "        ts.reserve(walkers);\n"
-            "        for (unsigned long long wi = 0; wi < walkers; ++wi) {{\n"
+            "        for (std::uint64_t wi = 0; wi < walkers; ++wi) {{\n"
             "            ts.emplace_back([wi, &ok, &res]() {{\n"
-            "                if ({}_walk(wi, res[wi].data())) {{ ok[wi] = 1; }}\n"
+            "                if ({}_walk(wi, res[wi])) {{ ok[wi] = 1; }}\n"
             "            }});\n"
             "        }}\n"
             "    }}\n"
-            "    for (unsigned long long wi = 0; wi < walkers; ++wi) {{\n"
+            "    for (std::uint64_t wi = 0; wi < walkers; ++wi) {{\n"
             "        if (ok[wi] != 0) {{\n"
-            "            for (unsigned long long v = 0; v < {}ULL; ++v) {{ out[v] = res[wi][v]; }}\n"
+            "            std::ranges::copy(res[wi], out.begin());\n"
             "            return true;\n"
             "        }}\n"
             "    }}\n"
@@ -683,10 +742,10 @@ namespace {
     out += "// A CUDA kernel plus a host launcher. Nothing here has been compiled or run by the\n";
     out += "// emitter, which produces text only.\n";
     out += "#include <cstdint>\n#include <vector>\n\n";
-    out += emit_domains(w, p, "__device__ __constant__ ");
+    out += emit_domains(w, p, /*device=*/true);
     out += '\n';
-    out += emit_check_fn(w, p, "__device__ inline ");
-    out += emit_decode_fn(w, p, "__device__ inline ");
+    out += emit_check_fn(w, p, /*device=*/true);
+    out += emit_decode_fn(w, p, /*device=*/true);
 
     if (opts.strategy == Strategy::exhaustive) {
         out += std::format(
@@ -785,7 +844,10 @@ namespace {
             "    }}\n"
             "    ok[wi] = ({}_conflicts(a) == 0) ? 1 : 0;\n"
             "}}\n\n",
-            std::format("{}_kernel", entry_point_name(opts)), opts.walkers, n, n, p, opts.seed, p,
+            // The format string already appends `_kernel`. Appending it here as well named
+            // the kernel `<entry>_kernel_kernel`, while the launcher below called `<entry>_kernel`
+            // -- so this target had never compiled, and no text assertion could have said so.
+            entry_point_name(opts), opts.walkers, n, n, p, opts.seed, p,
             p, p, opts.max_steps, p, p, n, p, p, p, opts.noise_per_1024, p, p, p, p);
         // The host launcher. Without it `entry_point_name` would name a symbol that does not
         // exist, and the LOWEST-INDEXED-walker determinism the header promises would have

@@ -286,10 +286,15 @@ auto main() -> int {
                   t.expect(!src->contains("nimblecas") ||
                                !src->contains("#include \"nimblecas"),
                            "the emitted code includes no NimbleCAS header");
-                  t.expect(!src->contains("import "),
-                           "the emitted code imports no module, so it drops into any build");
-                  t.expect(src->contains("#include <cstdint>"),
-                           "it includes what it actually needs");
+                  // Standalone means it depends on nothing of ours -- not that it depends on
+                  // nothing. It imports the standard library, which is what Rules 11/12/41 say
+                  // project source does, and nothing else.
+                  t.expect(!src->contains("import nimblecas"),
+                           "the emitted code imports no NimbleCAS module, so it drops into any "
+                           "build that has a standard library");
+                  t.expect(src->contains("import std;"),
+                           "it takes the standard library the way the rest of the repository "
+                           "does");
               })
         .test("emission_can_omit_the_simd_and_threaded_paths",
               [](TestContext& t) {
@@ -749,6 +754,72 @@ auto main() -> int {
                   t.expect(src->contains("nc_wsolve_break_count"),
                            "the break-count helper is emitted");
               })
+        .test("the_cpp_targets_emit_only_policy_conforming_source",
+              [](TestContext& t) {
+                  // config/cpp_details.txt applied to the code this module WRITES. A generated
+                  // file is still project source, and until this case existed both C++ targets
+                  // emitted C with C++ threads bolted on.
+                  for (const Strategy s : {Strategy::exhaustive, Strategy::walksat}) {
+                      CompileOptions opts;
+                      opts.target = Target::cpp;
+                      opts.strategy = s;
+                      const auto src = compile(simple_sat(), opts);
+                      t.expect(src.has_value(), "the C++ target compiles");
+                      if (!src.has_value()) {
+                          continue;
+                      }
+                      t.expect(src->contains("import std;"), "Rules 11/12/41: import std");
+                      t.expect(!src->contains("#include <"),
+                               "Rules 11/12/41: no standard header in the C++ target");
+                      t.expect(!src->contains("unsigned long long") &&
+                                   !src->contains("unsigned char"),
+                               "Rule 48: the widths are named, not spelled out in C keywords");
+                      t.expect(!src->contains("__builtin_"),
+                               "no compiler builtin where the standard library has the name -- "
+                               "std::countr_zero is the same instruction and is portable");
+                      t.expect(!src->contains("static inline "),
+                               "Rule 31: no leading-return-type C helpers");
+                      t.expect(!src->contains("(void)"),
+                               "static_cast<void>, not a C-style discard");
+                      t.expect(src->contains("[[nodiscard]]"),
+                               "Rule 10: results that must not be dropped say so");
+                      t.expect(src->contains("auto ") && src->contains(" -> "),
+                               "Rule 31: trailing return types");
+                  }
+
+                  // The WalkSAT target carries the shapes the bit-parallel one has no use for.
+                  CompileOptions walk;
+                  walk.target = Target::cpp;
+                  walk.strategy = Strategy::walksat;
+                  const auto wsrc = compile(simple_sat(), walk);
+                  t.expect(wsrc.has_value(), "the WalkSAT C++ target compiles");
+                  if (wsrc.has_value()) {
+                      t.expect(!wsrc->contains("_scratch* ") && !wsrc->contains("const unsigned*"),
+                               "Rule 3: no raw pointers in the emitted signatures");
+                      t.expect(wsrc->contains("std::span<const std::uint32_t>"),
+                               "Rule 24: the occurrence lists are spans over the tables");
+                      t.expect(wsrc->contains("std::array<std::uint32_t, nc_formula_maxclause>"),
+                               "Rule 24: the per-clause scratch is a std::array, sized by the "
+                               "formula's real widest clause rather than by a fixed 64 that "
+                               "would silently drop a wider clause's remaining literals");
+                      t.expect(wsrc->contains("-> bool"),
+                               "a walk either succeeded or did not, so it returns bool, not int");
+                  }
+
+                  // CUDA is deliberately exempt and must NOT be changed to match: nvcc has no
+                  // `import std`, and device code cannot use std::array or std::span.
+                  CompileOptions cuda;
+                  cuda.target = Target::cuda;
+                  cuda.strategy = Strategy::walksat;
+                  const auto csrc = compile(simple_sat(), cuda);
+                  t.expect(csrc.has_value(), "the CUDA target still compiles");
+                  if (csrc.has_value()) {
+                      t.expect(csrc->contains("#include <cstdint>"),
+                               "CUDA keeps headers, because nvcc has no import std");
+                      t.expect(csrc->contains("__managed__ unsigned nc_"),
+                               "and keeps plain arrays, which device code can address");
+                  }
+              })
         .test("walksat_cuda_emission_uses_managed_tables_and_one_thread_per_walker",
               [](TestContext& t) {
                   CompileOptions opts;
@@ -854,7 +925,7 @@ auto main() -> int {
                       if (src.has_value()) {
                           t.expect(!src->contains("AdaptNovelty+"),
                                    "a non-adaptive variant emits no noise schedule");
-                          t.expect(src->contains("unsigned noise = noise_percent;"),
+                          t.expect(src->contains("std::uint32_t noise = noise_percent;"),
                                    "and takes the caller's noise as given");
                       }
                   }
@@ -866,7 +937,7 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->contains("unsigned noise = 0u;"),
+                  t.expect(src->contains("std::uint32_t noise = 0U;"),
                            "it starts from pure greed, as the published algorithm does, rather "
                            "than from the caller's setting");
                   t.expect(src->contains("best_unsat = now_unsat;"),
@@ -888,10 +959,10 @@ auto main() -> int {
                   if (!src.has_value()) {
                       return;
                   }
-                  t.expect(src->contains("s->age[v] = 0ULL;"),
+                  t.expect(src->contains("s.age[v] = 0ULL;"),
                            "ages are cleared inside the walk, not only at allocation");
                   const std::size_t walk_at = src->find("_walk(");
-                  const std::size_t reset_at = src->find("s->age[v] = 0ULL;");
+                  const std::size_t reset_at = src->find("s.age[v] = 0ULL;");
                   t.expect(walk_at != std::string::npos && reset_at != std::string::npos &&
                                reset_at > walk_at,
                            "and the clearing sits inside the walk function specifically");
@@ -911,7 +982,7 @@ auto main() -> int {
                       if (src.has_value()) {
                           t.expect(src->contains("_make_count("),
                                    "a make count is emitted");
-                          t.expect(src->contains("score[i] = (int)"),
+                          t.expect(src->contains("score[i] = static_cast<std::int32_t>("),
                                    "and the ranking is a score rather than a raw break count");
                       }
                   }

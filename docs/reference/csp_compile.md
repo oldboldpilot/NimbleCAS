@@ -152,11 +152,20 @@ struct EmitOptions {
 ### Emitted code characteristics
 
 1. **C++23 (`Target::cpp`):**
-   - Emits embedded domain values, offsets, and sizes as `constexpr` flat arrays.
-   - Generates inline constraint evaluation (`*_satisfies`, `*_conflicts`, and `*_conflicted`).
-   - For `exhaustive`, divides the index space evenly across `shards` using `std::jthread`. Each thread records the lowest satisfying index it finds into a thread-safe slot; the host reduces via `std::min_element` to ensure the overall lowest index wins.
-   - For `min_conflicts`, runs `walkers` threads using Splitmix64. The winning assignment is selected from the lowest-indexed walker that succeeded, ensuring results are reproducible regardless of thread scheduling.
-2. **CUDA (`Target::cuda`):**
+   - The emitted source follows `config/cpp_details.txt`, the same code policy as the module that
+     writes it: `import std` rather than headers (Rules 11/12/41), `std::span` parameters rather
+     than raw pointers (Rules 3/24), `std::array` tables, fixed-width types (Rule 48), trailing
+     return types (Rule 31) and `[[nodiscard]]` (Rule 10). A generated file is still project
+     source. The CUDA target is deliberately exempt and must stay so — see below.
+   - Emits embedded domain values, offsets, and sizes as `inline constexpr std::array` tables.
+   - Generates inline constraint evaluation (`*_satisfies`, `*_conflicts`, and `*_conflicted`),
+     each taking the assignment as a `std::span` so it carries its own extent.
+   - For `exhaustive`, divides the index space evenly across `shards` using `std::jthread`. Each thread records the lowest satisfying index it finds into a thread-safe slot; the host reduces with `std::ranges::min`, so the overall lowest index wins whichever shard found it.
+   - For `min_conflicts`, runs `walkers` threads using Splitmix64. The winning assignment is selected from the lowest-indexed walker that succeeded, ensuring results are reproducible regardless of thread scheduling. The per-walker success flags are one byte each rather than `std::vector<bool>`, whose packed representation would put neighbouring walkers' concurrent writes in the same byte.
+2. **CUDA (`Target::cuda`):** deliberately NOT held to the C++ policy above. `nvcc` has no
+   `import std`, and device code cannot use `std::span` or `std::array`, so the device target
+   keeps headers and plain arrays. A test pins this, so a later change made in the name of
+   consistency fails there rather than silently breaking `nvcc`.
    - Emits device tables in `__device__ __constant__` memory. No claim is made here about what that costs at runtime: nothing in this module has been compiled or measured.
    - Emits duplicate tables with a `_host` suffix for the host launcher, because CUDA `__constant__` memory cannot be accessed directly by host pointers.
    - For `exhaustive`, threads calculate grid strides across the index space and reduce the winning index via `atomicMin`. The launcher retrieves the index and decodes it into output host memory.
@@ -165,6 +174,34 @@ struct EmitOptions {
    - Emits Python text defining constants `<prefix>_NUM_VARS` and `<prefix>_NUM_CONSTRAINTS`.
    - Generates a `@triton.jit` kernel function that accepts an `assignments_ptr` tensor (2D layout: `n_rows × num_vars`), a `conflicts_ptr` destination tensor, `n_rows`, and a power-of-two `BLOCK` size.
    - Loads candidate rows vectorially into individual registers per variable, evaluates constraint expressions using bitwise operators (`&`, `|`), and stores accumulated conflict counts.
+
+## Verifying the generated code
+
+The test suite checks the emitted TEXT. A string match cannot tell whether that text is a
+program, and for a long time nothing ran a compiler over it -- which is how an emitted CUDA
+target that had never been compilable survived a green suite.
+
+`scripts/verify-generated.sh` closes that: it emits every variant, compiles each one
+(`clang++-23` with libc++ for C++, `nvcc` for CUDA, a Python parse for Triton) and RUNS the C++
+ones against the reference answer the emitting tool prints. It is not part of `ctest`, because it
+needs a toolchain a test binary has no business assuming. Run it after touching an emitter.
+
+## CLI driver: `tools/csp_compile.cpp`
+
+```bash
+csp_compile <n> [cpp|cuda|triton] [prefix] [exhaustive|minconflicts] [pairwise] \
+            [shards=N] [walkers=N] [steps=N] [noise=PER1024] [seed=N]
+```
+
+Compiles an n-queens CSP, writing the generated source to `stdout` and a summary — variable and
+constraint counts, the assignment space, and the reference search's first solution — to `stderr`,
+so the output can be redirected straight into a file.
+
+N-queens rather than a problem file format: a CSP is a graph of typed constraints, not a
+line-oriented format like DIMACS, and the queens family exercises a variadic `all_different`, a
+parametrised binary `abs_diff_ne` and a search space that reaches `max_search_space`, all from a
+single integer. `pairwise` re-expresses the rows as pairwise not-equals — the same solution set,
+a different landscape for local search.
 
 ## Reference implementations
 
