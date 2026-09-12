@@ -126,7 +126,67 @@ Cross-process gRPC backend build (ON, `libsgee_capi_grpc` — independent of `NI
 cmake -B build -GNinja -DNIMBLECAS_SGEE_GRPC=ON -DNIMBLECAS_SGEE_ROOT=/path/to/StochasticGraphExecutionEngine
 cmake --build build
 ```
-Requires a built SGEE **gRPC** tree with `sgee_capi_grpc.h` under `${NIMBLECAS_SGEE_ROOT}/bindings/capi` and `libsgee_capi_grpc` under `${NIMBLECAS_SGEE_ROOT}/build-grpc/lib` (built with `-DSGEE_USE_GRPC=ON`, which also produces the `sgee_queue_node` server). The cross-process integration test `taskdag_sgee_grpc_tests` runs only when `NIMBLECAS_SGEE_QUEUE_NODE` points at a built `sgee_queue_node` (else it CTest-skips, exit 77); it spawns the node + two worker processes and asserts bit-identity to `serial_executor`.
+Requires a built SGEE **gRPC** tree with `sgee_capi_grpc.h` under `${NIMBLECAS_SGEE_ROOT}/bindings/capi` and `libsgee_capi_grpc` under `${NIMBLECAS_SGEE_ROOT}/build-grpc/lib` (built with `-DSGEE_USE_GRPC=ON`, which also produces the `sgee_queue_node` server — but see **Building the SGEE gRPC tree** below, because that flag alone is not enough on a host that has apt's gRPC). The cross-process integration test `taskdag_sgee_grpc_tests` runs only when `NIMBLECAS_SGEE_QUEUE_NODE` points at a built `sgee_queue_node` (else it CTest-skips, exit 77); it spawns the node + two worker processes and asserts bit-identity to `serial_executor`.
+
+### Building the SGEE gRPC tree
+
+Upstream's own recipe is `-DSGEE_USE_GRPC=ON`, but on a machine that has apt's gRPC installed
+that flag alone produces a tree with **none** of the three artifacts NimbleCAS needs. The
+configure log is the only place it shows: the three `SGEE: ... enabled` lines below are what a
+usable tree prints, and their absence is a WARNING, not an error.
+
+```bash
+cmake -B build-grpc -GNinja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=clang++-23 -DCMAKE_C_COMPILER=clang-23 \
+  -DSGEE_USE_GRPC=ON \
+  -DCMAKE_DISABLE_FIND_PACKAGE_gRPC=ON \
+  -DCMAKE_CXX_FLAGS="-Wno-error=missing-template-arg-list-after-template-kw" \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DLIBCXX_MODULES_PATH=/usr/lib/llvm-23/share/libc++/v1 \
+  -DSGEE_BUILD_TESTS=OFF -DSGEE_BUILD_EXAMPLES=OFF -DSGEE_BUILD_BENCHMARKS=OFF \
+  -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$PWD/build-grpc"
+cmake --build build-grpc --target sgee_capi_grpc sgee_queue_node
+```
+```
+-- SGEE: gRPC transport enabled (consensus + node-execution service)
+-- SGEE: task-queue gRPC service enabled (proto/task_queue.proto)
+-- SGEE: gRPC-client C-ABI shim enabled (libsgee_capi_grpc)
+```
+
+Each non-obvious flag earns its place:
+
+- **`CMAKE_DISABLE_FIND_PACKAGE_gRPC=ON` is the load-bearing one.** SGEE tries
+  `find_package(gRPC CONFIG QUIET)` first and only falls back to an in-tree `FetchContent` of
+  gRPC v1.62.0 when that fails. Installing `libgrpc++-dev` makes it *succeed*, and that is the
+  wrong branch twice over. First, apt's `libgrpc++.so` is built against **libstdc++** — 109 of
+  its exported symbols carry `std::__cxx11::basic_string` in their signature — while SGEE
+  requires **libc++** for `import std`; the two would link and then pass mismatched
+  `std::string` across the gRPC API.
+  Second, the apt package ships no `protoc`/`grpc_cpp_plugin` **CMake targets**, and SGEE
+  deliberately refuses a host `protoc` (`if(NOT TARGET protoc OR NOT TARGET grpc_cpp_plugin)`)
+  rather than generate code against one protobuf ABI and link another — so it degrades to a
+  warning and silently skips `sgee_task_queue_proto`, `sgee_queue_node` **and**
+  `sgee_capi_grpc`. Disabling the find forces the FetchContent branch, where one compiler and
+  one standard library build everything.
+- **`CMAKE_CXX_FLAGS=-Wno-error=missing-template-arg-list-after-template-kw`** — gRPC v1.62.0
+  writes `Traits::template CallSeqFactory(...)`, a `template` keyword with no argument list.
+  P1787 made that well-formed; clang 23 still diagnoses it as an error **by default**, failing
+  26 objects. Downgraded to a warning rather than switched off, so the same shape in SGEE's own
+  sources would still be visible.
+- **`CMAKE_POLICY_VERSION_MINIMUM=3.5`** — vendored c-ares still calls
+  `cmake_minimum_required(VERSION 3.0)`, which current CMake rejects outright.
+- **`LIBCXX_MODULES_PATH`** — SGEE defaults to a clang-22 path; point it at the installed
+  toolchain's `std.cppm` (`find /usr -name std.cppm`).
+- **`CMAKE_RUNTIME_OUTPUT_DIRECTORY`** — the test `ENVIRONMENT` strings above hardcode
+  `${NIMBLECAS_SGEE_ROOT}/build-grpc/sgee_queue_node`, so the binary must land at the build
+  root, not in a subdirectory.
+
+That the wall is really gone is checkable, and worth checking: `readelf -d` on the shim should
+name `libc++.so.1` and **no** `libstdc++`, `nm -DC ... | grep -c __cxx11` should be **0**, and
+`nm -D --defined-only` should show all 14 `sgee_grpc_*` entry points. A downstream binary may
+still pull `libstdc++` transitively through TBB — that is fine, and distinct, so long as no C++
+type crosses the shim's own pure-C boundary.
 
 The **cluster** test `taskdag_sgee_grpc_cluster_tests` (three legs: plaintext quorum, mTLS quorum,
 leader-failover) additionally needs `NIMBLECAS_GEN_TEST_CERTS_SH` pointing at
