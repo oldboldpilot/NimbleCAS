@@ -163,19 +163,22 @@ Each non-obvious flag earns its place:
   its exported symbols carry `std::__cxx11::basic_string` in their signature — while SGEE
   requires **libc++** for `import std`; the two would link and then pass mismatched
   `std::string` across the gRPC API.
-  Second, the apt package ships no `protoc`/`grpc_cpp_plugin` **CMake targets**, and SGEE
-  deliberately refuses a host `protoc` (`if(NOT TARGET protoc OR NOT TARGET grpc_cpp_plugin)`)
-  rather than generate code against one protobuf ABI and link another — so it degrades to a
-  warning and silently skips `sgee_task_queue_proto`, `sgee_queue_node` **and**
-  `sgee_capi_grpc`. Disabling the find forces the FetchContent branch, where one compiler and
-  one standard library build everything.
+  Second, SGEE guards its codegen with `if(NOT TARGET protoc OR NOT TARGET grpc_cpp_plugin)`
+  — **bare** target names, which only `FetchContent_MakeAvailable(grpc)` creates. The apt
+  package exports its plugin solely as the *namespaced imported* target
+  `gRPC::grpc_cpp_plugin`, and no `protoc` target at all, so that guard fails. SGEE then
+  deliberately degrades to a `message(WARNING)` rather than reach for a host `protoc` — its
+  own comment gives the reason, generating code against one protobuf ABI and linking another
+  — and silently skips `sgee_task_queue_proto`, `sgee_queue_node` **and** `sgee_capi_grpc`.
+  Disabling the find forces the FetchContent branch, where one compiler and one standard
+  library build everything.
 - **`CMAKE_CXX_FLAGS=-Wno-error=missing-template-arg-list-after-template-kw`** — gRPC v1.62.0
   writes `Traits::template CallSeqFactory(...)`, a `template` keyword with no argument list.
   P1787 made that well-formed; clang 23 still diagnoses it as an error **by default**, failing
   26 objects. Downgraded to a warning rather than switched off, so the same shape in SGEE's own
   sources would still be visible.
 - **`CMAKE_POLICY_VERSION_MINIMUM=3.5`** — vendored c-ares still calls
-  `cmake_minimum_required(VERSION 3.0)`, which current CMake rejects outright.
+  `CMAKE_MINIMUM_REQUIRED(VERSION 3.1.0)`, which current CMake rejects outright.
 - **`LIBCXX_MODULES_PATH`** — SGEE defaults to a clang-22 path; point it at the installed
   toolchain's `std.cppm` (`find /usr -name std.cppm`).
 - **`CMAKE_RUNTIME_OUTPUT_DIRECTORY`** — the test `ENVIRONMENT` strings above hardcode
