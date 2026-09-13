@@ -67,7 +67,7 @@ it everywhere **except** the C ABI:
 | gRPC client `TaskQueueClient::lease` | **done** |
 | gRPC server `TaskQueueService::Lease` (both branches) | **done** |
 | Raft-replicated command shape | **unchanged, deliberately** — the proposal still names one task id, so an old node simply ignores the new proto field |
-| **C ABI** | **missing** |
+| **C ABI** | **done** — SGEE `main` @ `6ec13bfc` |
 
 Semantics, confirmed in the code rather than the commit message: the filter selects the
 earliest pending task whose payload **contains** those bytes — a raw unanchored byte-substring
@@ -75,7 +75,7 @@ search over the whole payload — applied on the leader before the choice. An **
 short-circuits to the existing head-of-line behaviour, bit-identical, which is what every
 current caller sends. No match returns `QueueEmpty`.
 
-### The change
+### The change — **landed** (SGEE `main` @ `6ec13bfc`)
 
 Additive only. Three new entry points beside the existing ones — never extra parameters on the
 current symbols, which the Python `ctypes` layer and the nanobind bindings both call:
@@ -94,11 +94,23 @@ Each shim already calls a function that accepts the filter as a defaulted parame
 substantive delta per entry point is **one argument on one call**. Factor each existing lease
 body into a static helper taking a span; the old symbol passes `{}`.
 
-Estimated surface: **~130–160 lines across 4 files**, all additive.
+Estimated surface: **~130–160 lines across 4 files**, all additive. **Actual: +250/−29 across
+those 4 files plus `tests/CMakeLists.txt`**, and the three existing symbols are byte-for-byte
+unchanged in behaviour — each now forwards to the shared helper with an empty span.
 
-One documentation caveat worth writing down at the same time: a filtered lease returns
-`SGEE_ERR_QUEUE_EMPTY` to mean *"nothing for you"*, not *"the queue is empty"*. The replicated
-shim's existing `NotLeased → QUEUE_EMPTY` mapping already conflates these.
+The caveat above was written down in the headers at the same time: a filtered lease returns
+`SGEE_ERR_QUEUE_EMPTY` to mean *"nothing for you"*, not *"the queue is empty"*. Writing it up
+also turned up a header claim that did not match the code — `sgee_replicated_broker_lease` was
+documented as returning `SGEE_ERR_NOT_LEASED` when nothing is pending, but it maps `NotLeased →
+SGEE_ERR_QUEUE_EMPTY`. Corrected in the same commit.
+
+**How it is verified.** `tests/task_queue/capi_lease_filter_test.cpp` drives the new entry point
+through the pure C surface only — it includes `sgee_capi.h`, imports no module, and compiles
+with no module flags at all, which is the shim's actual contract. Mutating
+`sgee_broker_lease_filtered` to ignore its filter — the shape lease-then-hand-back degenerates
+to — fails 7 of its 25 checks, two of them the structural ones this page argues from: the
+unmatched lease left the head `LEASED` rather than `PENDING`, and spent one of its attempts
+having executed nothing. SGEE's suite is 78/78 with the test included.
 
 ## Blocker 2 — nothing reports which worker produced a result
 
@@ -139,7 +151,18 @@ on changes nothing today.
 
 ## Status
 
-- **Blocker 1**: unblocked upstream in SGEE's core; needs ~150 additive lines in its C ABI.
-- **Blocker 2**: not yet designed anywhere; needs the queue to surface the leasing worker id.
-- **NimbleCAS**: the coordinator-side half is complete as of M8 and is inert by design until
-  the above lands.
+- **Blocker 1**: **CLEARED.** The filter reached SGEE's core in `28537cc5` and its C ABI in
+  `6ec13bfc`; `sgee_broker_lease_filtered`, `sgee_replicated_broker_lease_filtered` and
+  `sgee_grpc_lease_filtered` all export unmangled from the built shims.
+- **Blocker 2**: **still open, and still not designed anywhere.** Nothing in the C ABI reports
+  which worker produced a result, so the coordinator cannot derive a child's routing tag from
+  its parent's location.
+- **NimbleCAS**: unchanged — the coordinator-side half is complete as of M8 and remains inert,
+  because `CapiBrokerPort`/`GrpcBrokerPort` still call the *unfiltered* lease. Step 1 of "What
+  NimbleCAS would do" below is now unblocked and is the next thing to build.
+
+**What clearing blocker 1 does and does not buy.** It buys *affinity* routing: a worker can
+refuse to be handed work it cannot serve, and a GPU-only task can wait for a GPU worker instead
+of being leased by whoever polls first. It does **not** buy *data* locality — that needs blocker
+2. `affinity_placement`'s honesty note therefore still stands until NimbleCAS consumes the new
+entry points.
