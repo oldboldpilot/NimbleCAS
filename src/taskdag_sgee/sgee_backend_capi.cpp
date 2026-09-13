@@ -4,6 +4,26 @@
 module;
 #include "sgee_capi.h"
 
+// Weak-symbol declaration for graceful fallback if linked against an older runtime library.
+// The filtered lease arrived in SGEE main @ 6ec13bfc; a libsgee_capi.so predating it exports
+// every other symbol this file uses. Declaring this one weak keeps NimbleCAS linkable and fully
+// functional against that older .so, refusing ONLY the filtered path (see lease_filtered below)
+// instead of failing to load at all.
+extern "C" {
+__attribute__((weak)) sgee_error_t sgee_broker_lease_filtered(
+    sgee_task_broker_t* broker,
+    uint64_t worker_id,
+    uint64_t timeout_ms,
+    uint64_t* out_task_id,
+    uint64_t* out_token,
+    int* out_placement,
+    uint32_t* out_attempt,
+    void** out_payload,
+    size_t* out_payload_len,
+    const void* payload_filter,
+    size_t payload_filter_len);
+}
+
 module nimblecas.taskdag_sgee;
 
 import std;
@@ -66,11 +86,19 @@ auto CapiBrokerPort::enqueue(std::span<const std::byte> payload,
     return out_id;
 }
 
-auto CapiBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+auto CapiBrokerPort::lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                                    std::span<const std::byte> payload_filter)
     -> Result<std::optional<Lease>> {
     const std::lock_guard lock(mutex_);
     if (!broker_) {
         return make_error<std::optional<Lease>>(MathError::distributed_error);
+    }
+    // An older libsgee_capi.so has no filtered entry point. REFUSE rather than fall back to the
+    // unfiltered lease: silently handing this worker whatever sits at the head is precisely the
+    // wrong answer the filter exists to prevent, and it would be indistinguishable from success.
+    // Rule 32 -- an honest not_implemented beats a plausible-looking wrong task.
+    if (!payload_filter.empty() && &sgee_broker_lease_filtered == nullptr) {
+        return make_error<std::optional<Lease>>(MathError::not_implemented);
     }
     std::uint64_t qid = 0;
     std::uint64_t token = 0;
@@ -79,8 +107,16 @@ auto CapiBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
     void* out_payload = nullptr;
     std::size_t out_payload_len = 0;
 
-    const int rc = sgee_broker_lease(broker_, worker_id, timeout_ms, &qid, &token,
-                                     &placement, &attempt, &out_payload, &out_payload_len);
+    // An empty filter routes to the ORIGINAL symbol, not to the filtered one with an empty span.
+    // Upstream those are bit-identical, but routing this way means an unfiltered run against an
+    // older .so takes a code path that has always existed.
+    const int rc =
+        payload_filter.empty()
+            ? sgee_broker_lease(broker_, worker_id, timeout_ms, &qid, &token,
+                                &placement, &attempt, &out_payload, &out_payload_len)
+            : sgee_broker_lease_filtered(broker_, worker_id, timeout_ms, &qid, &token,
+                                         &placement, &attempt, &out_payload, &out_payload_len,
+                                         payload_filter.data(), payload_filter.size());
     if (rc == SGEE_ERR_QUEUE_EMPTY) {
         // Defensive: the header only populates out-params on success, but free unconditionally so
         // correctness never rests on a shim internal (this is the hottest path — polled every tick).

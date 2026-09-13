@@ -135,6 +135,30 @@ struct DiamondIds { TaskId a, b, c, d, probe; };
     return ids;
 }
 
+// Builds a Payload from raw bytes with the length given EXPLICITLY, so an embedded NUL survives
+// into the payload instead of terminating it. The filtered lease matches bytes, not C strings,
+// and a helper that stopped at the first NUL would quietly make that untestable.
+[[nodiscard]] auto raw_bytes(const char* s, std::size_t n) -> Payload {
+    Payload p;
+    p.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        p.push_back(static_cast<std::byte>(static_cast<unsigned char>(s[i])));
+    }
+    return p;
+}
+
+[[nodiscard]] auto raw_bytes(std::string_view s) -> Payload {
+    return raw_bytes(s.data(), s.size());
+}
+
+// Loads a port with the given payloads in order, so two ports can be given identical contents
+// and their lease choices compared side by side.
+auto load_queue(FakeBrokerPort& port, const std::vector<Payload>& payloads) -> void {
+    for (const auto& p : payloads) {
+        (void)port.enqueue(std::span<const std::byte>(p), SgeePlacement::cpu, 3);
+    }
+}
+
 }  // namespace
 
 auto main() -> int {
@@ -1514,5 +1538,219 @@ auto main() -> int {
                                "placement does not change how many tasks executed");
                   }
               })
+        // ── Filtered lease (ROADMAP §6.2 item 3, blocker 1) ───────────────────────────────
+        // These run against FakeBrokerPort, which is only worth testing because it is required
+        // to implement the SAME predicate as SGEE's InMemoryIndex::earliest_pending_matching.
+        // If the double and the real thing disagree, these tests are the thing that is wrong.
+        .test("payload_matches_filter_is_a_raw_unanchored_byte_search",
+              [](TestContext& t) {
+                  using nimblecas::payload_matches_filter;
+                  const auto hay = raw_bytes("alpha:gpu0:beta");
+
+                  t.expect(payload_matches_filter(hay, Payload{}),
+                           "an EMPTY filter matches everything (this is what makes it head-of-line)");
+                  t.expect(payload_matches_filter(hay, raw_bytes("gpu0")),
+                           "a filter matches in the MIDDLE — the search is unanchored");
+                  t.expect(payload_matches_filter(hay, raw_bytes("alpha")), "matches at the start");
+                  t.expect(payload_matches_filter(hay, raw_bytes("beta")), "matches at the end");
+                  t.expect(payload_matches_filter(hay, hay), "a payload matches itself exactly");
+                  t.expect(!payload_matches_filter(hay, raw_bytes("gpu1")),
+                           "a near-miss does not match");
+                  t.expect(!payload_matches_filter(hay, raw_bytes("alpha:gpu0:beta!")),
+                           "a filter LONGER than the payload cannot match");
+                  t.expect(!payload_matches_filter(Payload{}, raw_bytes("x")),
+                           "nothing matches inside an empty payload");
+                  t.expect(payload_matches_filter(Payload{}, Payload{}),
+                           "empty filter matches even an empty payload");
+
+                  // The property a strstr-shaped implementation silently loses.
+                  const auto with_nul = raw_bytes("tag\0gpu0", 8);
+                  t.expect(payload_matches_filter(with_nul, raw_bytes("\0gpu0", 5)),
+                           "a filter SPANNING an embedded NUL matches — bytes, not C strings");
+                  t.expect(!payload_matches_filter(with_nul, raw_bytes("tag\0cpu", 7)),
+                           "and a non-match spanning a NUL is still correctly rejected");
+              })
+
+        .test("lease_filter_empty_is_head_of_line_against_a_pinned_oracle",
+              [](TestContext& t) {
+                  // WHAT THIS CAN AND CANNOT PROVE. `lease()` is now a non-virtual forward to
+                  // `lease_filtered(.., {})`, so comparing the two proves only that the forward
+                  // exists — they would agree with each other even if BOTH skipped the head. So
+                  // the load-bearing assertion here is against a PINNED ORACLE: the exact FIFO
+                  // order, spelled out below independently of any implementation. The
+                  // side-by-side comparison is kept as well, because that is the check that would
+                  // catch a future override making the two disagree.
+                  const std::vector<Payload> contents{
+                      raw_bytes("first:cpu"), raw_bytes("second:gpu"), raw_bytes("third:cpu")};
+
+                  FakeBrokerPort plain;
+                  FakeBrokerPort filtered;
+                  load_queue(plain, contents);
+                  load_queue(filtered, contents);
+
+                  for (std::size_t i = 0; i < contents.size(); ++i) {
+                      const auto a = plain.lease(1, 1000);
+                      const auto b = filtered.lease_filtered(1, 1000, Payload{});
+                      t.expect(a.has_value() && a->has_value(), "plain lease yields a task");
+                      t.expect(b.has_value() && b->has_value(), "empty-filter lease yields a task");
+                      if (!(a.has_value() && a->has_value() && b.has_value() && b->has_value())) {
+                          continue;
+                      }
+                      // The oracle: strict FIFO — qids 1..n in enqueue order, first attempt each.
+                      const auto expected_qid = static_cast<std::uint64_t>(i) + 1;
+                      t.expect((*a)->qid == expected_qid, "plain lease takes the FIFO head");
+                      t.expect((*a)->payload == contents[i], "and that head's exact payload");
+                      t.expect((*a)->attempt == 1, "on its first attempt");
+                      t.expect((*b)->qid == expected_qid, "empty filter takes the SAME head");
+                      t.expect((*b)->payload == contents[i], "with the same payload");
+                      t.expect((*b)->attempt == 1, "and the same attempt");
+                  }
+                  t.expect(!plain.lease(1, 1000)->has_value(), "plain queue is drained");
+                  t.expect(!filtered.lease_filtered(1, 1000, Payload{})->has_value(),
+                           "empty-filter queue is drained identically");
+              })
+
+        .test("lease_filter_skips_a_non_matching_head_without_spending_it",
+              [](TestContext& t) {
+                  // THE test. A filtered lease must skip the head at the CHOICE, leaving it
+                  // exactly as it found it. If the skip were implemented as lease-then-release,
+                  // the head would come back LEASED, or PENDING with attempt 1 — and a queue whose
+                  // head belongs to a busy peer would dead-letter it within seconds.
+                  FakeBrokerPort port;
+                  load_queue(port, {raw_bytes("head:cpu"), raw_bytes("tail:gpu")});
+
+                  const auto leased = port.lease_filtered(7, 1000, raw_bytes("gpu"));
+                  t.expect(leased.has_value() && leased->has_value(), "the gpu worker gets a task");
+                  if (leased.has_value() && leased->has_value()) {
+                      t.expect((*leased)->qid == 2, "it got qid 2 — the head (qid 1) was skipped");
+                      t.expect((*leased)->payload == raw_bytes("tail:gpu"), "and got its payload");
+                  }
+
+                  const auto head_state = port.state(1);
+                  t.expect(head_state.has_value() && *head_state == BrokerPort::QState::pending,
+                           "the skipped head is STILL PENDING, not leased");
+                  t.expect(port.attempts(1) == 0,
+                           "and has spent NO attempt — it was never leased at all");
+
+                  // It remains available to a worker that can serve it.
+                  const auto cpu = port.lease_filtered(8, 1000, raw_bytes("cpu"));
+                  t.expect(cpu.has_value() && cpu->has_value() && (*cpu)->qid == 1,
+                           "a cpu worker still gets the head afterwards");
+              })
+
+        .test("lease_filter_picks_the_earliest_match_not_merely_any_match",
+              [](TestContext& t) {
+                  FakeBrokerPort port;
+                  load_queue(port, {raw_bytes("a:cpu"), raw_bytes("b:gpu"),
+                                    raw_bytes("c:cpu"), raw_bytes("d:gpu")});
+
+                  const auto first = port.lease_filtered(1, 1000, raw_bytes("gpu"));
+                  t.expect(first.has_value() && first->has_value() && (*first)->qid == 2,
+                           "earliest gpu task (qid 2) wins over the later one (qid 4)");
+                  const auto second = port.lease_filtered(1, 1000, raw_bytes("gpu"));
+                  t.expect(second.has_value() && second->has_value() && (*second)->qid == 4,
+                           "the next gpu lease then takes qid 4");
+                  const auto third = port.lease_filtered(1, 1000, raw_bytes("gpu"));
+                  t.expect(third.has_value() && !third->has_value(),
+                           "with both gpu tasks leased, a gpu worker sees nothing");
+                  t.expect(port.attempts(1) == 0 && port.attempts(3) == 0,
+                           "the two cpu tasks were never touched by any of that");
+              })
+
+        .test("lease_filter_no_match_is_nullopt_not_an_error",
+              [](TestContext& t) {
+                  // "Nothing for me" is reported as queue-empty and is INDISTINGUISHABLE from
+                  // "nothing at all". A worker must not read it as a failure — the pump treats
+                  // both as a reason to back off and poll again, never to stop.
+                  FakeBrokerPort port;
+                  load_queue(port, {raw_bytes("only:cpu")});
+
+                  const auto miss = port.lease_filtered(1, 1000, raw_bytes("gpu"));
+                  t.expect(miss.has_value(), "a filter that matches nothing is NOT an error");
+                  t.expect(miss.has_value() && !miss->has_value(), "it is an empty optional");
+
+                  const auto st = port.state(1);
+                  t.expect(st.has_value() && *st == BrokerPort::QState::pending,
+                           "the unmatched task is untouched: still pending");
+                  t.expect(port.attempts(1) == 0, "and still at attempt 0");
+              })
+
+        .test("lease_filter_matches_across_an_embedded_nul_in_the_payload",
+              [](TestContext& t) {
+                  // Task envelopes are binary. A filter implemented over C strings would truncate
+                  // both sides at the first NUL and match the wrong task — or none.
+                  FakeBrokerPort port;
+                  load_queue(port, {raw_bytes("op\0node-a", 9), raw_bytes("op\0node-b", 9)});
+
+                  const auto got = port.lease_filtered(1, 1000, raw_bytes("\0node-b", 7));
+                  t.expect(got.has_value() && got->has_value(), "the NUL-spanning filter matches");
+                  t.expect(got.has_value() && got->has_value() && (*got)->qid == 2,
+                           "and selects qid 2, not the byte-prefix-identical qid 1");
+                  t.expect(port.attempts(1) == 0, "qid 1 was skipped, not spent");
+              })
+
+        .test("worker_pump_honours_its_payload_filter",
+              [](TestContext& t) {
+                  // End to end through run_worker_pump: a pump configured with a tag must execute
+                  // only tasks carrying it, and must leave the others pending rather than failing
+                  // them. This is the property that makes a heterogeneous pool safe.
+                  TaskRegistry reg;
+                  (void)reg.register_op("nimblecas.test.identity/v1",
+                                        [](std::span<const Payload> args) -> Result<Payload> {
+                                            return args.empty() ? Payload{} : args[0];
+                                        });
+                  const auto fp = reg.fingerprint();
+
+                  const auto make_task = [&](std::string_view tag) {
+                      return encode_task(TaskEnvelope{.registry_fp = fp,
+                                                      .op_id = "nimblecas.test.identity/v1",
+                                                      .args = {raw_bytes(tag)}}).value();
+                  };
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  load_queue(port, {make_task("cpu-only-work"), make_task("gpu-only-work")});
+
+                  std::jthread pump([&](const std::stop_token& st) {
+                      run_worker_pump(port, reg, results,
+                                      WorkerPumpConfig{.worker_id = 1,
+                                                       .lease_timeout_ms = 100'000,
+                                                       .idle_backoff_ms = 1,
+                                                       .payload_filter = raw_bytes("gpu-only")},
+                                      st);
+                  });
+
+                  t.expect(wait_until([&] {
+                               const auto s = port.state(2);
+                               return s.has_value() && *s == BrokerPort::QState::completed;
+                           }),
+                           "the gpu-tagged task (qid 2) is executed and completed");
+
+                  // LIVENESS WITNESS — why this is not a sleep-and-hope assertion.
+                  // Concluding "qid 1 was never taken" from a timeout is VACUOUS: a pump starved
+                  // by the scheduler produces exactly the same observation as a correctly
+                  // filtering one, so the test would pass on a broken implementation. Instead,
+                  // enqueue a SECOND matching task and require the pump to complete it. Once that
+                  // lands, the pump has demonstrably run another full lease-execute-complete cycle
+                  // WHILE qid 1 sat pending and available — so the assertion that follows is about
+                  // the filter's behaviour rather than about scheduling luck.
+                  const auto extra = make_task("gpu-only-second");
+                  const auto extra_qid =
+                      port.enqueue(std::span<const std::byte>(extra), SgeePlacement::cpu, 3);
+                  t.expect(extra_qid.has_value(), "a second gpu-tagged task is enqueued");
+                  t.expect(extra_qid.has_value() && wait_until([&] {
+                               const auto s = port.state(*extra_qid);
+                               return s.has_value() && *s == BrokerPort::QState::completed;
+                           }),
+                           "the pump completes the SECOND gpu task — proof it kept polling");
+
+                  const auto cpu_state = port.state(1);
+                  t.expect(cpu_state.has_value() && *cpu_state == BrokerPort::QState::pending,
+                           "and the cpu-tagged task (qid 1) is STILL pending — never leased");
+                  t.expect(port.attempts(1) == 0,
+                           "with no attempt spent, so it is not drifting toward dead-letter");
+                  pump.request_stop();
+              })
+
         .run();
 }

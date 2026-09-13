@@ -134,9 +134,24 @@ on changes nothing today.
 
 ## What NimbleCAS would do once both land
 
-1. Extend `CapiBrokerPort` / `GrpcBrokerPort` to call the `_filtered` lease, with each worker
-   passing a routing tag it is willing to serve.
-2. Put that tag in the task payload where a substring match can find it. The `TaskEnvelope`
+1. ~~Extend `CapiBrokerPort` / `GrpcBrokerPort` to call the `_filtered` lease, with each worker
+   passing a routing tag it is willing to serve.~~ **DONE.** `BrokerPort::lease_filtered` is the
+   pure virtual; `lease` is now a non-virtual convenience that forwards with an empty span, so
+   every existing caller is unchanged by construction. `CapiBrokerPort` and `GrpcBrokerPort`
+   route an empty filter to the original symbol and a non-empty one to
+   `sgee_broker_lease_filtered` / `sgee_grpc_lease_filtered`, both declared **weak**: linked
+   against an older `.so` a filtered lease returns `not_implemented` rather than silently
+   degrading to an unfiltered one — the fallback that would hand back exactly the wrong task.
+   `FakeBrokerPort` implements the same predicate (`payload_matches_filter`) so the double and
+   the real broker cannot drift, and `WorkerPumpConfig::payload_filter` carries a pump's tag.
+
+   One degradation this canNOT catch, recorded because it is invisible: a *current* client shim
+   against an *old gRPC server*. proto3 makes `payload_filter` a field an old node simply
+   ignores, so the request succeeds and returns an unfiltered task. There is no version
+   handshake. A mixed-version cluster is the one configuration where a filtered lease can still
+   hand back work the filter excluded.
+2. Put that tag in the task payload where a substring match can find it. **This is now the
+   blocking step.** The `TaskEnvelope`
    wire format v1 has a **reserved `u16`** at offset 6, but two bytes are too few and too
    collidable for a substring search over arbitrary argument bytes; a v2 framing with an
    explicit, length-prefixed, magic-delimited routing field is the honest option. Note that the
@@ -157,12 +172,27 @@ on changes nothing today.
 - **Blocker 2**: **still open, and still not designed anywhere.** Nothing in the C ABI reports
   which worker produced a result, so the coordinator cannot derive a child's routing tag from
   its parent's location.
-- **NimbleCAS**: unchanged — the coordinator-side half is complete as of M8 and remains inert,
-  because `CapiBrokerPort`/`GrpcBrokerPort` still call the *unfiltered* lease. Step 1 of "What
-  NimbleCAS would do" below is now unblocked and is the next thing to build.
+- **NimbleCAS**: **consumes the filtered lease as of this commit** — step 1 above is done, with
+  `payload_matches_filter`, `BrokerPort::lease_filtered`, both real ports, `FakeBrokerPort`, and
+  `WorkerPumpConfig::payload_filter`. Verified by 7 tests (48 checks) in
+  `tests/taskdag_sgee_tests.cpp`, which run in the DEFAULT build because they drive
+  `FakeBrokerPort`; the SGEE=ON configuration passes 37/37 against the real `CapiBrokerPort`
+  linked to SGEE `6ec13bfc`, and the full suite is 176/176.
+
+  Those tests were mutation-checked rather than trusted. Making the predicate ignore its filter
+  kills 6 of the 7; re-implementing the skip as **lease-then-hand-back** — spend an attempt, mark
+  it leased — kills 5, including the end-to-end pump test. The one survivor of the first mutant
+  is the empty-filter equivalence test, which is correct: "always match" *is* the right answer
+  for an empty filter.
+
+- **Still inert end to end, for a NARROWER reason.** Nothing writes a routing tag into a payload,
+  so every caller still passes an empty filter and behaviour is unchanged. `SgeePlacement` rides
+  its own `int` parameter, a channel the substring search cannot see. The blocking piece has
+  moved from upstream into this repo: it is step 2's framing decision, which is not free because
+  the envelope bytes are also the memo key.
 
 **What clearing blocker 1 does and does not buy.** It buys *affinity* routing: a worker can
 refuse to be handed work it cannot serve, and a GPU-only task can wait for a GPU worker instead
 of being leased by whoever polls first. It does **not** buy *data* locality — that needs blocker
-2. `affinity_placement`'s honesty note therefore still stands until NimbleCAS consumes the new
-entry points.
+2. `affinity_placement`'s honesty note has been updated rather than removed: it still says the
+mechanism changes nothing today, because it still does.

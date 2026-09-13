@@ -143,6 +143,33 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Payload filter matching
+// ---------------------------------------------------------------------------
+//
+// The predicate a filtered lease selects on, kept here so the FakeBrokerPort and the real SGEE
+// ports cannot drift apart: this MUST agree byte for byte with SGEE's
+// `InMemoryIndex::earliest_pending_matching`, which does a raw unanchored substring search over
+// the whole payload.
+//
+// Two properties are load-bearing and easy to lose:
+//   - an EMPTY needle matches EVERYTHING, so an empty filter is exactly head-of-line; and
+//   - the search is over BYTES, not a C string, so an embedded NUL is an ordinary byte on both
+//     sides. A `strstr`-shaped implementation would silently truncate both operands at the first
+//     NUL, and task envelopes are binary.
+[[nodiscard]] inline auto payload_matches_filter(std::span<const std::byte> payload,
+                                                 std::span<const std::byte> filter) noexcept
+    -> bool {
+    if (filter.empty()) {
+        return true;
+    }
+    if (filter.size() > payload.size()) {
+        return false;
+    }
+    return std::search(payload.begin(), payload.end(), filter.begin(), filter.end())
+           != payload.end();
+}
+
+// ---------------------------------------------------------------------------
 // BrokerPort interface
 // ---------------------------------------------------------------------------
 class BrokerPort {
@@ -162,8 +189,33 @@ public:
                                        SgeePlacement placement, std::uint32_t max_attempts)
         -> Result<std::uint64_t> = 0;
 
-    [[nodiscard]] virtual auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+    // Leases the earliest pending task whose payload CONTAINS `payload_filter` as a raw,
+    // unanchored byte substring (see payload_matches_filter above for the exact predicate).
+    //
+    // The filter is applied AT THE CHOICE, on the leader, before a task is picked — never by
+    // leasing and handing back. That is not a stylistic preference: `mark_requeued` restores a
+    // task's ORIGINAL enqueue time, so a handed-back task returns to the head and the worker
+    // meets it again next poll; and `lease` is the only place `attempt` is incremented, so each
+    // hand-back spends one of the task's lives having executed nothing and dead-letters
+    // perfectly good work. docs/technical/sgee-locality-abi.md has the full argument.
+    //
+    // An EMPTY filter short-circuits to the unfiltered head-of-line choice, bit-identical to the
+    // behaviour that predates this parameter.
+    //
+    // NO MATCH IS NOT AN ERROR: it returns nullopt, indistinguishable from an empty queue. A
+    // worker cannot tell "nothing for me" from "nothing at all", and must treat neither as a
+    // reason to stop polling.
+    [[nodiscard]] virtual auto lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                                              std::span<const std::byte> payload_filter)
         -> Result<std::optional<Lease>> = 0;
+
+    // Unfiltered head-of-line lease. NON-VIRTUAL on purpose: it is defined as `lease_filtered`
+    // with an empty filter, and leaving it virtual would invite an override that silently
+    // disagrees with the filtered path about what an empty filter means.
+    [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+        -> Result<std::optional<Lease>> {
+        return lease_filtered(worker_id, timeout_ms, {});
+    }
 
     [[nodiscard]] virtual auto complete(std::uint64_t qid, std::uint64_t token)
         -> Result<void> = 0;
@@ -274,7 +326,8 @@ public:
         return qid;
     }
 
-    [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+    [[nodiscard]] auto lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                                      std::span<const std::byte> payload_filter)
         -> Result<std::optional<Lease>> override {
         const std::lock_guard lock(mutex_);
         // A lease fault is the ERROR branch, not nullopt: queue-empty is not a fault.
@@ -283,7 +336,12 @@ public:
         }
         for (const std::uint64_t qid : fifo_order_) {
             const auto it = tasks_.find(qid);
-            if (it != tasks_.end() && it->second.state == QState::pending) {
+            // A non-matching task is SKIPPED, not leased-and-released: control never reaches the
+            // body below, so its `attempt` is not spent and its state stays `pending`. Those two
+            // properties are the whole reason the filter lives at the choice, so they are what
+            // the mutation test for this function goes after.
+            if (it != tasks_.end() && it->second.state == QState::pending
+                && payload_matches_filter(it->second.payload, payload_filter)) {
                 TaskEntry& entry = it->second;
                 entry.attempt++;
                 entry.state = QState::leased;
@@ -466,7 +524,8 @@ public:
                                SgeePlacement placement, std::uint32_t max_attempts)
         -> Result<std::uint64_t> override;
 
-    [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+    [[nodiscard]] auto lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                                      std::span<const std::byte> payload_filter)
         -> Result<std::optional<Lease>> override;
 
     [[nodiscard]] auto complete(std::uint64_t qid, std::uint64_t token)
@@ -576,7 +635,8 @@ public:
                                SgeePlacement placement, std::uint32_t max_attempts)
         -> Result<std::uint64_t> override;
 
-    [[nodiscard]] auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+    [[nodiscard]] auto lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                                      std::span<const std::byte> payload_filter)
         -> Result<std::optional<Lease>> override;
 
     [[nodiscard]] auto complete(std::uint64_t qid, std::uint64_t token)
@@ -665,6 +725,23 @@ struct WorkerPumpConfig {
     std::uint64_t lease_timeout_ms{0};   // 0 = default (30000)
     std::uint64_t idle_backoff_ms{2};    // sleep when QueueEmpty
     std::uint64_t heartbeat_every_ms{0}; // 0 = visibility / 3
+
+    // The routing tag THIS pump is willing to serve, matched as a raw byte substring of the task
+    // payload on the leader before the task is chosen. EMPTY (the default) means "anything", which
+    // is the exact head-of-line behaviour every existing caller already gets.
+    //
+    // ── READ THIS BEFORE SETTING IT ─────────────────────────────────────────────────────
+    // A non-empty filter makes this pump see ONLY matching tasks. It will sit idle beside a queue
+    // full of work that does not match it — that is the entire point, but it means a pool must
+    // COLLECTIVELY cover every tag the graph can produce. Leave one tag unserved and the run
+    // stalls until its deadline rather than mis-routing, because an unmatched lease is reported
+    // as nullopt (queue-empty), which is exactly what an idle pump expects to see.
+    //
+    // Nothing in NimbleCAS puts a tag INTO a payload yet: the TaskEnvelope v1 framing has no
+    // field a substring search can safely aim at, and the envelope bytes are also the memo key
+    // (see docs/reference/memo_dist.md), so adding one is a versioned framing change with cache
+    // consequences. Until that lands this field is for callers who frame their own payloads.
+    Payload payload_filter{};
 };
 
 auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& results,
@@ -858,20 +935,27 @@ private:
 // routing rather than a crash. Affinity tables are small; the copy is the cheap side of that trade.
 //
 // ── HONESTY BOUNDARY (Rule 32) ───────────────────────────────────────────────────────────
-// THIS IS HALF A MECHANISM, AND TURNING IT ON CHANGES NOTHING TODAY. It labels every task
-// correctly and the ABI carries one `int placement` per task from enqueue through to lease. But the
-// label never actually reaches a worker: `CapiBrokerPort::lease` and `GrpcBrokerPort::lease`
-// both DISCARD `out_placement`, and `BrokerPort::Lease` has no field to hold it, so it dies
-// inside the port. Nor could a worker use it if it had it: `sgee_broker_lease`
-// hands out the earliest pending task and accepts no placement filter, and the CAPI port drops
-// the `out_placement` it is given. So a GPU-only task is still leased by whichever worker asks
-// first.
+// THIS IS STILL HALF A MECHANISM, AND TURNING IT ON STILL CHANGES NOTHING TODAY -- but the
+// reason has NARROWED, so do not read the old one back into it. The lease side can now filter:
+// `BrokerPort::lease_filtered` reaches SGEE's `sgee_broker_lease_filtered` /
+// `sgee_grpc_lease_filtered` (SGEE main @ 6ec13bfc), and a worker CAN decline work it cannot
+// serve. What is missing is no longer the filter; it is the CONNECTION between this label and
+// that filter, and there are two distinct gaps:
 //
-// It is built and tested now because it is the piece that lives in this repo, and because
-// `Affinity`/`to_placement` were otherwise dead code reachable only from unit tests. It becomes
-// real routing the moment the lease side can filter -- see docs/technical/sgee-locality-abi.md
-// for exactly what that requires. Until then, do not read a placement label as a guarantee about
-// where a task ran.
+//   1. The filter matches PAYLOAD BYTES, and nothing writes the placement label into a payload.
+//      `SgeePlacement` rides its own `int` parameter from enqueue to lease, a channel the
+//      substring search cannot see. Closing this needs a TaskEnvelope framing with an explicit
+//      routing field -- and the envelope bytes are also the memo key (docs/reference/memo_dist.md),
+//      so it is a versioned change that retires cache entries, not a free one.
+//   2. `CapiBrokerPort` and `GrpcBrokerPort` still DISCARD `out_placement`, and `BrokerPort::Lease`
+//      still has no field to hold it, so the label a worker receives still dies inside the port.
+//
+// So a GPU-only task is STILL leased by whichever worker asks first, and a placement label is
+// STILL not a guarantee about where a task ran. What changed is that the blocking piece is now
+// inside this repo rather than upstream. See docs/technical/sgee-locality-abi.md -- note in
+// particular that even closing both gaps buys AFFINITY routing, not DATA locality: nothing in
+// the SGEE C ABI reports which worker produced a result, so a child's tag cannot be derived
+// from its parent's location.
 [[nodiscard]] auto affinity_placement(const AffinityTable& table,
                                       SgeePlacement fallback = SgeePlacement::cpu)
     -> std::function<SgeePlacement(const TaskGraph&, TaskId)>;
@@ -1197,7 +1281,8 @@ auto decode_result(std::span<const std::byte> bytes) -> Result<ResultEnvelope> {
 auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& results,
                      WorkerPumpConfig cfg, const std::stop_token& stop) -> void {
     while (!stop.stop_requested()) {
-        auto lease_res = port.lease(cfg.worker_id, cfg.lease_timeout_ms);
+        auto lease_res = port.lease_filtered(cfg.worker_id, cfg.lease_timeout_ms,
+                                             cfg.payload_filter);
         if (!lease_res.has_value()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(cfg.idle_backoff_ms));
             continue;

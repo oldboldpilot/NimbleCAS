@@ -14,6 +14,22 @@ __attribute__((weak)) sgee_error_t sgee_grpc_client_open_tls(
     sgee_grpc_client_t** out_client);
 
 __attribute__((weak)) uint64_t sgee_grpc_last_leader_hint(void);
+
+// Filtered lease — arrived in SGEE main @ 6ec13bfc, so an older libsgee_capi_grpc.so lacks it.
+__attribute__((weak)) sgee_error_t sgee_grpc_lease_filtered(
+    sgee_grpc_client_t* client,
+    uint64_t worker_id,
+    uint64_t timeout_ms,
+    uint64_t* out_task_id,
+    uint64_t* out_token_local,
+    uint64_t* out_token_term,
+    uint64_t* out_token_index,
+    int* out_placement,
+    uint32_t* out_attempt,
+    void** out_payload,
+    size_t* out_payload_len,
+    const void* payload_filter,
+    size_t payload_filter_len);
 }
 
 module nimblecas.taskdag_sgee;
@@ -293,11 +309,22 @@ auto GrpcBrokerPort::enqueue(std::span<const std::byte> payload,
     return make_error<std::uint64_t>(MathError::distributed_error);
 }
 
-auto GrpcBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
+auto GrpcBrokerPort::lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                                    std::span<const std::byte> payload_filter)
     -> Result<std::optional<Lease>> {
     std::lock_guard lock(mutex_);
     if (!ring_ || ring_->nodes.empty()) {
         return make_error<std::optional<Lease>>(MathError::distributed_error);
+    }
+    // Same refusal as the C-ABI port: against an older libsgee_capi_grpc.so, a filtered lease is
+    // not_implemented rather than a silent unfiltered one. Note this guards the CLIENT SHIM only.
+    // A current shim talking to an OLD SERVER degrades differently and invisibly: proto3 makes
+    // the new `payload_filter` field one an old node simply ignores, so the request succeeds and
+    // returns an UNFILTERED task. There is no version handshake to catch that, so a mixed-version
+    // cluster is the one configuration where this call can still hand back work the filter
+    // excluded.
+    if (!payload_filter.empty() && &sgee_grpc_lease_filtered == nullptr) {
+        return make_error<std::optional<Lease>>(MathError::not_implemented);
     }
     const std::size_t n = ring_->nodes.size();
     const auto retry_deadline = std::chrono::steady_clock::now() + k_transport_retry_budget;
@@ -318,9 +345,16 @@ auto GrpcBrokerPort::lease(std::uint64_t worker_id, std::uint64_t timeout_ms)
         void* out_payload = nullptr;
         std::size_t out_payload_len = 0;
 
-        const int rc = sgee_grpc_lease(client, worker_id, timeout_ms, &qid, &token_local,
-                                       &token_term, &token_index, &placement, &attempt_num,
-                                       &out_payload, &out_payload_len);
+        // Empty filter takes the original symbol — see the matching note in the C-ABI port.
+        const int rc =
+            payload_filter.empty()
+                ? sgee_grpc_lease(client, worker_id, timeout_ms, &qid, &token_local,
+                                  &token_term, &token_index, &placement, &attempt_num,
+                                  &out_payload, &out_payload_len)
+                : sgee_grpc_lease_filtered(client, worker_id, timeout_ms, &qid, &token_local,
+                                           &token_term, &token_index, &placement, &attempt_num,
+                                           &out_payload, &out_payload_len,
+                                           payload_filter.data(), payload_filter.size());
         GrpcBufferGuard payload_guard{out_payload};
 
         if (rc == SGEE_ERR_QUEUE_EMPTY) {

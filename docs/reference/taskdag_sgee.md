@@ -217,7 +217,7 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | `encode_result` / `decode_result` | Binary codec framing `"NCRT"` (version 1 LE). |
 | `ResultChannel` | Abstract out-of-band result store interface (`put`/`get` keyed by qid), plus `try_get` → `Result<optional<Payload>>` where **absence is not an error**. |
 | `InMemoryResultChannel` | Mutex + hash map implementation of `ResultChannel`. |
-| `BrokerPort` | Abstract queue interface (`enqueue`, `lease`, `complete`, `fail`, `heartbeat`, `sweep_expired`, `state`). |
+| `BrokerPort` | Abstract queue interface (`enqueue`, `lease_filtered`, `lease`, `complete`, `fail`, `heartbeat`, `sweep_expired`, `state`). `lease_filtered` is the pure virtual; `lease` is a **non-virtual** forward with an empty filter, so an override cannot make the two disagree. |
 | `FakeBrokerPort` | Deterministic in-memory `BrokerPort` with injectable hand clock. |
 | `CapiBrokerPort` | `class CapiBrokerPort : public BrokerPort` — C-ABI wrapper over `libsgee_capi`'s `sgee_task_broker_t*` (ON only). |
 | `GrpcBrokerPort` | `class GrpcBrokerPort : public BrokerPort` — remote `sgee_queue_node` over gRPC via `libsgee_capi_grpc` (`NIMBLECAS_SGEE_GRPC` only). Two `connect` factories: `connect(endpoint, auth, deadline_ms)` (single node) and `connect(vector<endpoints>, auth, deadline_ms, tls)` (Raft ring). `failover_rotations()` reports how many times it followed leadership. |
@@ -226,7 +226,8 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | `SgeeGrpcTlsOptions` | `struct { string ca_cert_path, cert_path, key_path, target_name_override; }` — **all-or-nothing**: empty ⇒ plaintext, partial ⇒ rejected. |
 | `SgeeGrpcExecutorOptions` | `struct { string endpoint; string auth_token; u64 rpc_deadline_ms; vector<string> endpoints; SgeeGrpcTlsOptions tls; }` — a non-empty `endpoints` supersedes `endpoint`. |
 | `sgee_grpc_distributed_executor` | `auto sgee_grpc_distributed_executor(SgeeExecutorConfig, SgeeGrpcExecutorOptions) -> Result<unique_ptr<Executor>>` factory (cross-process; `wal_dir` ignored, `num_workers==0` valid). |
-| `WorkerPumpConfig` | `struct { u64 worker_id; u64 lease_timeout_ms; u64 idle_backoff_ms; u64 heartbeat_every_ms; }` |
+| `WorkerPumpConfig` | `struct { u64 worker_id; u64 lease_timeout_ms; u64 idle_backoff_ms; u64 heartbeat_every_ms; Payload payload_filter; }` — `payload_filter` empty (default) means "anything". |
+| `payload_matches_filter` | `(payload, filter) -> bool` — raw **unanchored byte** substring test; an empty filter matches everything. Must agree with SGEE's `InMemoryIndex::earliest_pending_matching`; a `strstr`-shaped version would truncate binary envelopes at the first NUL. |
 | `run_worker_pump` | Worker execution loop: lease → decode → registry lookup → invoke → put result → complete. |
 | `SgeeExecutorConfig` | Config struct with fluent setters (`with_registry`, `with_num_workers`, `with_poll_interval_ms`, `with_max_result_recoveries`, etc.). |
 | `SgeeDistributedExecutor` | `class SgeeDistributedExecutor : public Executor` — level-synchronous wavefront coordinator. |
@@ -339,19 +340,68 @@ The table is **copied** into the returned closure, not referenced. A placement f
 outlives the expression that built it, and a dangling `AffinityTable` would be silent wrong
 routing rather than a crash.
 
-> **⚠ This is half a mechanism, and turning it on changes nothing today.** It labels every task
-> correctly, and the C ABI carries one `int placement` per task from enqueue through to lease.
-> **But the label never reaches a worker.** `CapiBrokerPort::lease` and `GrpcBrokerPort::lease`
-> both discard `out_placement`, and `BrokerPort::Lease` has no field to hold it, so it dies inside
-> the port. Nor could a worker use it if it had it: `sgee_broker_lease` hands out the earliest
-> pending task and accepts no placement filter. A GPU-only task is still leased by whichever
-> worker asks first.
+> **⚠ This is still half a mechanism, and turning it on still changes nothing today — but the
+> reason has narrowed.** The lease side *can* now filter (see below). What is missing is the
+> connection between this label and that filter, in two distinct places:
 >
-> It exists because it is the piece that lives in this repo, and because `Affinity` and
-> `to_placement` were otherwise dead code reachable only from unit tests. It becomes real routing
-> the moment the lease side can filter. **Do not read a placement label as a guarantee about where
-> a task ran.** See [sgee-locality-abi.md](../technical/sgee-locality-abi.md) for exactly what the
-> C ABI must add.
+> 1. The filter matches **payload bytes**, and nothing writes the placement label into a payload.
+>    `SgeePlacement` rides its own `int` parameter from enqueue to lease, a channel a substring
+>    search cannot see. Closing this needs a `TaskEnvelope` framing with an explicit routing
+>    field — and the envelope bytes are also the memo key ([`memo_dist`](memo_dist.md)), so it is
+>    a versioned change that retires cache entries, not a free one.
+> 2. `CapiBrokerPort` and `GrpcBrokerPort` still discard `out_placement`, and `BrokerPort::Lease`
+>    still has no field to hold it, so the label a worker receives still dies inside the port.
+>
+> A GPU-only task is therefore **still** leased by whichever worker asks first. **Do not read a
+> placement label as a guarantee about where a task ran.** See
+> [sgee-locality-abi.md](../technical/sgee-locality-abi.md) — and note that even closing both gaps
+> buys *affinity* routing, not *data* locality.
+
+## Filtered lease (ROADMAP §6.2 item 3, blocker 1)
+
+```cpp
+// BrokerPort — lease_filtered is the pure virtual; lease is a NON-VIRTUAL forward.
+virtual auto lease_filtered(std::uint64_t worker_id, std::uint64_t timeout_ms,
+                            std::span<const std::byte> payload_filter)
+    -> Result<std::optional<Lease>> = 0;
+
+auto lease(std::uint64_t worker_id, std::uint64_t timeout_ms)   // == lease_filtered(.., {})
+    -> Result<std::optional<Lease>>;
+```
+
+Leases the earliest pending task whose payload **contains** `payload_filter` as a raw, unanchored
+byte substring. An **empty** filter short-circuits to the unfiltered head-of-line choice,
+bit-identical to the behaviour that predates the parameter — which is what every current caller
+sends. `WorkerPumpConfig::payload_filter` supplies a pump's own tag.
+
+**The filter is applied at the choice, on the leader.** Lease-then-hand-back is not an equivalent
+implementation: `mark_requeued` restores a task's *original* enqueue time, so a released task
+returns to the head and the worker meets it again next poll; and `lease` is the only place
+`attempt` is incremented, so every hand-back spends one of the task's lives having executed
+nothing, dead-lettering good work within seconds.
+
+**No match is not an error.** It returns `nullopt` — indistinguishable from an empty queue. A
+worker cannot tell "nothing for me" from "nothing at all" and must treat neither as a reason to
+stop polling. The corollary is a liveness hazard worth stating plainly: a pool of filtered pumps
+must **collectively** cover every tag the graph can produce, or the run stalls until its deadline
+rather than mis-routing.
+
+**Version degradation.** `sgee_broker_lease_filtered` and `sgee_grpc_lease_filtered` (SGEE `main`
+@ `6ec13bfc`) are declared **weak**. Against an older `.so` a *filtered* lease returns
+`not_implemented`; it does **not** fall back to the unfiltered lease, because silently handing
+back whatever sits at the head is precisely the wrong answer the filter exists to prevent, and it
+would be indistinguishable from success. An unfiltered lease keeps working, and routes to the
+original symbol rather than to the new one with an empty span.
+
+> **One degradation this cannot catch.** A *current* client shim against an *old gRPC server*:
+> proto3 makes `payload_filter` a field an old node simply ignores, so the request succeeds and
+> returns an **unfiltered** task. There is no version handshake. A mixed-version cluster is the
+> one configuration where a filtered lease can still hand back work the filter excluded.
+
+`FakeBrokerPort` implements the same predicate via the exported `payload_matches_filter`, so the
+test double and the real broker cannot drift. The 7 tests covering this are mutation-checked:
+ignoring the filter kills 6 of them, and re-implementing the skip as lease-then-hand-back kills 5,
+including the end-to-end pump test.
 
 Placement never affects results: `TaskRunResult::outputs` and `executed` are identical with and
 without it, which is asserted directly in `tests/taskdag_sgee_tests.cpp`.
