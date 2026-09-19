@@ -408,6 +408,73 @@ auto main() -> int {
               })
 
         // -------------------------------------------------------------------
+        // 5b. routing does not partition the cache
+        // -------------------------------------------------------------------
+        .test("a_memo_entry_survives_being_routed_somewhere_else",
+              [](TestContext& t) {
+                  // THE WHOLE JUSTIFICATION for keeping the routing tag out of TaskEnvelope is that
+                  // a task's cache identity must not depend on where it ran. The codec-level test
+                  // (routing_never_moves_the_memo_key) proves the BYTES strip back; this proves the
+                  // EXECUTOR actually keys on the stripped form. Without it, storing the dispatched
+                  // bytes as `encoded_payload` would pass every other test in the suite and quietly
+                  // give every routing category its own private cache.
+                  TaskRegistry reg;
+                  (void)reg.register_op("rt.seed/v1", [](auto) -> Result<Payload> { return encode_i64(3); });
+                  (void)reg.register_op("rt.sq/v1", [](auto ps) -> Result<Payload> {
+                      return encode_i64(decode_i64(ps[0]) * decode_i64(ps[0]));
+                  });
+
+                  TaskGraph g;
+                  const auto seed = g.add_named_task(reg, "rt.seed/v1").value();
+                  const auto sq = g.add_named_task(reg, "rt.sq/v1", std::vector<TaskId>{seed}).value();
+
+                  const auto tag_of = [](std::string_view name) {
+                      Payload out;
+                      for (const char ch : name) {
+                          out.push_back(static_cast<std::byte>(ch));
+                      }
+                      return out;
+                  };
+
+                  InProcessMemo memo(8, 1000, std::size_t{1024} * 1024);
+
+                  // Run 1: every task routed to "cpu".
+                  FakeBrokerPort port1;
+                  InMemoryResultChannel chan1;
+                  SgeeExecutorConfig cfg1;
+                  cfg1.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1)
+                      .with_memo(memo)
+                      .with_routing_tag([&](const TaskGraph&, TaskId) { return tag_of("cpu"); });
+                  SgeeDistributedExecutor exec1(cfg1, port1, chan1);
+                  const auto res1 = exec1.run(g).value();
+                  t.expect_eq(res1.executed, std::size_t{2}, "run 1 executes both tasks");
+                  t.expect_eq(memo.stats().publishes, std::uint64_t{2}, "run 1 publishes both");
+
+                  // Run 2: the SAME graph, routed to "gpu" instead. Different bytes on the wire.
+                  FakeBrokerPort port2;
+                  InMemoryResultChannel chan2;
+                  SgeeExecutorConfig cfg2;
+                  cfg2.with_registry(reg).with_num_workers(1).with_poll_interval_ms(1)
+                      .with_memo(memo)
+                      .with_routing_tag([&](const TaskGraph&, TaskId) { return tag_of("gpu"); });
+                  SgeeDistributedExecutor exec2(cfg2, port2, chan2);
+                  const auto res2 = exec2.run(g).value();
+
+                  t.expect(outputs_bit_identical(res2.outputs, res1.outputs),
+                           "run 2 outputs are BIT-IDENTICAL to run 1");
+                  t.expect_eq(res2.executed, std::size_t{0},
+                              "THE TEST: re-routed run executes NOTHING -- the cache still applies");
+                  t.expect_eq(memo.stats().hits, std::uint64_t{2},
+                              "both lookups hit despite the payloads differing on the wire");
+                  t.expect_eq(memo.stats().publishes, std::uint64_t{2},
+                              "and nothing was republished under a second, routing-specific key");
+                  t.expect_eq(memo.stats().key_mismatches, std::uint64_t{0},
+                              "with no key mismatches, so the hits are real and not collisions");
+                  t.expect_eq(decode_i64(res2.outputs[sq.value].value()), std::int64_t{9},
+                              "and the answer is still 9");
+              })
+
+        // -------------------------------------------------------------------
         // 6. memo_does_not_cache_a_failure_that_is_not_the_inputs_fault
         // -------------------------------------------------------------------
         .test("memo_does_not_cache_a_failure_that_is_not_the_inputs_fault",

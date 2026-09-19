@@ -1752,5 +1752,381 @@ auto main() -> int {
                   pump.request_stop();
               })
 
+        // -----------------------------------------------------------------------------
+        // Routing trailer (ROADMAP 6.2 item 3, step 2)
+        // -----------------------------------------------------------------------------
+        .test("untagged_encoding_still_matches_the_hand_derived_v1_vector",
+              [](TestContext& t) {
+                  // THE POINT OF THIS TEST is that adding routing retires NO cache entry. The memo
+                  // is keyed by these exact bytes (docs/reference/memo_dist.md), so if the untagged
+                  // encoding ever moves by one byte, every entry written by every previous version
+                  // silently becomes unreachable -- a miss, not an error, so nothing else fails.
+                  //
+                  // The vector below is DERIVED FROM THE FORMAT SPEC BY HAND, not captured from a
+                  // run. Capturing it would make this test agree with whatever the code currently
+                  // emits, which is exactly the assurance it is supposed to provide.
+                  const TaskEnvelope env{
+                      .registry_fp = 0x0102030405060708ULL,
+                      .op_id = "a.b/v1",
+                      .args = {Payload{std::byte{0x77}}}
+                  };
+                  const std::array<std::uint8_t, 39> expected{
+                      0x54, 0x44, 0x43, 0x4E,                          // magic "NCDT" in LE
+                      0x01, 0x00,                                      // version 1
+                      0x00, 0x00,                                      // reserved
+                      0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,  // registry_fp LE
+                      0x06, 0x00, 0x00, 0x00,                          // op_len 6
+                      0x61, 0x2E, 0x62, 0x2F, 0x76, 0x31,              // "a.b/v1"
+                      0x01, 0x00, 0x00, 0x00,                          // n_args 1
+                      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // arg[0] length 1
+                      0x77                                             // arg[0] bytes
+                  };
+
+                  const auto enc = encode_task(env);
+                  t.expect(enc.has_value(), "the reference envelope encodes");
+                  t.expect(enc.has_value() && enc->size() == expected.size(),
+                           "the untagged encoding is still exactly 39 bytes");
+                  bool identical = enc.has_value() && enc->size() == expected.size();
+                  for (std::size_t i = 0; identical && i < expected.size(); ++i) {
+                      identical = static_cast<std::uint8_t>((*enc)[i]) == expected[i];
+                  }
+                  t.expect(identical,
+                           "THE NO-CACHE-RETIREMENT TEST: untagged bytes match the pinned v1 vector");
+              })
+
+        .test("an_empty_routing_tag_changes_absolutely_nothing",
+              [](TestContext& t) {
+                  using nimblecas::sgee_bridge::routing_filter;
+                  using nimblecas::sgee_bridge::with_routing_tag;
+
+                  const TaskEnvelope env{.registry_fp = 9, .op_id = "e/v1", .args = {encode_i64(5)}};
+                  const auto plain = encode_task(env).value();
+
+                  const auto empty_filter = routing_filter(Payload{});
+                  t.expect(empty_filter.has_value() && empty_filter->empty(),
+                           "routing_filter of an empty tag is the empty filter, not an error");
+
+                  const auto tagged = with_routing_tag(plain, Payload{});
+                  t.expect(tagged.has_value(), "with_routing_tag accepts an empty tag");
+                  t.expect(tagged.has_value() && *tagged == plain,
+                           "and returns the input BYTE FOR BYTE -- the untagged path costs nothing");
+                  t.expect(tagged.has_value() && tagged->size() > 4 &&
+                               static_cast<std::uint8_t>((*tagged)[4]) == 1,
+                           "the version is still 1, so no v1 reader is shut out by a no-op call");
+              })
+
+        .test("a_routing_tag_rides_along_without_touching_the_task",
+              [](TestContext& t) {
+                  using nimblecas::sgee_bridge::routing_tag_of;
+                  using nimblecas::sgee_bridge::with_routing_tag;
+                  using nimblecas::sgee_bridge::without_routing_tag;
+
+                  const TaskEnvelope env{
+                      .registry_fp = 0xDEADBEEFULL,
+                      .op_id = "r.t/v1",
+                      .args = {encode_i64(11), encode_i64(-3)}
+                  };
+                  const auto plain = encode_task(env).value();
+                  const auto tag = raw_bytes("gpu");
+
+                  const auto wire = with_routing_tag(plain, tag);
+                  t.expect(wire.has_value(), "with_routing_tag succeeds");
+                  t.expect(wire.has_value() && wire->size() == plain.size() + 8 + tag.size(),
+                           "the payload grows by exactly magic + tag + length");
+                  t.expect(wire.has_value() && static_cast<std::uint8_t>((*wire)[4]) == 2,
+                           "and announces itself as version 2");
+
+                  const auto got = routing_tag_of(*wire);
+                  t.expect(got.has_value() && *got == tag, "routing_tag_of recovers the tag");
+
+                  // The task itself must be untouched: a worker decoding a ROUTED task must get the
+                  // identical envelope it would have got from an unrouted one, or routing would be
+                  // changing what runs rather than only where.
+                  const auto dec = decode_task(*wire);
+                  t.expect(dec.has_value(), "a tagged payload still decodes");
+                  t.expect(dec.has_value() && dec->registry_fp == env.registry_fp &&
+                               dec->op_id == env.op_id && dec->args == env.args,
+                           "and yields the SAME TaskEnvelope the untagged payload does");
+
+                  const auto stripped = without_routing_tag(*wire);
+                  t.expect(stripped.has_value() && *stripped == plain,
+                           "and stripping returns the original bytes exactly");
+              })
+
+        .test("routing_never_moves_the_memo_key",
+              [](TestContext& t) {
+                  using nimblecas::sgee_bridge::with_routing_tag;
+                  using nimblecas::sgee_bridge::without_routing_tag;
+
+                  // The design claim this repo now depends on: a task's cache identity is
+                  // independent of where it is routed. Two identical computations sent to different
+                  // workers must remain ONE memo entry and must still dedup against each other.
+                  const TaskEnvelope env{.registry_fp = 7, .op_id = "k/v1", .args = {encode_i64(1)}};
+                  const auto key = encode_task(env).value();
+
+                  const auto on_gpu = with_routing_tag(key, raw_bytes("gpu")).value();
+                  const auto on_cpu = with_routing_tag(key, raw_bytes("cpu")).value();
+                  t.expect(on_gpu != on_cpu, "the two dispatched payloads genuinely differ");
+
+                  const auto key_from_gpu = without_routing_tag(on_gpu);
+                  const auto key_from_cpu = without_routing_tag(on_cpu);
+                  t.expect(key_from_gpu.has_value() && *key_from_gpu == key,
+                           "the gpu-routed payload strips back to the original key");
+                  t.expect(key_from_cpu.has_value() && *key_from_cpu == key,
+                           "so does the cpu-routed one");
+                  t.expect(key_from_gpu.has_value() && key_from_cpu.has_value() &&
+                               *key_from_gpu == *key_from_cpu,
+                           "THE MEMO-KEY TEST: routing does not change a task's cache identity");
+              })
+
+        .test("re_tagging_replaces_a_tag_rather_than_stacking_one",
+              [](TestContext& t) {
+                  using nimblecas::payload_matches_filter;
+                  using nimblecas::sgee_bridge::routing_filter;
+                  using nimblecas::sgee_bridge::with_routing_tag;
+                  using nimblecas::sgee_bridge::without_routing_tag;
+
+                  const TaskEnvelope env{.registry_fp = 3, .op_id = "s/v1", .args = {encode_i64(2)}};
+                  const auto key = encode_task(env).value();
+
+                  const auto once = with_routing_tag(key, raw_bytes("cpu")).value();
+                  const auto twice = with_routing_tag(once, raw_bytes("gpu"));
+                  t.expect(twice.has_value(), "re-tagging succeeds");
+
+                  const auto gpu_filter = routing_filter(raw_bytes("gpu")).value();
+                  const auto cpu_filter = routing_filter(raw_bytes("cpu")).value();
+                  t.expect(twice.has_value() && payload_matches_filter(*twice, gpu_filter),
+                           "the re-tagged payload matches the NEW tag");
+                  // If the trailers stacked, the payload would match BOTH filters and be leasable by
+                  // two disjoint pools -- the exact mis-routing this field exists to prevent.
+                  t.expect(twice.has_value() && !payload_matches_filter(*twice, cpu_filter),
+                           "and no longer matches the OLD one: replaced, not stacked");
+                  t.expect(twice.has_value() && twice->size() == once.size(),
+                           "the payload did not grow a second trailer");
+                  const auto back = without_routing_tag(*twice);
+                  t.expect(back.has_value() && *back == key,
+                           "and one strip still reaches the key");
+              })
+
+        .test("the_routing_filter_matches_the_tagged_payload_and_only_it",
+              [](TestContext& t) {
+                  using nimblecas::payload_matches_filter;
+                  using nimblecas::sgee_bridge::routing_filter;
+                  using nimblecas::sgee_bridge::with_routing_tag;
+
+                  const TaskEnvelope env{.registry_fp = 1, .op_id = "f/v1", .args = {encode_i64(8)}};
+                  const auto key = encode_task(env).value();
+                  const auto wire = with_routing_tag(key, raw_bytes("gpu")).value();
+
+                  const auto gpu = routing_filter(raw_bytes("gpu")).value();
+                  const auto cpu = routing_filter(raw_bytes("cpu")).value();
+
+                  // PIN THE NEEDLE ITSELF, by hand. Everything below compares a payload written by
+                  // with_routing_tag against a needle built by routing_filter -- and with_routing_tag
+                  // builds the trailer by CALLING routing_filter. A bug shared by both (a reversed
+                  // length, the wrong endianness, the fields transposed) would make every one of
+                  // those assertions agree with itself and pass. This vector is the only thing in
+                  // the test that does not come from the implementation.
+                  const std::array<std::uint8_t, 11> expected_trailer{
+                      0x4F, 0x52, 0x43, 0x4E,  // magic "NCRO" in LE
+                      0x67, 0x70, 0x75,        // tag "gpu"
+                      0x03, 0x00, 0x00, 0x00   // tag length 3, LE, written LAST
+                  };
+                  t.expect(gpu.size() == expected_trailer.size(),
+                           "a 3-byte tag yields an 11-byte filter");
+                  bool needle_pinned = gpu.size() == expected_trailer.size();
+                  for (std::size_t i = 0; needle_pinned && i < expected_trailer.size(); ++i) {
+                      needle_pinned = static_cast<std::uint8_t>(gpu[i]) == expected_trailer[i];
+                  }
+                  t.expect(needle_pinned, "and its bytes are exactly the hand-derived trailer");
+
+                  t.expect(payload_matches_filter(wire, gpu),
+                           "a gpu pump's filter finds the gpu tag it was written with");
+                  t.expect(!payload_matches_filter(wire, cpu),
+                           "a cpu pump's filter does not");
+                  t.expect(!payload_matches_filter(key, gpu),
+                           "and an UNTAGGED payload matches no routing filter at all");
+
+                  // "gpu" is a prefix of "gpu2": the length field is what stops one pool stealing
+                  // another's work, so check the needle is not merely the tag bytes.
+                  const auto gpu2 = routing_filter(raw_bytes("gpu2")).value();
+                  t.expect(!payload_matches_filter(wire, gpu2),
+                           "a longer tag sharing a prefix does not match -- the length is load-bearing");
+                  const auto wire2 = with_routing_tag(key, raw_bytes("gpu2")).value();
+                  t.expect(!payload_matches_filter(wire2, gpu),
+                           "and neither does the shorter one against the longer tag");
+              })
+
+        .test("a_malformed_routing_trailer_is_refused_not_guessed",
+              [](TestContext& t) {
+                  using nimblecas::sgee_bridge::routing_tag_of;
+                  using nimblecas::sgee_bridge::with_routing_tag;
+
+                  const TaskEnvelope env{.registry_fp = 2, .op_id = "d/v1", .args = {encode_i64(4)}};
+                  const auto key = encode_task(env).value();
+                  const auto wire = with_routing_tag(key, raw_bytes("gpu")).value();
+
+                  const Payload truncated(wire.begin(), wire.end() - 1);
+                  t.expect(!decode_task(truncated).has_value(),
+                           "a trailer missing a byte is a syntax_error, not a short tag");
+                  t.expect(!routing_tag_of(truncated).has_value(),
+                           "and routing_tag_of refuses it too");
+
+                  Payload bad_magic = wire;
+                  bad_magic[bad_magic.size() - 8] = std::byte{0x00};
+                  t.expect(!decode_task(bad_magic).has_value(),
+                           "a corrupted magic is refused rather than read as tag bytes");
+
+                  Payload zero_len = wire;
+                  zero_len[zero_len.size() - 4] = std::byte{0x00};
+                  t.expect(!decode_task(zero_len).has_value(),
+                           "a v2 payload declaring a zero-length tag is refused: v2 means TAGGED");
+
+                  Payload huge_len = wire;
+                  huge_len[huge_len.size() - 3] = std::byte{0xFF};
+                  t.expect(!decode_task(huge_len).has_value(),
+                           "and a tag length past the cap is refused, never used to size a read");
+
+                  // A tag over the cap must be refused at the WRITE end as well, so an oversize tag
+                  // can never reach the wire and be rejected only by the reader.
+                  const Payload oversize(nimblecas::sgee_bridge::k_max_routing_tag_bytes + 1,
+                                         std::byte{0x41});
+                  t.expect(!with_routing_tag(key, oversize).has_value(),
+                           "with_routing_tag refuses a tag over k_max_routing_tag_bytes");
+              })
+
+        .test("an_argument_that_mimics_a_routing_trailer_false_matches",
+              [](TestContext& t) {
+                  using nimblecas::payload_matches_filter;
+                  using nimblecas::sgee_bridge::routing_filter;
+                  using nimblecas::sgee_bridge::routing_tag_of;
+
+                  // HONESTY (Rule 32). The lease filter is a raw substring search over payload bytes
+                  // and knows nothing about framing, so an ARGUMENT containing the trailer byte
+                  // sequence matches a filter looking for it. This test exists so that fact is
+                  // recorded as OBSERVED BEHAVIOUR rather than as a caveat in a comment nobody
+                  // checks. It is a mis-ROUTING risk only: the worker decodes the envelope and runs
+                  // what it actually says, so the answer is never wrong, only computed elsewhere.
+                  const auto gpu = routing_filter(raw_bytes("gpu")).value();
+                  const TaskEnvelope env{
+                      .registry_fp = 5,
+                      .op_id = "m/v1",
+                      .args = {gpu}  // an argument whose BYTES are a routing trailer
+                  };
+                  const auto key = encode_task(env).value();
+
+                  t.expect(payload_matches_filter(key, gpu),
+                           "an untagged task whose ARGUMENT mimics the trailer still matches");
+                  const auto tag = routing_tag_of(key);
+                  t.expect(tag.has_value() && tag->empty(),
+                           "yet it carries NO tag -- the version field, not the bytes, decides");
+              })
+
+        .test("affinity_routing_tag_agrees_with_affinity_placement",
+              [](TestContext& t) {
+                  using nimblecas::affinity_routing_tag;
+                  using nimblecas::placement_tag;
+
+                  TaskRegistry reg;
+                  (void)reg.register_op("art.cpu/v1", [](auto) -> Result<Payload> { return encode_i64(1); });
+                  (void)reg.register_op("art.gpu/v1", [](auto) -> Result<Payload> { return encode_i64(2); });
+                  (void)reg.register_op("art.hyb/v1", [](auto) -> Result<Payload> { return encode_i64(3); });
+                  (void)reg.register_op("art.none/v1", [](auto) -> Result<Payload> { return encode_i64(4); });
+
+                  TaskGraph g;
+                  const auto c = g.add_named_task(reg, "art.cpu/v1").value();
+                  const auto gp = g.add_named_task(reg, "art.gpu/v1").value();
+                  const auto h = g.add_named_task(reg, "art.hyb/v1").value();
+                  const auto un = g.add_named_task(reg, "art.none/v1").value();
+
+                  AffinityTable table;
+                  table.emplace("art.cpu/v1", Affinity::cpu_only);
+                  table.emplace("art.gpu/v1", Affinity::gpu_only);
+                  table.emplace("art.hyb/v1", Affinity::hybrid);
+
+                  const auto place = affinity_placement(table);
+                  const auto tagger = affinity_routing_tag(table);
+
+                  // The two halves are built from one table and MUST agree: the label says where a
+                  // task belongs and the tag is what actually routes it there. If they could differ,
+                  // a task would be placed as one category and queued for another.
+                  bool agree = true;
+                  for (const TaskId id : {c, gp, h, un}) {
+                      agree = agree && tagger(g, id) == placement_tag(place(g, id));
+                  }
+                  t.expect(agree, "every task's tag is exactly placement_tag of its placement");
+
+                  t.expect(tagger(g, gp) == raw_bytes("gpu"), "gpu_only tags as gpu");
+                  t.expect(tagger(g, c) == raw_bytes("cpu"), "cpu_only tags as cpu");
+                  t.expect(tagger(g, h) == raw_bytes("cpu"), "hybrid tags as cpu");
+                  t.expect(tagger(g, un) == raw_bytes("cpu"), "an unlisted op takes the fallback tag");
+                  t.expect(placement_tag(SgeePlacement::distributed) == raw_bytes("distributed"),
+                           "the wire strings are the frozen names, not enumerator values");
+              })
+
+        .test("a_routed_run_is_bit_identical_and_actually_dispatches_tags",
+              [](TestContext& t) {
+                  using nimblecas::affinity_routing_tag;
+                  using nimblecas::payload_matches_filter;
+                  using nimblecas::sgee_bridge::routing_filter;
+
+                  TaskRegistry reg;
+                  (void)reg.register_op("rr.seed/v1", [](auto) -> Result<Payload> { return encode_i64(6); });
+                  (void)reg.register_op("rr.gpu/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) * 7); });
+                  (void)reg.register_op("rr.cpu/v1", [](auto ps) -> Result<Payload> { return encode_i64(decode_i64(ps[0]) + 5); });
+
+                  TaskGraph g;
+                  const auto seed = g.add_named_task(reg, "rr.seed/v1").value();
+                  const auto hot = g.add_named_task(reg, "rr.gpu/v1", std::vector<TaskId>{seed}).value();
+                  const auto cold = g.add_named_task(reg, "rr.cpu/v1", std::vector<TaskId>{seed}).value();
+
+                  AffinityTable table;
+                  table.emplace("rr.gpu/v1", Affinity::gpu_only);
+                  table.emplace("rr.cpu/v1", Affinity::cpu_only);
+                  table.emplace("rr.seed/v1", Affinity::cpu_only);
+
+                  const auto ser_res = nimblecas::serial_executor()->run(g).value();
+
+                  FakeBrokerPort port;
+                  InMemoryResultChannel results;
+                  SgeeExecutorConfig cfg;
+                  cfg.with_registry(reg)
+                      .with_num_workers(2)
+                      .with_poll_interval_ms(1)
+                      .with_placement(affinity_placement(table))
+                      .with_routing_tag(affinity_routing_tag(table));
+
+                  SgeeDistributedExecutor dist_exec(cfg, port, results);
+                  const auto dist_res = dist_exec.run(g);
+                  t.expect(dist_res.has_value(), "a routed run completes");
+
+                  // Routing must not change a single ANSWER. Workers here are unfiltered, so this is
+                  // the control: the tag is on the wire and the results are untouched by it.
+                  bool bit_identical = dist_res.has_value() &&
+                                       dist_res->outputs.size() == ser_res.outputs.size();
+                  for (std::size_t i = 0; bit_identical && i < ser_res.outputs.size(); ++i) {
+                      bit_identical = results_equal(dist_res->outputs[i], ser_res.outputs[i]);
+                  }
+                  t.expect(bit_identical, "a routed run is BIT-IDENTICAL to the serial reference");
+                  t.expect(dist_res.has_value() && decode_i64(dist_res->outputs[hot.value].value()) == 42,
+                           "the gpu-affine task computed 42");
+                  t.expect(dist_res.has_value() && decode_i64(dist_res->outputs[cold.value].value()) == 11,
+                           "the cpu-affine task computed 11");
+
+                  // And the tags genuinely reached the queue, rather than the run merely succeeding
+                  // because nothing was tagged at all.
+                  const auto gpu_filter = routing_filter(raw_bytes("gpu")).value();
+                  const auto seen = port.enqueued_payloads();
+                  std::size_t gpu_tagged = 0;
+                  for (const auto& pl : seen) {
+                      if (payload_matches_filter(pl, gpu_filter)) {
+                          ++gpu_tagged;
+                      }
+                  }
+                  t.expect(seen.size() == 3, "all three tasks were dispatched");
+                  t.expect(gpu_tagged == 1,
+                           "EXACTLY ONE dispatched payload carries the gpu tag -- the routing is real");
+              })
+
         .run();
 }

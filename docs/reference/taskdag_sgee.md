@@ -226,7 +226,13 @@ All entry points live in namespace `nimblecas` and `nimblecas::sgee_bridge`, `[[
 | `SgeeGrpcTlsOptions` | `struct { string ca_cert_path, cert_path, key_path, target_name_override; }` — **all-or-nothing**: empty ⇒ plaintext, partial ⇒ rejected. |
 | `SgeeGrpcExecutorOptions` | `struct { string endpoint; string auth_token; u64 rpc_deadline_ms; vector<string> endpoints; SgeeGrpcTlsOptions tls; }` — a non-empty `endpoints` supersedes `endpoint`. |
 | `sgee_grpc_distributed_executor` | `auto sgee_grpc_distributed_executor(SgeeExecutorConfig, SgeeGrpcExecutorOptions) -> Result<unique_ptr<Executor>>` factory (cross-process; `wal_dir` ignored, `num_workers==0` valid). |
-| `WorkerPumpConfig` | `struct { u64 worker_id; u64 lease_timeout_ms; u64 idle_backoff_ms; u64 heartbeat_every_ms; Payload payload_filter; }` — `payload_filter` empty (default) means "anything". |
+| `WorkerPumpConfig` | `struct { u64 worker_id; u64 lease_timeout_ms; u64 idle_backoff_ms; u64 heartbeat_every_ms; Payload payload_filter; }` — `payload_filter` empty (default) means "anything". Set it from `routing_filter(placement_tag(...))`, never by hand. |
+| `routing_filter` | `(tag) -> Result<Payload>` — the exact trailer bytes `magic \|\| tag \|\| len`. Both the dispatcher and the pump go through it, so needle and haystack cannot drift. Empty tag ⇒ empty filter. |
+| `with_routing_tag` | `(task_bytes, tag, max_bytes) -> Result<Payload>` — fluent; appends a routing trailer and stamps version 2. An **empty** tag returns the input byte-for-byte. **Replaces** an existing tag rather than stacking. |
+| `routing_tag_of` | `(task_bytes) -> Result<Payload>` — the tag carried, empty if none, `syntax_error` if malformed. |
+| `without_routing_tag` | `(task_bytes) -> Result<Payload>` — the inverse: the v1 bytes that are the **memo key**. |
+| `placement_tag` | `(SgeePlacement) -> Payload` — the frozen ASCII wire name (`"cpu"`, `"gpu"`, …). Part of the dispatcher/pump contract; do not change one. |
+| `affinity_routing_tag` | `(AffinityTable, fallback) -> function<Payload(const TaskGraph&, TaskId)>` — `affinity_placement`'s counterpart, built on top of it so the label and the tag agree by construction. |
 | `payload_matches_filter` | `(payload, filter) -> bool` — raw **unanchored byte** substring test; an empty filter matches everything. Must agree with SGEE's `InMemoryIndex::earliest_pending_matching`; a `strstr`-shaped version would truncate binary envelopes at the first NUL. |
 | `run_worker_pump` | Worker execution loop: lease → decode → registry lookup → invoke → put result → complete. |
 | `SgeeExecutorConfig` | Config struct with fluent setters (`with_registry`, `with_num_workers`, `with_poll_interval_ms`, `with_max_result_recoveries`, etc.). |
@@ -340,22 +346,27 @@ The table is **copied** into the returned closure, not referenced. A placement f
 outlives the expression that built it, and a dangling `AffinityTable` would be silent wrong
 routing rather than a crash.
 
-> **⚠ This is still half a mechanism, and turning it on still changes nothing today — but the
-> reason has narrowed.** The lease side *can* now filter (see below). What is missing is the
-> connection between this label and that filter, in two distinct places:
+> **⚠ `affinity_placement` on its own still changes nothing.** The label it produces rides
+> `SgeePlacement`'s own `int` parameter from enqueue to lease — a channel the substring filter
+> cannot see, and one that `CapiBrokerPort` and `GrpcBrokerPort` still **discard** on the way back
+> (`BrokerPort::Lease` has no field to hold it). Set only `placement` and a GPU-only task is still
+> leased by whichever worker asks first.
 >
-> 1. The filter matches **payload bytes**, and nothing writes the placement label into a payload.
->    `SgeePlacement` rides its own `int` parameter from enqueue to lease, a channel a substring
->    search cannot see. Closing this needs a `TaskEnvelope` framing with an explicit routing
->    field — and the envelope bytes are also the memo key ([`memo_dist`](memo_dist.md)), so it is
->    a versioned change that retires cache entries, not a free one.
-> 2. `CapiBrokerPort` and `GrpcBrokerPort` still discard `out_placement`, and `BrokerPort::Lease`
->    still has no field to hold it, so the label a worker receives still dies inside the port.
+> **What enforces the label** is the pair below — `affinity_routing_tag` on the dispatcher and
+> `routing_filter` on the pump — which put the same category into the payload *bytes*, where the
+> leader acts on it before it chooses:
 >
-> A GPU-only task is therefore **still** leased by whichever worker asks first. **Do not read a
-> placement label as a guarantee about where a task ran.** See
-> [sgee-locality-abi.md](../technical/sgee-locality-abi.md) — and note that even closing both gaps
-> buys *affinity* routing, not *data* locality.
+> ```cpp
+> cfg.with_placement(affinity_placement(table))          // the label
+>    .with_routing_tag(affinity_routing_tag(table));     // what actually routes
+> // and on a GPU pump:
+> pump.payload_filter = *routing_filter(placement_tag(SgeePlacement::gpu));
+> ```
+>
+> Both halves are built from one `AffinityTable`, so they cannot disagree. Even together they buy
+> *affinity* routing, not *data* locality: nothing in the SGEE C ABI reports which worker produced
+> a result, so a child's tag cannot be derived from its parent's location. See
+> [sgee-locality-abi.md](../technical/sgee-locality-abi.md), blocker 2.
 
 ## Filtered lease (ROADMAP §6.2 item 3, blocker 1)
 
@@ -405,6 +416,47 @@ including the end-to-end pump test.
 
 Placement never affects results: `TaskRunResult::outputs` and `executed` are identical with and
 without it, which is asserted directly in `tests/taskdag_sgee_tests.cpp`.
+
+## Routing trailer (ROADMAP §6.2 item 3, step 2)
+
+The filter searches payload **bytes**, so a routing tag has to be *in* the payload. It rides in a
+trailer appended to the encoded task:
+
+```
+... v1 task bytes ... || k_routing_magic (u32 LE) || tag bytes || tag_len (u32 LE)
+```
+
+with the version at offset 4 stamped `2`. The length is written **last** so the trailer can be
+located from the end of the payload in constant time; that is what lets a reader strip routing
+without parsing the body, and why `decode_task` handles v2 by removing a suffix and then running
+the v1 parser completely unchanged. No v1 offset moves and no v1 parsing rule is relaxed.
+
+**The tag is not part of `TaskEnvelope`, deliberately.** `TaskEnvelope` is a task's *identity* —
+registry fingerprint, op id, argument bytes — and where a computation runs is not part of what it
+computes. Keeping the tag out of the struct is what makes the following true:
+
+| Property | Why it holds |
+| :--- | :--- |
+| **No cache entry is retired.** | `encode_task` is untouched by routing; an untagged task encodes byte-for-byte as it did before the feature existed. A pinned, hand-derived 39-byte vector in the test suite fails if that ever stops being true. |
+| **Routing does not partition the cache.** | The executor keys the memo and the dedup index on the **untagged** bytes and dispatches the **tagged** bytes. The same computation routed to `"cpu"` and to `"gpu"` is one memo entry. |
+| **A worker sees the same task either way.** | `decode_task` of a tagged payload yields the identical `TaskEnvelope` the untagged payload does. |
+
+`with_routing_tag` **replaces** an existing tag rather than stacking one — two trailers would make
+a payload match two disjoint pools' filters, which is the mis-routing the field exists to prevent.
+
+> **⚠ An accidental match is improbable, not impossible.** The filter runs on the leader over raw
+> bytes and knows nothing of framing, so an **argument** whose bytes happen to contain the trailer
+> sequence matches a filter looking for it. This is a mis-**routing** risk only: the worker decodes
+> the envelope and executes what it actually says, so the answer is never wrong, only computed in
+> the wrong place. `tests/taskdag_sgee_tests.cpp` asserts this behaviour directly rather than
+> leaving it as a caveat — see `an_argument_that_mimics_a_routing_trailer_false_matches`.
+
+The 11 tests covering this are mutation-checked. Dropping the tag in `with_routing_tag` kills 6;
+keying the memo on the dispatched bytes kills exactly 1 (`a_memo_entry_survives_being_routed_somewhere_else`, which exists *because* that mutant survived everything else); stacking trailers
+instead of replacing kills 1; collapsing `placement_tag` kills 2; making the trailer invisible to
+readers kills 5. Changing `k_routing_magic` — an internally consistent, silent wire-contract break
+— kills exactly 1, the hand-pinned needle vector, which is the only assertion in the suite not
+derived from the implementation.
 
 ## See also
 

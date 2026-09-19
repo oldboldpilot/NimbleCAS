@@ -6,9 +6,13 @@ ROADMAP §6.2 item 3 asks that "tasks are scheduled on nodes that already hold p
 (e.g. a downstream matrix calculation is scheduled on the specific GPU holding the parent
 matrix) to minimize inter-node TCP/IP or PCIe transfers."
 
-**That cannot be built inside NimbleCAS.** This page records exactly why, exactly what the
-`StochasticGraphExecutionEngine` C ABI would have to add, and what NimbleCAS would then do with
-it — so the work can be picked up without re-deriving any of it.
+**Half of it could not be built inside NimbleCAS**, and that half — a lease that filters on the
+leader — landed in SGEE's C ABI at `6ec13bfc`. NimbleCAS now consumes it and routes by affinity
+category end to end. What is still missing is *data* locality, which needs blocker 2 below.
+
+This page records exactly why, exactly what the `StochasticGraphExecutionEngine` C ABI had to add
+and still has to add, and what NimbleCAS does with it — so the rest can be picked up without
+re-deriving any of it.
 
 ## The half that exists
 
@@ -150,14 +154,31 @@ on changes nothing today.
    ignores, so the request succeeds and returns an unfiltered task. There is no version
    handshake. A mixed-version cluster is the one configuration where a filtered lease can still
    hand back work the filter excluded.
-2. Put that tag in the task payload where a substring match can find it. **This is now the
-   blocking step.** The `TaskEnvelope`
-   wire format v1 has a **reserved `u16`** at offset 6, but two bytes are too few and too
-   collidable for a substring search over arbitrary argument bytes; a v2 framing with an
-   explicit, length-prefixed, magic-delimited routing field is the honest option. Note that the
-   envelope bytes are also the memo key (see [`memo_dist`](../reference/memo_dist.md)), so a
-   framing change must either keep the routing field **out** of the memo key or accept that
-   changing a task's routing retires its cache entries.
+2. ~~Put that tag in the task payload where a substring match can find it.~~ **DONE.** The
+   routing field is a **trailer**, not the reserved `u16` at offset 6 — two bytes are too few and
+   too collidable for a substring search over arbitrary argument bytes:
+
+   ```
+   ... v1 task bytes ... || k_routing_magic (u32 LE) || tag bytes || tag_len (u32 LE)
+   ```
+
+   with the version stamped 2. The length goes **last** so the trailer is locatable from the end
+   in constant time, which is what lets `decode_task` strip a suffix and then run the v1 parser
+   completely unchanged.
+
+   The memo-key question posed here was answered by keeping the routing field **out** of the key,
+   and the cost of doing so turned out to be zero rather than a retired cache: the tag is not a
+   member of `TaskEnvelope` at all, so `encode_task` is untouched and an untagged task still
+   encodes byte-for-byte as it always did. The executor keys the memo and the dedup index on the
+   **untagged** bytes and dispatches the **tagged** ones, so the same computation routed two ways
+   is one cache entry. A pinned, hand-derived 39-byte vector in the test suite fails if the
+   untagged encoding ever moves.
+
+   `SgeeExecutorConfig::routing_tag` supplies the tag (consulted at **both** enqueue sites, like
+   `placement`), `affinity_routing_tag` builds it from the same `AffinityTable` that
+   `affinity_placement` uses, and a pump serves a category with
+   `routing_filter(placement_tag(...))` — one function producing both the bytes written and the
+   bytes searched for, so they cannot drift.
 3. Record the producing worker per completed task, and derive each child's tag from the
    producer of its heaviest parent.
 4. Measure it the way M6 and M7 were measured, with a pre-registered rule and a negative
@@ -185,14 +206,35 @@ on changes nothing today.
   is the empty-filter equivalence test, which is correct: "always match" *is* the right answer
   for an empty filter.
 
-- **Still inert end to end, for a NARROWER reason.** Nothing writes a routing tag into a payload,
-  so every caller still passes an empty filter and behaviour is unchanged. `SgeePlacement` rides
-  its own `int` parameter, a channel the substring search cannot see. The blocking piece has
-  moved from upstream into this repo: it is step 2's framing decision, which is not free because
-  the envelope bytes are also the memo key.
+- **Affinity routing now works end to end.** Steps 1 and 2 are both done, so the chain
+  *affinity table → routing tag → payload trailer → leader-side filter → pump* is closed. A GPU-only
+  task waits for a GPU worker instead of being leased by whoever polls first. Configured with:
 
-**What clearing blocker 1 does and does not buy.** It buys *affinity* routing: a worker can
-refuse to be handed work it cannot serve, and a GPU-only task can wait for a GPU worker instead
-of being leased by whoever polls first. It does **not** buy *data* locality — that needs blocker
-2. `affinity_placement`'s honesty note has been updated rather than removed: it still says the
-mechanism changes nothing today, because it still does.
+  ```cpp
+  cfg.with_placement(affinity_placement(table))
+     .with_routing_tag(affinity_routing_tag(table));
+  pump.payload_filter = *routing_filter(placement_tag(SgeePlacement::gpu));
+  ```
+
+  Verified by 11 tests across `tests/taskdag_sgee_tests.cpp` and `tests/taskdag_sgee_memo_tests.cpp`,
+  mutation-checked with six mutants — all killed. Two are worth recording because they are the ones
+  that nearly escaped: keying the memo on the **dispatched** bytes (which silently gives every
+  routing category its own private cache) is caught by exactly one test, written only after that
+  mutant survived everything else; and changing `k_routing_magic` — an internally consistent,
+  invisible wire-contract break — is caught only by the hand-pinned needle vector, the single
+  assertion in the suite not derived from the implementation. An adversarial review found both the
+  self-referential test and a comment that still described the pre-rewrite field order.
+
+- **Still NOT data locality, and that is the whole of what remains.** Routing is by *category*
+  (`"cpu"`, `"gpu"`, …), not by *node*. Deriving a child's tag from the node that produced its
+  heaviest parent — step 3 — needs blocker 2, which is still open and still undesigned.
+
+- **Not yet measured.** Step 4 stands: no locality win is claimed anywhere, because none has been
+  measured. Locality results are highly sensitive to payload size and network cost, and a NEGATIVE
+  result on a single machine remains entirely plausible.
+
+**What this does and does not buy.** *Affinity* routing: a worker can refuse work it cannot serve.
+Not *data* locality — that needs blocker 2. `affinity_placement`'s honesty note has been narrowed
+rather than removed: **that function alone** still changes nothing, because the label still rides a
+channel the filter cannot see and both real ports still discard `out_placement`. What changed is
+that there is now a second half (`affinity_routing_tag`) that does enforce it.

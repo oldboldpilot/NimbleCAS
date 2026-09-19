@@ -77,6 +77,63 @@ struct ResultEnvelope {
 
 [[nodiscard]] auto decode_result(std::span<const std::byte> bytes) -> Result<ResultEnvelope>;
 
+// ---------------------------------------------------------------------------
+// Routing trailer (ROADMAP §6.2 item 3, blocker 1 step 2)
+// ---------------------------------------------------------------------------
+// A routing tag says WHERE a task should run. It is deliberately NOT a member of TaskEnvelope,
+// because TaskEnvelope is the task's IDENTITY -- the registry fingerprint, the op, and the
+// argument bytes -- and where a computation runs is not part of what it computes. Keeping the
+// tag out of the struct is what lets the memo key stay exactly what it was: `encode_task` is
+// untouched by routing, so no cache entry written before this feature existed is retired by it,
+// and two tasks differing ONLY in routing still collide in the memo and still dedup. See
+// docs/reference/memo_dist.md for why that matters.
+//
+// The tag rides in a TRAILER appended to the encoded task, because the lease filter is a raw
+// unanchored byte-substring search over the whole payload (see `payload_matches_filter`) and a
+// trailer is the one place a fixed byte string can be appended without disturbing a single
+// existing offset.
+//
+//     ... v1 task bytes ... || k_routing_magic (u32 LE) || tag bytes || tag_len (u32 LE)
+//
+// and the version field at offset 4 is stamped 2, so the framing announces itself rather than
+// relying on a reader happening to reject the extra bytes.
+//
+// The length is written LAST, after the tag rather than before it, so the trailer can be located
+// from the END of the payload in constant time. That is what lets a reader strip routing without
+// parsing the body at all, and it is why `decode_task` handles v2 by removing a suffix and then
+// running the v1 parser completely unchanged -- no offset in the v1 body moves, and no v1 parsing
+// rule is relaxed to accommodate trailing bytes.
+inline constexpr std::uint32_t k_routing_magic = 0x4E43524F;  // "NCRO" in LE
+inline constexpr std::size_t k_max_routing_tag_bytes = 240;
+
+// The exact bytes a tag contributes to a payload: magic || tag || len. A pump passes this as its
+// `payload_filter` and `with_routing_tag` appends this same sequence, FROM THIS ONE FUNCTION, so
+// the thing searched for and the thing written can never drift apart.
+//
+// An empty tag yields empty bytes -- the filter that matches everything -- which keeps
+// "no routing" expressible without a special case at either end.
+//
+// HONESTY (Rule 32): this makes an accidental match IMPROBABLE, not impossible. The filter runs
+// on the leader over raw payload bytes and knows nothing of framing, so an ARGUMENT whose bytes
+// happen to contain this exact sequence matches too. A false match mis-ROUTES a task; it never
+// corrupts one, because the worker decodes the envelope and executes what it actually says.
+[[nodiscard]] auto routing_filter(std::span<const std::byte> tag) -> Result<Payload>;
+
+// Fluent (Rule 15): returns `task_bytes` carrying `tag`. An EMPTY tag returns the input
+// UNCHANGED -- byte for byte, version still 1 -- which is why turning routing on costs existing
+// callers and existing caches nothing. Re-tagging already-tagged bytes replaces the tag.
+[[nodiscard]] auto with_routing_tag(Payload task_bytes, std::span<const std::byte> tag,
+                                    std::size_t max_bytes = k_max_task_payload_bytes)
+    -> Result<Payload>;
+
+// The tag `task_bytes` carries, or an EMPTY payload if it carries none. Malformed input is a
+// syntax_error, never a guess.
+[[nodiscard]] auto routing_tag_of(std::span<const std::byte> task_bytes) -> Result<Payload>;
+
+// The inverse of with_routing_tag: the v1 bytes that are this task's MEMO KEY. Untagged input is
+// returned unchanged.
+[[nodiscard]] auto without_routing_tag(Payload task_bytes) -> Result<Payload>;
+
 }  // namespace nimblecas::sgee_bridge
 
 export namespace nimblecas {
@@ -282,6 +339,15 @@ public:
         return next_qid_;
     }
 
+    // Every payload handed to enqueue, in dispatch order, INCLUDING tasks later completed or
+    // reaped. A test-double observation hook: asserting on what a dispatcher put on the queue is
+    // the only way to tell "the tag was written" from "the run happened to pass", and a task's own
+    // stored copy cannot answer that once the task is gone.
+    [[nodiscard]] auto enqueued_payloads() const -> std::vector<Payload> {
+        const std::lock_guard lock(mutex_);
+        return enqueue_log_;
+    }
+
     // Lease attempts consumed by qid so far (0 for an unknown qid).
     [[nodiscard]] auto attempts(std::uint64_t qid) const -> std::uint32_t {
         const std::lock_guard lock(mutex_);
@@ -321,6 +387,7 @@ public:
             .max_attempts = max_attempts ? max_attempts : 3,
             .state = QState::pending
         };
+        enqueue_log_.push_back(entry.payload);
         tasks_[qid] = std::move(entry);
         fifo_order_.push_back(qid);
         return qid;
@@ -459,6 +526,9 @@ public:
     }
 
 private:
+    // Append-only; see enqueued_payloads(). Guarded by mutex_ like every other member.
+    std::vector<Payload> enqueue_log_;
+
     struct TaskEntry {
         std::uint64_t qid{0};
         Payload payload;
@@ -737,11 +807,14 @@ struct WorkerPumpConfig {
     // stalls until its deadline rather than mis-routing, because an unmatched lease is reported
     // as nullopt (queue-empty), which is exactly what an idle pump expects to see.
     //
-    // Nothing in NimbleCAS puts a tag INTO a payload yet: the TaskEnvelope v1 framing has no
-    // field a substring search can safely aim at, and the envelope bytes are also the memo key
-    // (see docs/reference/memo_dist.md), so adding one is a versioned framing change with cache
-    // consequences. Until that lands this field is for callers who frame their own payloads.
-    Payload payload_filter{};
+    // Set it from the SAME function the dispatcher tags with, never by hand:
+    //
+    //     cfg.payload_filter = *sgee_bridge::routing_filter(placement_tag(SgeePlacement::gpu));
+    //
+    // paired with `SgeeExecutorConfig::routing_tag = affinity_routing_tag(table)`. Both sides go
+    // through `routing_filter`, so the bytes written and the bytes searched for are the same
+    // bytes by construction. A hand-written filter is how a pool silently stops matching.
+    Payload payload_filter;
 };
 
 auto run_worker_pump(BrokerPort& port, const TaskRegistry& reg, ResultChannel& results,
@@ -760,6 +833,20 @@ struct SgeeExecutorConfig {
     std::uint64_t run_deadline_ms{0};
     std::size_t max_result_recoveries{0};
     std::function<SgeePlacement(const TaskGraph&, TaskId)> placement;
+
+    // ── Routing (ROADMAP §6.2 item 3) ────────────────────────────────────────────────
+    // The tag written into each dispatched task's payload, where a worker's lease filter can
+    // find it. Null (the default) writes nothing, and the dispatched bytes are then byte-for-byte
+    // what they were before this field existed.
+    //
+    // Consulted at BOTH enqueue sites, exactly like `placement`, so a result-recovery re-enqueue
+    // routes the same way the original dispatch did.
+    //
+    // It does NOT touch the memo or the dedup index: both key on the UNTAGGED encoding, so two
+    // tasks that differ only in where they are meant to run remain the same cache entry. Routing
+    // is therefore free to change between runs without retiring anything.
+    std::function<Payload(const TaskGraph&, TaskId)> routing_tag;
+
     bool cost_ordering{false};
     ScheduleParams schedule_params{};
     const CostTable* cost_table{nullptr};
@@ -844,6 +931,12 @@ struct SgeeExecutorConfig {
     auto with_placement(std::function<SgeePlacement(const TaskGraph&, TaskId)> f)
         -> SgeeExecutorConfig& {
         placement = std::move(f);
+        return *this;
+    }
+
+    auto with_routing_tag(std::function<Payload(const TaskGraph&, TaskId)> f)
+        -> SgeeExecutorConfig& {
+        routing_tag = std::move(f);
         return *this;
     }
 
@@ -935,30 +1028,47 @@ private:
 // routing rather than a crash. Affinity tables are small; the copy is the cheap side of that trade.
 //
 // ── HONESTY BOUNDARY (Rule 32) ───────────────────────────────────────────────────────────
-// THIS IS STILL HALF A MECHANISM, AND TURNING IT ON STILL CHANGES NOTHING TODAY -- but the
-// reason has NARROWED, so do not read the old one back into it. The lease side can now filter:
-// `BrokerPort::lease_filtered` reaches SGEE's `sgee_broker_lease_filtered` /
-// `sgee_grpc_lease_filtered` (SGEE main @ 6ec13bfc), and a worker CAN decline work it cannot
-// serve. What is missing is no longer the filter; it is the CONNECTION between this label and
-// that filter, and there are two distinct gaps:
+// THIS FUNCTION ALONE STILL CHANGES NOTHING. It produces the `placement` label, and the label
+// travels on `SgeePlacement`'s own `int` parameter from enqueue to lease -- a channel the lease
+// filter cannot see, and one that `CapiBrokerPort` and `GrpcBrokerPort` still DISCARD on the way
+// back (`BrokerPort::Lease` has no field to hold it). Setting ONLY `placement` therefore still
+// gets a GPU-only task leased by whichever worker asks first.
 //
-//   1. The filter matches PAYLOAD BYTES, and nothing writes the placement label into a payload.
-//      `SgeePlacement` rides its own `int` parameter from enqueue to lease, a channel the
-//      substring search cannot see. Closing this needs a TaskEnvelope framing with an explicit
-//      routing field -- and the envelope bytes are also the memo key (docs/reference/memo_dist.md),
-//      so it is a versioned change that retires cache entries, not a free one.
-//   2. `CapiBrokerPort` and `GrpcBrokerPort` still DISCARD `out_placement`, and `BrokerPort::Lease`
-//      still has no field to hold it, so the label a worker receives still dies inside the port.
+// What enforces the label is the pair `affinity_routing_tag` + `WorkerPumpConfig::payload_filter`,
+// which put the same category into the payload BYTES, where the leader's filter can act on it
+// before it chooses. Use `affinity_placement` for the label and `affinity_routing_tag` for the
+// routing; built from the same AffinityTable they agree by construction.
 //
-// So a GPU-only task is STILL leased by whichever worker asks first, and a placement label is
-// STILL not a guarantee about where a task ran. What changed is that the blocking piece is now
-// inside this repo rather than upstream. See docs/technical/sgee-locality-abi.md -- note in
-// particular that even closing both gaps buys AFFINITY routing, not DATA locality: nothing in
-// the SGEE C ABI reports which worker produced a result, so a child's tag cannot be derived
-// from its parent's location.
+// Even both together buy AFFINITY routing, not DATA locality: nothing in the SGEE C ABI reports
+// which worker produced a result, so a child's tag cannot be derived from its parent's location.
+// See docs/technical/sgee-locality-abi.md, blocker 2.
 [[nodiscard]] auto affinity_placement(const AffinityTable& table,
                                       SgeePlacement fallback = SgeePlacement::cpu)
     -> std::function<SgeePlacement(const TaskGraph&, TaskId)>;
+
+// The routing tag for a placement category: a short, stable ASCII name ("cpu", "gpu", ...).
+//
+// ASCII rather than the enumerator's integer value, ON PURPOSE. The tag is found by a raw
+// substring search over payload bytes that are mostly numbers, and a single byte 0x02 occurs
+// constantly in such data; "gpu" preceded by a magic and followed by its length does not. The
+// value is part of the WIRE CONTRACT between a dispatcher and a pump -- changing a string here
+// silently stops matching pumps configured elsewhere, so treat these as frozen.
+[[nodiscard]] auto placement_tag(SgeePlacement p) -> Payload;
+
+// `affinity_placement`'s counterpart, and the half that actually routes: builds the
+// `SgeeExecutorConfig::routing_tag` function from the same frozen AffinityTable, mapping each
+// task to `placement_tag(affinity_placement(table, fallback)(g, id))`.
+//
+// The SAME PRECONDITION applies, for the same reason: every TaskId must have been issued by the
+// TaskGraph passed alongside it, because this forwards to TaskGraph::op_id, which is guarded by
+// an assert only and the canonical flags define NDEBUG. The table is COPIED into the closure.
+//
+// A pool configured with this must COLLECTIVELY cover every tag the graph produces -- see the
+// warning on WorkerPumpConfig::payload_filter. A pump serving "gpu" is configured with
+// `routing_filter(placement_tag(SgeePlacement::gpu))`.
+[[nodiscard]] auto affinity_routing_tag(const AffinityTable& table,
+                                        SgeePlacement fallback = SgeePlacement::cpu)
+    -> std::function<Payload(const TaskGraph&, TaskId)>;
 
 // Factory (NIMBLECAS_SGEE=ON). Validates config (invalid -> domain_error) and returns an executor
 // whose every run() opens a FRESH per-run CapiBrokerPort on a process-unique WAL, deleted on success
@@ -1087,7 +1197,42 @@ auto affinity_placement(const AffinityTable& table, SgeePlacement fallback)
     };
 }
 
+auto placement_tag(SgeePlacement p) -> Payload {
+    // Frozen wire strings. Every enumerator is named explicitly with NO default, so adding a
+    // placement category is a compile error here rather than a task that silently routes as
+    // something else.
+    std::string_view name;
+    switch (p) {
+        case SgeePlacement::direct:      name = "direct"; break;
+        case SgeePlacement::cpu:         name = "cpu"; break;
+        case SgeePlacement::gpu:         name = "gpu"; break;
+        case SgeePlacement::docker:      name = "docker"; break;
+        case SgeePlacement::distributed: name = "distributed"; break;
+        case SgeePlacement::cloud:       name = "cloud"; break;
+    }
+    Payload out;
+    out.reserve(name.size());
+    for (const char c : name) {
+        out.push_back(static_cast<std::byte>(c));
+    }
+    return out;
+}
+
+auto affinity_routing_tag(const AffinityTable& table, SgeePlacement fallback)
+    -> std::function<Payload(const TaskGraph&, TaskId)> {
+    // Built ON TOP of affinity_placement rather than beside it: one table, one lookup rule, one
+    // fallback. A second copy of the switch could disagree with the label, which would put a task
+    // in a queue tagged for one category while its placement said another.
+    return [place = affinity_placement(table, fallback)](const TaskGraph& g, TaskId id) -> Payload {
+        return placement_tag(place(g, id));
+    };
+}
+
 namespace sgee_bridge {
+
+// Defined below, beside the rest of the routing helpers; declared here because decode_task needs
+// it to strip a v2 trailer before parsing.
+[[nodiscard]] auto routing_trailer_len(std::span<const std::byte> bytes) -> Result<std::size_t>;
 
 auto encode_task(const TaskEnvelope& env, std::size_t max_bytes) -> Result<Payload> {
     if (env.op_id.empty() || env.op_id.size() > 256) {
@@ -1138,8 +1283,23 @@ auto decode_task(std::span<const std::byte> bytes) -> Result<TaskEnvelope> {
     }
     const std::uint32_t magic = read_u32_le(bytes, 0);
     const std::uint16_t version = read_u16_le(bytes, 4);
-    if (magic != k_task_magic || version != 1) {
+    if (magic != k_task_magic || (version != 1 && version != 2)) {
         return make_error<TaskEnvelope>(MathError::syntax_error);
+    }
+
+    // A v2 payload is a v1 payload plus a routing trailer. Strip the trailer HERE and let every
+    // line below run on a v1 body, so routing adds no case to the argument parsing -- the part
+    // that handles hostile lengths and must not grow a second shape to get wrong.
+    if (version == 2) {
+        const auto trailer_res = routing_trailer_len(bytes);
+        if (!trailer_res.has_value()) {
+            return make_error<TaskEnvelope>(trailer_res.error());
+        }
+        // A v2 payload must actually carry a tag; `with_routing_tag` never stamps 2 without one.
+        if (*trailer_res == 0 || bytes.size() - *trailer_res < 20) {
+            return make_error<TaskEnvelope>(MathError::syntax_error);
+        }
+        bytes = bytes.first(bytes.size() - *trailer_res);
     }
 
     const std::uint64_t fp = read_u64_le(bytes, 8);
@@ -1202,6 +1362,106 @@ auto decode_task(std::span<const std::byte> bytes) -> Result<TaskEnvelope> {
         .op_id = std::move(op_id),
         .args = std::move(args)
     };
+}
+
+// Length of the routing trailer at the end of `bytes`, or 0 when the header says v1.
+// Reads ONLY the header version and the trailer; the body is never parsed, which is what makes
+// stripping routing independent of whether the body is well formed.
+[[nodiscard]] auto routing_trailer_len(std::span<const std::byte> bytes) -> Result<std::size_t> {
+    if (bytes.size() < 20 || read_u32_le(bytes, 0) != k_task_magic) {
+        return make_error<std::size_t>(MathError::syntax_error);
+    }
+    const std::uint16_t version = read_u16_le(bytes, 4);
+    if (version == 1) {
+        return std::size_t{0};
+    }
+    if (version != 2 || bytes.size() < 8) {
+        return make_error<std::size_t>(MathError::syntax_error);
+    }
+    const std::uint32_t tag_len = read_u32_le(bytes, bytes.size() - 4);
+    if (tag_len < 1 || tag_len > k_max_routing_tag_bytes) {
+        return make_error<std::size_t>(MathError::syntax_error);
+    }
+    // 8 + tag_len cannot wrap: tag_len is a u32 already bounded by k_max_routing_tag_bytes.
+    const std::size_t trailer = 8 + static_cast<std::size_t>(tag_len);
+    if (bytes.size() < trailer
+        || read_u32_le(bytes, bytes.size() - trailer) != k_routing_magic) {
+        return make_error<std::size_t>(MathError::syntax_error);
+    }
+    return trailer;
+}
+
+auto routing_filter(std::span<const std::byte> tag) -> Result<Payload> {
+    if (tag.empty()) {
+        return Payload{};
+    }
+    if (tag.size() > k_max_routing_tag_bytes) {
+        return make_error<Payload>(MathError::overflow);
+    }
+    Payload out;
+    out.reserve(8 + tag.size());
+    write_u32_le(k_routing_magic, out);
+    out.insert(out.end(), tag.begin(), tag.end());
+    write_u32_le(static_cast<std::uint32_t>(tag.size()), out);
+    return out;
+}
+
+auto with_routing_tag(Payload task_bytes, std::span<const std::byte> tag, std::size_t max_bytes)
+    -> Result<Payload> {
+    // Strip first, unconditionally. Re-tagging must REPLACE, not stack: two trailers would make
+    // the payload match both filters, which is precisely the mis-routing this field exists to stop.
+    auto stripped_res = without_routing_tag(std::move(task_bytes));
+    if (!stripped_res.has_value()) {
+        return make_error<Payload>(stripped_res.error());
+    }
+    Payload out = std::move(*stripped_res);
+    if (tag.empty()) {
+        return out;  // byte-identical to the v1 input: the untagged path costs nothing
+    }
+
+    auto filter_res = routing_filter(tag);
+    if (!filter_res.has_value()) {
+        return make_error<Payload>(filter_res.error());
+    }
+    // Headroom check phrased as a subtraction against the cap, never a sum that could wrap.
+    if (out.size() > max_bytes || filter_res->size() > max_bytes - out.size()) {
+        return make_error<Payload>(MathError::overflow);
+    }
+
+    out[4] = static_cast<std::byte>(2);  // version 2; byte 5 is already 0 for a u16 LE 1
+    out[5] = static_cast<std::byte>(0);
+    out.insert(out.end(), filter_res->begin(), filter_res->end());
+    return out;
+}
+
+auto routing_tag_of(std::span<const std::byte> task_bytes) -> Result<Payload> {
+    const auto trailer_res = routing_trailer_len(task_bytes);
+    if (!trailer_res.has_value()) {
+        return make_error<Payload>(trailer_res.error());
+    }
+    if (*trailer_res == 0) {
+        return Payload{};
+    }
+    const std::size_t tag_len = *trailer_res - 8;
+    const auto tag = task_bytes.subspan(task_bytes.size() - *trailer_res + 4, tag_len);
+    return Payload(tag.begin(), tag.end());
+}
+
+auto without_routing_tag(Payload task_bytes) -> Result<Payload> {
+    const auto trailer_res = routing_trailer_len(task_bytes);
+    if (!trailer_res.has_value()) {
+        return make_error<Payload>(trailer_res.error());
+    }
+    if (*trailer_res == 0) {
+        return task_bytes;
+    }
+    if (task_bytes.size() - *trailer_res < 20) {
+        return make_error<Payload>(MathError::syntax_error);
+    }
+    task_bytes.resize(task_bytes.size() - *trailer_res);
+    task_bytes[4] = static_cast<std::byte>(1);  // back to v1: these ARE the memo-key bytes
+    task_bytes[5] = static_cast<std::byte>(0);
+    return task_bytes;
 }
 
 auto encode_result(const ResultEnvelope& env) -> Result<Payload> {
@@ -1446,6 +1706,18 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             return make_error<TaskRunResult>(MathError::domain_error);
         }
     }
+
+    // The ONE place a routing tag is applied, shared by both enqueue sites so a recovery
+    // re-enqueue cannot route differently from the original dispatch. It takes the KEY bytes and
+    // returns the WIRE bytes; the caller keeps the key, because that is what the memo and the
+    // dedup index are addressed by. With no routing_tag configured this is the identity, and the
+    // dispatched bytes are exactly what they were before routing existed.
+    const auto to_wire = [this, &g](TaskId id, const Payload& key_bytes) -> Result<Payload> {
+        if (!cfg_.routing_tag) {
+            return key_bytes;
+        }
+        return sgee_bridge::with_routing_tag(key_bytes, cfg_.routing_tag(g, id));
+    };
 
     // Acquire this run's transport: a fresh broker + channel + WAL for a per-run
     // factory, or the borrowed pair for the reference ctor. Done AFTER the pre-flight
@@ -1720,13 +1992,20 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
             }
 
             const SgeePlacement placement = cfg_.placement ? cfg_.placement(g, id) : SgeePlacement::cpu;
-            auto enqueue_res = port.enqueue(*enc_res, placement, cfg_.max_attempts);
+            const auto wire_res = to_wire(id, *enc_res);
+            if (!wire_res.has_value()) {
+                return make_error<TaskRunResult>(MathError::distributed_error);
+            }
+            auto enqueue_res = port.enqueue(*wire_res, placement, cfg_.max_attempts);
             if (!enqueue_res.has_value()) {
                 return make_error<TaskRunResult>(MathError::distributed_error);
             }
 
             pending_tasks[*enqueue_res] = PendingTaskInfo{
                 .id = id,
+                // The KEY, deliberately, not the dispatched bytes: this field is what the memo is
+                // published under further down, and a tagged key would make a task's cache entry
+                // depend on where it happened to be routed.
                 .encoded_payload = std::move(*enc_res),
                 .recoveries = 0
             };
@@ -1768,8 +2047,12 @@ auto SgeeDistributedExecutor::run(const TaskGraph& g) -> Result<TaskRunResult> {
                         if (info.recoveries < cfg_.max_result_recoveries) {
                             const SgeePlacement placement =
                                 cfg_.placement ? cfg_.placement(g, info.id) : SgeePlacement::cpu;
+                            const auto re_wire_res = to_wire(info.id, info.encoded_payload);
+                            if (!re_wire_res.has_value()) {
+                                return make_error<TaskRunResult>(MathError::distributed_error);
+                            }
                             auto re_enqueue_res =
-                                port.enqueue(info.encoded_payload, placement, cfg_.max_attempts);
+                                port.enqueue(*re_wire_res, placement, cfg_.max_attempts);
                             if (!re_enqueue_res.has_value()) {
                                 return make_error<TaskRunResult>(MathError::distributed_error);
                             }
