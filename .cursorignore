@@ -1,0 +1,17 @@
+# Credentials must never be indexed or read by any AI tool or model.
+# Honoured by: Cursor / cursor-agent (.cursorignore), Gemini CLI (.geminiignore),
+# Gemini Code Assist (.aiexclude). Claude Code is covered by permissions.deny
+# in the user-level ~/.claude/settings.json. Keep these three files identical.
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+config/.env
+.netrc
+.git-credentials
+.git/config
+*.pem
+*.key
+*.p12
+*.pfx
