@@ -200,7 +200,7 @@ NimbleCAS is cross-platform C++23 and builds under clang with two standard libra
 scripts/build.sh                         # configure, build, run tests
 NIMBLECAS_SANITIZE=ON scripts/build.sh   # ASan + UBSan + LSan build
 
-# Windows — Visual Studio's bundled clang + MSVC STL (run in Git Bash)
+# Windows — newest installed clang + MSVC STL (run in Git Bash)
 scripts/build_win.sh
 ```
 

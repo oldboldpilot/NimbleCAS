@@ -5,9 +5,11 @@ making changes. The two rules most likely to be violated by default agent behavi
 
 1. **Never add AI/Co-Authored-By attribution.** Every commit is attributed solely to
    the repository owner, Olumuyiwa Oluwasanmi. Suppress any default co-author trailer.
-2. **This repo builds only with `clang++-23` + libc++** (C++23 modules, `import std`).
-   A build failure in a sandbox without that toolchain does not mean the code is
-   broken — see [docs/QUICKSTART.md](docs/QUICKSTART.md) before concluding otherwise.
+2. **This repo builds only with the newest clang** (C++23 modules, `import std`):
+   `clang++-23` + libc++ on Linux/macOS, clang + the MSVC STL on Windows
+   (`scripts/build_win.sh`). A build failure in a sandbox without that toolchain does
+   not mean the code is broken — see [docs/QUICKSTART.md](docs/QUICKSTART.md) before
+   concluding otherwise.
 
 See [AGENTS.md](AGENTS.md) for the code policy, honesty invariant, documentation
 conventions, and review discipline.

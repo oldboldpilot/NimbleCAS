@@ -20,7 +20,52 @@ if(WIN32)
     -mavx -mavx2 -mfma
     -DNDEBUG
     -Wno-reserved-module-identifier
-    -Wno-include-angled-in-module-purview)
+    -Wno-include-angled-in-module-purview
+    # The MSVC STL wraps its headers in `#pragma pack(push, _CRT_PACKING)` with
+    # _CRT_PACKING == 8, so std::expected / optional / pair / variant are only 8-aligned
+    # even around a 16-aligned payload: alignof(expected<Rational128, E>) == 8 while
+    # alignof(Rational128) == 16. cl.exe has no __int128 and never meets this; clang does,
+    # and emits aligned 16-byte loads (vmovdqa) through the reference value() returns --
+    # an access violation whenever the payload lands at 8 mod 16 (int128_tests and
+    # feature_arithmetic_tests, Rational128::operator==, 2026-10-24). Capping the alignment
+    # clang may ASSUME through a pointer at 8 makes those loads unaligned-safe; it changes
+    # no layout. libc++ does not pack, so Linux does not need it.
+    -fmax-type-align=8)
+  # Pin the MSVC compatibility version that clang stamps into every BMI.
+  #
+  # Left to itself, clang takes it from the FILE VERSION of the installed cl.exe -- inside or
+  # outside a developer shell -- and writes it into the target triple of every module it builds
+  # (x86_64-pc-windows-msvc19.51.36260). A Visual Studio update patches cl.exe IN PLACE: on
+  # 2026-10-24 it moved 19.51.36256 -> 19.51.36260 inside an unchanged 14.51.36231 toolset
+  # directory, so nothing CMake or Ninja tracks changed, and every cached .pcm was refused with
+  # "Microsoft Visual C/C++ Version differs in precompiled file". Only that FIRST error names the
+  # cause; the hundreds after it read "use of undeclared identifier 'std'".
+  #
+  # Pinned to MAJOR.MINOR.0, a patch update no longer touches the BMIs. A minor update changes
+  # the flag only on a fresh configure, and then Ninja rebuilds everything because the command
+  # line changed -- the stale-BMI state is unreachable either way. It must be three components:
+  # clang reads "19.51" as "19" (verified on clang 23.1.4).
+  if(NOT NIMBLECAS_MSVC_COMPAT_VERSION)
+    set(_ncas_probe_src "${CMAKE_BINARY_DIR}/CMakeFiles/ncas_msvc_version_probe.cpp")
+    file(WRITE "${_ncas_probe_src}" "int ncas_msvc_version_probe;\n")
+    # "-###" MUST be quoted: an unquoted `#` starts a CMake comment even mid-argument, which
+    # silently ran `clang++ -` with the rest of the line discarded.
+    execute_process(
+      COMMAND "${CMAKE_CXX_COMPILER}" "-###" -c "${_ncas_probe_src}"
+      OUTPUT_VARIABLE _ncas_probe_out
+      ERROR_VARIABLE _ncas_probe_err)
+    string(REGEX MATCH "windows-msvc([0-9]+)\\.([0-9]+)" _ncas_msvc_triple
+           "${_ncas_probe_out}${_ncas_probe_err}")
+    if(NOT _ncas_msvc_triple)
+      message(FATAL_ERROR
+        "Could not read the MSVC version from ${CMAKE_CXX_COMPILER}'s target triple. "
+        "Pass -DNIMBLECAS_MSVC_COMPAT_VERSION=<major>.<minor>.0 (e.g. 19.51.0) explicitly.")
+    endif()
+    set(NIMBLECAS_MSVC_COMPAT_VERSION "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.0" CACHE STRING
+        "MSVC compatibility version pinned into every BMI (major.minor.0)")
+  endif()
+  message(STATUS "NimbleCAS: -fms-compatibility-version=${NIMBLECAS_MSVC_COMPAT_VERSION}")
+  add_compile_options(-fms-compatibility-version=${NIMBLECAS_MSVC_COMPAT_VERSION})
   # __builtin_cpu_supports (SIMD dynamic dispatch) needs __cpu_model from clang's
   # compiler-rt builtins, which the MSVC-style link does not pull in by default.
   # Link the builtins archive explicitly (located relative to the clang compiler).

@@ -6,9 +6,10 @@ NimbleCAS is cross-platform C++23 and builds under two clang toolchains:
 
 - **Linux/macOS:** `clang++-23` with **libc++** (provides `share/libc++/v1/std.cppm`
   for `import std`), CMake ≥ 3.30, Ninja. Reference host `oluwasanmi-multigpu-server`.
-- **Windows:** the **clang + MSVC-STL** toolchain bundled with Visual Studio
-  (`clang++.exe` targeting `x86_64-pc-windows-msvc`), using `import std` from the MSVC
-  toolset's `std.ixx`. CMake + Ninja are also bundled with Visual Studio.
+- **Windows:** the **newest clang** (`clang++.exe` targeting `x86_64-pc-windows-msvc`)
+  with the **MSVC STL**, using `import std` from the MSVC toolset's `std.ixx`. Install
+  the latest LLVM release under `C:\tools\LLVM<major>` (or `C:\Program Files\LLVM`);
+  Visual Studio supplies the STL, CMake and Ninja.
 
 ## Windows build
 
@@ -16,9 +17,19 @@ NimbleCAS is cross-platform C++23 and builds under two clang toolchains:
 scripts/build_win.sh      # run in Git Bash — configures build-win/, builds, runs ctest
 ```
 
-This finds the Visual Studio-bundled clang++/CMake/Ninja/llvm-rc automatically. The
-whole engine and test suite build and run identically to the Linux build. (Python
-bindings are Linux-only for now; the C++ engine is fully cross-platform.)
+This picks the highest-versioned clang among `$NIMBLECAS_LLVM_BIN`, `C:\tools\LLVM*\bin`,
+`C:\Program Files\LLVM\bin` and Visual Studio's bundled copy (which lags upstream, so it
+is the last resort), and Visual Studio's CMake/Ninja. The whole engine and test suite
+build and run identically to the Linux build. (Python bindings are Linux-only for now;
+the C++ engine is fully cross-platform.)
+
+**Visual Studio updates and module files.** clang stamps the MSVC version it finds in
+`cl.exe` into every BMI, and a VS update patches `cl.exe` in place. `cmake/CanonicalFlags.cmake`
+therefore pins `-fms-compatibility-version=<major>.<minor>.0` at configure time, so a patch
+update leaves `build-win/` valid. If a build ever fails with *"Microsoft Visual C/C++ Version
+differs in precompiled file"* (the first error; every later one reads as a missing `std`),
+delete the `.pcm` files under `build-win/` and rebuild. `ToolchainBMIGuard` will not do it
+for you here: it fingerprints the clang binary, and in this failure clang did not change.
 
 ## Python environment (uv)
 

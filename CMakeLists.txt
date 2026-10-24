@@ -15,7 +15,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
-include(LibcxxLocate)     # ask clang++ where ITS libc++ is (feeds the two below)
+# Sweep stale .pcm/.modmap when the compiler changes in place (an apt or overlay upgrade keeps
+# the path, so CMake and Ninja see nothing). Included from the fastjson submodule rather than
+# copied: the guard is kept byte-identical across this ecosystem, and including the one copy
+# makes that true by construction. It runs once per configure and must precede every target.
+include(${CMAKE_SOURCE_DIR}/external/fastestjsoninthewest/cmake/ToolchainBMIGuard.cmake)
+include(LibcxxLocate)    # ask clang++ where ITS libc++ is (feeds the two below)
 include(CanonicalFlags)   # global canonical compile/link flags (Rule 50)
 include(StdModule)        # std_module target providing `import std` (Rules 12/41)
 

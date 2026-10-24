@@ -62,7 +62,8 @@ appends an attribution trailer to commits, suppress it for this repo.
 
 ## Build & test
 
-NimbleCAS requires **`clang++-23` + libc++** (for `import std` and C++23 modules) —
+NimbleCAS requires the **newest clang** — `clang++-23` + libc++ on Linux/macOS, clang +
+the MSVC STL on Windows (for `import std` and C++23 modules) —
 most agent sandboxes running only a system `g++`/older `clang` **cannot** build this
 repo; don't assume a failing build means the code is broken without confirming the
 toolchain matches. See **[docs/QUICKSTART.md](docs/QUICKSTART.md)** for full detail.
@@ -73,7 +74,7 @@ scripts/build.sh                         # configure, build, run tests (ctest)
 NIMBLECAS_SANITIZE=ON scripts/build.sh   # + ASan/UBSan/LSan
 NIMBLECAS_SANITIZER=thread|memory scripts/build.sh   # TSan / MSan — see docs/testing/sanitizers.md
 
-# Windows — Visual Studio's bundled clang + MSVC STL (run in Git Bash)
+# Windows — newest installed clang + MSVC STL (run in Git Bash)
 scripts/build_win.sh
 
 # Python bindings (Linux, uv-managed)
