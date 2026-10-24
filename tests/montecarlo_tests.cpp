@@ -141,6 +141,20 @@ auto main() -> int {
                   auto bad = integrate_parallel([](double x) { return x; }, 1.0, 0.0, 10, 1);
                   t.expect(!bad.has_value() && bad.error() == nimblecas::MathError::domain_error,
                            "integrate_parallel(b < a) yields domain_error");
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  for (const auto& [lo, hi] : {std::pair{nan, 1.0}, std::pair{0.0, nan}}) {
+                      auto rs = integrate([](double x) { return x; }, lo, hi, 10, 1);
+                      auto rp = integrate_parallel([](double x) { return x; }, lo, hi, 10, 1);
+                      t.expect(!rs.has_value() && rs.error() == nimblecas::MathError::domain_error &&
+                                   !rp.has_value() &&
+                                   rp.error() == nimblecas::MathError::domain_error,
+                               "a NaN bound yields domain_error, not a NaN estimate");
+                  }
+                  // A single sample is one partial block. (The block-count wrap near UINT64_MAX
+                  // that the quotient+remainder form fixes is not testable: a correct run at that
+                  // size never finishes. It is covered by review, not by this suite.)
+                  auto one = integrate_parallel([](double) { return 2.0; }, 0.0, 1.0, 1, 3);
+                  t.expect(one.has_value() && *one == 2.0, "one sample is one partial block");
                   auto zero = integrate_parallel([](double x) { return x; }, 0.0, 1.0, 0, 1);
                   t.expect(!zero.has_value() && zero.error() == nimblecas::MathError::domain_error,
                            "integrate_parallel(samples == 0) yields domain_error");
@@ -196,6 +210,73 @@ auto main() -> int {
                   t.expect(rp.has_value() && std::bit_cast<std::uint64_t>(*rp) ==
                                                  std::bit_cast<std::uint64_t>(expected),
                            "integrate_parallel matches the hand-blocked sum bit-for-bit");
+              })
+        .test("parallel_rounds_beyond_the_first_are_summed",
+              [](TestContext& t) {
+                  // The parallel entry points walk blocks in rounds of 4096. With a constant
+                  // integrand every block partial is its exact sample count, so the estimate is
+                  // exactly the width -- unless a block is dropped, repeated or mis-indexed.
+                  // 4096 full blocks + 5 samples puts a 5-sample block alone in round two; a
+                  // round-two block indexed from 0 instead of 4096 would add 65536, not 5.
+                  constexpr std::uint64_t n = 4096 * montecarlo_block + 5;
+                  auto r = integrate_parallel([](double) { return 1.0; }, 0.0, 3.0, n, 8);
+                  t.expect(r.has_value() && *r == 3.0,
+                           std::format("multi-round integrate_parallel of 1 over [0,3] == 3 "
+                                       "(got {})", r ? *r : -1.0));
+              })
+        .test("estimate_pi_reads_counters_2i_and_2i_plus_1",
+              [](TestContext& t) {
+                  // Pin estimate_pi's draws independently of pi_block, so serial and parallel
+                  // cannot share a wrong pairing (e.g. i and i+1, which correlates x and y).
+                  constexpr std::uint64_t n = 70000;  // two blocks
+                  const std::uint64_t key = splitmix64(31);
+                  std::uint64_t hits = 0;
+                  for (std::uint64_t i = 0; i < n; ++i) {
+                      const double x = uniform_unit(counter_u64(key, 2 * i));
+                      const double y = uniform_unit(counter_u64(key, 2 * i + 1));
+                      if (x * x + y * y < 1.0) ++hits;
+                  }
+                  const double expected = 4.0 * static_cast<double>(hits) / static_cast<double>(n);
+                  auto r = estimate_pi(n, 31);
+                  t.expect(r.has_value() && *r == expected,
+                           "estimate_pi matches a hand count over counters 2i, 2i+1");
+                  auto over = estimate_pi_parallel((std::uint64_t{1} << 63U) + 1, 1);
+                  t.expect(!over.has_value() && over.error() == nimblecas::MathError::domain_error,
+                           "estimate_pi beyond 2^63 samples is a domain_error, not a wrapped replay");
+              })
+        .test("guards_reject_empty_functions_and_non_finite_input",
+              [](TestContext& t) {
+                  using nimblecas::MathError;
+                  const std::function<double(double)> empty;
+                  const double inf = std::numeric_limits<double>::infinity();
+                  const double nan = std::numeric_limits<double>::quiet_NaN();
+                  auto e1 = integrate_parallel(empty, 0.0, 1.0, 10, 1);
+                  t.expect(!e1 && e1.error() == MathError::domain_error,
+                           "integrate_parallel(empty f) is a domain_error, not a throw");
+                  auto e2 = rejection_sample(empty, 0.0, 1.0, 1.0, 1, 1, 1);
+                  t.expect(!e2 && e2.error() == MathError::domain_error,
+                           "rejection_sample(empty pdf) is a domain_error, not a throw");
+                  auto i1 = integrate([](double) { return 1.0; }, inf, inf, 10, 1);
+                  t.expect(!i1 && i1.error() == MathError::domain_error,
+                           "integrate over [inf, inf] is a domain_error, not NaN");
+                  auto i2 = integrate_parallel([](double) { return 1.0; }, -1e308, 1e308, 10, 1);
+                  t.expect(!i2 && i2.error() == MathError::overflow,
+                           "integrate over [-1e308, 1e308] reports overflow of b - a");
+                  auto eq = integrate_parallel([](double) { return 5.0; }, 2.0, 2.0, 10, 1);
+                  t.expect(eq.has_value() && *eq == 0.0, "b == a integrates to 0");
+                  auto r1 = rejection_sample([](double) { return 1.0; }, nan, 1.0, 1.0, 4, 1, 10);
+                  t.expect(!r1 && r1.error() == MathError::domain_error,
+                           "rejection_sample with a NaN bound is a domain_error");
+                  auto r2 = rejection_sample([](double x) { return x; }, 0.0, 1.0, nan, 4, 1, 10);
+                  t.expect(!r2 && r2.error() == MathError::domain_error,
+                           "rejection_sample with a NaN ceiling is a domain_error");
+                  // Huge want, small trial budget, nothing accepted: an empty success, and no
+                  // up-front reserve of `want`.
+                  constexpr auto big = std::numeric_limits<std::uint64_t>::max();
+                  auto r3 = rejection_sample([](double) { return 0.0; }, 0.0, 1.0, 1.0, big, 1,
+                                             1000);
+                  t.expect(r3.has_value() && r3->empty(),
+                           "huge want with a small trial budget returns an empty success");
               })
         .test("estimate_pi_parallel_is_bit_identical_to_serial",
               [](TestContext& t) {

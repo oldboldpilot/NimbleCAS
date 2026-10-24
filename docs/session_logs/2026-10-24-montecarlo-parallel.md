@@ -55,9 +55,47 @@ whether the results are bit-identical. Measured numbers are in
 - Linux (WSL, clang 23.1.5 + libc++): full `ctest` 174/174.
 - Windows (clang 23.1.4 + MSVC STL): full `ctest` 174/174.
 
-## Not done
+## Review (after the first push, 9def168)
 
-- No adversarial review was run (time-boxed session).
+The feature landed on `main` before review; that is a policy deviation, recorded here. A
+read-only `claude -p` review then found, and a follow-up commit fixed:
+
+1. **Block count wrapped** for `samples` within 65535 of `UINT64_MAX`:
+   `(samples + block - 1) / block` became 0, so `integrate` returned **0.0 as a success**. Now
+   quotient + remainder test; block ends computed as `begin + min(samples - begin, block)`.
+2. **Allocation could throw out of the railway**: the serial path reserved one `double` per
+   block (the old code allocated nothing); `samples = 2^62` asks for 512 TiB. Serial now keeps a
+   running total (same additions, same bits, no allocation); parallel runs rounds of 4096 blocks.
+3. **FP environment** is per thread and not inherited by pool threads: documented as a
+   precondition of `integrate_parallel` (not enforced).
+4. **The bench could print `bit-identical true` for two failed calls** (both left at 0.0): values
+   now start as NaN and `same()` rejects NaN.
+5. Pre-existing: a NaN bound passed `b < a` and produced a NaN estimate; now `domain_error`
+   (tested).
+
+A second review by agy (`gemini-4-argon-high`; the first attempt failed because
+`gemini-3.1-pro-high` no longer exists) on the fixed code found, and this commit also fixes:
+
+6. **The second parallel round was never tested** (one round = 4096 blocks = 268M samples; the
+   largest test used 65 blocks), so `block_fn(k)` instead of `block_fn(first + k)` survived. New
+   test: a constant integrand over 4096 blocks + 5 samples must give exactly the width. That
+   mutant was run and is now killed.
+7. **No test pinned `estimate_pi`'s counter pairing** (2i, 2i+1) independently of `pi_block`;
+   now one does.
+8. Pre-existing, now `domain_error`: an empty `std::function` threw `bad_function_call` out of
+   the railway (`integrate`, `integrate_parallel`, `rejection_sample`); `estimate_pi` above 2^63
+   samples silently replayed earlier darts (`2*i` wraps); `rejection_sample` let NaN bounds and a
+   NaN ceiling through, and could still throw from an up-front `reserve` when both `want` and
+   `max_trials` were huge (now reserves at most 2^20 and grows); infinite bounds gave a NaN
+   estimate. A finite interval whose width overflows (`[-1e308, 1e308]`) now returns `overflow`,
+   as `rng::uniform_double` already did.
+
+Not acted on: `parallel::for_ranges` with `grain == 0` divides by zero on PPL (outside this
+change; montecarlo always passes 1); `sample_variance` overflows on `{1e308, 1e308}`; montecarlo
+does not use the AVX-512 `counter_u64_batch`; the speedups are wall-clock timings, not a perf
+profile.
+
+## Not done
 - One mutant was run: summing the block partials in REVERSE in both entry points. Against the
   first version of the pin test (3 blocks + tail) it **survived** — four partials summed either
   way gave the same bits. The test now uses 64 blocks + a 3-sample tail and first asserts that

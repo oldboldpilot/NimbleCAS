@@ -23,8 +23,9 @@ import nimblecas.parallel;
 export namespace nimblecas {
 
 // Monte Carlo estimate of the definite integral ∫_a^b f(x) dx = (b − a) · mean(f(U)),
-// with U drawn uniformly on [a, b]. Returns domain_error if b < a or samples == 0
-// (b == a is allowed and integrates to 0).
+// with U drawn uniformly on [a, b]. Returns domain_error if `f` is empty, b < a, either bound
+// is not finite, or samples == 0 (b == a is allowed and integrates to 0); overflow if the
+// finite bounds are so far apart that b − a is not finite.
 //
 // REPRODUCIBILITY: a key is derived from `seed` via splitmix64, then sample i uses
 // x_i = a + uniform_unit(counter_u64(key, i)) · (b − a). Every sample is a pure function
@@ -44,8 +45,11 @@ inline constexpr std::uint64_t montecarlo_block = std::uint64_t{1} << 16U;
 // `integrate`, with the blocks evaluated concurrently on the `parallel` runtime (TBB on
 // Linux/macOS, PPL on Windows). Returns exactly what `integrate` returns for the same
 // arguments — bit-identical, independent of thread count and scheduling — and the same
-// domain errors. PRECONDITION: `f` is invoked concurrently from several threads, so it must
-// be safe to call concurrently (a pure function is; one mutating captured state is not).
+// domain errors. PRECONDITIONS: `f` is invoked concurrently from several threads, so it must
+// be safe to call concurrently (a pure function is; one mutating captured state is not). And
+// the caller's floating-point environment must be the default one: the rounding mode and the
+// flush-to-zero/denormals-are-zero flags are per thread, pool threads do not inherit the
+// caller's, so a caller that changed them would see blocks rounded two different ways.
 [[nodiscard]] auto integrate_parallel(const std::function<double(double)>& f, double a,
                                       double b, std::uint64_t samples, std::uint64_t seed)
     -> Result<double>;
@@ -54,7 +58,8 @@ inline constexpr std::uint64_t montecarlo_block = std::uint64_t{1} << 16U;
 // per sample — counter_u64(key, 2i) and counter_u64(key, 2i+1) — count the darts with
 // x² + y² < 1 (inside the unit quarter circle), and return 4 · hits / samples. Like
 // `integrate`, each sample is a pure function of its index, so the estimate is
-// partition-independent. Returns domain_error if samples == 0.
+// partition-independent. Returns domain_error if samples == 0 or samples > 2^63 (sample i
+// reads counters 2i and 2i+1, which would wrap and replay earlier darts beyond that).
 [[nodiscard]] auto estimate_pi(std::uint64_t samples, std::uint64_t seed) -> Result<double>;
 
 // `estimate_pi`, with the blocks counted concurrently. The hit count is an integer, so any
@@ -73,7 +78,8 @@ inline constexpr std::uint64_t montecarlo_block = std::uint64_t{1} << 16U;
 // however many were accepted (possibly fewer than `want`, possibly empty). It therefore
 // always terminates and can never spin forever, even for a pathological pdf/m_bound. The
 // returned vector holds only accepted x values, each in [a, b]. Returns domain_error if
-// b < a, m_bound ≤ 0, want == 0, or max_trials == 0.
+// `pdf` is empty, b < a, a bound is not finite, m_bound is not a positive number (≤ 0 or
+// NaN), want == 0, or max_trials == 0; overflow if b − a is not finite.
 [[nodiscard]] auto rejection_sample(const std::function<double(double)>& pdf, double a, double b,
                                     double m_bound, std::uint64_t want, std::uint64_t seed,
                                     std::uint64_t max_trials) -> Result<std::vector<double>>;
@@ -97,16 +103,26 @@ namespace nimblecas {
 
 namespace {
 
-auto block_count(std::uint64_t samples) -> std::size_t {
-    return static_cast<std::size_t>((samples + montecarlo_block - 1) / montecarlo_block);
+// Written as quotient + remainder test rather than (samples + block - 1) / block, which wraps
+// for samples within a block of UINT64_MAX.
+auto block_count(std::uint64_t samples) -> std::uint64_t {
+    return samples / montecarlo_block + (samples % montecarlo_block != 0 ? 1U : 0U);
 }
+
+// Blocks handed to transform_index per round. The parallel entry points walk the blocks in
+// rounds of this many, so their memory is bounded by the round, not by `samples` -- the serial
+// entry points allocate nothing, and a huge sample count must not make the parallel ones throw
+// out of the no-throw railway from a vector allocation. Adding each round's partials in order
+// to one running total is the same sequence of additions as adding all partials in order.
+inline constexpr std::uint64_t kBlocksPerRound = 4096;
 
 // Sum of f over the samples of block `blk`, in index order. Shared by both entry points, so
 // the per-block partials (and hence the final sum) cannot differ between them.
 auto integrate_block(const std::function<double(double)>& f, std::uint64_t key, double a,
-                     double width, std::uint64_t samples, std::size_t blk) -> double {
-    const std::uint64_t begin = static_cast<std::uint64_t>(blk) * montecarlo_block;
-    const std::uint64_t end = std::min(samples, begin + montecarlo_block);
+                     double width, std::uint64_t samples, std::uint64_t blk) -> double {
+    const std::uint64_t begin = blk * montecarlo_block;
+    // samples - begin cannot wrap (begin < samples); begin + montecarlo_block could.
+    const std::uint64_t end = begin + std::min(samples - begin, montecarlo_block);
     double sum = 0.0;
     for (std::uint64_t i = begin; i < end; ++i) {
         const double x = a + uniform_unit(counter_u64(key, i)) * width;
@@ -118,9 +134,9 @@ auto integrate_block(const std::function<double(double)>& f, std::uint64_t key, 
 // Darts of block `blk` landing inside the unit quarter circle. Two decorrelated counter
 // draws per sample (indices 2i and 2i+1) keep x and y independent and every draw a pure
 // function of the sample index.
-auto pi_block(std::uint64_t key, std::uint64_t samples, std::size_t blk) -> std::uint64_t {
-    const std::uint64_t begin = static_cast<std::uint64_t>(blk) * montecarlo_block;
-    const std::uint64_t end = std::min(samples, begin + montecarlo_block);
+auto pi_block(std::uint64_t key, std::uint64_t samples, std::uint64_t blk) -> std::uint64_t {
+    const std::uint64_t begin = blk * montecarlo_block;
+    const std::uint64_t end = begin + std::min(samples - begin, montecarlo_block);
     std::uint64_t hits = 0;
     for (std::uint64_t i = begin; i < end; ++i) {
         const double x = uniform_unit(counter_u64(key, 2 * i));
@@ -132,21 +148,58 @@ auto pi_block(std::uint64_t key, std::uint64_t samples, std::size_t blk) -> std:
     return hits;
 }
 
-// The one combine both integrate entry points end in: partials added in block order.
-auto finish_integrate(std::span<const double> partials, double width, std::uint64_t samples)
-    -> double {
-    double sum = 0.0;
-    for (const double p : partials) {
-        sum += p;
+// Runs `block_fn` over every block and adds the partials, in block order, to `total`. Serial
+// when `parallel` is false; otherwise rounds of kBlocksPerRound blocks go through
+// transform_index (grain 1: a block is 65536 samples, coarse enough to be its own task). Either
+// way the additions into `total` happen in the same order, which is the bit-identity guarantee.
+template <typename T, typename BlockFn>
+auto sum_blocks(std::uint64_t samples, bool parallel, T total, BlockFn block_fn) -> T {
+    const std::uint64_t blocks = block_count(samples);
+    if (!parallel) {
+        for (std::uint64_t blk = 0; blk < blocks; ++blk) {
+            total += block_fn(blk);
+        }
+        return total;
     }
+    for (std::uint64_t first = 0; first < blocks; first += kBlocksPerRound) {
+        const std::uint64_t round = std::min(blocks - first, kBlocksPerRound);
+        const auto partials = parallel::transform_index(
+            static_cast<std::size_t>(round),
+            [&](std::size_t k) { return block_fn(first + k); }, std::size_t{1});
+        for (const T p : partials) {
+            total += p;
+        }
+    }
+    return total;
+}
+
+auto integrate_impl(const std::function<double(double)>& f, double a, double b,
+                    std::uint64_t samples, std::uint64_t seed, bool parallel) -> Result<double> {
+    // isfinite rejects NaN as well as ±inf: a NaN bound compares false both ways and would
+    // otherwise slip past `b < a` to a NaN "estimate". An empty f would throw
+    // bad_function_call out of the railway on the first sample.
+    if (!f || !std::isfinite(a) || !std::isfinite(b) || b < a || samples == 0) {
+        return make_error<double>(MathError::domain_error);
+    }
+    const double width = b - a;
+    if (!std::isfinite(width)) {  // e.g. [-1e308, 1e308]; same verdict as rng::uniform_double
+        return make_error<double>(MathError::overflow);
+    }
+    const std::uint64_t key = splitmix64(seed);
+    const double sum = sum_blocks(samples, parallel, 0.0, [&](std::uint64_t blk) {
+        return integrate_block(f, key, a, width, samples, blk);
+    });
     return width * (sum / static_cast<double>(samples));
 }
 
-auto finish_pi(std::span<const std::uint64_t> partials, std::uint64_t samples) -> double {
-    std::uint64_t hits = 0;
-    for (const std::uint64_t p : partials) {
-        hits += p;
+auto estimate_pi_impl(std::uint64_t samples, std::uint64_t seed, bool parallel)
+    -> Result<double> {
+    if (samples == 0 || samples > (std::uint64_t{1} << 63U)) {
+        return make_error<double>(MathError::domain_error);
     }
+    const std::uint64_t key = splitmix64(seed);
+    const std::uint64_t hits = sum_blocks(samples, parallel, std::uint64_t{0},
+                                          [&](std::uint64_t blk) { return pi_block(key, samples, blk); });
     return 4.0 * static_cast<double>(hits) / static_cast<double>(samples);
 }
 
@@ -154,77 +207,44 @@ auto finish_pi(std::span<const std::uint64_t> partials, std::uint64_t samples) -
 
 auto integrate(const std::function<double(double)>& f, double a, double b, std::uint64_t samples,
                std::uint64_t seed) -> Result<double> {
-    if (b < a || samples == 0) {
-        return make_error<double>(MathError::domain_error);
-    }
-    const std::uint64_t key = splitmix64(seed);
-    const double width = b - a;
-    const std::size_t blocks = block_count(samples);
-    std::vector<double> partials;
-    partials.reserve(blocks);
-    for (std::size_t blk = 0; blk < blocks; ++blk) {
-        partials.push_back(integrate_block(f, key, a, width, samples, blk));
-    }
-    return finish_integrate(partials, width, samples);
+    return integrate_impl(f, a, b, samples, seed, /*parallel=*/false);
 }
 
 auto integrate_parallel(const std::function<double(double)>& f, double a, double b,
                         std::uint64_t samples, std::uint64_t seed) -> Result<double> {
-    if (b < a || samples == 0) {
-        return make_error<double>(MathError::domain_error);
-    }
-    const std::uint64_t key = splitmix64(seed);
-    const double width = b - a;
-    // grain 1: a block is 65536 evaluations of f, coarse enough that each is its own task.
-    // transform_index is order-preserving, so the grain moves work between threads but never
-    // changes which partial lands in which slot.
-    const auto partials = parallel::transform_index(
-        block_count(samples),
-        [&](std::size_t blk) { return integrate_block(f, key, a, width, samples, blk); },
-        std::size_t{1});
-    return finish_integrate(partials, width, samples);
+    return integrate_impl(f, a, b, samples, seed, /*parallel=*/true);
 }
 
 auto estimate_pi(std::uint64_t samples, std::uint64_t seed) -> Result<double> {
-    if (samples == 0) {
-        return make_error<double>(MathError::domain_error);
-    }
-    const std::uint64_t key = splitmix64(seed);
-    const std::size_t blocks = block_count(samples);
-    std::vector<std::uint64_t> partials;
-    partials.reserve(blocks);
-    for (std::size_t blk = 0; blk < blocks; ++blk) {
-        partials.push_back(pi_block(key, samples, blk));
-    }
-    return finish_pi(partials, samples);
+    return estimate_pi_impl(samples, seed, /*parallel=*/false);
 }
 
 auto estimate_pi_parallel(std::uint64_t samples, std::uint64_t seed) -> Result<double> {
-    if (samples == 0) {
-        return make_error<double>(MathError::domain_error);
-    }
-    const std::uint64_t key = splitmix64(seed);
-    const auto partials = parallel::transform_index(
-        block_count(samples), [&](std::size_t blk) { return pi_block(key, samples, blk); },
-        std::size_t{1});
-    return finish_pi(partials, samples);
+    return estimate_pi_impl(samples, seed, /*parallel=*/true);
 }
 
 auto rejection_sample(const std::function<double(double)>& pdf, double a, double b, double m_bound,
                       std::uint64_t want, std::uint64_t seed, std::uint64_t max_trials)
     -> Result<std::vector<double>> {
-    if (b < a || m_bound <= 0.0 || want == 0 || max_trials == 0) {
+    // Negated comparison on m_bound so a NaN ceiling fails it, as NaN bounds fail isfinite.
+    if (!pdf || !std::isfinite(a) || !std::isfinite(b) || b < a || !(m_bound > 0.0) ||
+        want == 0 || max_trials == 0) {
         return make_error<std::vector<double>>(MathError::domain_error);
+    }
+    const double width = b - a;
+    if (!std::isfinite(width)) {
+        return make_error<std::vector<double>>(MathError::overflow);
     }
 
     auto rng = Rng::seeded(seed);
-    const double width = b - a;
 
     std::vector<double> accepted;
-    // At most min(want, max_trials) samples can ever be accepted, so reserve that — never
-    // the raw `want`, which an un-clamped caller could set huge enough to make reserve()
-    // throw std::bad_alloc/length_error and escape the no-throw railway contract.
-    accepted.reserve(static_cast<std::size_t>(std::min(want, max_trials)));
+    // At most min(want, max_trials) samples can ever be accepted, but both may be huge, and a
+    // reserve() of that size would throw bad_alloc/length_error out of the railway before a
+    // single trial ran. Reserve at most 2^20 up front and let push_back grow past it; only a
+    // run that really accepts that many samples needs the memory.
+    accepted.reserve(static_cast<std::size_t>(
+        std::min({want, max_trials, std::uint64_t{1} << 20U})));
 
     // Hard cap on proposals: the loop makes at most `max_trials` iterations and also exits
     // early once `want` samples are collected — so it always terminates.
