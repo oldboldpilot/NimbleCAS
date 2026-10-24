@@ -269,7 +269,7 @@ add_library(nimblecas_montecarlo STATIC)
 target_sources(nimblecas_montecarlo PUBLIC
   FILE_SET CXX_MODULES FILES src/montecarlo/montecarlo.cppm)
 target_link_libraries(nimblecas_montecarlo
-  PUBLIC nimblecas_rng nimblecas_core std_module)
+  PUBLIC nimblecas_parallel nimblecas_rng nimblecas_core std_module)
 
 # ---- nimblecas.qmc : quasi-Monte Carlo low-discrepancy sequences & adaptive integration (§7.8) ----
 add_library(nimblecas_qmc STATIC)
@@ -2373,6 +2373,11 @@ target_link_libraries(cpu_bench
 add_executable(mc_bench tools/mc_bench.cpp)
 target_link_libraries(mc_bench
   PRIVATE nimblecas_pricing nimblecas_core std_module)
+
+# nimblecas.montecarlo serial vs parallel estimators (bit-identity + throughput).
+add_executable(montecarlo_bench tools/montecarlo_bench.cpp)
+target_link_libraries(montecarlo_bench
+  PRIVATE nimblecas_montecarlo nimblecas_parallel nimblecas_core std_module)
 
 # Task DAG scheduler cost-aware ordering benchmark harness (ROADMAP §6.1 / M6).
 add_executable(taskdag_sched_bench tools/taskdag_sched_bench.cpp)

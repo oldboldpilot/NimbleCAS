@@ -15,11 +15,15 @@ import nimblecas.testing;
 
 using nimblecas::counter_u64;
 using nimblecas::estimate_pi;
+using nimblecas::estimate_pi_parallel;
 using nimblecas::integrate;
+using nimblecas::integrate_parallel;
+using nimblecas::montecarlo_block;
 using nimblecas::rejection_sample;
 using nimblecas::sample_mean;
 using nimblecas::sample_variance;
 using nimblecas::splitmix64;
+using nimblecas::uniform_unit;
 using nimblecas::testing::TestContext;
 using nimblecas::testing::TestSuite;
 
@@ -112,6 +116,103 @@ auto main() -> int {
                   t.expect(same,
                            "disjoint index halves concatenate to the whole range (partition-"
                            "independent)");
+              })
+        .test("integrate_parallel_is_bit_identical_to_serial",
+              [](TestContext& t) {
+                  // Sample counts straddling every block edge: inside one block, exactly one
+                  // block, one past it, and a ragged multi-block tail.
+                  const auto f = [](double x) { return std::sin(x) * std::exp(-x * x); };
+                  const std::array<std::uint64_t, 6> counts{
+                      1, montecarlo_block - 1, montecarlo_block, montecarlo_block + 1,
+                      5 * montecarlo_block + 12345, 1000003};
+                  for (const std::uint64_t n : counts) {
+                      auto s = integrate(f, -1.5, 2.5, n, 4242);
+                      auto p = integrate_parallel(f, -1.5, 2.5, n, 4242);
+                      t.expect(s.has_value() && p.has_value(),
+                               std::format("integrate and integrate_parallel succeed (n={})", n));
+                      if (s && p) {
+                          t.expect(std::bit_cast<std::uint64_t>(*s) ==
+                                       std::bit_cast<std::uint64_t>(*p),
+                                   std::format("integrate_parallel == integrate bit-for-bit "
+                                               "(n={}, serial {}, parallel {})",
+                                               n, *s, *p));
+                      }
+                  }
+                  auto bad = integrate_parallel([](double x) { return x; }, 1.0, 0.0, 10, 1);
+                  t.expect(!bad.has_value() && bad.error() == nimblecas::MathError::domain_error,
+                           "integrate_parallel(b < a) yields domain_error");
+                  auto zero = integrate_parallel([](double x) { return x; }, 0.0, 1.0, 0, 1);
+                  t.expect(!zero.has_value() && zero.error() == nimblecas::MathError::domain_error,
+                           "integrate_parallel(samples == 0) yields domain_error");
+                  auto conv = integrate_parallel([](double x) { return x * x; }, 0.0, 1.0,
+                                                 400000, 20260703);
+                  t.expect(conv.has_value() && std::abs(*conv - (1.0 / 3.0)) < 0.01,
+                           "integrate_parallel(x^2, [0,1]) ~ 1/3");
+              })
+        .test("integrate_uses_the_documented_block_grouping",
+              [](TestContext& t) {
+                  // Recompute the estimate by hand with the documented grouping -- each block
+                  // summed in index order, partials summed in block order -- and require the
+                  // library to match it bit-for-bit. Without this pin, serial and parallel could
+                  // drift to some other grouping together and the test above would still pass.
+                  //
+                  // 64 full blocks plus a 3-sample tail: many partials of very different size
+                  // make the sum order-sensitive. A 4-block input was not (summing its partials
+                  // in reverse gave the same bits, so a reversed-combine mutant survived).
+                  const auto f = [](double x) { return 1.0 / (1.0 + x * x); };
+                  constexpr std::uint64_t n = 64 * montecarlo_block + 3;
+                  const double a = 0.25;
+                  const double width = 3.0;
+                  const std::uint64_t key = splitmix64(77);
+                  std::vector<double> partials;
+                  for (std::uint64_t begin = 0; begin < n; begin += montecarlo_block) {
+                      const std::uint64_t end = std::min(n, begin + montecarlo_block);
+                      double block = 0.0;
+                      for (std::uint64_t i = begin; i < end; ++i) {
+                          block += f(a + uniform_unit(counter_u64(key, i)) * width);
+                      }
+                      partials.push_back(block);
+                  }
+                  const auto estimate = [&](double total) {
+                      return width * (total / static_cast<double>(n));
+                  };
+                  double forward = 0.0;
+                  for (const double p : partials) forward += p;
+                  double reversed = 0.0;
+                  for (auto it = partials.rbegin(); it != partials.rend(); ++it) reversed += *it;
+                  const double expected = estimate(forward);
+
+                  // Guard the guard: if this input were order-insensitive, the pin below could
+                  // not fail, and passing it would prove nothing.
+                  t.expect(std::bit_cast<std::uint64_t>(estimate(reversed)) !=
+                               std::bit_cast<std::uint64_t>(expected),
+                           "this input is order-sensitive (block order changes the last bits)");
+
+                  auto r = integrate(f, a, a + width, n, 77);
+                  t.expect(r.has_value() && std::bit_cast<std::uint64_t>(*r) ==
+                                                std::bit_cast<std::uint64_t>(expected),
+                           "integrate matches the hand-blocked sum bit-for-bit");
+                  auto rp = integrate_parallel(f, a, a + width, n, 77);
+                  t.expect(rp.has_value() && std::bit_cast<std::uint64_t>(*rp) ==
+                                                 std::bit_cast<std::uint64_t>(expected),
+                           "integrate_parallel matches the hand-blocked sum bit-for-bit");
+              })
+        .test("estimate_pi_parallel_is_bit_identical_to_serial",
+              [](TestContext& t) {
+                  const std::array<std::uint64_t, 5> counts{
+                      1, montecarlo_block, montecarlo_block + 1, 7 * montecarlo_block + 3, 900001};
+                  for (const std::uint64_t n : counts) {
+                      auto s = estimate_pi(n, 12345);
+                      auto p = estimate_pi_parallel(n, 12345);
+                      t.expect(s.has_value() && p.has_value() && *s == *p,
+                               std::format("estimate_pi_parallel == estimate_pi (n={})", n));
+                  }
+                  auto zero = estimate_pi_parallel(0, 1);
+                  t.expect(!zero.has_value() && zero.error() == nimblecas::MathError::domain_error,
+                           "estimate_pi_parallel(0) yields domain_error");
+                  auto big = estimate_pi_parallel(2000000, 99);
+                  t.expect(big.has_value() && std::abs(*big - std::numbers::pi) < 0.01,
+                           "estimate_pi_parallel(2e6) ~ pi");
               })
         .test("estimate_pi_is_close",
               [](TestContext& t) {

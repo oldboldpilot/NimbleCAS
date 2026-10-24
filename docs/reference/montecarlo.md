@@ -17,11 +17,13 @@ assert them only within generous tolerances.
 What *is* exact and bit-defined is **reproducibility**. There is no time or
 entropy seeding anywhere: equal seeds reproduce equal results, bit-for-bit. The
 two integration estimators are expressed over the **stateless** counter core
-`counter_u64(key, i)` — because sample `i` is a pure function of its index, any
-partition of the range `0..samples-1` across workers, concatenated in index
-order, reproduces the single-threaded estimate exactly (**partition-independent
-by construction**; summed serially here, but the design admits parallel
-summation). `rejection_sample` instead consumes a **stateful** `Rng::seeded`
+`counter_u64(key, i)`, so sample `i` is a pure function of its index. Because
+floating-point addition is not associative, the *grouping* of the sum is fixed
+too: `0..samples-1` is cut into blocks of `montecarlo_block` (65536) samples,
+each block is summed in index order, and the partials are added in block order.
+The serial and the `_parallel` entry points share that grouping, so
+`integrate_parallel` returns exactly what `integrate` returns, at any thread
+count. `rejection_sample` instead consumes a **stateful** `Rng::seeded`
 trial stream and is hard-capped at `max_trials` proposals so it can never loop
 forever. All failure is reported on the railway (`Result<T>` / `MathError`),
 never by throwing.
@@ -30,8 +32,9 @@ never by throwing.
 import nimblecas.montecarlo;
 ```
 
-Depends on [`core`](core.md) and [`rng`](rng.md) (`splitmix64`, `counter_u64`,
-`uniform_unit`, `Rng::seeded` / `next_unit`).
+Depends on [`core`](core.md), [`rng`](rng.md) (`splitmix64`, `counter_u64`,
+`uniform_unit`, `Rng::seeded` / `next_unit`) and [`parallel`](parallel.md)
+(`transform_index`, for the `_parallel` entry points).
 
 ## Integration & sampling estimators (free functions)
 
@@ -43,7 +46,33 @@ owns the stream.
 | :--- | :--- | :--- |
 | `integrate` | `[[nodiscard]] auto integrate(std::function<double(double)> f, double a, double b, std::uint64_t samples, std::uint64_t seed) -> Result<double>` | Monte Carlo estimate of `∫_a^b f(x) dx = (b − a)·mean(f(U))`, `U ~ Uniform[a, b]`. A key is derived from `seed` via `splitmix64`; sample `i` is `x_i = a + uniform_unit(counter_u64(key, i))·(b − a)`, a pure function of `i` — hence **partition-independent**. `domain_error` if `b < a` or `samples == 0` (`b == a` is allowed and integrates to `0`). |
 | `estimate_pi` | `[[nodiscard]] auto estimate_pi(std::uint64_t samples, std::uint64_t seed) -> Result<double>` | Classic dart estimate of π: per sample draw `(x, y)` in `[0, 1)²` from two **decorrelated** counter draws — `counter_u64(key, 2i)` and `counter_u64(key, 2i+1)` — count darts with `x² + y² < 1`, return `4·hits / samples`. Each sample is a pure function of its index, so the estimate is partition-independent. `domain_error` if `samples == 0`. |
+| `integrate_parallel` | `[[nodiscard]] auto integrate_parallel(const std::function<double(double)>& f, double a, double b, std::uint64_t samples, std::uint64_t seed) -> Result<double>` | `integrate` with the blocks evaluated concurrently on [`nimblecas.parallel`](parallel.md) (TBB on Linux/macOS, PPL on Windows). **Bit-identical** to `integrate` for the same arguments, independent of thread count and scheduling; same domain errors. **Precondition:** `f` is called from several threads at once, so it must be safe to call concurrently — a pure function is; one that mutates captured state is not. |
+| `estimate_pi_parallel` | `[[nodiscard]] auto estimate_pi_parallel(std::uint64_t samples, std::uint64_t seed) -> Result<double>` | `estimate_pi` with the blocks counted concurrently. The hit count is an integer, so any grouping gives the same total: bit-identical to `estimate_pi`. `domain_error` if `samples == 0`. |
 | `rejection_sample` | `[[nodiscard]] auto rejection_sample(std::function<double(double)> pdf, double a, double b, double m_bound, std::uint64_t want, std::uint64_t seed, std::uint64_t max_trials) -> Result<std::vector<double>>` | Draw up to `want` samples on `[a, b]` with density ∝ `pdf` by rejection against a uniform proposal with ceiling `m_bound`: a candidate `x ~ Uniform[a, b]` is accepted when `U·m_bound ≤ pdf(x)`, `U ~ Uniform[0, 1)`. `pdf` need **not** be normalised — only its shape and the ceiling matter. A stateful `Rng::seeded(seed)` supplies the trial stream. `domain_error` if `b < a`, `m_bound ≤ 0`, `want == 0`, or `max_trials == 0`. |
+
+### The block decomposition
+
+`montecarlo_block` (`inline constexpr std::uint64_t`, 65536) is part of the
+**result**, not a tuning knob: changing it changes `integrate`'s low-order bits
+(never `estimate_pi`'s). The serial `integrate` adopted the blocked grouping on
+2026-10-24 so that the parallel entry point could match it exactly; before that
+it summed in one running total, so an estimate pinned to its last bit before that
+date may differ from today's in the final few ulps — well inside the sampling
+error. `rejection_sample` has no parallel form: its stateful trial stream and
+early exit at `want` accepted samples are inherently sequential.
+
+Measured 2026-10-24 with `tools/montecarlo_bench.cpp` (target `montecarlo_bench`;
+200M samples, integrand `exp(-x²)`; i9-13900K, 24 cores / 32 threads, results
+bit-identical in every run):
+
+| Host / backend | `integrate` serial → parallel | `estimate_pi` serial → parallel |
+| :--- | :--- | :--- |
+| WSL Ubuntu, TBB, 30 workers | 50.5 → 805.3 M samples/s (**16.0×**) | 37.8 → 630.6 M/s (**16.7×**) |
+| Windows, PPL, 32 workers | 43.4 → 798.2 M samples/s (**18.4×**) | 36.9 → 626.7 M/s (**17.0×**) |
+
+One run each, not a distribution; the Windows run overlapped a WSL build, so its
+serial figure is likely pessimistic. Both platforms print the same value to nine
+places (`0.882095282`, `3.141557080`).
 
 ### `rejection_sample` termination guarantee
 
@@ -72,7 +101,8 @@ RNG; they are the numerical-`f64` counterparts of the exact-`Q` estimators in
 | Condition | Error |
 | :--- | :--- |
 | `integrate` with `b < a`, or `samples == 0` | `MathError::domain_error` |
-| `estimate_pi` with `samples == 0` | `MathError::domain_error` |
+| `integrate_parallel` with `b < a`, or `samples == 0` | `MathError::domain_error` |
+| `estimate_pi` / `estimate_pi_parallel` with `samples == 0` | `MathError::domain_error` |
 | `rejection_sample` with `b < a`, `m_bound ≤ 0`, `want == 0`, or `max_trials == 0` | `MathError::domain_error` |
 | `sample_mean` on an empty span | `MathError::domain_error` |
 | `sample_variance` on an empty span, or `sample == true` with fewer than 2 points | `MathError::domain_error` |
